@@ -15,6 +15,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -170,7 +171,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
 
     uint32_t num_pages_per_l1_buffer = num_bytes_per_send / input_buffer_page_size;
     TT_ASSERT(num_messages_to_send * num_pages_per_l1_buffer >= num_pages);
@@ -209,7 +210,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -249,9 +250,11 @@ bool RunWriteBWTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
     try {
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+        tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+        tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
     } catch (std::exception& e) {
         std::cout << "Failed compile: " << e.what() << std::endl;
         throw e;
@@ -260,10 +263,10 @@ bool RunWriteBWTest(
     std::cout << "Running..." << std::endl;
 
     std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
+        tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr);
     });
     std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
+        tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr);
     });
 
     th2.join();

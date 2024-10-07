@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
         */
         CommandQueue& cq = device->command_queue();
 
-        Program program = CreateProgram();
+        auto program = CreateScopedProgram();
 
         constexpr CoreCoord core = {0, 0};
 
@@ -220,7 +220,7 @@ int main(int argc, char **argv) {
         /*
          * Move src data back into DRAM src buffer 0 to do another eltwise calculation
          */
-        Program program_mul = CreateProgram();
+        auto program_mul = CreateScopedProgram();
 
         /*
          * Because we're using a new program, we must redeclare all the

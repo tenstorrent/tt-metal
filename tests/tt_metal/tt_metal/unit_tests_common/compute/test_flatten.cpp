@@ -68,7 +68,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
 bool flatten(CommonFixture *fixture, tt_metal::Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 

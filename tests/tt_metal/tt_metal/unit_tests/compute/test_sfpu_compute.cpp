@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -117,7 +118,7 @@ struct SfpuConfig {
 /// @return
 bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
                     .size = byte_size,
@@ -217,7 +218,8 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);

@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -37,7 +34,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
 
@@ -151,8 +148,8 @@ int main(int argc, char **argv) {
             (std::uint32_t)dram_dst_noc_xy.y,
             num_tiles});
 
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

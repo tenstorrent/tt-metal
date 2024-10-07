@@ -52,7 +52,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, DataMovementKernel) {
     )";
 
     for (Device *device : this->devices_) {
-        Program program = CreateProgram();
+        auto program = CreateScopedProgram();
         tt_metal::CreateKernelFromString(
             program,
             kernel_src_code,
@@ -80,7 +80,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ComputeKernel) {
     )";
 
     for (Device *device : this->devices_) {
-        Program program = CreateProgram();
+        auto program = CreateScopedProgram();
         tt_metal::CreateKernelFromString(
             program,
             kernel_src_code,
@@ -113,7 +113,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, EthernetKernel) {
             log_info(LogTest, "Skipping this test on device {} because it has no active ethernet cores.", device_id);
             continue;
         }
-        Program program = CreateProgram();
+        auto program = CreateScopedProgram();
         tt_metal::CreateKernelFromString(
             program,
             kernel_src_code,

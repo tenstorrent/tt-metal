@@ -11,7 +11,7 @@
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_tensor, const Tensor &expert_mask_tensor, const Tensor &topk_mask_tensor, const uint16_t k, Tensor &out_tensor) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -215,7 +215,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -237,6 +237,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(const Tensor &input_
 
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 } // namespace ttnn::operations::reduction::detail

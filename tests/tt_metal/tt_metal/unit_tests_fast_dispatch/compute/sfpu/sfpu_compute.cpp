@@ -116,7 +116,7 @@ struct SfpuConfig {
 /// @return
 bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device= cq.device(),
                     .size = byte_size,
@@ -223,7 +223,6 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
     EnqueueProgram(cq, program, false);
 
     EnqueueReadBuffer(cq, output_dram_buffer, dest_buffer_data, true);
-
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }

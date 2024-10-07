@@ -19,7 +19,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);

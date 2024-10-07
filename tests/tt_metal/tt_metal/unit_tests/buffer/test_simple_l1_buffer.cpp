@@ -7,9 +7,7 @@
 #include "test_buffer_utils.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 
@@ -54,7 +52,7 @@ namespace tt::test::buffer::detail {
             generate_uniform_random_vector<uint32_t>(5, 5, byte_size / sizeof(uint32_t));
         std::vector<uint32_t> outputs;
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         const uint32_t cb_index = 0;
         const uint32_t output_cb_index = 16;
         const CoreCoord phys_core = device->worker_core_from_logical_core(core);
@@ -99,7 +97,8 @@ namespace tt::test::buffer::detail {
 
 
         writeL1Backdoor(device, core, input_local_address, inputs);
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
         readL1Backdoor(device, core, input_local_address, byte_size, outputs);
         tt::log_debug("input readback inputs[0]={} == readback[0]={}", inputs[0], outputs[0]);
         readL1Backdoor(device, core, output_local_address, byte_size, outputs);

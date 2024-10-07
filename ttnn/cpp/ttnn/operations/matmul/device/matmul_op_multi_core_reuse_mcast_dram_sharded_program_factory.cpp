@@ -456,7 +456,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     log_debug("M: {}, K: {}, N: {}", M, K, N);
     log_debug("per_core_M: {}, per_core_N_storage: {}", per_core_M, per_core_N_storage);
 
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     // get the dram readers
     CoreRangeSet all_worker_cores = CoreRangeSet{{}};
@@ -1186,7 +1186,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     auto override_runtime_arguments_callback =
         [writer_kernel_ids, all_worker_cores_ordered, cb_src2, cb_output_reshard](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

@@ -218,7 +218,7 @@ TestStrBR{4,4}
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};

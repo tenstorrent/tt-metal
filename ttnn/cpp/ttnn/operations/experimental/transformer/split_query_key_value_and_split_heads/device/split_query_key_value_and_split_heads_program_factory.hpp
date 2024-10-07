@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
             start_core_y
         ]
     (
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -213,7 +213,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(const Tensor &a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    auto program = CreateProgram();
     // reader compile arg
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) num_heads_per_tensor,
@@ -343,7 +343,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

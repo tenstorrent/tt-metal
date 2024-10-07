@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 
@@ -25,7 +26,7 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = test_config.single_tile_size;
@@ -118,7 +119,8 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
         test_config.writer_ublock,
         false});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result_vec_bf16;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);

@@ -4,19 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "basic_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -142,7 +136,7 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
     for (tt_metal::Device *device : this->devices_) {
         std::set<CoreCoord> storage_only_cores = device->storage_only_cores();
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};
         CoreRange all_cores(start_core, end_core);
@@ -172,7 +166,8 @@ TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
             }
         }
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         uint32_t expected_value_to_read = 0x1234;
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {

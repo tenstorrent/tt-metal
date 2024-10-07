@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat output_data_format,
     bool untilize_out
 ) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
     // batch_scale_factor
@@ -412,7 +412,7 @@ operation::ProgramWithCallbacks create_program(
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_reader_id, mm_kernel_in1_reader_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

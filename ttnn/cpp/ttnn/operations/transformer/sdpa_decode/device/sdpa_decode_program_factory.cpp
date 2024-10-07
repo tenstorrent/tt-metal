@@ -88,7 +88,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     log_debug("Sk_chunk_t: {}", Sk_chunk_t);
     log_debug("k_chunk_size: {}", k_chunk_size);
 
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
     Device *device = input_tensor_q.device();
 
@@ -642,7 +642,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

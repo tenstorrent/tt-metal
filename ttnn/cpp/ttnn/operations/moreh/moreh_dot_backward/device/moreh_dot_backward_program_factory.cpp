@@ -21,7 +21,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto& other = tensor_args.other;
     const auto& input_grad = tensor_return_value.at(0);
     const auto& other_grad = tensor_return_value.at(1);
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 

@@ -16,7 +16,7 @@
 namespace ttnn::operations::pool {
 
 MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
-    Program& program,
+    ProgramHandle program,
     const Tensor& input,
     const Tensor& reader_indices,
     Tensor& output,
@@ -382,7 +382,7 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto parallel_config = sliding_window::ParallelConfig{
         .grid = input.shard_spec().value().grid,
@@ -407,7 +407,8 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     auto reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 
-    tt::tt_metal::detail::AddConfigBuffer(program, reader_indices_on_device.device_buffer());
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::AddConfigBuffer(*program_ptr, reader_indices_on_device.device_buffer());
 
     auto in_n = sliding_window_config.batch_size;
     auto in_h = sliding_window_config.input_hw.first;

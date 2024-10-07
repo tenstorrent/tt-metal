@@ -61,7 +61,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     uint32_t bnc1 = (bN * bC == 1);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     tt_metal::Device* device = a.device();
 

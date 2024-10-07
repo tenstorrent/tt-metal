@@ -3,16 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 #include <string>
 #include <vector>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -234,7 +232,7 @@ int main(int argc, char **argv) {
         tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
-        tt_metal::Program program = tt_metal::Program();
+        auto program = tt::tt_metal::CreateScopedProgram();
 
         uint32_t kernel_read_size = 64 * 1024;
 
@@ -279,7 +277,8 @@ int main(int argc, char **argv) {
             // Execute application
             std::thread t1([&]() {
                 if (enable_kernel_read) {
-                    tt::tt_metal::detail::LaunchProgram(device, program);
+                    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+                    tt::tt_metal::detail::LaunchProgram(device, *program_ptr);
                 }
             });
 

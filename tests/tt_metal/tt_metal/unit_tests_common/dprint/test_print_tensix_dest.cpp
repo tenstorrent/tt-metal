@@ -54,7 +54,7 @@ static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer&
 
 // Creates a circular buffer (L1 cache) for the specified core and data format
 static CBHandle create_circular_buffer(
-    tt_metal::Program& program,
+    tt_metal::ProgramHandle program,
     const tt_metal::CoreCoord& core_coord,
     uint32_t cb_index,
     tt::DataFormat data_format,
@@ -75,7 +75,7 @@ constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
 static DramBuffer prepare_reader(tt_metal::Device* device,
-                                 tt_metal::Program& program,
+                                 tt_metal::ProgramHandle program,
                                  const DestPrintTestConfig& config) {
     // Create input DRAM buffer
     auto input_dram_buffer =
@@ -103,7 +103,7 @@ static DramBuffer prepare_reader(tt_metal::Device* device,
 }
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::ProgramHandle program, const DestPrintTestConfig& config) {
     // Create output DRAM buffer
     auto output_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
@@ -129,7 +129,7 @@ static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& pr
 }
 
 // Prepares the compute kernel with the specified program and test configuration
-static KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintTestConfig& config) {
+static KernelHandle prepare_compute(tt_metal::ProgramHandle program, const DestPrintTestConfig& config) {
     return tt_metal::CreateKernel(
         program,
         config.compute_kernel,
@@ -198,7 +198,7 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
 static bool reader_datacopy_writer(
     DPrintFixture* fixture, tt_metal::Device* device, const DestPrintTestConfig& config) {
     // Create program
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     // Prepare reader kernel and get input DRAM buffer
     auto input_dram_buffer = prepare_reader(device, program, config);

@@ -6,13 +6,13 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 
 void RunTest(Device *device) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     std::set<CoreRange> core_ranges;
     //CoreCoord grid_size = device->logical_grid_size();
@@ -68,7 +68,8 @@ void RunTest(Device *device) {
     auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (slow_dispatch) {
         // Slow dispatch uses LaunchProgram
-        tt::tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt::tt_metal::detail::LaunchProgram(device, *program_ptr);
     } else {
         // Fast Dispatch uses the command queue
         CommandQueue& cq = device->command_queue();

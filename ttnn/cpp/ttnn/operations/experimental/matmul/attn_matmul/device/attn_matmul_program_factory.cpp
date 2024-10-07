@@ -16,7 +16,7 @@ using namespace tt;
 
 operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Tensor &b, Tensor& output, std::optional<const uint32_t> num_tokens, std::optional<const bool> transpose_hw, CoreCoord compute_with_storage_grid_size, ttnn::DeviceComputeKernelConfig compute_kernel_config) {
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

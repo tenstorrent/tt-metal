@@ -23,7 +23,7 @@ struct DRAMtoL1MulticastConfig{
 
 bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, const DRAMtoL1MulticastConfig &cfg){
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;

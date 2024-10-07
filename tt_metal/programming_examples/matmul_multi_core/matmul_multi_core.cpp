@@ -54,7 +54,7 @@ void matmul_multi_core(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16
     * Setup program to execute along with its buffers and kernels to use
     */
     CommandQueue& cq = device->command_queue();
-    Program program{};
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     /*
     * Multi-Core prep

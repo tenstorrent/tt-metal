@@ -160,7 +160,7 @@ static void add_worker_config_to_edm_builders(
 }
 
 static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<KernelHandle>> build_reduce_scatter_worker_ct(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::CCLOpConfig const& op_config,
     ReduceScatterWorkerArgBuilder const& worker_arg_builder,
@@ -242,7 +242,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 }
 
 static void set_reduce_scatter_worker_rt(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     Device const* device,
     KernelHandle worker_receiver_kernel_id,
     KernelHandle worker_sender_kernel_id,
@@ -507,7 +507,7 @@ create_worker_circular_buffers(
     CoreRangeSet const& worker_core_range,
     std::optional<CoreRangeSet> const& second_worker_core_range,
     uint32_t worker_pages_per_transfer,
-    tt::tt_metal::Program& program) {
+    tt::tt_metal::ProgramHandle program) {
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t page_size_bytes = op_config.get_page_size();
 
@@ -655,7 +655,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     //////////////////
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     // Semaphores && CBs
     auto worker_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);
@@ -839,7 +839,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     auto override_runtime_arguments_callback =
         [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, worker_cores, total_num_workers, ring_index](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

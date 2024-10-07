@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                                      const tt::tt_metal::LegacyShape &output_tensor_shape,
                                                      const tt::tt_metal::LegacyShape &input_tensor_start,
                                                      const float pad_value) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
 
     auto override_runtime_args_callback =
         [reader_kernel_id=reader_kernel_id, writer_kernel_id=writer_kernel_id](
-            const Program &program,
+            const ProgramHandle program,
             const std::vector<Buffer*>& input_buffers,
             const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                                            const Shape &output_tensor_shape,
                                            const Shape &input_tensor_start,
                                            const float pad_value) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -268,7 +268,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                    core,
                    reader_rt_args);
 
-    auto override_runtime_args_callback = [kernel_id=reader_kernel_id](const Program &program,
+    auto override_runtime_args_callback = [kernel_id=reader_kernel_id](const ProgramHandle program,
                                                                              const std::vector<Buffer*>& input_buffers,
                                                                              const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -281,12 +281,12 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value) {
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -368,7 +368,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     );
 
     auto override_runtime_args_callback = [kernel_id=unary_reader_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -385,12 +385,12 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, const float pad_value) {
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -503,7 +503,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -525,7 +525,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 
@@ -640,7 +640,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
                                                                 const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_tensor_shape;
 
@@ -842,7 +842,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                                            writer_kernel_id = writer_kernel_id,
                                            ncores_h = ncores_h,
                                            ncores_w = ncores_w](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -865,7 +865,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 
@@ -977,7 +977,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
                                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
                                                                 const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_tensor_shape;
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
@@ -1098,7 +1098,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor 
         ]
     (
         const void* operation,
-        const Program& program,
+        const ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -1323,7 +1323,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
                                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
                                                                 const tt::tt_metal::LegacyShape &input_tensor_start,
                                                                 const float pad_value) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_tensor_shape;
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
@@ -1479,7 +1479,7 @@ operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

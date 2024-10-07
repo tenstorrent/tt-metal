@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <functional>
-#include <random>
-#include <cmath>
 #include <sstream>
 
 #include <magic_enum.hpp>
@@ -16,6 +13,7 @@
 #include "common/bfloat16.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
 
 
@@ -72,7 +70,7 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
 
@@ -190,8 +188,8 @@ bool run_sfpu_test(string sfpu_name,int tile_factor=1,bool use_DRAM=true) {
                                  );
 
 
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

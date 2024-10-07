@@ -336,7 +336,7 @@ int main(int argc, char **argv) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {(std::size_t)num_cores_c - 1,
                           (std::size_t)num_cores_r - 1};

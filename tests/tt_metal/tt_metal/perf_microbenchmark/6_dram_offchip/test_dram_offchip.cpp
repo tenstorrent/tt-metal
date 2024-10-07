@@ -16,6 +16,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/common/work_split.hpp"
 
@@ -51,7 +52,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 template <typename T>
 std::vector<T> slice_vec(std::vector<T> const &v, int m, int n);
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
@@ -61,7 +62,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,
@@ -243,7 +244,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::CompileProgram(device, *program_ptr);
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
@@ -260,7 +262,8 @@ int main(int argc, char **argv) {
                 dram_bandwidth[i]);
 
             if (use_device_profiler) {
-                unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+                unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, *program_ptr);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
                 log_info(
@@ -361,14 +364,14 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_cores,
     const uint32_t &num_reqs_at_a_time,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
     const uint32_t &access_type) {
-    tt_metal::Program program = tt_metal::Program();
+    auto program = CreateScopedProgram();
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
@@ -394,7 +397,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     const uint32_t &num_cores,
     const uint32_t &num_cores_y,
     const uint32_t &num_cores_x,

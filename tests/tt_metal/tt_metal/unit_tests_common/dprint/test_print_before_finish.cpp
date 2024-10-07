@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};

@@ -26,7 +26,7 @@ bool enable_fp32_dest(
 }
 
 operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cache_tensor, const Tensor &input_tensor, std::optional<const Tensor> update_idxs_tensor, std::optional<const Tensor> page_table, const std::vector<uint32_t> update_idxs, const uint32_t batch_offset, ttnn::DeviceComputeKernelConfig compute_kernel_config, const bool share_cache) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt_metal::Device *device = input_tensor.device();
 
@@ -294,7 +294,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(const Tensor& cach
         is_paged_cache
     ](
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

@@ -473,7 +473,7 @@ void DeviceData::overflow_check(Device *device) {
 template<bool is_dram_variant,
          bool is_host_variant>
 void configure_kernel_variant(
-    Program& program,
+    ProgramHandle program,
     string path,
     std::vector<uint32_t> compile_args, // yes, copy
     CoreCoord my_core,

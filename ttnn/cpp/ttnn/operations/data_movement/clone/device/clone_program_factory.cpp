@@ -16,7 +16,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     using namespace tt::tt_metal::detail;
 
     const auto& input = tensor_args.input;
-    Program program = Program();
+    auto program = CreateProgram();
 
     bool tilized = output.get_layout() == Layout::TILE;
 
@@ -145,7 +145,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         start_id += num_units_per_core;
     }
 
-    return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores}};
+    return {program, {unary_reader_kernel_id, unary_writer_kernel_id, cores}};
 }
 
 void CloneOperation::ProgramFactory::override_runtime_arguments(

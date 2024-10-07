@@ -12,23 +12,20 @@
 
 #include "device/tt_arch_types.h"
 #include "gtest/gtest.h"
+#include "impl/buffers/circular_buffer.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "impl/device/device.hpp"
-#include "impl/buffers/circular_buffer.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/common/core_coord.h"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 // #include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using tt::tt_metal::Device;
 
@@ -206,7 +203,6 @@ std::vector<uint32_t> get_receiver_writer_rt_args(
 
 // TODO: randomize each noc for testing purposes
 void build_and_run_autonomous_stream_test(
-    std::vector<Program>& programs,
     std::vector<Device*> const& devices,
     std::size_t num_messages,
     std::size_t page_size,
@@ -217,7 +213,6 @@ void build_and_run_autonomous_stream_test(
     bool enable_page_size_variations,
     std::array<uint32_t, num_sizes> const& sub_sizes,
     std::size_t num_loop_iterations) {
-    TT_ASSERT(programs.size() == 0);
     // Make configurable
     const uint32_t read_write_cb_num_pages = 8;
     const uint32_t page_size_plus_header = page_size + tile_header_size;
@@ -232,9 +227,8 @@ void build_and_run_autonomous_stream_test(
     uint32_t stream_tile_header_buffer_size_bytes = tile_header_buffer_num_messages * tile_header_size;
     uint32_t relay_stream_overlay_blob_size_bytes = 256;
 
-    programs.emplace_back();
     Device* device = devices.at(0);
-    Program& program = programs.at(0);
+    auto program = tt_metal::CreateScopedProgram();
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 
     CoreCoord sender_core = CoreCoord(0, 0);
@@ -337,30 +331,31 @@ void build_and_run_autonomous_stream_test(
         CreateCircularBuffer(program, second_relay_core, relay_stream_buffer_cb_config);
     auto receiver_stream_buffer_cb = CreateCircularBuffer(program, receiver_core, receiver_stream_buffer_cb_config);
 
-    program.allocate_circular_buffers(device);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    program_ptr->allocate_circular_buffers(device);
 
     uint32_t sender_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, sender_stream_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, sender_stream_buffer_cb)->address();
     uint32_t first_relay_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, first_relay_stream_buffer_cb)->address();
     uint32_t second_relay_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, second_relay_stream_buffer_cb)->address();
     uint32_t receiver_stream_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, receiver_stream_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, receiver_stream_buffer_cb)->address();
     uint32_t sender_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, sender_stream_tile_header_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, sender_stream_tile_header_buffer_cb)->address();
     uint32_t first_relay_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_tile_header_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, first_relay_stream_tile_header_buffer_cb)->address();
     uint32_t second_relay_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_tile_header_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, second_relay_stream_tile_header_buffer_cb)->address();
     uint32_t receiver_stream_tile_header_buffer_addr =
-        tt_metal::detail::GetCircularBuffer(program, receiver_stream_tile_header_buffer_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, receiver_stream_tile_header_buffer_cb)->address();
     uint32_t first_relay_stream_overlay_blob_addr =
-        tt_metal::detail::GetCircularBuffer(program, first_relay_stream_overlay_blob_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, first_relay_stream_overlay_blob_cb)->address();
     uint32_t second_relay_stream_overlay_blob_addr =
-        tt_metal::detail::GetCircularBuffer(program, second_relay_stream_overlay_blob_cb)->address();
+        tt_metal::detail::GetCircularBuffer(*program_ptr, second_relay_stream_overlay_blob_cb)->address();
 
-    uint32_t receiver_cb_address = tt_metal::detail::GetCircularBuffer(program, receiver_cb)->address();
+    uint32_t receiver_cb_address = tt_metal::detail::GetCircularBuffer(*program_ptr, receiver_cb)->address();
     log_trace(tt::LogTest, "receiver_cb_address: {}", receiver_cb_address);
 
     TT_ASSERT(sender_stream_buffer_size_bytes % page_size_plus_header == 0);
@@ -580,7 +575,7 @@ void build_and_run_autonomous_stream_test(
     }
     tt_metal::SetRuntimeArgs(program, receiver_writer_kernel, receiver_core, receiver_writer_rt_args);
 
-    tt::tt_metal::detail::CompileProgram(device, program);
+    tt::tt_metal::detail::CompileProgram(device, *program_ptr);
     for (std::size_t i = 0; i < num_loop_iterations; i++) {
         log_debug(tt::LogTest, "Enqueing Program");
         tt_metal::EnqueueProgram(device->command_queue(), program, true);
@@ -674,9 +669,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreams) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program> programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
-        programs,
         {device_},
         num_messages_to_send,
         page_size,
@@ -717,9 +710,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSmallPackets) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 5, 1};
 
-    std::vector<Program> programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
-        programs,
         {device_},
         num_messages_to_send,
         page_size,
@@ -760,9 +751,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingShort) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program> programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
-        programs,
         {device_},
         num_messages_to_send,
         page_size,
@@ -814,10 +803,8 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingRandomShor
             sub_sizes.at(i) = std::rand() % (page_size / noc_word_size);
             EXPECT_TRUE(sub_sizes.at(i) < (page_size / noc_word_size));
         }
-        std::vector<Program> programs;
         log_info(tt::LogTest, "Iteration: {}", i);
         tt::tt_metal::build_and_run_autonomous_stream_test(
-            programs,
             {device_},
             num_messages_to_send,
             page_size,
@@ -865,9 +852,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingLong) {
 
     std::array<uint32_t, num_sizes> sub_sizes = std::array<uint32_t, num_sizes>{0, 3, 4, 7, 0, 2, 10, 1};
 
-    std::vector<Program> programs;
     tt::tt_metal::build_and_run_autonomous_stream_test(
-        programs,
         {device_},
         num_messages_to_send,
         page_size,
@@ -951,9 +936,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSweep) {
                             EXPECT_TRUE(sub_sizes.at(i) < (page_size / noc_word_size));
                         }
 
-                        std::vector<Program> programs;
                         tt::tt_metal::build_and_run_autonomous_stream_test(
-                            programs,
                             {device_},
                             num_messages,
                             page_size,

@@ -31,7 +31,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = output_grad.device();
-    Program program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -288,7 +288,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         tile_offset += num_rows_per_core * num_inner;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
 }
 
 void MorehLayerNormBackwardInputGradOperation::ProgramFactory::override_runtime_arguments(

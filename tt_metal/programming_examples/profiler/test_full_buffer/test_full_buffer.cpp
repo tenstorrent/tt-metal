@@ -6,7 +6,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/hostdevcommon/profiler_common.h"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 
 void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dispatch)
@@ -17,7 +17,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
     CoreRange all_cores(start_core, end_core);
     auto eth_cores = device->get_active_ethernet_cores(true);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     constexpr int loop_size = 200;
     std::map<string, string> kernel_defines = {
@@ -56,7 +56,8 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
     }
     else
     {
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
     }
 
 }

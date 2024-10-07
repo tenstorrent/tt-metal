@@ -81,7 +81,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     CoreCoord phys_spoof_prefetch_core = device->worker_core_from_logical_core(spoof_prefetch_core);
     CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     uint32_t dispatch_buffer_size_blocks_g = 4;
 
@@ -193,6 +193,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
     constexpr NOC my_noc_index = NOC::NOC_0;
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
 
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
     configure_kernel_variant<true, true>(program,
         "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
         dispatch_compile_args,
@@ -220,10 +221,10 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
             tt::llrt::write_hex_vec_to_core(
                 device->id(), phys_dispatch_core, read_ptr_update_val, completion_q_rd_ptr);
         });
-        tt::tt_metal::detail::LaunchProgram(device, program);
+        tt::tt_metal::detail::LaunchProgram(device, *program_ptr);
         t1.join();
     } else {
-        tt::tt_metal::detail::LaunchProgram(device, program);
+        tt::tt_metal::detail::LaunchProgram(device, *program_ptr);
     }
 
     // Validation

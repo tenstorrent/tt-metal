@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0, out_cb_index = 16;
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -198,7 +198,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

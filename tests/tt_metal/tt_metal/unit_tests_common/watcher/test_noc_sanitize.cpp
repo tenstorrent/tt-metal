@@ -24,7 +24,7 @@ typedef enum sanitization_features {
 
 void RunTestOnCore(WatcherFixture* fixture, Device* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
     CoreCoord phys_core;
     if (is_eth_core)
         phys_core = device->ethernet_core_from_logical_core(core);

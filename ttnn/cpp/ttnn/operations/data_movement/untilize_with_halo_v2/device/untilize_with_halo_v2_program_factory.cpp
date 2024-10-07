@@ -19,7 +19,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
-    Program& program,
+    ProgramHandle program,
     const Tensor& input_tensor,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
@@ -208,7 +208,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     auto override_runtime_arguments_callback = [src_cb, out_cb, padding_config_cb, local_config_cb, remote_config_cb](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

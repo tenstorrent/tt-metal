@@ -14,6 +14,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -68,7 +69,7 @@ void check_semaphores_are_initialized(tt_metal::Device *device, tt_metal::Progra
     }
 }
 
-bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::Program &program, const CoreRangeSet &core_range_set) {
+bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_metal::ProgramHandle program, const CoreRangeSet &core_range_set) {
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
@@ -153,9 +154,10 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
         golden_sem_values.push_back(initial_value);
     }
 
-    check_program_is_mapped_to_correct_cores(program, core_range_set, compute_kernel_args);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    check_program_is_mapped_to_correct_cores(*program_ptr, core_range_set, compute_kernel_args);
 
-    tt_metal::detail::CompileProgram(device, program);
+    tt_metal::detail::CompileProgram(device, *program_ptr);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -188,9 +190,9 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     }
 
 
-    tt_metal::detail::LaunchProgram(device, program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
-    check_semaphores_are_initialized(device, program, core_range_set, golden_sem_values);
+    check_semaphores_are_initialized(device, *program_ptr, core_range_set, golden_sem_values);
 
     for (const auto &[core, dst_l1_buffer] : core_to_l1_buffer) {
         std::vector<uint32_t> result_vec;
@@ -220,7 +222,7 @@ int main(int argc, char **argv) {
 
 
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         CoreRange core_range_one({0, 0}, {1, 1});
         CoreRange core_range_two({2, 2}, {3, 3});
         CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});

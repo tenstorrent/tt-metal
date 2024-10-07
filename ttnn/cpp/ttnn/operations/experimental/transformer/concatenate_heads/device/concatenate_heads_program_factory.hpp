@@ -57,7 +57,7 @@ operation::ProgramWithCallbacks concatenate_heads_multi_core(const Tensor &a, Te
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks concatenate_heads_multi_core(const Tensor &a, Te
             start_core_y
         ]
     (
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks concatenate_heads_multi_core(const Tensor &a, Te
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // ttnn::operations::experimental::transformer::detail

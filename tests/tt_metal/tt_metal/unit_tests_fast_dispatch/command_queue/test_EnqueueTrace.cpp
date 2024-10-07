@@ -11,6 +11,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/logger.hpp"
@@ -27,8 +28,8 @@ struct TestBufferConfig {
     BufferType buftype;
 };
 
-Program create_simple_unary_program(Buffer& input, Buffer& output) {
-    Program program = CreateProgram();
+ScopedProgramHandle create_simple_unary_program(Buffer& input, Buffer& output) {
+    auto program = CreateScopedProgram();
     Device* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
@@ -76,14 +77,15 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
         input.num_pages()
     };
 
-    SetRuntimeArgs(device, detail::GetKernel(program, writer_kernel), worker, writer_runtime_args);
-    SetRuntimeArgs(device, detail::GetKernel(program, reader_kernel), worker, reader_runtime_args);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    SetRuntimeArgs(device, detail::GetKernel(*program_ptr, writer_kernel), worker, writer_runtime_args);
+    SetRuntimeArgs(device, detail::GetKernel(*program_ptr, reader_kernel), worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, 2048);
 
     CreateCircularBuffer(program, core_range, output_cb_config);
-    return program;
+    return std::move(program);
 }
 
 // All basic trace tests just assert that the replayed result exactly matches
@@ -104,10 +106,10 @@ TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
         input_data[i] = i;
     }
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
-    auto simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
-    EnqueueProgram(command_queue, *simple_program, true);
+    auto simple_program = create_simple_unary_program(input, output);
+    EnqueueProgram(command_queue, simple_program, true);
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
-    EnqueueProgram(command_queue, *simple_program, kNonBlocking);
+    EnqueueProgram(command_queue, simple_program, kNonBlocking);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
@@ -133,7 +135,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
 
     CommandQueue& command_queue = this->device_->command_queue();
 
-    Program simple_program = create_simple_unary_program(input, output);
+    auto simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -156,7 +158,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
     Buffer input_temp(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output_temp(this->device_, 2048, 2048, BufferType::DRAM);
-    Program simple_program_temp = create_simple_unary_program(input_temp, output_temp);
+    auto simple_program_temp = create_simple_unary_program(input_temp, output_temp);
     EnqueueProgram(command_queue, simple_program_temp, true);
     // Run trace that can clobber the temporary buffers created above
     EnqueueProgram(command_queue, simple_program, false);
@@ -187,12 +189,12 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     trace_output_data.resize(input_data.size());
 
     bool has_eager = true;
-    std::shared_ptr<Program> simple_program;
+    ScopedProgramHandle simple_program;
     // EAGER MODE EXECUTION
     if (has_eager) {
-        simple_program = std::make_shared<Program>(create_simple_unary_program(input, output));
+        simple_program = create_simple_unary_program(input, output);
         EnqueueWriteBuffer(command_queue, input, input_data.data(), true);
-        EnqueueProgram(command_queue, *simple_program, true);
+        EnqueueProgram(command_queue, simple_program, true);
         EnqueueReadBuffer(command_queue, output, eager_output_data.data(), true);
     }
 
@@ -205,7 +207,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
         if (!has_trace) {
             // Program must be cached first
             tid = BeginTraceCapture(this->device_, command_queue.id());
-            EnqueueProgram(command_queue, *simple_program, false);
+            EnqueueProgram(command_queue, simple_program, false);
             EndTraceCapture(this->device_, command_queue.id(), tid);
             has_trace = true;
         }
@@ -229,8 +231,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
     Buffer interm(this->device_, 2048, 2048, BufferType::DRAM);
     Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
 
-    Program op0 = create_simple_unary_program(input, interm);
-    Program op1 = create_simple_unary_program(interm, output);
+    auto op0 = create_simple_unary_program(input, interm);
+    auto op1 = create_simple_unary_program(interm, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -305,8 +307,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
 
     uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
     uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
-    vector<std::shared_ptr<Buffer>> interm_buffers;
-    vector<Program> programs;
+    std::vector<std::shared_ptr<Buffer>> interm_buffers;
+    std::vector<ScopedProgramHandle> programs;
 
     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
@@ -316,11 +318,11 @@ TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
     for (int i = 0; i < num_programs; i++) {
         interm_buffers.push_back(std::make_shared<Buffer>(this->device_, 2048, 2048, BufferType::DRAM));
         if (i == 0) {
-            programs.push_back(create_simple_unary_program(*input, *(interm_buffers[i])));
+            programs.emplace_back(create_simple_unary_program(*input, *(interm_buffers[i])));
         } else if (i == (num_programs - 1)) {
-            programs.push_back(create_simple_unary_program(*(interm_buffers[i - 1]), *output));
+            programs.emplace_back(create_simple_unary_program(*(interm_buffers[i - 1]), *output));
         } else {
-            programs.push_back(create_simple_unary_program(*(interm_buffers[i - 1]), *(interm_buffers[i])));
+            programs.emplace_back(create_simple_unary_program(*(interm_buffers[i - 1]), *(interm_buffers[i])));
         }
     }
 

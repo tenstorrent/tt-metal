@@ -11,6 +11,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -144,7 +145,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        auto program = tt::tt_metal::CreateScopedProgram();
 
         CoreCoord start_core = {0, 0};
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
@@ -213,7 +214,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::CompileProgram(device, *program_ptr);
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
@@ -227,7 +229,7 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
 
             if (use_device_profiler) {
-                elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, *program_ptr);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
             }

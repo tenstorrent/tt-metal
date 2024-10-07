@@ -111,7 +111,7 @@ std::unique_ptr<CclOpTensorConfig> CclOpTensorConfig::build_all_gather_tensor_co
 
 
 void generate_edm_kernels_for_ring_or_linear_topology(
-   tt::tt_metal::Program& program,
+   tt::tt_metal::ProgramHandle program,
     Device const* device,
     RingTopology const& topology_config,
     std::vector<ccl::EriscDatamoverBuilder> const& clockwise_edm_builders,
@@ -165,7 +165,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
 
 
 KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
+   tt::tt_metal::ProgramHandle program,
     Device const* device,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core,

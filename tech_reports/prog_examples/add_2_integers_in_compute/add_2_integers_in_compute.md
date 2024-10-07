@@ -18,7 +18,7 @@ To build and execute, you may use the following commands. Note that we include t
 ``` cpp
 Device *device = CreateDevice(0);
 CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+auto program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 

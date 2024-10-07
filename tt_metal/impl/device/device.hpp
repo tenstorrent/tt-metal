@@ -8,11 +8,13 @@
 #include <mutex>
 
 #include "hostdevcommon/common_values.hpp"
-#include "impl/dispatch/work_executor.hpp"
+#include "tt_metal/impl/dispatch/work_executor.hpp"
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
+#include "tt_metal/impl/program/program_handle.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
@@ -240,7 +242,7 @@ class Device {
     void init_command_queue_host();
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
-    void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
+    void configure_kernel_variant(ProgramHandle program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
                                   CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
@@ -295,7 +297,7 @@ class Device {
     LaunchMessageRingBufferState worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;
 
-    std::vector<std::unique_ptr<Program>> command_queue_programs;
+    std::vector<ScopedProgramHandle> command_queue_programs;
     bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
     uint32_t num_worker_cores_;

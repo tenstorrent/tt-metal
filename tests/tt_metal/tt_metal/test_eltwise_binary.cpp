@@ -39,7 +39,10 @@ int main(int argc, char** argv) {
 
     CommandQueue& cq = device->command_queue();
 
-    Program programs[] = {tt_metal::CreateProgram(), tt_metal::CreateProgram(), tt_metal::CreateProgram()};
+    std::vector<ScopedProgramHandle> programs;
+    programs.emplace_back(tt_metal::CreateScopedProgram());
+    programs.emplace_back(tt_metal::CreateScopedProgram());
+    programs.emplace_back(tt_metal::CreateScopedProgram());
 
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
@@ -52,8 +55,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            // tt_metal::Program program = tt_metal::CreateProgram();
-            tt_metal::Program& program = programs[eltwise_op];
+            auto& program = programs[eltwise_op];
 
             CoreCoord core = {0, 0};
 

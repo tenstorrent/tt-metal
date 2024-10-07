@@ -13,6 +13,7 @@
 #include "host_api.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/program/program.hpp"
+#include "impl/program/program_pool.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_cluster_descriptor_types.h"
 
@@ -27,15 +28,19 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
 
         const chip_id_t device_id = 0;
         this->device_ = CreateDevice(device_id);
-        this->program_ = CreateProgram();
+        this->program_handle_ = CreateProgram();
+        this->program_ = ProgramPool::instance().get_program(this->program_handle_);
     }
 
-    void TearDown() override { CloseDevice(this->device_); }
+    void TearDown() override {
+        CloseDevice(this->device_);
+        CloseProgram(this->program_handle_);
+    }
 
     void create_kernel(const string &kernel_file) {
         CoreCoord core(0, 0);
         tt_metal::CreateKernel(
-            this->program_,
+            this->program_handle_,
             kernel_file,
             core,
             tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -60,7 +65,8 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
     }
 
     Device *device_;
-    Program program_;
+    ProgramHandle program_handle_;
+    Program* program_;
 
    private:
     void validate_preconditions() {
@@ -107,7 +113,7 @@ class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderMetalRootDir) {
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    detail::CompileProgram(this->device_, *this->program_);
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderKernelRootDir) {
@@ -115,7 +121,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderKernelRootDir) {
     const string &new_kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/new_kernel.cpp";
     this->setup_kernel_dir(orig_kernel_file, new_kernel_file);
     this->create_kernel(new_kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    detail::CompileProgram(this->device_, *this->program_);
     this->cleanup_kernel_dir();
 }
 
@@ -123,12 +129,12 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, KernelUnderMetalRootDirAndKern
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
     this->setup_kernel_dir(kernel_file, kernel_file);
     this->create_kernel(kernel_file);
-    detail::CompileProgram(this->device_, this->program_);
+    detail::CompileProgram(this->device_, *this->program_);
     this->cleanup_kernel_dir();
 }
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, NonExistentKernel) {
     const string &kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
     this->create_kernel(kernel_file);
-    EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
+    EXPECT_THROW(detail::CompileProgram(this->device_, *this->program_), std::exception);
 }

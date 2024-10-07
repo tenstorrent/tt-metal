@@ -32,7 +32,7 @@ CoreCoord get_core_range(uint32_t num_blocks_rows, uint32_t num_blocks_cols,
 }
 
 // took & revise from bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
-tt_metal::Program create_program_mcast_in0_in1(
+tt_metal::ScopedProgramHandle create_program_mcast_in0_in1(
     tt_metal::Device* device, MathFidelity math_fidelity, CoreCoord core_range,
     uint32_t B, uint32_t M, uint32_t N, uint32_t K, bool bcast_batch,
     uint32_t in0_block_w, uint32_t out_subblock_h, uint32_t out_subblock_w,
@@ -41,7 +41,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     std::shared_ptr<tt_metal::Buffer> out_buffer, tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format, tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format) {
-  tt_metal::Program program{};
+  auto program = tt::tt_metal::CreateScopedProgram();
 
   uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
   uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);

@@ -165,7 +165,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
 
         tile_offset += units_per_core;
     }
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
 }
 
 void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(

@@ -25,7 +25,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     auto dst_buffer = output.buffer();
     float scaler = 1.0f;
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);

@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
-#include "common/constants.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.
@@ -146,7 +145,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
         uint32_t M = 2;
@@ -358,7 +357,8 @@ int main(int argc, char **argv) {
             core,
             writer_rt_args);
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

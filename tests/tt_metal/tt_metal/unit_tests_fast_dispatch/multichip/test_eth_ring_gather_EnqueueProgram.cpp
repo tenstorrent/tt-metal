@@ -11,9 +11,10 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -177,7 +178,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
+    std::map<chip_id_t, tt_metal::ScopedProgramHandle> programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -190,8 +191,18 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         //                      Sender Device
         ////////////////////////////////////////////////////////////////////////////
         const auto& [sender_device, receiver_device, eth_sender_core, eth_receiver_core] = sender_receivers[i];
-        auto& sender_program = programs[sender_device->id()];
-        auto& receiver_program = programs[receiver_device->id()];
+
+        const auto get_by = [&](auto id) -> auto& {
+            if (const auto it = programs.find(id); it != programs.end()) {
+                return it->second;
+            } else {
+                return programs.emplace(id, tt::tt_metal::CreateScopedProgram()).first->second;
+            }
+        };
+
+        auto& sender_program = get_by(sender_device->id());
+        auto& receiver_program = get_by(receiver_device->id());
+
         CoreCoord sender_receiver_core;
         for (uint32_t j = 0; j < sender_receivers.size(); ++j) {
             if (std::get<1>(sender_receivers[j])->id() == sender_device->id()) {
@@ -279,7 +290,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     std::vector<std::reference_wrapper<CommandQueue>> cqs;
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(programs.at(device->id()));
+        tt::tt_metal::detail::CompileProgram(device, *program_ptr);
         auto& cq = device->command_queue();
 
         EnqueueProgram(cq, programs.at(device->id()), false);
@@ -325,7 +337,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<std::vector<uint32_t>> inputs;
     inputs.reserve(sender_receivers.size());
     std::vector<uint32_t> all_zeros(numel * sender_receivers.size(), 0);
-    std::map<chip_id_t, tt_metal::Program> programs;
+    std::map<chip_id_t, tt_metal::ScopedProgramHandle> programs;
     std::vector<uint32_t> full_input;
     full_input.reserve(numel * sender_receivers.size());
 
@@ -348,7 +360,14 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             }
         }
 
-        auto& program = programs[device->id()];
+        const auto get_by = [&](auto id) -> auto& {
+            if (const auto it = programs.find(id); it != programs.end()) {
+                return it->second;
+            } else {
+                return programs.emplace(id, tt::tt_metal::CreateScopedProgram()).first->second;
+            }
+        };
+        auto& program = get_by(device->id());
 
         auto input_buffer =
             CreateBuffer(InterleavedBufferConfig{device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
@@ -402,7 +421,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
                     uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
-                        output_buffers[i]->buffer_type() == tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here
+                        output_buffers[i]->buffer_type() ==
+                        tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -424,7 +444,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<std::reference_wrapper<CommandQueue>> cqs;
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        tt::tt_metal::detail::CompileProgram(device, programs.at(device->id()));
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(programs.at(device->id()));
+        tt::tt_metal::detail::CompileProgram(device, *program_ptr);
         auto& cq = device->command_queue();
 
         EnqueueProgram(cq, programs.at(device->id()), false);

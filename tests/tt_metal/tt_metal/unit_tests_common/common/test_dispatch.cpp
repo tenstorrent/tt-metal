@@ -5,6 +5,7 @@
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
@@ -29,7 +30,7 @@ static void test_sems_across_core_types(CommonFixture *fixture,
             device->get_active_ethernet_cores() :
             device->get_inactive_ethernet_cores();
         if (eth_cores.size() > 0) {
-            Program program = CreateProgram();
+            auto program = CreateScopedProgram();
 
             CoreCoord eth_core = *eth_cores.begin();
             CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
@@ -90,7 +91,7 @@ static void test_sems_across_core_types(CommonFixture *fixture,
 TEST_F(CommonFixture, TestEthBlank) {
 
     Device *device = devices_[0];
-    Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     // TODO: tweak when FD supports idle eth
     const auto &eth_cores = this->slow_dispatch_ ?
@@ -117,7 +118,7 @@ TEST_F(CommonFixture, TestTensixInitLocalMemory) {
 
     Device *device = devices_[0];
     CoreCoord core = {0, 0};
-    Program program;
+    auto program = CreateScopedProgram();
 
     CreateKernel(
         program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
@@ -144,7 +145,7 @@ TEST_F(CommonFixture, TestEthInitLocalMemory) {
     }
 
     Device *device = devices_[0];
-    Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     // TODO: tweak when FD supports idle eth
     const auto &eth_cores = this->slow_dispatch_ ?
@@ -211,7 +212,7 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
             return;
         }
 
-        Program program;
+        auto program = CreateScopedProgram();
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
             .set_page_size(intermediate_cb, single_tile_size)
             .set_page_size(out_cb, single_tile_size);
@@ -233,12 +234,14 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
 
         vector<uint32_t> cb_config_vector;
 
+        auto* program_ptr = ProgramPool::instance().get_program(program);
+
         tt::tt_metal::detail::ReadFromDeviceL1(
             device, core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
+            program_ptr->get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
 
         // ETH core doesn't have CB
-        EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
+        EXPECT_TRUE(program_ptr->get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
         uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);

@@ -6,10 +6,10 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 
@@ -82,7 +82,7 @@ int main(int argc, char **argv) {
         assert(is_power_of_2(tx_queue_size_bytes) && (tx_queue_size_bytes >= 1024));
         assert(is_power_of_2(rx_queue_size_bytes) && (rx_queue_size_bytes >= 1024));
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord traffic_gen_tx_core = {tx_x, tx_y};
         CoreCoord traffic_gen_rx_core = {rx_x, rx_y};
@@ -162,7 +162,8 @@ int main(int argc, char **argv) {
 
         auto start = std::chrono::system_clock::now();
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         auto end = std::chrono::system_clock::now();
 

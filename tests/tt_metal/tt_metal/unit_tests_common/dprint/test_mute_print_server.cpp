@@ -20,7 +20,7 @@ Printing int from arg: 2)";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // This tests prints only on a single core
     constexpr CoreCoord core = {0, 0}; // Print on first core only

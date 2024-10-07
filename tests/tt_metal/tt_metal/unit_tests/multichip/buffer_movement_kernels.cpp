@@ -4,24 +4,17 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "device_fixture.hpp"
 #include "n300_device_fixture.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 constexpr std::int32_t MAX_BUFFER_SIZE =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
@@ -100,7 +93,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -124,7 +117,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -148,9 +141,10 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-
-    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
-    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr); });
+    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr); });
 
     th1.join();
     th2.join();
@@ -183,7 +177,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
     /*std::vector<uint32_t> input_packed =
@@ -235,7 +229,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     auto output_buffer = CreateBuffer(receiver_config);
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
@@ -266,9 +260,10 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
-
-    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
-    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr); });
+    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr); });
 
     th1.join();
     th2.join();

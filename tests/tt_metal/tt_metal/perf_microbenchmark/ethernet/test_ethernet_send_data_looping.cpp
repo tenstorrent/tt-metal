@@ -3,25 +3,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <random>
 
+#include "impl/device/device.hpp"
+#include "llrt/llrt.hpp"
 #include "tt_metal/common/core_coord.h"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 class N300TestDevice {
    public:
@@ -131,7 +126,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -160,7 +155,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                           Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -189,16 +184,18 @@ bool RunWriteBWTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+    tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
 
     std::cout << "Running..." << std::endl;
 
     std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
+        tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr);
     });
     std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
+        tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr);
     });
 
     th2.join();

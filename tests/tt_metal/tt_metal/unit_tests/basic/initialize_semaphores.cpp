@@ -12,13 +12,14 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 
 using namespace tt;
 
 namespace unit_tests::initialize_semaphores {
 
-void initialize_program(tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
+void initialize_program(tt_metal::Device *device, tt_metal::ProgramHandle program, const CoreRange &core_range) {
     uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
@@ -60,7 +61,7 @@ void initialize_program(tt_metal::Device *device, tt_metal::Program &program, co
 }
 
 void create_and_read_max_num_semaphores(
-    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
+    tt_metal::Device *device, tt_metal::ProgramHandle program, const CoreRange &core_range) {
     std::vector<uint32_t> golden;
     for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
@@ -68,12 +69,10 @@ void create_and_read_max_num_semaphores(
         golden.push_back(initial_value);
         ASSERT_TRUE(semaphore_id == i);
     }
-
-    tt_metal::detail::CompileProgram(device, program);
-
-    program.finalize(device);
-
-    ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    tt_metal::detail::CompileProgram(device, *program_ptr);
+    program_ptr->finalize(device);
+    ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, *program_ptr));
 
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -81,7 +80,7 @@ void create_and_read_max_num_semaphores(
             std::vector<uint32_t> res;
             for (uint32_t i = 0; i < NUM_SEMAPHORES; i++) {
                 std::vector<uint32_t> single_val;
-                uint32_t semaphore_addr = program.get_sem_base_addr(device, logical_core, CoreType::WORKER) + (hal.get_alignment(HalMemType::L1) * i);
+                uint32_t semaphore_addr = program_ptr->get_sem_base_addr(device, logical_core, CoreType::WORKER) + (hal.get_alignment(HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
@@ -93,8 +92,9 @@ void create_and_read_max_num_semaphores(
 }
 
 void try_creating_more_than_max_num_semaphores(
-    tt_metal::Device *device, tt_metal::Program &program, const CoreRange &core_range) {
-    ASSERT_TRUE(program.num_semaphores() == 0);
+    tt_metal::Device *device, tt_metal::ProgramHandle program, const CoreRange &core_range) {
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    ASSERT_TRUE(program_ptr->num_semaphores() == 0);
     create_and_read_max_num_semaphores(device, program, core_range);
     constexpr static uint32_t val = 5;
     ASSERT_ANY_THROW(tt_metal::CreateSemaphore(program, core_range, val));
@@ -104,7 +104,7 @@ void try_creating_more_than_max_num_semaphores(
 
 TEST_F(DeviceFixture, InitializeLegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::initialize_program(devices_.at(id), program, core_range);
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), program, core_range);
@@ -113,7 +113,7 @@ TEST_F(DeviceFixture, InitializeLegalSemaphores) {
 
 TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::initialize_program(devices_.at(id), program, core_range);
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
@@ -122,7 +122,7 @@ TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
 }
 
 TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core0(0,0);
     uint32_t sem0_id = tt_metal::CreateSemaphore(program, core0, 0);

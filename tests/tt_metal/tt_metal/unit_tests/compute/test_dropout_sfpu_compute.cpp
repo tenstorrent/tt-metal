@@ -7,6 +7,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -66,7 +67,7 @@ bool test_dropout_standalone(tt_metal::Device* device, float probability, uint32
         /*
         * Setup program to execute along with its buffers and kernels to use
         */
-        Program program = CreateProgram();
+        auto program = CreateScopedProgram();
         constexpr CoreCoord core = {0, 0};
         constexpr uint32_t single_tile_size = 2 * 1024;
         constexpr uint32_t num_tiles = 128;
@@ -177,7 +178,8 @@ bool test_dropout_standalone(tt_metal::Device* device, float probability, uint32
             }
         );
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         /*
          * Read the result and compare to a golden result. Record pass/fail

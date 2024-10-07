@@ -48,7 +48,7 @@ void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = Ma
 bool matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulTileConfig &cfg, vector<uint32_t> activations, vector<std::seed_seq::result_type> weights, deprecated::Tensor<bfloat16> tensor){
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 

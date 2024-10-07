@@ -264,7 +264,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         tile_offset += num_rows_per_core * num_inner_tiles;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::override_runtime_arguments(

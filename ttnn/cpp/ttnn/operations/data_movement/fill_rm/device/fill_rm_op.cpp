@@ -17,7 +17,7 @@ namespace ttnn::operations::data_movement{
 operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &output, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, float val_hi, float val_lo) {
 
     tt::tt_metal::Device *device = any.device();
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(any.get_dtype());
@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
     );
 
     auto override_runtime_args_callback = [kernel_id=binary_reader_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -66,7 +66,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(const Tensor& any, Tensor &o
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 void FillRM::validate(const std::vector<Tensor> &input_tensors) const {

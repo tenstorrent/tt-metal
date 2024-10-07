@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -56,7 +57,7 @@ struct TestConfig {
 };
 
 void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& test_config) {
-    Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -218,7 +219,8 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         (std::uint32_t)dram_dst_noc_xy.y,
         num_tiles});
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

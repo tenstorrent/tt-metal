@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <chrono>
 #include <thread>
-#include <cmath>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/debug/dprint_server.hpp"
 
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
@@ -17,6 +16,7 @@
 
 #include "tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 namespace tt {
 
@@ -45,6 +45,11 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
 
     detail::DumpDeviceProfileResults(device, cores_in_program);
 #endif
+}
+
+void DumpDeviceProfileResults(Device *device, ProgramHandle handle) {
+    auto* program_ptr = ProgramPool::instance().get_program(handle);
+    DumpDeviceProfileResults(device, *program_ptr);
 }
 
 }  // namespace v0
@@ -93,7 +98,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 #endif
 }
 
-void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program> &sync_program, bool doHeader)
+void syncDeviceHost(Device *device, CoreCoord logical_core, ProgramHandle& sync_program, bool doHeader)
 {
     if (!tt::llrt::OptionsG.get_profiler_sync_enabled()) return;
     ZoneScopedC(tracy::Color::Tomato3);
@@ -104,15 +109,15 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     smallestHostime.emplace(device_id, 0);
 
     constexpr uint16_t sampleCount = 249;
-    if (sync_program == nullptr) {
-        sync_program = std::make_shared<tt_metal::Program>();
+    if (!sync_program.is_valid()) {
+        sync_program = CreateProgram();
 
         std::map<string, string> kernel_defines = {
             {"SAMPLE_COUNT", std::to_string(sampleCount)},
         };
 
         tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
-            *sync_program, "tt_metal/tools/profiler/sync/sync_kernel.cpp",
+            sync_program, "tt_metal/tools/profiler/sync/sync_kernel.cpp",
             logical_core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -122,7 +127,8 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     }
     constexpr bool wait_for_all_cores_done = false;
     constexpr bool force_slow_dispatch = true;
-    LaunchProgram(device, sync_program, wait_for_all_cores_done, force_slow_dispatch);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sync_program);
+    LaunchProgram(device, *program_ptr, wait_for_all_cores_done, force_slow_dispatch);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -470,7 +476,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the last
                 // owner. Sync program also contains a buffer so it is safter to release it here
                 tt_metal_device_profiler_map.at(device_id).output_dram_buffer.reset();
-                tt_metal_device_profiler_map.at(device_id).sync_program.reset();
+                tt::tt_metal::CloseProgram(tt_metal_device_profiler_map.at(device_id).sync_program);
             }
             else
             {

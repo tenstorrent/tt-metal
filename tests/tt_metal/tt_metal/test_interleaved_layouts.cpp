@@ -2,16 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
 #include <math.h>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
-
-#include "llrt/llrt.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 #include "impl/debug/dprint_server.hpp"
 
@@ -93,7 +89,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
 
@@ -203,7 +199,8 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         CoreCoord debug_core = {1,1};
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -272,7 +269,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
 
@@ -375,7 +372,8 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             (uint32_t) stick_size,
             (uint32_t) log2(stick_size)});
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -427,7 +425,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
 
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     CoreCoord core = {0, 0};
 
     tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})
@@ -515,11 +513,8 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             core,
             {dst->address(), 0, 0, num_pages});
 
-
-
-
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
 
@@ -532,11 +527,8 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
             core,
             {dst->address(), 0, 0, num_pages});
 
-
-
-
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
     }

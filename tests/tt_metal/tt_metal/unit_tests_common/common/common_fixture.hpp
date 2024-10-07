@@ -7,6 +7,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
@@ -15,17 +16,18 @@
 class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
+    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::ProgramHandle program) {
         static std::unordered_map<uint64_t, uint32_t> trace_captured;
-        uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
-            tt::tt_metal::detail::LaunchProgram(device, program);
+            auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+            tt::tt_metal::detail::LaunchProgram(device, *program_ptr);
         } else {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
             tt::tt_metal::EnqueueProgram(cq, program, false);
             tt::tt_metal::Finish(cq);
         }
     }
+
     void WriteBuffer(tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t> &src_vec){
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);

@@ -11,6 +11,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -86,7 +87,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
@@ -98,7 +99,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     int out_subblock_w,
     int per_core_M,
     int per_core_N) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -190,7 +191,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
 bool assign_runtime_args_to_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     int num_cores_r,
     int num_cores_c,
     tt_metal::KernelHandle mm_reader_kernel,

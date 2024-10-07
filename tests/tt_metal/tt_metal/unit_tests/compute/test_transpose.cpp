@@ -18,6 +18,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
 #include "common/test_tiles.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -70,7 +71,7 @@ void validate_transpose_wh(const std::vector<uint32_t> &src_vec, const std::vect
 void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
 
-    Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -174,7 +175,8 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

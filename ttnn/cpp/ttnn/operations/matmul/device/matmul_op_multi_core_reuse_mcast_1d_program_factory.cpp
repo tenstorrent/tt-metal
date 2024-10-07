@@ -23,7 +23,7 @@ using ttnn::operations::unary::UnaryWithParam;
 namespace reuse_mcast_1d_optimized_helpers {
 
 operation::ProgramWithCallbacks create_program_mcast_in0(
-    tt_metal::Program& program,
+    tt_metal::ProgramHandle program,
     const Tensor& a,
     tt_metal::Device* device,
     MathFidelity math_fidelity,
@@ -812,7 +812,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
          cores,
          num_cores_with_work](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -908,7 +908,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     bool in0_is_sharded,
     bool output_is_sharded,
     bool untilize_out) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     bool fuse_op = false;
 
@@ -1502,7 +1502,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
          start_core,
          cores](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -1579,7 +1579,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,
@@ -1785,7 +1785,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool mcast_in0,
     bool untilize_out) {
 
-    tt_metal::Program program{}; /* Create a program */
+    auto program = tt::tt_metal::CreateProgram(); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
     return matmul_multi_core_reuse_mcast_1d_optimized_(
@@ -1810,7 +1810,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
 }
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor> bias,

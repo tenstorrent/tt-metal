@@ -46,7 +46,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = output_grad.device();
-    Program program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -264,7 +264,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         tile_offset += num_cols_per_core;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
 }
 
 void MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::override_runtime_arguments(

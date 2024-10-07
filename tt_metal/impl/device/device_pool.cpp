@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 #include <numa.h>
 
@@ -116,6 +117,7 @@ void DevicePool::initialize(
     const std::vector<uint32_t> &l1_bank_remap) noexcept {
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
+    ProgramPool::instance().initialize();
 
     if (_inst == nullptr) {
         static DevicePool device_pool(device_ids, num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap);

@@ -190,7 +190,7 @@ Matmul create_matmul_struct(
 );
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -201,7 +201,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,

@@ -125,7 +125,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     tt::tt_metal::Device *device{input.device()};
 
     ////////////////////////////////////////////////////////////////////////////
@@ -476,14 +476,14 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
                                               const void *operation,
-                                              Program &program,
+                                              ProgramHandle program,
                                               const std::vector<Tensor> &input_tensors,
                                               const std::vector<std::optional<const Tensor>> &optional_input_tensors,
                                               const std::vector<Tensor> &output_tensors) {
 
     };
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void MorehMatmulOperation::MultiCoreProgramFactory::override_runtime_arguments(

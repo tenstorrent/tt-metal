@@ -3,14 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -152,8 +151,8 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> create_program(tt_metal::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle , tt_metal::KernelHandle> create_program(tt_metal::Device *device, int num_cores_r, int num_cores_c, int per_core_M, int per_core_N, int K, int in0_block_w, int out_subblock_h, int out_subblock_w) {
+    auto program = tt_metal::CreateScopedProgram();
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_size = in0_block_tiles * 2 * single_tile_size; // double buffer
@@ -249,7 +248,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle , tt_metal::KernelHandle> c
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    return {std::move(program), mm_reader_kernel, unary_writer_kernel};
+    return {program, mm_reader_kernel, unary_writer_kernel};
 }
 
 std::vector<bfloat16> get_row_slice(std::vector<bfloat16> data, int total_row_slices, int row_slice_index, int rows, int cols) {
@@ -395,7 +394,9 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
+
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");
         for(int i = 0; i < num_cores_r; i++) {

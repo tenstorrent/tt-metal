@@ -5,6 +5,7 @@
 #include "device_fixture.hpp"
 #include "tt_metal/common/bfloat8.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -47,7 +48,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;
 
     CoreCoord core = {0, 0};
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
         .device = device, .size = dram_buffer_size_bfp16b, .page_size = dram_buffer_size_bfp16b, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -244,7 +245,8 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
             (uint32_t)test_config.ublock_size_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
 
     // ////////////////////////////////////////////////////////////////////////////

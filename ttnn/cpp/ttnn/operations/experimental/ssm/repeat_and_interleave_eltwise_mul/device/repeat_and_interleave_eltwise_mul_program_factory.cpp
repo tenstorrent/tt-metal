@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_data_format);
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     // Constants
     constexpr uint32_t ONE_TILE = 1;
@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
                              num_blocks_per_core_group_2,
                              ashape,
                              bshape,
-                             hidden_size](Program& program, const Tensor& a, const Tensor& b, const Tensor& output) {
+                             hidden_size](ProgramHandle program, const Tensor& a, const Tensor& b, const Tensor& output) {
         tt::tt_metal::Buffer* src0_buffer = a.buffer();
         tt::tt_metal::Buffer* src1_buffer = b.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -264,7 +264,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

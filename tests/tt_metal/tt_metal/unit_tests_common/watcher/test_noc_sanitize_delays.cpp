@@ -31,7 +31,7 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
 }
 
 void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord &core) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
         const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
         const uint32_t NUM_TILES = 4;

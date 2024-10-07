@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
 // 1. Host writes data to buffer in DRAM
@@ -53,7 +51,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord loader_logical_core = {0, 0};
         CoreCoord writer_logical_core = {0, 1};
@@ -146,8 +144,8 @@ int main(int argc, char **argv) {
             transient_buffer_size_tiles,
             transient_buffer_size_bytes});
 
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(output_dram_buffer, result_vec);

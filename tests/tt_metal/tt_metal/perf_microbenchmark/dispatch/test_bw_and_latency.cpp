@@ -158,7 +158,7 @@ int main(int argc, char **argv) {
 
         CommandQueue& cq = device->command_queue();
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         string src_mem;
         uint32_t noc_addr_x, noc_addr_y;

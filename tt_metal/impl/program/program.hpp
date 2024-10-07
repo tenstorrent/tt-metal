@@ -13,6 +13,7 @@
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
+#include "tt_metal/impl/program/program_handle.hpp"
 #include "dev_msgs.h"
 
 namespace tt {
@@ -229,14 +230,15 @@ class Program {
 
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
 
-    friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+    friend CBHandle CreateCircularBuffer(ProgramHandle program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
+
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
 
     friend KernelHandle detail::AddKernel(Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
-    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
+    friend uint32_t CreateSemaphore(ProgramHandle program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
     KernelHandle add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);

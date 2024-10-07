@@ -20,11 +20,11 @@
 #include <cassert>
 #include <climits>
 #include <cstdint>
+#include <deque>
 #include <limits>
+#include <tt_metal/common/assert.hpp>
 #include <type_traits>
 #include <utility>
-
-#include <tt_metal/common/assert.hpp>
 
 namespace tt::stl {
 
@@ -61,6 +61,8 @@ struct Key {
     explicit Key(T full_value) : value(full_value) {
         assert(value & 1);  // Ensure the key is valid
     }
+
+    T raw() const { return value; }
 
     T index() const { return value >> VERSION_BITS; }
     T version() const { return value & VERSION_MASK; }
@@ -110,12 +112,7 @@ class SlotMap {
         Slot& operator=(Slot&& other) noexcept {
             if (this != &other) {
                 this->~Slot();
-                version = other.version;
-                if (other.occupied()) {
-                    new (&value) T(std::move(other.value));
-                } else {
-                    next_free = other.next_free;
-                }
+                new (this) Slot(std::move(other));
             }
             return *this;
         }
@@ -130,28 +127,22 @@ class SlotMap {
             }
         }
 
-        ~Slot()
-            requires std::is_trivially_destructible_v<T>
-        = default;
+        ~Slot() = default;
     };
 
    private:
     static constexpr index_type max_index = KeyT::max_index;
     static constexpr index_type invalid_index = std::numeric_limits<index_type>::max();
-    std::vector<Slot> slots;
+    std::deque<Slot> slots;
 
     // Index of the first free slot.
-    uint32_t free_head;
+    uint32_t free_head = invalid_index;
 
     // Number of occupied slots.
-    uint32_t num_elems;
+    uint32_t num_elems = 0;
 
    public:
-    /**
-     * @brief Constructs a SlotMap with an optional initial capacity.
-     * @param capacity The initial capacity of the SlotMap.
-     */
-    SlotMap(size_t capacity = 0) : free_head(invalid_index), num_elems(0) { slots.reserve(capacity); }
+    SlotMap() = default;
 
     /**
      * @brief Constructs an element in-place and returns its key.
@@ -234,18 +225,6 @@ class SlotMap {
      * @return The total number of slots (occupied and free).
      */
     size_t capacity() const noexcept { return slots.capacity(); }
-
-    /**
-     * @brief Increases the capacity of the SlotMap to at least the specified value.
-     * @param new_capacity The new capacity to the SlotMap.
-     */
-    void reserve(size_t new_capacity) {
-        TT_FATAL(new_capacity <= max_index ,"SlotMap capacity out of bounds");
-
-        // Technically this can reserve more than max_index, but it's not a problem,
-        // since we still check the index bounds when inserting.
-        slots.reserve(new_capacity);
-    }
 
     /**
      * @brief Checks if the SlotMap is empty.

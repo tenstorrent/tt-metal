@@ -5,22 +5,17 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "device_fixture.hpp"
 #include "n300_device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
@@ -52,7 +47,7 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    auto program = CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -104,7 +99,8 @@ bool reader_kernel_no_send(
             (uint32_t)eth_l1_byte_address,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     auto readback_vec = llrt::read_hex_vec_from_core(device->id(), eth_noc_xy, eth_l1_byte_address, byte_size);
     pass &= (readback_vec == inputs);
@@ -123,7 +119,7 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    auto program = CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -175,7 +171,8 @@ bool writer_kernel_no_receive(
             (uint32_t)eth_l1_byte_address,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     auto readback_vec = llrt::read_hex_vec_from_core(device->id(), dram_noc_xy, dram_byte_address, byte_size);
     pass &= (readback_vec == inputs);
@@ -285,7 +282,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -308,7 +305,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -328,11 +325,14 @@ bool eth_direct_sender_receiver_kernels(
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
 
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+
     std::thread th1 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(sender_device, sender_program);
+        tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr);
     });
     std::thread th2 = std::thread([&] {
-        tt_metal::detail::LaunchProgram(receiver_device, receiver_program);
+        tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr);
     });
 
     th1.join();

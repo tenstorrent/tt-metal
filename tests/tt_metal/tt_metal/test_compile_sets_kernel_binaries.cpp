@@ -14,6 +14,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "llrt/hal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -40,7 +41,7 @@ std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<K
     return kernel->name() + "/" + latest_hash;
 }
 
-void construct_program(Program& program, Device * device, CoreCoord& core) {
+void construct_program(ProgramHandle program, Device * device, CoreCoord& core) {
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 2048;
     uint32_t dram_buffer_size =
@@ -117,7 +118,7 @@ int main(int argc, char **argv) {
         }
         tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
         std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
-        std::vector<Program> programs;
+        std::vector<ScopedProgramHandle> programs;
         std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
         std::map<uint32_t, std::vector<ll_api::memory>> compute_binaries;
@@ -131,8 +132,7 @@ int main(int argc, char **argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            programs.push_back(Program());
-            Program& program = programs.back();
+            auto& program = programs.emplace_back(tt_metal::CreateScopedProgram());
 
             construct_program(program, device, core);
 
@@ -141,18 +141,19 @@ int main(int argc, char **argv) {
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
             uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
+            auto* program_ptr = ProgramPool::instance().get_program(program);
+            const KernelGroup* kernel_group = program_ptr->kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
                 kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
                 "Error");
-            auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            auto compute_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+            auto riscv0_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+            auto riscv1_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
             uint32_t mask = device->build_key();
-            tt_metal::detail::CompileProgram(device, program);
+            tt_metal::detail::CompileProgram(device, *program_ptr);
             compute_binaries.insert({mask, compute_kernel->binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
             brisc_binaries.insert({mask, riscv0_kernel->binaries(mask)});
@@ -170,28 +171,28 @@ int main(int argc, char **argv) {
                 }
             }
             tt_metal::detail::ClearKernelCache();
-            std::vector<Program> new_programs;
+
+            std::vector<ScopedProgramHandle> new_programs;
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
-                new_programs.push_back(Program());
-                Program& program = new_programs.back();
+                auto& program = new_programs.emplace_back(tt_metal::CreateScopedProgram());
                 construct_program(program, device, core);
             }
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
             for (int i = 0; i < num_devices; i++) {
-                auto& device = devices[i];
-                auto& program = new_programs[i];
-                ths.emplace_back([&] {
+                auto device = devices[i];
+                auto program_ptr = ProgramPool::instance().get_program(new_programs[i]);
+                ths.emplace_back([&, device, program_ptr] {
                     for (int j = 0; j < num_compiles; j++) {
                         uint32_t mask = device->build_key();
-                        tt_metal::detail::CompileProgram(device, program);
+                        tt_metal::detail::CompileProgram(device, *program_ptr);
                         uint32_t programmable_core_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-                        const KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        const KernelGroup* kernel_group = program_ptr->kernels_on_core(core, programmable_core_index);
+                        auto compute_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+                        auto riscv0_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+                        auto riscv1_kernel = tt_metal::detail::GetKernel(*program_ptr, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
                         TT_FATAL(compute_kernel->binaries(mask) == compute_binaries.at(mask), "Error");
                         TT_FATAL(riscv0_kernel->binaries(mask) == brisc_binaries.at(mask), "Error");
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");

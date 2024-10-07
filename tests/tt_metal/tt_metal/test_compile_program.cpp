@@ -16,6 +16,8 @@
 
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -94,10 +96,10 @@ struct ProgramAttributes {
     uint32_t output_cb_index = 16;
 };
 
-Program create_program(Device *device, const ProgramAttributes &program_attributes) {
+ScopedProgramHandle create_program(Device *device, const ProgramAttributes &program_attributes) {
 
     CoreCoord core = {0, 0};
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t single_tile_size = 2 * 1024;
 
@@ -177,17 +179,18 @@ bool test_compile_program_in_loop(Device *device) {
     ClearKernelCache(device->build_key());
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
 
     static constexpr int num_compiles = 10;
     std::unordered_map<std::string, std::string> kernel_name_to_hash;
     for (int compile_idx = 0; compile_idx < num_compiles; compile_idx++) {
-        auto kernel_cache_status = CompileProgramTestWrapper(device, program);
+        auto kernel_cache_status = CompileProgramTestWrapper(device, *program_ptr);
         if (compile_idx == 0) {
-            assert_kernel_binary_path_exists(program, device->build_key(), kernel_cache_status);
-            assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
+            assert_kernel_binary_path_exists(*program_ptr, device->build_key(), kernel_cache_status);
+            assert_program_cache_hit_status(*program_ptr, /*hit_expected=*/false, kernel_cache_status);
             kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
         } else {
-            assert_program_cache_hit_status(program, /*hit_expected=*/true, kernel_cache_status);
+            assert_program_cache_hit_status(*program_ptr, /*hit_expected=*/true, kernel_cache_status);
             assert_kernel_hash_matches(kernel_name_to_hash, kernel_cache_status);
         }
     }
@@ -203,16 +206,18 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     ProgramAttributes default_attributes;
     auto program = create_program(device, default_attributes);
 
-    auto kernel_cache_status = CompileProgramTestWrapper(device, program);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    auto kernel_cache_status = CompileProgramTestWrapper(device, *program_ptr);
 
-    assert_kernel_binary_path_exists(program, device->build_key(), kernel_cache_status);
-    assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
+    assert_kernel_binary_path_exists(*program_ptr, device->build_key(), kernel_cache_status);
+    assert_program_cache_hit_status(*program_ptr, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
     ClearKernelCache(device->build_key());
     auto second_program = create_program(device, default_attributes);
-    auto second_kernel_cache_status = CompileProgramTestWrapper(device, second_program);
-    assert_program_cache_hit_status(second_program, /*hit_expected=*/false, second_kernel_cache_status);
+    auto* second_program_ptr = ProgramPool::instance().get_program(second_program);
+    auto second_kernel_cache_status = CompileProgramTestWrapper(device, *second_program_ptr);
+    assert_program_cache_hit_status(*second_program_ptr, /*hit_expected=*/false, second_kernel_cache_status);
     assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);
 
     return pass;
@@ -255,10 +260,11 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
     const std::unordered_map<tt::RISCV, bool> &kernel_type_to_cache_hit_status
 ) {
     auto program = create_program(device, attributes);
-    auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->build_key(), kernel_cache_status);
-    assert_cache_hit_status_for_kernel_type(program, kernel_type_to_cache_hit_status, kernel_cache_status);
-    assert_hash_comparison_for_kernel_type(program, prev_kernel_name_to_hash, kernel_type_to_cache_hit_status, kernel_cache_status);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    auto kernel_cache_status = CompileProgramTestWrapper(device, *program_ptr);
+    assert_kernel_binary_path_exists(*program_ptr, device->build_key(), kernel_cache_status);
+    assert_cache_hit_status_for_kernel_type(*program_ptr, kernel_type_to_cache_hit_status, kernel_cache_status);
+    assert_hash_comparison_for_kernel_type(*program_ptr, prev_kernel_name_to_hash, kernel_type_to_cache_hit_status, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     return kernel_name_to_hash;
 }
@@ -294,9 +300,10 @@ bool test_compile_program_with_modified_program(Device *device) {
 
     ProgramAttributes attributes;
     auto program = create_program(device, attributes);
-    auto kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_kernel_binary_path_exists(program, device->build_key(), kernel_cache_status);
-    assert_program_cache_hit_status(program, /*hit_expected=*/false, kernel_cache_status);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    auto kernel_cache_status = CompileProgramTestWrapper(device, *program_ptr);
+    assert_kernel_binary_path_exists(*program_ptr, device->build_key(), kernel_cache_status);
+    assert_program_cache_hit_status(*program_ptr, /*hit_expected=*/false, kernel_cache_status);
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
     // Modify compute kernel compile time args - expect cache miss for compute kernel

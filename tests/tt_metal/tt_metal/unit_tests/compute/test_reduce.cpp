@@ -5,20 +5,15 @@
 #include <gtest/gtest.h>
 #include <math.h>
 
-#include <algorithm>
 #include <functional>
-#include <random>
 
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
 #include "common/test_tiles.hpp"
 #include "common/bfloat16.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -85,7 +80,7 @@ void set_math_fid_masks_binary(uint16_t &srca_fid_mask, uint16_t &srcb_fid_mask,
     }
 }
 
-void add_reader_writer_kernels(tt_metal::Program &program, const CoreCoord &logical_core, const ReduceConfig &test_config, std::shared_ptr<tt_metal::Buffer> src_dram_buffer, std::shared_ptr<tt_metal::Buffer> dst_dram_buffer) {
+void add_reader_writer_kernels(tt_metal::ProgramHandle program, const CoreCoord &logical_core, const ReduceConfig &test_config, std::shared_ptr<tt_metal::Buffer> src_dram_buffer, std::shared_ptr<tt_metal::Buffer> dst_dram_buffer) {
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1]*test_config.shape[0];
     uint32_t HW = H*W;
     uint32_t N = test_config.shape[0]*test_config.shape[1];
@@ -209,7 +204,7 @@ std::string get_compute_kernel_name(const ReduceDim &reduce_dim) {
 }
 
 void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig& test_config) {
-    Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -326,7 +321,8 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     // The kernel will view the input as TILED_NFACES
     std::vector<uint32_t> result_vec;

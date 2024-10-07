@@ -12,6 +12,7 @@
 #include "common/bfloat16.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -22,7 +23,7 @@ bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::Device 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 

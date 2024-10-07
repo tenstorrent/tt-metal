@@ -8,6 +8,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
@@ -84,14 +85,14 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     int num_cores_r,
     int num_cores_c,
     int tensor_num_tiles,
     int block_num_tiles) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     int num_cores = num_cores_r * num_cores_c;
 
@@ -163,7 +164,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args}
     );
 
-    return {program, reader_kernel, writer_kernel};
+    return {std::move(program), reader_kernel, writer_kernel};
 }
 
 bool write_runtime_args_to_device(
@@ -396,7 +397,8 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         log_info(LogTest, "Matmul test done");
         log_info(LogTest, "Gathering data back from dram and checking against golden");

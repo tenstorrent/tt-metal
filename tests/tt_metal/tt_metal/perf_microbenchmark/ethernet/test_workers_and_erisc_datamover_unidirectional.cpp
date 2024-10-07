@@ -4,30 +4,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
 #include <limits>
-#include <random>
 
 #include "device/tt_arch_types.h"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/common/core_coord.h"
-#include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 // #include "impl/kernels/kernel_types.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 class N300TestDevice {
    public:
@@ -201,7 +195,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                               Device 0
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt_metal::CreateScopedProgram();
     uint32_t chip0_worker_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, chip0_sender_worker_core, 0);
 
     chip0_edm_args.push_back(chip0_sender_channels_offset);
@@ -345,7 +339,7 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                              Device 1
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt_metal::CreateScopedProgram();
     auto chip1_receiver_worker_core = CoreCoord(0, 0);
     uint32_t chip1_worker_semaphore_id = tt::tt_metal::CreateSemaphore(receiver_program, chip1_receiver_worker_core, 0);
 
@@ -520,10 +514,11 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
     try {
-        tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-        tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+        tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+        tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr );
     } catch (std::exception& e) {
         std::cout << "Failed compile: " << e.what() << std::endl;
         throw e;
@@ -531,8 +526,8 @@ bool RunWriteBWTest(
 
     std::cout << "Running..." << std::endl;
 
-    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
-    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
+    std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr); });
+    std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr); });
 
     th2.join();
     th1.join();

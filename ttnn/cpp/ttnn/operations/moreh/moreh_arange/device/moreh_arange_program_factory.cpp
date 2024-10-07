@@ -23,7 +23,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         split_work_to_cores(grid, Wt);
 
     // Create program
-    Program program = Program();
+    auto program = CreateProgram();
 
     // Create circular buffer
     tt::operations::primary::CreateCircularBuffer(
@@ -74,7 +74,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         SetRuntimeArgs(program, kernel_id, core, writer_args);
         tile_offset += num_tiles_per_core;
     }
-    return {std::move(program), {kernel_id, num_cores, core_h}};
+    return {program, {kernel_id, num_cores, core_h}};
 }
 
 void MorehArangeOperation::ProgramFactory::override_runtime_arguments(

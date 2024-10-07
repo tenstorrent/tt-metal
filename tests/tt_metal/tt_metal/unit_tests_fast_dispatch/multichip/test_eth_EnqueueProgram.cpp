@@ -14,6 +14,7 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
@@ -49,7 +50,7 @@ const size_t get_rand_32_byte_aligned_address(const size_t& base, const size_t& 
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord& eth_core_coord) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
@@ -67,7 +68,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     vector<uint32_t> dummy_kernel0_args = {0, 1, 2, 3, 4, 5, 6, 7, 8};
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
-    tt::tt_metal::detail::CompileProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::CompileProgram(device, *program_ptr);
     auto& cq = device->command_queue();
     EnqueueProgram(cq, program, false);
     Finish(cq);
@@ -92,7 +94,7 @@ bool reader_kernel_no_send(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    auto program = CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -141,7 +143,8 @@ bool reader_kernel_no_send(
         });
 
     auto& cq = device->command_queue();
-    tt::tt_metal::detail::CompileProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::CompileProgram(device, *program_ptr);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
@@ -162,7 +165,7 @@ bool writer_kernel_no_receive(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::Program();
+    auto program = CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -211,7 +214,8 @@ bool writer_kernel_no_receive(
         });
 
     auto& cq = device->command_queue();
-    tt::tt_metal::detail::CompileProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::CompileProgram(device, *program_ptr);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
@@ -262,7 +266,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt::tt_metal::CreateScopedProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -285,7 +289,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt::tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -305,8 +309,10 @@ bool eth_direct_sender_receiver_kernels(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+    tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
 
     EnqueueProgram(sender_device->command_queue(), sender_program, false);
     EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
@@ -372,7 +378,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt::tt_metal::CreateScopedProgram();
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -396,7 +402,7 @@ bool chip_to_chip_dram_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt::tt_metal::CreateScopedProgram();
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -421,8 +427,10 @@ bool chip_to_chip_dram_buffer_transfer(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+    tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
 
     EnqueueProgram(sender_device->command_queue(), sender_program, false);
     EnqueueProgram(receiver_device->command_queue(), receiver_program, false);
@@ -457,7 +465,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program sender_program = tt_metal::Program();
+    auto sender_program = tt::tt_metal::CreateScopedProgram();
 
     auto input_packed = generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
 
@@ -503,7 +511,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     ////////////////////////////////////////////////////////////////////////////
     //                      Receiver Device
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program receiver_program = tt_metal::Program();
+    auto receiver_program = tt::tt_metal::CreateScopedProgram();
 
     auto output_buffer = CreateBuffer(receiver_config);
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
@@ -535,8 +543,10 @@ bool chip_to_chip_interleaved_buffer_transfer(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-    tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+    auto* sender_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt::tt_metal::ProgramPool::instance().get_program(receiver_program);
+    tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+    tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
 
     EnqueueProgram(sender_device->command_queue(), sender_program, false);
     EnqueueProgram(receiver_device->command_queue(), receiver_program, false);

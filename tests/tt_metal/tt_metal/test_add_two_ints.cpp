@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1
@@ -34,7 +32,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         CoreCoord core = {0, 0};
         std::vector<uint32_t> first_runtime_args = {101, 202};
         std::vector<uint32_t> second_runtime_args = {303, 606};
@@ -52,8 +50,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, first_runtime_args);
 
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> first_kernel_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), first_kernel_result);
@@ -63,7 +61,7 @@ int main(int argc, char **argv) {
         //                  Update Runtime Args and Re-run Application
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, second_runtime_args);
-        tt_metal::detail::LaunchProgram(device, program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         std::vector<uint32_t> second_kernel_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), second_kernel_result);

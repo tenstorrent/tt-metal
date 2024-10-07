@@ -20,7 +20,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     auto& output_grad = tensor_args.output_grad;
 
     const auto& bias_grad_shape = bias_grad.get_legacy_shape().without_padding();
@@ -202,7 +202,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         tile_offset += num_cols_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehBiasAddBackwardOperation::MultiCoreProgramFactory::override_runtime_arguments(

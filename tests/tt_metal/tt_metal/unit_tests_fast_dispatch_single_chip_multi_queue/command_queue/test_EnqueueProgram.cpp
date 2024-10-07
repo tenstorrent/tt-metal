@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
 #include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/scoped_timer.hpp"
+#include "impl/program/program_pool.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
@@ -99,10 +97,9 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    vector<Program> programs;
+    std::vector<ScopedProgramHandle> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
-        Program& program = programs.back();
+        auto& program = programs.emplace_back(tt::tt_metal::CreateScopedProgram());
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
@@ -239,13 +236,14 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
             }
         }
 
-        tt::tt_metal::detail::CompileProgram(this->device_, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt::tt_metal::detail::CompileProgram(this->device_, *program_ptr);
     }
 
     for (uint8_t cq_id = 0; cq_id < this->device_->num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} programs on cq {} for cache warmup.", programs.size(), (uint32_t)cq_id);
         // This loop caches program and runs
-        for (Program& program: programs) {
+        for (auto& program: programs) {
             EnqueueProgram(this->device_->command_queue(cq_id), program, false);
         }
 
@@ -259,7 +257,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestRandomizedProgram) {
             if (i % 10 == 0) {
                 log_debug(tt::LogTest, "Enqueueing {} programs on cq {} for iter: {}/{} now.", programs.size(), (uint32_t)cq_id, i+1, NUM_ITERATIONS);
             }
-            for (Program& program: programs) {
+            for (auto& program: programs) {
                 EnqueueProgram(this->device_->command_queue(cq_id), program, false);
             }
         }

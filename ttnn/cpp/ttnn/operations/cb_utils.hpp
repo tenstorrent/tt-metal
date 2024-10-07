@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 template <size_t N>
 std::tuple<std::array<CB, N>, CBHandle> create_cb(
     const CB (&cbs)[N],
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     uint32_t page_size,
     uint32_t num_pages,
@@ -38,7 +38,7 @@ std::tuple<std::array<CB, N>, CBHandle> create_cb(
 
 inline std::tuple<CB, CBHandle> create_cb(
     CB cb,
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     uint32_t page_size,
     uint32_t num_pages,

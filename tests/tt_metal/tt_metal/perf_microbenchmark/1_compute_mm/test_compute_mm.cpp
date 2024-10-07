@@ -126,7 +126,7 @@ void prepare_inputs(
     std::vector<std::vector<float>>& in0_bfp8_unpack_slice,
     std::vector<std::vector<float>>& in1_bfp8_unpack_slice);
 
-tt_metal::Program create_program_single_core (
+tt_metal::ScopedProgramHandle create_program_single_core (
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -147,7 +147,7 @@ tt_metal::Program create_program_single_core (
     uint32_t interm_cb_dtype
 );
 
-tt_metal::Program create_program(
+tt_metal::ScopedProgramHandle create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -441,7 +441,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "out_subblock_h {}", out_subblock_h);
         log_debug(LogTest, "out_subblock_w {}", out_subblock_w);
 
-        tt::tt_metal::Program program;
+        tt::tt_metal::ScopedProgramHandle program;
         if (single_core) {
             program = create_program_single_core(
                 device,
@@ -519,7 +519,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Kernel Execution and Perf Profiling
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::CompileProgram(device, *program_ptr);
 
         constexpr int giga_byte = 1000000;
         constexpr long long tera_byte = 1000000000000LL;
@@ -535,10 +536,10 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (fast_dispatch_mode == false) {
                 log_debug(LogTest, "calling detail::LaunchProgram");
-                detail::LaunchProgram(device, program);
+                detail::LaunchProgram(device, *program_ptr);
                 log_debug(LogTest, "detail::LaunchProgram done");
 
-                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
+                uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, *program_ptr);
                 double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                 auto execution_time = t0_to_any_riscfw_end * cycle_time;
                 rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -561,7 +562,7 @@ int main(int argc, char** argv) {
                 tt_metal::DumpDeviceProfileResults(device, program);
 
                 if (single_core) {
-                    uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);
+                    uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, *program_ptr);
                     double cycle_time = 1 / static_cast<double>(tt_npu_clock) / giga_byte;
                     auto execution_time = t0_to_any_riscfw_end * cycle_time;
                     rmax_tflops.push_back(static_cast<double>(num_of_matmul_ops) / execution_time / tera_byte);
@@ -651,7 +652,6 @@ int main(int argc, char** argv) {
                 rmax_per_rpeak * 100);
             pass = false;
         }
-
         pass &= tt_metal::CloseDevice(device);
 
         // for csv
@@ -833,7 +833,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
     return {in0_cb_addr, in1_cb_addr, in2_cb_addr, out_cb_addr, in0_addr, in1_addr, out_addr};
 }
 
-tt_metal::Program create_program_single_core (
+tt_metal::ScopedProgramHandle create_program_single_core(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -853,7 +853,7 @@ tt_metal::Program create_program_single_core (
     uint32_t num_blocks,
     uint32_t interm_cb_dtype
 ) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     log_debug("cb_data_format: {} ", cb_data_format);
     log_debug("math_fidelity: {} ", math_fidelity);
@@ -1042,7 +1042,7 @@ tt_metal::Program create_program_single_core (
 }
 
 
-tt_metal::Program create_program(
+tt_metal::ScopedProgramHandle create_program(
     tt_metal::Device* device,
     tt::DataFormat cb_data_format,
     MathFidelity math_fidelity,
@@ -1066,7 +1066,7 @@ tt_metal::Program create_program(
     uint32_t out_addr,
     bool matmul_block,
     bool packer_l1) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     uint32_t num_buffer = 2;  // double buffer
     uint32_t in0_block_tiles = per_core_Mt * in0_block_w;

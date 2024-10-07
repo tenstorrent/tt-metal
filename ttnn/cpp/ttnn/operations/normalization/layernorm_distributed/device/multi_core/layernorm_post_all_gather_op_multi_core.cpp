@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
@@ -341,17 +341,6 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     CircularBufferConfig cb_out0_config = CircularBufferConfig(out0_tiles*out_single_tile_size, {{tt::CB::c_out0, out_data_format}}).set_page_size(tt::CB::c_out0, out_single_tile_size);
     CreateCircularBuffer( program, all_cores, cb_out0_config );
 
-    // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns std::vector<std::shared_ptr<CircularBuffer>>
-
-    for (const auto& cb : program.circular_buffers_on_corerange(*all_cores.ranges().begin())) {
-        for (const auto index : cb->buffer_indices()) {
-            tt::log_debug("cb_id {}", index);
-            tt::log_debug("page_size: {}", cb->page_size(index));
-            tt::log_debug("num_pages: {}", cb->num_pages(index));
-            tt::log_debug("data_format: {}", cb->data_format(index));
-        }
-    }
-
     uint32_t curr_row = 0;
     float winv = 1.0f / (W * num_devices); // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
@@ -389,7 +378,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
         ]
     (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

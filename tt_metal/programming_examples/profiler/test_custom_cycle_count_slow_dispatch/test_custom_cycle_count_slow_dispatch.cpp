@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 
 bool RunCustomCycle(tt_metal::Device *device, int loop_count)
@@ -17,7 +17,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     constexpr int loop_size = 50;
     constexpr bool profile_device = true;
@@ -43,7 +43,8 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines}
     );
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     return pass;
 }

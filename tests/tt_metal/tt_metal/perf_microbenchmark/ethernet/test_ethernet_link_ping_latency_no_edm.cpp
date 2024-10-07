@@ -19,6 +19,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -75,7 +76,7 @@ struct ChipSenderReceiverEthCore {
     CoreCoord receiver_core;
 };
 
-std::tuple<Program,Program> build(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::ScopedProgramHandle> build(
     Device *device0,
     Device *device1,
     CoreCoord eth_sender_core,
@@ -86,8 +87,8 @@ std::tuple<Program,Program> build(
     KernelHandle &local_kernel,
     KernelHandle &remote_kernel
 ) {
-    Program program0;
-    Program program1;
+    auto program0 = tt_metal::CreateScopedProgram();
+    auto program1 = tt_metal::CreateScopedProgram();
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
@@ -120,21 +121,23 @@ std::tuple<Program,Program> build(
 
     // // Launch
     try {
-        tt::tt_metal::detail::CompileProgram(device0, program0);
-        tt::tt_metal::detail::CompileProgram(device1, program1);
+        auto program0_ptr = tt::tt_metal::ProgramPool::instance().get_program(program0);
+        auto program1_ptr = tt::tt_metal::ProgramPool::instance().get_program(program1);
+        tt::tt_metal::detail::CompileProgram(device0, *program0_ptr);
+        tt::tt_metal::detail::CompileProgram(device1, *program1_ptr);
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Failed compile: {}", e.what());
         throw e;
     }
 
-    return std::tuple<Program,Program>{std::move(program0),std::move(program1)};
+    return {std::move(program0), std::move(program1)};
 }
 
 void run(
     Device *device0,
     Device *device1,
-    Program &program0,
-    Program &program1,
+    ProgramHandle program0,
+    ProgramHandle program1,
     KernelHandle local_kernel,
     KernelHandle remote_kernel,
 
@@ -156,8 +159,10 @@ void run(
     tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, rt_args());
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, program0); });
-        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, program1); });
+        auto program0_ptr = tt::tt_metal::ProgramPool::instance().get_program(program0);
+        auto program1_ptr = tt::tt_metal::ProgramPool::instance().get_program(program1);
+        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, *program0_ptr); });
+        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, *program1_ptr); });
 
         th2.join();
         th1.join();

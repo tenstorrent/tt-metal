@@ -17,6 +17,7 @@
 #include "dev_msgs.h"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 namespace tt {
 
@@ -307,6 +308,7 @@ DeviceProfiler::~DeviceProfiler()
     {
         TracyTTDestroy(tracyCtx.second);
     }
+    CloseProgram(sync_program);
 #endif
 }
 

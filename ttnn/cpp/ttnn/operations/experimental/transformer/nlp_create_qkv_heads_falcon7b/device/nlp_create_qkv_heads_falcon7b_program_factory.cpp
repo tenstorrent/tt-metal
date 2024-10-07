@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     bool tile_dtype_is_bfloat16 = a.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
             num_cores_y
         ]
     (
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<tt::tt_metal::Buffer*>& input_buffers,
         const std::vector<tt::tt_metal::Buffer*>& output_buffers
     ) {
@@ -179,7 +179,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_falcon7b(const T
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 

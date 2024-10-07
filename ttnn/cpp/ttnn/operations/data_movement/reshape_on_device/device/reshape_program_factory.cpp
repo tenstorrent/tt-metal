@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -79,7 +79,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -101,12 +101,12 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -251,7 +251,7 @@ operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& 
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_rm_multi_core(const Tensor &input_tensor,
@@ -361,7 +361,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
 
     TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::Device *device = a.device();
 
@@ -464,7 +464,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
         ]
     (
         const void* operation,
-        const Program& program,
+        const ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

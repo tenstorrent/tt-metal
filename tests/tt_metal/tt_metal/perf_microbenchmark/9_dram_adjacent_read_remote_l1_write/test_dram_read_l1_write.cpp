@@ -17,8 +17,10 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "tt_metal/common/work_split.hpp"
+
 #include <yaml-cpp/yaml.h>
 
 using namespace tt;
@@ -73,7 +75,7 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t tile_size, uin
     num_pages = total_size / page_size;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &all_dram_reader_cores,
     const CoreRangeSet &all_l1_receiver_cores,
@@ -89,7 +91,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<CoreCoord>all_l1_writer_cores_ordered,
     uint32_t bank_start_id,
     const uint32_t &input_buffer_addr) {
-    tt_metal::Program program = tt_metal::Program();
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -885,7 +887,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::CompileProgram(device, *program_ptr);
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {

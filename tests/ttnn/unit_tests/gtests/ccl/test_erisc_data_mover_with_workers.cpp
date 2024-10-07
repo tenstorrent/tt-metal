@@ -17,6 +17,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -36,7 +37,7 @@ using namespace tt::test_utils::df;
 namespace ttnn {
 namespace ccl {
 void set_edm_runtime_args(
-    tt_metal::Program& program,
+    tt_metal::ProgramHandle program,
     KernelHandle edm_kernel_handle,
     ccl::EriscDatamoverBuilder const& edm_builder,
     CoreCoord const& eth_core
@@ -111,7 +112,7 @@ struct KernelXY {
 };
 
 void generate_receiver_worker_kernels(
-    Program &program,
+    tt_metal::ProgramHandle program,
     Device *device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
@@ -203,7 +204,7 @@ void generate_receiver_worker_kernels(
 }
 
 void generate_sender_worker_kernels(
-    Program &program,
+    tt_metal::ProgramHandle program,
     Device *device,
     CoreCoord const& worker_core,
     CoreCoord const& edm_core,
@@ -320,8 +321,8 @@ bool RunWriteBWTest(
 
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    tt_metal::Program sender_program{};
-    tt_metal::Program receiver_program{};
+    auto sender_program = tt_metal::CreateScopedProgram();
+    auto receiver_program = tt_metal::CreateScopedProgram();
 
     std::vector<CoreCoord> worker_cores;
     {
@@ -588,9 +589,12 @@ bool RunWriteBWTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
+    auto* sender_program_ptr = tt_metal::ProgramPool::instance().get_program(sender_program);
+    auto* receiver_program_ptr = tt_metal::ProgramPool::instance().get_program(receiver_program);
+
     try {
-        tt::tt_metal::detail::CompileProgram(sender_device, sender_program);
-        tt::tt_metal::detail::CompileProgram(receiver_device, receiver_program);
+        tt::tt_metal::detail::CompileProgram(sender_device, *sender_program_ptr);
+        tt::tt_metal::detail::CompileProgram(receiver_device, *receiver_program_ptr);
     } catch (std::exception& e) {
         log_error("Failed compile: {}", e.what());
         throw e;
@@ -599,8 +603,8 @@ bool RunWriteBWTest(
     log_info(tt::LogTest, "Running...");
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, sender_program); });
-        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, receiver_program); });
+        std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(sender_device, *sender_program_ptr); });
+        std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(receiver_device, *receiver_program_ptr); });
 
         th2.join();
         th1.join();

@@ -40,7 +40,7 @@ namespace ttnn::operations::experimental::transformer {
         uint32_t q_heads_per_core = num_q_heads / num_w_cores;
         uint32_t k_heads_per_core = num_kv_heads / num_w_cores;
 
-        Program program = CreateProgram();
+        auto program = CreateProgram();
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t) q_shard_ht,
             (std::uint32_t) q_shard_wt,
@@ -116,7 +116,7 @@ namespace ttnn::operations::experimental::transformer {
             ]
         (
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors

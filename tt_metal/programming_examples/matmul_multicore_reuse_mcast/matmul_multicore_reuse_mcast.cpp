@@ -55,7 +55,7 @@ void matmul_multicore_reuse_mcast(std::vector<bfloat16>& a, std::vector<bfloat16
     * Core range is just single core
     */
     CommandQueue& cq = device->command_queue();
-    Program program{};
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;

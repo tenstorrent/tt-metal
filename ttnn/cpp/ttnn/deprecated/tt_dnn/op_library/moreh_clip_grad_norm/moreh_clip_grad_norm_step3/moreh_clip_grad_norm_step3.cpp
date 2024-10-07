@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
          writer_kernels_id = writer_kernels_id,
          num_cores_to_be_used = num_cores_to_be_used,
          num_cores_y = num_cores_y](
-            const Program& program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>&) {
+            const ProgramHandle program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>&) {
             auto clip_coef_clamped_buffer = input_buffers.at(input_buffers.size() - 1);
             const auto clip_coef_clamped_address = clip_coef_clamped_buffer->address();
 

@@ -14,7 +14,7 @@
 namespace ttnn::operations::data_movement {
 
 operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids, const Tensor &input_a, const Tensor & input_b, const Tensor &output) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     Device *device = input_a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -119,7 +119,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
     }
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores,  page_size](
         const void* operation,
-        const Program& program,
+        const ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

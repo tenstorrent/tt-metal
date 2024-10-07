@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 
@@ -35,8 +32,8 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type){
 }
 
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -88,8 +85,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
     return {std::move(program), binary_reader_kernel, unary_writer_kernel};
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(tt_metal::Device *device, const CoreCoord &core, uint32_t single_tile_size) {
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -142,7 +139,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 
 void write_program_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreCoord &core,
@@ -251,7 +248,8 @@ int main(int argc, char **argv) {
 
         write_program_runtime_args_to_device(device, program1, reader1_kernel_id, writer1_kernel_id, core, num_tiles, *src0_dram_buffer, *src1_dram_buffer, *dst_dram_buffer);
 
-        tt_metal::detail::LaunchProgram(device, program1);
+        auto* program1_ptr = tt::tt_metal::ProgramPool::instance().get_program(program1);
+        tt_metal::detail::LaunchProgram(device, *program1_ptr);
 
         std::vector<uint32_t> intermediate_result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, intermediate_result_vec);
@@ -279,7 +277,8 @@ int main(int argc, char **argv) {
 
         write_program_runtime_args_to_device(device, program2, reader2_kernel_id, writer2_kernel_id, core, num_tiles, *src0_dram_buffer, *src1_dram_buffer, *dst_dram_buffer);
 
-        tt_metal::detail::LaunchProgram(device, program2);
+        auto* program2_ptr = tt::tt_metal::ProgramPool::instance().get_program(program2);
+        tt_metal::detail::LaunchProgram(device, *program2_ptr);
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);

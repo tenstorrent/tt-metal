@@ -15,7 +15,7 @@ using namespace tt;
 
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor &input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     const auto& input_shape = input_tensor.get_legacy_shape();
     const uint32_t head_dim = input_shape[-1];
@@ -124,7 +124,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(const Tensor 
     ]
     (
         const void* operation,
-        Program &program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

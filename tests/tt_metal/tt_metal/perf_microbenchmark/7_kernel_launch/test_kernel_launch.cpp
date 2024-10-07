@@ -2,17 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
 #include <vector>
 
-#include "common/bfloat16.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;
@@ -92,7 +87,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::Program();
+        auto program = tt::tt_metal::CreateScopedProgram();
         uint32_t single_tile_size = 2 * 1024;
 
         for (int core_group_idx = 0; core_group_idx < num_core_groups; ++core_group_idx) {
@@ -179,7 +174,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::CompileProgram(device, *program_ptr);
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {

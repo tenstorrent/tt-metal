@@ -17,7 +17,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     constexpr int loop_size = 50;
     constexpr bool profile_device = true;

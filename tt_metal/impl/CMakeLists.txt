@@ -11,6 +11,7 @@ set(IMPL_SRC
 	${CMAKE_CURRENT_SOURCE_DIR}/allocator/basic_allocator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/program/program_pool.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp

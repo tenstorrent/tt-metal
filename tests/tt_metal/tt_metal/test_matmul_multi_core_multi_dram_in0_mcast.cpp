@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -12,6 +10,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -86,7 +85,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
     return result;
 }
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     int start_core_x,
     int start_core_y,
@@ -98,7 +97,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
     int out_subblock_w,
     int per_core_M, int per_core_N) {
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -211,7 +210,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
 
 bool write_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -455,7 +454,8 @@ int main(int argc, char **argv) {
 
         log_info(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
         log_info(LogTest, "Matmul test done");
 
         log_info(LogTest, "Gathering data back from dram and checking against golden");

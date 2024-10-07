@@ -4,19 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -28,9 +22,10 @@ class DeviceParamFixture : public ::testing::TestWithParam<int> {
 
 namespace unit_tests_common::basic::test_device_init {
 
-void launch_program(tt_metal::Device *device, tt_metal::Program &program) {
+void launch_program(tt_metal::Device *device, tt_metal::ProgramHandle program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
     } else {
         CommandQueue &cq = device->command_queue();
         EnqueueProgram(cq, program, false);
@@ -43,7 +38,7 @@ void launch_program(tt_metal::Device *device, tt_metal::Program &program) {
 /// @return
 bool load_all_blank_kernels(tt_metal::Device *device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
     CreateKernel(
@@ -61,7 +56,6 @@ bool load_all_blank_kernels(tt_metal::Device *device) {
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, ComputeConfig{});
 
     unit_tests_common::basic::test_device_init::launch_program(device, program);
-    // tt_metal::detail::LaunchProgram(device, program);
     return pass;
 }
 }  // namespace unit_tests_common::basic::test_device_init

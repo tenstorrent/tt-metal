@@ -13,6 +13,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
@@ -72,7 +73,7 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
-    Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -157,15 +158,16 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
             num_tiles * 32
         };
 
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
         SetRuntimeArgs(
             device,
-            detail::GetKernel(program, flatten_kernel),
+            detail::GetKernel(*program_ptr, flatten_kernel),
             core,
             compute_runtime_args);
 
         SetRuntimeArgs(
             device,
-            detail::GetKernel(program, unary_writer_kernel),
+            detail::GetKernel(*program_ptr, unary_writer_kernel),
             core,
             writer_runtime_args);
         // Async write input
@@ -203,7 +205,7 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
@@ -225,7 +227,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program; /* Dummy program that helps keep track of buffers */
+    auto program = tt::tt_metal::CreateScopedProgram();
     std::vector<Buffer> buffer_objects;
     for (int j = 0; j < 10; j++) {
         // Asynchronously initialize a buffer on device
@@ -284,7 +286,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     const uint32_t num_pages = 1;
     const uint32_t page_size = detail::TileSize(tt::DataFormat::Float16_b);
@@ -308,7 +310,8 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
         .set_page_size(buffer_indices[1], page_size);
     // Asynchronously assign the L1 Buffer to the CB
     auto multi_core_cb = CreateCircularBuffer(program, cr_set, config1);
-    auto cb_ptr = detail::GetCircularBuffer(program, multi_core_cb);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    auto cb_ptr = detail::GetCircularBuffer(*program_ptr, multi_core_cb);
     Finish(this->device_->command_queue());
     // Addresses should match
     EXPECT_EQ(cb_ptr->address(), l1_buffer->address());
@@ -326,7 +329,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     CoreCoord core = {0, 0};
     uint32_t buf_size = 4096;
     uint32_t page_size = 4096;

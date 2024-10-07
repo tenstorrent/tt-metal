@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};

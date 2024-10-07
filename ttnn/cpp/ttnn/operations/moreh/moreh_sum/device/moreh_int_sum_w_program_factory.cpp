@@ -21,7 +21,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device* device{input.device()};
-    tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -188,7 +188,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         tile_offset += num_tensor_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void MorehSumOperation::MorehSumWIntFactory::override_runtime_arguments(

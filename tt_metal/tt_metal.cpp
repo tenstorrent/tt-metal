@@ -16,13 +16,15 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "impl/dispatch/command_queue.hpp"
-#include "tools/profiler/profiler.hpp"
+#include "impl/program/program_pool.hpp"
+#include "tools/profiler/tt_metal_profiler.hpp"
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
+#include "tt_metal/impl/trace/trace.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 #include "tt_metal/graph/graph_tracking.hpp"
@@ -669,9 +671,6 @@ void ReadShard(Buffer &buffer, std::vector<uint32_t> &host_buffer, const uint32_
     }
 }
 
-void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
-}
 
 void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
@@ -923,7 +922,11 @@ bool CloseDevice(Device *device) {
     return tt::DevicePool::instance().close_device(device_id);
 }
 
-Program CreateProgram() { return Program(); }
+ProgramHandle CreateProgram() {
+    return ProgramPool::instance().create_program();
+}
+
+void CloseProgram(ProgramHandle handle) { ProgramPool::instance().release_program(handle); }
 
 KernelHandle CreateDataMovementKernel(
     Program &program,
@@ -980,7 +983,7 @@ KernelHandle CreateEthernetKernel(
 }
 
 KernelHandle CreateKernel(
-    Program &program,
+    ProgramHandle program,
     const std::string &file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
@@ -989,19 +992,20 @@ KernelHandle CreateKernel(
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
             KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
             using T = std::decay_t<decltype(cfg)>;
+            auto* program_ptr = ProgramPool::instance().get_program(program);
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+                return CreateDataMovementKernel(*program_ptr, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+                return CreateComputeKernel(*program_ptr, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
+                return CreateEthernetKernel(*program_ptr, kernel_src, core_ranges, cfg);
             }
         },
         config);
 }
 
 KernelHandle CreateKernelFromString(
-    Program &program,
+    ProgramHandle program,
     const std::string &kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config) {
@@ -1010,49 +1014,55 @@ KernelHandle CreateKernelFromString(
             CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
             KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
             using T = std::decay_t<decltype(cfg)>;
+            auto* program_ptr = ProgramPool::instance().get_program(program);
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+                return CreateDataMovementKernel(*program_ptr, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
+                return CreateComputeKernel(*program_ptr, kernel_src, core_ranges, cfg);
             } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
+                return CreateEthernetKernel(*program_ptr, kernel_src, core_ranges, cfg);
             }
         },
         config);
 }
 
 CBHandle CreateCircularBuffer(
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const CircularBufferConfig &config) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    return program.add_circular_buffer(core_ranges, config);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    return program_ptr->add_circular_buffer(core_ranges, config);
 }
 
-const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle) {
-    return detail::GetCircularBuffer(program, cb_handle)->config();
+const CircularBufferConfig &GetCircularBufferConfig(ProgramHandle program, CBHandle cb_handle) {
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    return detail::GetCircularBuffer(*program_ptr, cb_handle)->config();
 }
 
-void UpdateCircularBufferTotalSize(Program &program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+void UpdateCircularBufferTotalSize(ProgramHandle program, CBHandle cb_handle, uint32_t total_size) {
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(*program_ptr, cb_handle);
     if (not circular_buffer->globally_allocated()) {
-        program.invalidate_circular_buffer_allocation();
+        program_ptr->invalidate_circular_buffer_allocation();
     }
     circular_buffer->config().set_total_size(total_size);
 }
 
-void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
-    detail::GetCircularBuffer(program, cb_handle)->config().set_page_size(buffer_index, page_size);
+void UpdateCircularBufferPageSize(ProgramHandle program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    detail::GetCircularBuffer(*program_ptr, cb_handle)->config().set_page_size(buffer_index, page_size);
 }
 
-void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer) {
-    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+void UpdateDynamicCircularBufferAddress(ProgramHandle program, CBHandle cb_handle, const Buffer &buffer) {
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    auto circular_buffer = detail::GetCircularBuffer(*program_ptr, cb_handle);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
 }
 
 uint32_t CreateSemaphore(
-    Program &program,
+    ProgramHandle program,
     const std::variant<CoreRange, CoreRangeSet> &core_spec,
     uint32_t initial_value,
     CoreType core_type) {
@@ -1067,10 +1077,11 @@ uint32_t CreateSemaphore(
             }
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+            auto* program_ptr = ProgramPool::instance().get_program(program);
             for (const auto &core_range : crs.ranges()) {
                 CoreCoord start_core = core_range.start_coord;
                 CoreCoord end_core = core_range.end_coord;
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range);
+                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(*program_ptr, core_range);
                 if (!semaphore_id.has_value()) {
                     semaphore_id = semaphore_id_candidate;
                 } else {
@@ -1079,7 +1090,7 @@ uint32_t CreateSemaphore(
             }
             TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
 
-            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
+            program_ptr->add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
             return semaphore_id.value();
         },
@@ -1106,13 +1117,14 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(
-    std::shared_ptr<Buffer> buffer, Program& program) {
+    std::shared_ptr<Buffer> buffer, ProgramHandle program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
-    EnqueueAddBufferToProgram(buffer->device()->command_queue(), buffer, program, false);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    EnqueueAddBufferToProgram(buffer->device()->command_queue(), buffer, *program_ptr, false);
 }
 
 void SetRuntimeArgs(
-    const Program &program,
+    ProgramHandle program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::vector<uint32_t> &runtime_args) {
@@ -1121,11 +1133,12 @@ void SetRuntimeArgs(
         not CommandQueue::async_mode_set(),
         "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast "
         "Dispatch.");
-    std::visit([&](auto &&core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    std::visit([&](auto &&core_spec) { SetRuntimeArgsImpl(*program_ptr, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
 void SetRuntimeArgs(
-    const Program &program,
+    ProgramHandle program,
     KernelHandle kernel,
     const std::vector<CoreCoord> &core_spec,
     const std::vector<std::vector<uint32_t>> &runtime_args) {
@@ -1139,7 +1152,8 @@ void SetRuntimeArgs(
         "Mistmatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
-    auto k = detail::GetKernel(program, kernel);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    auto k = detail::GetKernel(*program_ptr, kernel);
     for (size_t i = 0; i < core_spec.size(); i++) k->set_runtime_args(core_spec[i], runtime_args[i]);
 }
 
@@ -1166,36 +1180,40 @@ void SetRuntimeArgs(
     SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+void SetCommonRuntimeArgs(ProgramHandle program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "This variant of SetCommonRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for "
         "Fast Dispatch.");
     if (runtime_args.size() != 0) {
-        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+        auto* program_ptr = ProgramPool::instance().get_program(program);
+        detail::GetKernel(*program_ptr, kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
-RuntimeArgsData &GetRuntimeArgs(const Program &program, KernelHandle kernel_id, const CoreCoord &logical_core) {
+RuntimeArgsData &GetRuntimeArgs(ProgramHandle program, KernelHandle kernel_id, const CoreCoord &logical_core) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    return detail::GetKernel(*program_ptr, kernel_id)->runtime_args_data(logical_core);
 }
 
-std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(const Program &program, KernelHandle kernel_id) {
+std::vector<std::vector<RuntimeArgsData>> &GetRuntimeArgs(ProgramHandle program, KernelHandle kernel_id) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->runtime_args_data();
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    return detail::GetKernel(*program_ptr, kernel_id)->runtime_args_data();
 }
 
-RuntimeArgsData &GetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id) {
+RuntimeArgsData &GetCommonRuntimeArgs(ProgramHandle program, KernelHandle kernel_id) {
     TT_FATAL(
         not CommandQueue::async_mode_set(),
         "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
-    return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    return detail::GetKernel(*program_ptr, kernel_id)->common_runtime_args_data();
 }
 
 uint32_t BeginTraceCapture(Device *device, const uint8_t cq_id) {

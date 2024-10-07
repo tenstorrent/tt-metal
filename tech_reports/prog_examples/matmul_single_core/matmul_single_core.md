@@ -71,7 +71,7 @@ We want a just a single core, so we will restrict the core range to be just one 
 
 ``` cpp
 CommandQueue& cq = detail::GetCommandQueue(device);
-Program program{};
+auto program = tt::tt_metal::CreateProgram();
 CoreRange core({0, 0}, {0, 0});
 ```
 

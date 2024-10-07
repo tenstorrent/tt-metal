@@ -138,7 +138,7 @@ Tried printing CB::c_in1: Unsupported data format (Bfp8_b))";
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
     constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);

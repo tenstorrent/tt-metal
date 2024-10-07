@@ -24,7 +24,7 @@ namespace unit_tests_common::matmul::test_matmul_single_core{
 bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M, int N, int K, int out_subblock_h, int out_subblock_w){
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
     int in0_block_w = 2;

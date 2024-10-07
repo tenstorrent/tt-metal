@@ -69,7 +69,7 @@ Tensor HaloTensorCreation(const Tensor &input){
 }
 
 operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w, const DeviceComputeKernelConfig compute_kernel_config) {
-    Program program = CreateProgram();
+    auto program = CreateProgram();
     Device *device = input.device();
 
     auto input_shape = input.get_legacy_shape();
@@ -259,7 +259,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
 
     auto override_runtime_args_callback = [reader_kernel, cb_src0, out_cb](
         const void* operation,
-        Program &program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

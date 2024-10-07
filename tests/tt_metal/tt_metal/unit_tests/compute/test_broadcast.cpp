@@ -6,9 +6,10 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include "tt_metal/test_utils/df/bfloat16.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -134,7 +135,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         GTEST_SKIP(); // FIXME sub_tiles_bcast_rows and sub_bcast_rows_init_short dont exist
     }
 
-    Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -272,7 +273,9 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
     tt_metal::detail::WriteToBuffer(src_a_dram_buffer, tilized_input0);
     tt_metal::detail::WriteToBuffer(src_b_dram_buffer, tilized_input1);
 
-    tt_metal::detail::LaunchProgram(device, program);
+
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, dest_buffer_data);

@@ -25,7 +25,7 @@ struct DRAMConfig{
 };
 
 bool dram_single_core_db (CommonFixture* fixture, tt_metal::Device *device){
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -92,7 +92,7 @@ bool dram_single_core_db (CommonFixture* fixture, tt_metal::Device *device){
 
 bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const DRAMConfig &cfg, std::vector<uint32_t> src_vec){
     // Create a program
-    tt_metal::Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     tt_metal::InterleavedBufferConfig dram_config{
                             .device = device,

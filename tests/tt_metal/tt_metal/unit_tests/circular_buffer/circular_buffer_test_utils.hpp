@@ -18,7 +18,7 @@ struct CBConfig {
     const tt::DataFormat data_format = tt::DataFormat::Float16_b;
 };
 
-inline void initialize_program(Program& program, const CoreRangeSet& cr_set) {
+inline void initialize_program(ProgramHandle program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});

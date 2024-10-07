@@ -32,7 +32,7 @@ void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = Ma
     }
 }
 
-void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
+void create_CBs_for_fused_matmul(tt_metal::ProgramHandle program, tt_metal::Device* device, CoreCoord core, bool activations_rm, bool output_rm, uint32_t M, uint32_t N, uint32_t in0_block_w, uint32_t out_subblock_h) {
 
     uint32_t num_bytes_for_df = 2;
 
@@ -139,7 +139,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
 bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool activations_rm, bool output_rm, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
     uint32_t M = 4;

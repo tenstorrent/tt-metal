@@ -40,7 +40,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     bool has_momentum_buffer_out = momentum_buffer_out.has_value();
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -226,7 +226,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, has_momentum_buffer_out}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, core_h, has_momentum_buffer_out}};
 }
 
 void MorehSgdOperation::ProgramFactory::override_runtime_arguments(

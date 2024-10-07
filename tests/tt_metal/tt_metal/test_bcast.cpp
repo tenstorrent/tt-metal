@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <functional>
-#include <random>
 #include <vector>
 #include <map>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 #include "test_tiles.hpp"
 #include "test_gold_impls.hpp"
@@ -94,7 +93,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord core = {0, 0};
 
@@ -289,8 +288,8 @@ int main(int argc, char **argv) {
 
 
 
-
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
 
         // The kernel will view the input as TILED_NFACES
         vector<uint32_t> result_vec;

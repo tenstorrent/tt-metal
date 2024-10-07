@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
     uint32_t NC = N*C;
 
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
     Device *device = a.device();
 
     auto shard_spec = a.shard_spec().value();
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
 
     auto override_runtime_args_callback = [binary_reader_kernel_id, bcast_kernel_id, cb_src0, out_cb, ncores_x](
         const void* operation,
-        Program &program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors
@@ -267,7 +267,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(const Tensor &a, const
         }
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program=program, .override_runtime_arguments_callback=override_runtime_args_callback};
 }
 
 

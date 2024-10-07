@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = input.device();
-    auto program = Program();
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -170,7 +170,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
                                                    const void *operation,
-                                                   const Program &program,
+                                                   const ProgramHandle program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

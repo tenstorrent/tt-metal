@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>&,
             const std::vector<Tensor>& output_tensors) {

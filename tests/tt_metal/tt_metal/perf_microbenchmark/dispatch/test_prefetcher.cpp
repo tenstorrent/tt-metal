@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "assert.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -16,7 +12,7 @@
 #include "common.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;
 constexpr uint32_t DEVICE_DATA_SIZE = 768 * 1024;
@@ -1502,7 +1498,7 @@ std::chrono::duration<double> run_test(uint32_t iterations,
 }
 
 void configure_for_single_chip(Device *device,
-                               Program& program,
+                               ProgramHandle program,
                                void*& host_hugepage_base,
                                uint32_t prefetch_q_base,
                                uint32_t prefetch_q_rd_ptr_addr,
@@ -2137,9 +2133,9 @@ void configure_for_single_chip(Device *device,
 // This is, sadly, copied and modified from above
 // TODO: clean up, maybe leverage runtime structures
 void configure_for_multi_chip(Device *device,
-                              Program& program,
+                              ProgramHandle program,
                               Device *device_r,
-                              Program& program_r,
+                              ProgramHandle program_r,
                               int device_id_l,
                               int device_id_r,
                               void*& host_hugepage_base,
@@ -2944,8 +2940,8 @@ int main(int argc, char **argv) {
             device_r = tt_metal::CreateDevice(device_id_r);
         }
 
-        tt_metal::Program program = tt_metal::CreateProgram();
-        tt_metal::Program program_r = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
+        auto program_r = tt_metal::CreateScopedProgram();
 
         void* host_hugepage_base;
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
@@ -3029,11 +3025,14 @@ int main(int argc, char **argv) {
         }
 
         // Cache stuff
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        auto* program_r_ptr = tt::tt_metal::ProgramPool::instance().get_program(program_r);
+
         gen_terminate_cmds(terminate_cmds, terminate_sizes);
         gen_prefetcher_cmds(device_r, cmds, cmd_sizes, device_data, l1_buf_base_g);
         if (warmup_g) {
             log_info(tt::LogTest, "Warming up cache now...");
-            run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
+            run_test(1, device, *program_ptr, device_r, *program_r_ptr, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
             initialize_device_g = true;
         }
 
@@ -3046,14 +3045,14 @@ int main(int argc, char **argv) {
                 cmd_sizes.resize(0);
                 device_data.reset();
                 gen_prefetcher_cmds(device_r, cmds, cmd_sizes, device_data, l1_buf_base_g);
-                run_test(1, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
+                run_test(1, device, *program_ptr, device_r, *program_r_ptr, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
                 pass &= device_data.validate(device_r);
                 if (!pass) {
                     break;
                 }
             }
         } else {
-            auto elapsed_seconds = run_test(iterations_g, device, program, device_r, program_r, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
+            auto elapsed_seconds = run_test(iterations_g, device, *program_ptr, device_r, *program_r_ptr, cmd_sizes, terminate_sizes, cmds, terminate_cmds, host_hugepage_base, dev_hugepage_base_g, prefetch_q_base, prefetch_q_rd_ptr_addr, phys_prefetch_core_g, prefetch_q_writer);
 
             log_info(LogTest, "Ran in {}us", elapsed_seconds.count() * 1000 * 1000);
             log_info(LogTest, "Ran in {}us per iteration", elapsed_seconds.count() * 1000 * 1000 / iterations_g);

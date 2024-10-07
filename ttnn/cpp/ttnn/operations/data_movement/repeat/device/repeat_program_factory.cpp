@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks repeat_multi_core(
     const Tensor &input_tensor, const uint32_t repeat_dim, const uint32_t num_repeats, const Tensor &output) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::Device *device = output.device();
 
@@ -177,7 +177,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -197,7 +197,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }

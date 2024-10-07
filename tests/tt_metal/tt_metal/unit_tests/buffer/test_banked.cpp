@@ -12,6 +12,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt::tt_metal;
 
@@ -40,7 +41,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     string reader_kernel_name = "";
     string writer_kernel_name = "";
@@ -140,7 +141,8 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     SetRuntimeArgs(program, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program, writer_kernel, cfg.logical_core, writer_runtime_args);
 
-    detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    detail::LaunchProgram(device, *program_ptr);
     std::vector<uint32_t> reread_input_packed;
     detail::ReadFromBuffer(input_buffer, reread_input_packed);
 
@@ -164,7 +166,7 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program = CreateProgram();
+    auto program = CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig in_config{
                     .device=device,
@@ -253,7 +255,8 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
             (uint32_t)cfg.num_tiles,
         }
     );
-detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    detail::LaunchProgram(device, *program_ptr);
     std::vector<uint32_t> dest_buffer_data;
     detail::ReadFromBuffer(output_buffer, dest_buffer_data);
     pass &= input_packed == dest_buffer_data;

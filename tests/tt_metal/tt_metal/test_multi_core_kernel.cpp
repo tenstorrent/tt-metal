@@ -8,6 +8,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "common/bfloat16.hpp"
 #include "common/core_coord.h"
 // #include "tt_gdb/tt_gdb.hpp"
@@ -18,12 +19,12 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
+std::tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
     tt_metal::Device *device,
     uint32_t single_tile_size,
     const CoreRange &all_cores,
     const std::vector<uint32_t> &eltwise_unary_args) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord start_core = all_cores.start_coord;
     CoreCoord end_core = all_cores.end_coord;
@@ -70,7 +71,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
 void compile_and_configure_program(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     std::vector<uint32_t> &src_vec,
     tt_metal::Buffer &src_dram_buffer) {
     ////////////////////////////////////////////////////////////////////////////
@@ -87,7 +88,7 @@ void compile_and_configure_program(
 
 }
 
-void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
+void set_rt_args(tt_metal::ProgramHandle program, tt_metal::KernelHandle kernel, const CoreRange &core_range, const std::vector<uint32_t> &rt_args) {
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
             CoreCoord core = CoreCoord(x, y);
@@ -98,7 +99,7 @@ void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, cons
 
 void write_same_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,
@@ -128,7 +129,7 @@ void write_same_runtime_args_to_device(
 
 void write_unique_writer_runtime_args_to_device(
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
     const CoreRange &core_range,
@@ -223,7 +224,8 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device *device) {
 
     write_same_runtime_args_to_device(device, program, reader_kernel_id, writer_kernel_id, all_cores, num_tiles, *src_dram_buffer, *dst_dram_buffer);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -294,7 +296,8 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device *device) {
     write_unique_writer_runtime_args_to_device(
         device, program, reader_kernel_id, writer_kernel_id, all_cores, core_blocks, num_tiles, *src_dram_buffer, *dst_dram_buffer_1, *dst_dram_buffer_2, *dst_dram_buffer_3);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result_vec_1;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer_1, result_vec_1);

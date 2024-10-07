@@ -16,6 +16,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -36,7 +37,7 @@ bool reader_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -79,7 +80,8 @@ bool reader_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> dest_core_data;
     // tt_metal::detail::ReadFromBuffer(l1_buffer, dest_core_data);
@@ -105,7 +107,7 @@ bool writer_only(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
 
     tt_metal::InterleavedBufferConfig dram_config{
@@ -151,7 +153,8 @@ bool writer_only(
             (uint32_t)byte_size,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -181,7 +184,7 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -252,7 +255,8 @@ bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_conf
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
@@ -280,7 +284,7 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
@@ -363,7 +367,8 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);

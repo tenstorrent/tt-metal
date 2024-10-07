@@ -44,7 +44,7 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
     }
     for (const auto& core : test_cores) {
         // Set up program and command queue
-        Program program = Program();
+        auto program = CreateScopedProgram();
 
         // Create the kernel
         // TODO: When #6424 is fixed combine these kernels again.

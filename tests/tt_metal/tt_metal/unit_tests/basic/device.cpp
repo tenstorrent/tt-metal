@@ -4,18 +4,14 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "tests/tt_metal/tt_metal/unit_tests/common/basic_fixture.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests/common/device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -230,7 +226,7 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
             tt_metal::detail::WriteToDeviceL1(this->devices_.at(id), logical_core, write_address, host_input);
         }
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
         string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
@@ -244,7 +240,8 @@ TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
-        tt_metal::detail::LaunchProgram(this->devices_.at(id), program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(this->devices_.at(id), *program_ptr);
 
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
@@ -282,7 +279,7 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     Device *device = this->devices_.at(0);
     EXPECT_TRUE(device->is_mmio_capable());
     CoreCoord logical_core(0, 0);
@@ -310,7 +307,8 @@ TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
         }
     );
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> result(size_bytes/sizeof(uint32_t));
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());

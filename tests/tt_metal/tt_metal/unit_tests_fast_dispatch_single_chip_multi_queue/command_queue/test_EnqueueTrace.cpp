@@ -16,8 +16,8 @@ struct TestBufferConfig {
     BufferType buftype;
 };
 
-Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
-    Program program = CreateProgram();
+ScopedProgramHandle create_simple_unary_program(const Buffer& input, const Buffer& output) {
+    auto program = CreateScopedProgram();
 
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
@@ -68,7 +68,7 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
     };
     SetRuntimeArgs(program, reader_kernel, worker, reader_rt_args);
 
-    return program;
+    return std::move(program);
 }
 
 // All basic trace tests just assert that the replayed result exactly matches
@@ -83,7 +83,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
-    Program simple_program = create_simple_unary_program(input, output);
+    auto simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
@@ -124,7 +124,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
-    Program simple_program = create_simple_unary_program(input, output);
+    auto simple_program = create_simple_unary_program(input, output);
     vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;

@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -71,7 +72,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     tt::tt_metal::InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -259,7 +260,8 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
             (uint32_t)test_config.num_tiles,
         });
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Comparison Checking

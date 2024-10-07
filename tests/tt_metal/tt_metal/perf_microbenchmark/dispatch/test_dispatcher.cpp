@@ -2,16 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
 
 #include "logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "common.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -374,7 +371,7 @@ int main(int argc, char **argv) {
 
         CommandQueue& cq = device->command_queue();
 
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         CoreCoord spoof_prefetch_core = {0, 0};
         CoreCoord dispatch_core = {4, 0};
@@ -569,13 +566,15 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Prefetcher CMD Buffer size {}", std::to_string(prefetcher_buffer_size_g));
         log_info(LogTest, "Worker result data total bytes written {}", std::to_string(device_data.size() * sizeof(uint32_t)));
         // Cache stuff
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+
         for (int i = 0; i < warmup_iterations_g; i++) {
-            tt_metal::detail::LaunchProgram(device, program);
+            tt_metal::detail::LaunchProgram(device, *program_ptr);
         }
 
         auto start = std::chrono::system_clock::now();
         for (int i = 0; i < iterations_g; i++) {
-            tt_metal::detail::LaunchProgram(device, program);
+            tt_metal::detail::LaunchProgram(device, *program_ptr);
         }
         auto end = std::chrono::system_clock::now();
 

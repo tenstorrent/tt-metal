@@ -21,7 +21,7 @@ using namespace tt;
 namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast {
 
 std::
-    tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
+    tuple<tt_metal::ScopedProgramHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
     create_program(
         tt_metal::Device *device,
         int start_core_x,
@@ -38,7 +38,7 @@ std::
         int out_subblock_w,
         int per_core_M,
         int per_core_N) {
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     uint32_t single_tile_size = 2 * 1024;
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
@@ -164,7 +164,7 @@ std::
 bool write_runtime_args_to_device(
     int in1_or_in0,
     tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::ProgramHandle program,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -362,7 +362,8 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_r * num_cores_c);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
     log_debug(LogTest, "Matmul test done");
 
     log_debug(LogTest, "Gathering data back from dram and checking against golden");

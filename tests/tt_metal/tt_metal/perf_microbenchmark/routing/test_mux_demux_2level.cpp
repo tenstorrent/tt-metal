@@ -6,10 +6,9 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
-
+#include "tt_metal/impl/program/program_pool.hpp"
 using namespace tt;
 
 
@@ -94,7 +93,7 @@ int main(int argc, char **argv) {
     try {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        auto program = tt_metal::CreateScopedProgram();
 
         constexpr uint32_t tx_x = 0;
         constexpr uint32_t tx_y = 0;
@@ -453,7 +452,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "Starting test...");
 
         auto start = std::chrono::system_clock::now();
-        tt_metal::detail::LaunchProgram(device, program);
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+        tt_metal::detail::LaunchProgram(device, *program_ptr);
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

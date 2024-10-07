@@ -41,7 +41,7 @@ struct PipelineRowConfig {
 void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConfig& test_config) {
     CommandQueue& cq = device->command_queue();
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     // uint32_t num_tiles = 32;
     // uint32_t block_size_tiles = 16;

@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
 #include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt::tt_metal;
 
@@ -39,7 +37,7 @@ struct DummyProgramMultiCBConfig {
 
 namespace local_test_functions {
 
-void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
+void initialize_dummy_kernels(ProgramHandle program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
@@ -51,7 +49,7 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_compute_kernel = CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", cr_set, ComputeConfig{});
 }
 
-void initialize_dummy_semaphores(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
+void initialize_dummy_semaphores(ProgramHandle program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values)
 {
     for (uint32_t i = 0; i < init_values.size(); i++)
     {
@@ -59,7 +57,7 @@ void initialize_dummy_semaphores(Program& program, const std::variant<CoreRange,
     }
 }
 
-std::vector<CBHandle> initialize_dummy_circular_buffers(Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
+std::vector<CBHandle> initialize_dummy_circular_buffers(ProgramHandle program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs)
 {
     std::vector<CBHandle> cb_handles;
     for (uint32_t i = 0; i < cb_configs.size(); i++) {
@@ -110,7 +108,7 @@ bool cb_config_successful(Device* device, Program &program, const DummyProgramMu
 }
 
 bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
@@ -118,18 +116,20 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
     EnqueueProgram(cq, program, is_blocking_op);
     Finish(cq);
 
-    return cb_config_successful(device, program, program_config);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    return cb_config_successful(device, *program_ptr, program_config);
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
 
     const std::vector<CBHandle>& cb_handles = initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    const bool is_cb_config_before_update_successful = cb_config_successful(device, program, program_config);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    const bool is_cb_config_before_update_successful = cb_config_successful(device, *program_ptr, program_config);
 
     DummyProgramMultiCBConfig program_config_2 = program_config;
     for (uint32_t cb_id = 0; cb_id < program_config.cb_config_vector.size(); cb_id++) {
@@ -142,11 +142,11 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(Device* device, CommandQueue
     EnqueueProgram(cq, program, false);
     Finish(cq);
 
-    const bool is_cb_config_after_update_successful = cb_config_successful(device, program, program_config_2);
+    const bool is_cb_config_after_update_successful = cb_config_successful(device, *program_ptr, program_config_2);
     return is_cb_config_before_update_successful && is_cb_config_after_update_successful;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Program& program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
+bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, ProgramHandle program, const DummyProgramConfig& program_config, const vector<vector<uint32_t>>& expected_semaphore_vals) {
     TT_ASSERT(program_config.cr_set.size() == expected_semaphore_vals.size());
 
     bool are_all_semaphore_values_correct = true;
@@ -161,12 +161,13 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
         const vector<uint32_t>& expected_semaphore_vals_for_core = expected_semaphore_vals[expected_semaphore_vals_idx];
         TT_ASSERT(expected_semaphore_vals_for_core.size() == program_config.num_sems);
         expected_semaphore_vals_idx++;
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
         for (const CoreCoord& core_coord : core_range)
         {
             vector<uint32_t> semaphore_vals;
             uint32_t expected_semaphore_vals_for_core_idx = 0;
             const uint32_t semaphore_buffer_size = program_config.num_sems * hal.get_alignment(HalMemType::L1);
-            uint32_t semaphore_base = program.get_sem_base_addr(device, core_coord, CoreType::WORKER);
+            uint32_t semaphore_base = program_ptr->get_sem_base_addr(device, core_coord, CoreType::WORKER);
             tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, semaphore_base, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size(); i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t)))
             {
@@ -184,7 +185,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, Progr
 }
 
 bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     vector<uint32_t> expected_semaphore_values;
 
     for (uint32_t initial_sem_value = 0; initial_sem_value < program_config.num_sems; initial_sem_value++) {
@@ -196,7 +197,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config, uint32_t num_runtime_args_dm0, uint32_t num_runtime_args_dm1, uint32_t num_runtime_args_compute, uint32_t num_iterations) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     bool pass = true;
 
     CoreRangeSet cr_set = program_config.cr_set;
@@ -256,7 +257,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, CommandQueue& c
         }
     }
 
-    tt::tt_metal::detail::CompileProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::CompileProgram(device, *program_ptr);
     for (uint32_t i = 0; i < num_iterations; i++) {
         EnqueueProgram(cq, program, false);
     }
@@ -292,7 +294,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t num_runtime_args_for_cr0,
     uint32_t num_runtime_args_for_cr1,
     uint32_t num_iterations) {
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     bool pass = true;
 
     // TODO: this test would be better if it varied args across core ranges and kernel type
@@ -530,8 +532,7 @@ bool verify_rt_args(bool unique, Device* device, CoreCoord logical_core, const t
 
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig& program_config, uint32_t num_unique_rt_args, uint32_t num_common_rt_args, const tt::RISCV &riscv, bool idle_eth = false) {
-
-    Program program;
+    auto program = tt::tt_metal::CreateScopedProgram();
     bool pass = true;
     CoreRangeSet cr_set = program_config.cr_set;
 
@@ -605,7 +606,8 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
         default: TT_THROW("Unsupported {} processor in test.", riscv);
     }
 
-    const auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    const auto kernel = tt::tt_metal::detail::GetKernel(*program_ptr, kernel_id);
 
     // Unique Runtime Args.
     std::vector<uint32_t> unique_runtime_args;
@@ -683,7 +685,7 @@ namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
     for (Device *device : devices_) {
-        Program program;
+        auto program = tt::tt_metal::CreateScopedProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -765,7 +767,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
     CoreCoord core_coord(0,0);
 
     for (Device *device : devices_) {
-        Program program;
+        auto program = tt::tt_metal::CreateScopedProgram();
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
             .set_page_size(intermediate_cb, single_tile_size)
             .set_page_size(out_cb, single_tile_size);
@@ -779,9 +781,10 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
 
         vector<uint32_t> cb_config_vector;
 
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
         tt::tt_metal::detail::ReadFromDeviceL1(
             device, core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
+            program_ptr->get_cb_base_addr(device, core_coord, CoreType::WORKER), cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
@@ -826,7 +829,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
 
 TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
-        Program program;
+        auto program = tt::tt_metal::CreateScopedProgram();
 
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -1054,7 +1057,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
 
         CoreRangeSet cr_set({first_cr, second_cr});
 
-        Program program;
+        auto program = tt::tt_metal::CreateScopedProgram();
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
         vector<vector<uint32_t>> expected_semaphore_vals;
@@ -1244,10 +1247,10 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    vector<Program> programs;
+    std::vector<ScopedProgramHandle> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
-        Program& program = programs.back();
+        auto& program = programs.emplace_back(tt::tt_metal::CreateScopedProgram());
+        auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
         std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
@@ -1388,12 +1391,12 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             }
         }
 
-        tt::tt_metal::detail::CompileProgram(this->device_, program);
+        tt::tt_metal::detail::CompileProgram(this->device_, *program_ptr);
     }
 
     log_info(tt::LogTest, "Running {} programs for cache warmup.", programs.size());
     // This loop caches program and runs
-    for (Program& program: programs) {
+    for (auto& program: programs) {
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
@@ -1407,7 +1410,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
         if (i % 50 == 0) {
             log_info(tt::LogTest, "Enqueueing {} programs for iter: {}/{} now.", programs.size(), i+1, NUM_ITERATIONS);
         }
-        for (Program& program: programs) {
+        for (auto& program: programs) {
             EnqueueProgram(this->device_->command_queue(), program, false);
         }
     }

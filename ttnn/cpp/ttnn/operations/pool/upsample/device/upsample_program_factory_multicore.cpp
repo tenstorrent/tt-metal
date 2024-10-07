@@ -20,7 +20,7 @@ namespace ttnn::operations::upsample {
 using namespace tt;
 
 operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
-    Program program = CreateProgram();
+    auto program = CreateProgram();
     Device *device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
 
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
         const void* operation,
-        Program &program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>&,
         const std::vector<Tensor>& output_tensors

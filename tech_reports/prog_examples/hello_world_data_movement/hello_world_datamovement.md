@@ -37,7 +37,7 @@ using a single core to focus solely on the data movement kernel setup.
 
 ``` cpp
 CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+auto program = CreateProgram();
 ```
 
 Then, we obtain the device\'s `CommandQueue` in order to allow commands

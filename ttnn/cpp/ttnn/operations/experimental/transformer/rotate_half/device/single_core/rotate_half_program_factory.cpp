@@ -14,7 +14,7 @@ using namespace tt;
 using namespace tt::constants;
 
 operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Tensor &output) {
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
     );
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor &input, Ten
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 } // namespace ttnn::operations::experimental::transformer::detail

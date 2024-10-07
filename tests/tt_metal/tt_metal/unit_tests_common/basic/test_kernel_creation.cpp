@@ -16,7 +16,7 @@ using namespace tt;
 // Ensures we can successfully create kernels on available compute grid
 TEST_F(CommonFixture, CreateKernelsOnComputeCores) {
     for (unsigned int id = 0; id < devices_.size(); id++) {
-        tt_metal::Program program = CreateProgram();
+        auto program = CreateScopedProgram();
         CoreCoord compute_grid = devices_.at(id)->compute_with_storage_grid_size();
         EXPECT_NO_THROW(
             auto test_kernel = tt_metal::CreateKernel(

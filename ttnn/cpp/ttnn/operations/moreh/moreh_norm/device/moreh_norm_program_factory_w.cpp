@@ -198,7 +198,7 @@ MorehNormOperation::ProgramFactoryW::cached_program_t MorehNormOperation::Progra
         tile_offset += num_units_per_core * Wt;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores_to_be_used, num_cores_y}};
 }
 
 void MorehNormOperation::ProgramFactoryW::override_runtime_arguments(

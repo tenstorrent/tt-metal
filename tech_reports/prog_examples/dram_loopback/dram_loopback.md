@@ -26,7 +26,7 @@ We instantiate a device to control our `GRAYSKULL` type accelerator.
 
 ``` cpp
 CommandQueue& cq = detail::GetCommandQueue(device);
-Program program = CreateProgram();
+auto program = CreateProgram();
 ```
 
 We first obtain the global `CommandQueue` in order to use the fast dispatch capabilities of the software. This will be used when issuing commands for asynchronous reads/writes/program management.

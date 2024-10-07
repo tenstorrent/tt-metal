@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
     const tt::tt_metal::LegacyShape input_shape = a.get_legacy_shape();
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
     tt_metal::Device *device = a.device();
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0](
                                               const void *operation,
-                                              Program &program,
+                                              ProgramHandle program,
                                               const std::vector<Tensor> &input_tensors,
                                               const std::vector<std::optional<const Tensor>> &,
                                               const std::vector<Tensor> &output_tensors) {

@@ -173,7 +173,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
             });
         tile_offset += num_tensor_tiles_per_core;
     }
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, core_h}};
 }
 
 void MorehMeanOperation::MorehMeanWFactory::override_runtime_arguments(

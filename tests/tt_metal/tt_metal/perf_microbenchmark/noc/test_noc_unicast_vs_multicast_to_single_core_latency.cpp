@@ -2,13 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 //
@@ -29,7 +27,7 @@ void measure_latency(string kernel_name) {
         {"WORKER_NOC_Y", std::to_string(first_worker_physical_core.y)},
     };
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
     tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/noc/kernels/" + kernel_name + ".cpp",
@@ -41,8 +39,10 @@ void measure_latency(string kernel_name) {
 
     tt::tt_metal::detail::SetDeviceProfilerDir(kernel_name + "_microbenchmark");
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    detail::CompileProgram(device, program);
-    tt_metal::detail::LaunchProgram(device, program);
+
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::CompileProgram(device, *program_ptr);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
     tt_metal::CloseDevice(device);
 }
 

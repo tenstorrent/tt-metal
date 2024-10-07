@@ -28,7 +28,7 @@ The initial setup for this example follows the same pattern for the compute kern
 
 ``` cpp
 CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+auto program = CreateProgram();
 ```
 
 Then, we obtain the device's `CommandQueue` in order to allow commands to be dispatched for execution. The `Program` is initialized to encapsulate the kernels and data.

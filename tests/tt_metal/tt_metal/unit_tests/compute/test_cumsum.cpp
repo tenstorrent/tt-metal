@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -50,7 +51,7 @@ std::vector<tt::test_utils::df::bfloat16> gold_cumsum(std::vector<tt::test_utils
 }
 
 void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_config) {
-    Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateScopedProgram();
 
     CoreCoord core = {0, 0};
 
@@ -161,7 +162,8 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    tt_metal::detail::LaunchProgram(device, *program_ptr);
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);

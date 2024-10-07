@@ -31,6 +31,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
 using std::map;
@@ -2902,10 +2903,11 @@ void EnqueueWriteBuffer(
 }
 
 void EnqueueProgram(
-    CommandQueue& cq, Program& program, bool blocking) {
+    CommandQueue& cq, ProgramHandle handle, bool blocking) {
     detail::DispatchStateCheck(true);
+    auto* program_ptr = ProgramPool::instance().get_program(handle);
     cq.run_command(
-        CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = &program});
+        CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = program_ptr});
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {

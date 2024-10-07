@@ -11,7 +11,7 @@
 
 namespace tt::stl {
 
-template <auto MAX_STORAGE_SIZE, auto ALIGNMENT>
+template <std::size_t MAX_STORAGE_SIZE, std::size_t ALIGNMENT>
 struct unique_any final {
     using storage_t = std::array<std::byte, MAX_STORAGE_SIZE>;
 

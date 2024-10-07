@@ -17,7 +17,7 @@ namespace ttnn::operations::binary {
 
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
-    Program& program,
+    ProgramHandle program,
     const Tensor& a,
     const Tensor& b,
     const Tensor& output,
@@ -265,7 +265,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     std::vector<UnaryWithParam> fused_activations =
         operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);

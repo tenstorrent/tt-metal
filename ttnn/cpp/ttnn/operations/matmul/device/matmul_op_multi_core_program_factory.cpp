@@ -19,7 +19,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
-    tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     const tt::tt_metal::LegacyShape& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
@@ -178,7 +178,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const Program &program,
+            const ProgramHandle program,
             const std::vector<tt_metal::Buffer *> &input_buffers,
             const std::vector<tt_metal::Buffer *> &output_buffers) {
             auto src_dram_buffer_a = input_buffers.at(0);
@@ -202,7 +202,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace matmul

@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 
 static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
     // Set up program
-    Program program = Program();
+    auto program = CreateScopedProgram();
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, phys_core;
