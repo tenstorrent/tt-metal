@@ -54,8 +54,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     auto workload_event = std::make_shared<Event>();
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
-    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
-    auto output_buffer = ttnn::allocate_buffer_on_device(output_buf_size_datums * datum_size_bytes, device, np_out.get_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
+    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape.padded_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
+    auto output_buffer = ttnn::allocate_buffer_on_device(output_buf_size_datums * datum_size_bytes, device, np_out.get_padded_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
     auto output_storage = tt::tt_metal::DeviceStorage{output_buffer};
     Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
@@ -105,7 +105,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     std::vector<uint32_t> inputs = {4, 9, 16, 25, 36, 64};
     uint32_t io_cq = 1;
     uint32_t workload_dispatch_cq = 0;
-    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}));
+    ttnn::SimpleShape shape{1, 1, 1024, 1024};
 
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -158,7 +158,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
 
     uint32_t buf_size_datums = 1024 * 1024;
     uint32_t datum_size_bytes = 2;
-    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}));
+    ttnn::SimpleShape shape{1, 1, 1024, 1024};
     // Inside the loop, initialize a buffer with limited lifetime.
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the buffer), destroy the buffer (which will asynchronously
     // deallocate the buffer) in a loop

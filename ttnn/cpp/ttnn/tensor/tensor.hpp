@@ -89,6 +89,7 @@ struct Tensor {
         deallocate_through_destructor(false) {}
 
     Tensor(const Storage storage, const ttnn::Shape shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+    Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile = std::nullopt);
 
     // Constructor to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
@@ -211,7 +212,7 @@ struct Tensor {
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const tt::tt_metal::LegacyShape strides() const;
+    const ttnn::SimpleShape strides() const;
     uint32_t volume() const;
 
     // todo: rename volume to get_volume to indicate that its blocking
@@ -293,22 +294,22 @@ struct Tensor {
 };
 
 Tensor create_device_tensor(
-    const tt::tt_metal::LegacyShape &shape,
+    const ttnn::SimpleShape &logical_shape,
+    const ttnn::SimpleShape &padded_shape,
     DataType dtype,
     Layout layout,
     Device *device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 
-static Tensor create_device_tensor(
+// TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
+Tensor create_device_tensor(
     const ttnn::Shape &shape,
     DataType dtype,
     Layout layout,
     Device *device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt) {
-    return create_device_tensor(shape.value, dtype, layout, device, memory_config, tile);
-}
+    const std::optional<Tile>& tile = std::nullopt);
 
 // template<typename Buffer>
 // void *get_host_buffer(const Tensor &tensor);

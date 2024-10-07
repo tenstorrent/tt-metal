@@ -117,7 +117,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
         .memory_layout = TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    ttnn::Shape shape = ttnn::Shape(LegacyShape({1, 1, 32, 16384}));
+    ttnn::SimpleShape shape{1, 1, 32, 16384};
     const uint32_t buf_size_datums = 32 * 16384;
     const uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -210,7 +210,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         .memory_layout = TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
-    ttnn::Shape shape = ttnn::Shape(LegacyShape({1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())}));
+    ttnn::SimpleShape shape{1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())};
     const uint32_t buf_size_datums = 2 * 256 * 256 * ring_devices.size();
     const uint32_t datum_size_bytes = 2;
     // Output of reduce scatter is input_numel / num_devices_used_in_scatter_op

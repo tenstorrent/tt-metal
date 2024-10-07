@@ -234,9 +234,9 @@ inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::Legac
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
@@ -252,12 +252,12 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape, const std::optional<Tile>& tile = std::nullopt);
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile = std::nullopt);
 
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
