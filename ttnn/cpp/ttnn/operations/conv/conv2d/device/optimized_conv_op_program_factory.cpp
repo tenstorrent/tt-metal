@@ -24,29 +24,6 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-pair<uint32_t, uint32_t> compute_opt_conv_output_face_shape(uint32_t conv_activation_h, uint32_t conv_activation_w, uint32_t filter_h, uint32_t filter_w, uint32_t stride_h, uint32_t stride_w, uint32_t pad_h, uint32_t pad_w, uint32_t padding_for_32B_alignment) {
-    uint32_t conv_output_h = ((conv_activation_h - filter_h + (2 * pad_h)) / stride_h) + 1;
-    uint32_t conv_output_w = ((conv_activation_w - filter_w + (2 * pad_w) - padding_for_32B_alignment) / stride_w) + 1;
-    return {conv_output_h, conv_output_w};
-}
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, vector<int> conv_params, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
-    uint32_t filter_h = (uint32_t) conv_params[0];
-    uint32_t filter_w = (uint32_t) conv_params[1];
-    uint32_t stride_h = (uint32_t) conv_params[2];
-    uint32_t stride_w = (uint32_t) conv_params[3];
-    uint32_t pad_h = (uint32_t) conv_params[4];
-    uint32_t pad_w = (uint32_t) conv_params[5];
-    auto [conv_output_h, conv_output_w] = compute_opt_conv_output_face_shape(conv_activation_shape[1], conv_activation_shape[2], filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, padding_for_32B_alignment);
-    uint32_t batch_size = conv_activation_shape[0];
-    // pad height
-    uint32_t num_rows = (uint32_t) batch_size * conv_output_h * conv_output_w;
-    uint32_t act_block_h_datums = act_block_h_ntiles * TILE_HEIGHT;
-    uint32_t num_rows_padded = (uint32_t) (std::ceil((double) num_rows / (double) act_block_h_datums ) * act_block_h_datums);
-    uint32_t num_cols = conv_activation_shape[3] * filter_h * filter_w;
-    uint32_t num_cols_padded = round_up(conv_activation_shape[3] * filter_w, TILE_WIDTH) * filter_h;
-    return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
-}
-
 pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles, uint32_t padding_for_32B_alignment) {
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
@@ -158,7 +135,10 @@ std::vector<tt::tt_metal::LegacyShape> OptimizedConvNew::compute_output_shapes(c
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
-    auto [conv_output_h, conv_output_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(conv_activation_h, conv_activation_w, filter_h, filter_w, stride_h, stride_w, pad_h, pad_w, extra_padding_for_32B_alignment);
+
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t conv_output_h = output_shape[1];
+    uint32_t conv_output_w = output_shape[2];
 
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;

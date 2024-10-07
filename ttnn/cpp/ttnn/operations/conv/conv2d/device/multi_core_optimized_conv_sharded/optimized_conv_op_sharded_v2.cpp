@@ -685,17 +685,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         bias_ntiles =
             bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
-
-    auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
-        conv_act_size_h,
-        conv_act_size_w,
-        filter_h,
-        filter_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        extra_padding_for_32B_alignment);
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t conv_output_size_h = output_shape[1];
+    uint32_t conv_output_size_w = output_shape[2];
 
     std::map<string, string> reader_defines;
 
