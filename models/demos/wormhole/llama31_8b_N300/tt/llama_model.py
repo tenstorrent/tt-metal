@@ -102,7 +102,6 @@ class LMHead(nn.Module):
         state_dict_prefix,
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
-        grid_size=(8, 8),
     ):
         super().__init__()
         self.args = args
@@ -134,14 +133,14 @@ class LMHead(nn.Module):
                 start = device * size_per_device + sum(split_sizes[:i])
                 end = start + split_size
                 device_splits.append(torch_output_weights[:, start:end])
-                print(f"device {device}: {start} {end} (split size: {split_size})")
+                # print(f"device {device}: {start} {end} (split size: {split_size})")
 
             # Concatenate the splits from all devices
             combined_split = torch.cat(device_splits, dim=-1)
-            print(f"combined_split shape: {combined_split.shape}")
+            # print(f"combined_split shape: {combined_split.shape}")
 
             memory_config = args.create_dram_sharded_mem_config(k=args.dim, n=combined_split.shape[-1])
-            print(f"memory_config: {memory_config}")
+            # print(f"memory_config: {memory_config}")
             self.output_weights.append(
                 ttnn.as_tensor(
                     combined_split,
@@ -163,18 +162,22 @@ class LMHead(nn.Module):
 
         self.program_configs = [
             args.dram_matmul_config(
-                args.batch_rows,
+                args.tile_padded_batch_rows,
                 args.dim,
                 split_size,
-                grid_size,
+                (args.lm_head_grid.y, args.lm_head_grid.x),
             )
             for split_size in split_sizes
         ]
 
     def forward(self, x: ttnn.Tensor):
+        # print(f"LM_HEAD_INPUT_MEMCFG: {self.args.get_model_config()['LM_HEAD_INPUT_MEMCFG']}")
         x = ttnn.interleaved_to_sharded(x, self.args.get_model_config()["LM_HEAD_INPUT_MEMCFG"])
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
+            # print(f"weight: {weight.shape}, {weight.memory_config()}")
+            # print(f"x: {x.shape}")
+            # print(f"pc: {pc}")
             output = ttnn.linear(
                 x,
                 weight,
