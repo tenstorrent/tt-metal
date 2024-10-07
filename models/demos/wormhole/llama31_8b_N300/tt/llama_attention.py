@@ -191,7 +191,7 @@ class TtLlamaAttention(LightweightModule):
         assert self.max_batch_size * self.n_kv_heads < 64
         ###
         # QKV matmuls
-        # Use HiFi2 for DRAM-sharded matmuls as htey are otherwise flop-bound. Loses 1 bit of activation precision.
+        # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
         x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
         xqkv_fused_sharded = ttnn.linear(
