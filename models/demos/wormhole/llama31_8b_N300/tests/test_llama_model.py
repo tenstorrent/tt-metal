@@ -164,6 +164,8 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
             .squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
 
+        ttnn.deallocate(tt_out)
+
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
