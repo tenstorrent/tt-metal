@@ -26,8 +26,8 @@ from models.utility_functions import skip_for_grayskull
     "seq_len",
     (
         64 * 1024,
-        32 * 1024,
-        # 1024,
+        # 32 * 1024,
+        5120,
         32,
     ),
 )
@@ -41,12 +41,12 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.mlp."
+    first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.31.mlp."
     # TODO: regex match for this / filter dict keys
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
@@ -107,6 +107,7 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         act_layer=act_layer,
     )
     reference_model.load_state_dict(partial_state_dict)
+    reference_model.bfloat16()
 
     tt_model = TtLlamaImageFeedForward(
         mesh_device=mesh_device,
@@ -115,33 +116,28 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
-        model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, dim)
-    reference_output = reference_model(torch_input)
+    # torch_input = torch.randn(1, 1, seq_len, dim)
+    # pt_block_input = torch.load("/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_8L_x.pt")
+    pt_block_input = torch.load("/home/cglagovich/tt-metal/layer_31_intermediate.pt")
+    # pt_block_input = pt_block_input[..., :seq_len, :].bfloat16().float()
+    pt_block_input = pt_block_input.bfloat16().float()
+    pt_block_input = torch.nn.functional.pad(pt_block_input, (0, 0, 0, seq_len - pt_block_input.shape[-2]))
+    reference_output = reference_model(pt_block_input.bfloat16()).squeeze()
     tt_input = ttnn.from_torch(
-        torch_input,
+        pt_block_input,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Compilation pass for Llama_MLP")
     tt_output = tt_model(tt_input)
 
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat8_b,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    logger.info("Performance pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, :1, :, :]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
+        :, :1, :, :
+    ].squeeze()
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

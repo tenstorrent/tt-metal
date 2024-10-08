@@ -211,11 +211,18 @@ class TtModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                q_chunk_size=256 if seqlen > 2048 else 64,
-                k_chunk_size=256 if seqlen > 2048 else 64,
+                q_chunk_size=256 if seqlen >= 2048 else 64,
+                k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
             # Update the existing configurations using the new class methods
@@ -481,6 +488,7 @@ class TtModelArgs:
         self.vision_max_num_chunks = params.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = params.get("vision_num_cross_attention_layers", -1)
 
+        # Vision constants
         self.vision_dim = 1280
         self.vision_mlp_ratio = 4
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
@@ -488,6 +496,11 @@ class TtModelArgs:
         self.vision_dropout = 0.0
         self.vision_attn_n_heads = 16
         self.vision_head_dim = self.vision_hidden_dim // self.vision_attn_n_heads
+        self.vision_n_layers = 32
+        self.vision_n_global_layers = 8
+        self.vision_max_num_tiles = 4
+        self.vision_patch_size = 14
+        self.vision_in_channels = 3
 
     def _set_llama_params(self, checkpoint_dir):
         params_file = os.path.join(checkpoint_dir, "params.json")
