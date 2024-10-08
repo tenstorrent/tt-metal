@@ -233,11 +233,6 @@ TEST_F(DPrintFixture, TestDestPrintFloat16b) {
         .writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_print_dest.cpp"};
 
-    if (this->arch_ == ARCH::BLACKHOLE) {
-        // Issue #12234: [Blackhole] Fix dest print for dest remap
-        GTEST_SKIP();
-    }
-
     // Run the test on the device
     this->RunTestOnDevice(
         [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
@@ -256,11 +251,6 @@ TEST_F(DPrintFixture, TestDestPrintFloat32) {
 
     if (this->arch_ == ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
-    }
-
-    if (this->arch_ == ARCH::BLACKHOLE) {
-        // Issue #12234: [Blackhole] Fix dest print for dest remap
-        GTEST_SKIP();
     }
 
     // Run the test on the device
