@@ -43,7 +43,6 @@ enum DebugPrintHartIndex : unsigned int {
     DPRINT_PREFIX(WAIT)              \
     DPRINT_PREFIX(BFLOAT16)          \
     DPRINT_PREFIX(SETPRECISION)      \
-    DPRINT_PREFIX(NOC_LOG_XFER)      \
     DPRINT_PREFIX(FIXED)             \
     DPRINT_PREFIX(DEFAULTFLOAT)      \
     DPRINT_PREFIX(HEX)               \
@@ -106,8 +105,10 @@ struct TileSliceHostDev {
     uint16_t w0_                 ATTR_ALIGN2;
     uint16_t w1_                 ATTR_ALIGN2;
     uint16_t ws_                 ATTR_ALIGN2;
-    uint16_t count_              ATTR_ALIGN2;
-    uint16_t endl_rows_          ATTR_ALIGN2;
+    uint8_t cb_id_               ATTR_ALIGN1;
+    uint8_t count_               ATTR_ALIGN1;
+    uint8_t endl_rows_           ATTR_ALIGN1;
+    uint8_t data_format_         ATTR_ALIGN1;
     uint16_t samples_[MAXCOUNT]  ATTR_ALIGN2;
 } ATTR_PACK;
 
@@ -121,3 +122,5 @@ enum TypedU32_ARRAY_Format {
 };
 
 static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
+// We use DebugPrintMemLayout to hold noc xfer data, 32 buckets (one for each bit in noc xfer length field).
+static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));

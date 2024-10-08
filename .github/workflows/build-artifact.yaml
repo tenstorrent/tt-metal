@@ -111,10 +111,12 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            nice -n 19 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ inputs.build-type }} -DENABLE_TRACY=${{ inputs.tracy }}
-            nice -n 19 cmake --build build --target tests
-            nice -n 19 cmake --build build --target install
-
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples"
+            echo "${{ inputs.tracy }}"
+            if [ "${{ inputs.tracy }}" = "true" ]; then
+              build_command="$build_command --enable-profiler"
+            fi
+            nice -n 19 $build_command
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'

@@ -98,7 +98,7 @@ class RunTimeOptions {
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
     bool watcher_noinline = false;
-    bool dprint_noc_transfer_data = false;
+    bool record_noc_transfer_data = false;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -113,6 +113,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
 
     bool skip_loading_fw = false;
+    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -156,6 +157,7 @@ class RunTimeOptions {
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
     inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
     inline bool watcher_stack_usage_disabled() { return watcher_feature_disabled(watcher_stack_usage_str); }
+    inline bool watcher_dispatch_disabled() { return watcher_feature_disabled(watcher_dispatch_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -219,8 +221,8 @@ class RunTimeOptions {
         feature_targets[feature] = targets;
     }
 
-    inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
-    inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
+    inline bool get_record_noc_transfers() { return record_noc_transfer_data; }
+    inline void set_record_noc_transfers(bool val) { record_noc_transfer_data = val; }
 
     inline bool get_validate_kernel_binaries() { return validate_kernel_binaries; }
     inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
@@ -261,6 +263,7 @@ class RunTimeOptions {
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
     inline bool get_skip_loading_fw() { return skip_loading_fw; }
+    inline bool get_skip_reset_cores_on_init() { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
@@ -297,6 +300,7 @@ class RunTimeOptions {
     const std::string watcher_pause_str = "PAUSE";
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
+    const std::string watcher_dispatch_str = "DISPATCH";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();

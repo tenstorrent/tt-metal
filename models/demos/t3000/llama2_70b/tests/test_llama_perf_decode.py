@@ -212,7 +212,7 @@ def run_test_LlamaModel_end_to_end(
     ),
     ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
@@ -234,9 +234,7 @@ def test_Llama_perf_host(
 
     check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
-        device.enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     disable_compilation_reports()
 

@@ -25,6 +25,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
@@ -124,16 +125,15 @@ def test_llama_model_inference(device, weights, layers, use_program_cache, reset
             tt_model.device,
         )
         current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 8), device=device, dtype=ttnn.int32
-        )
 
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, current_pos_attn_tensor, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         # Convert ttnn tensor to torch tensor
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]
+
+        ttnn.deallocate(tt_out)
 
         # Update rotation matrix for next iteration
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)

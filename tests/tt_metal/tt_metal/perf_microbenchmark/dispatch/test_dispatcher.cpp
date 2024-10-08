@@ -385,7 +385,8 @@ int main(int argc, char **argv) {
         uint32_t num_compute_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 
         // Want different buffers on each core, instead use big buffer and self-manage it
-        uint32_t l1_buf_base = align(DISPATCH_L1_UNRESERVED_BASE, dispatch_buffer_page_size_g);
+        uint32_t dispatch_l1_unreserved_base = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t l1_buf_base = align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
@@ -441,11 +442,17 @@ int main(int argc, char **argv) {
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
         llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
-        constexpr uint32_t dispatch_cb_sem = 0;
-        constexpr uint32_t prefetch_sync_sem = 1;
-        tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
-        tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
-        tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+        const uint32_t spoof_prefetch_core_sem_0_id = tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
+        const uint32_t dispatch_core_sem_id = tt_metal::CreateSemaphore(program, {dispatch_core}, 0);
+        TT_ASSERT(spoof_prefetch_core_sem_0_id == dispatch_core_sem_id);
+        const uint32_t dispatch_cb_sem = spoof_prefetch_core_sem_0_id;
+
+        const uint32_t spoof_prefetch_core_sem_1_id = tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, 0);
+        const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
+
+        const uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+        const uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+        const uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
         std::vector<uint32_t> dispatch_compile_args =
             {l1_buf_base,
@@ -469,8 +476,16 @@ int main(int argc, char **argv) {
              0,    // prefetch_local_downstream_sem_addr
              0,    // prefetch_downstream_buffer_pages
              num_compute_cores, // max_write_packed_cores
+             0,
+             0,
+             0,
+             0,
+             0,
+             host_completion_queue_wr_ptr,
+             dev_completion_queue_wr_ptr,
+             dev_completion_queue_rd_ptr,
              true, // is_dram_variant
-             true // is_host_variant
+             true, // is_host_variant
             };
         std::vector<uint32_t> spoof_prefetch_compile_args =
             {l1_buf_base,

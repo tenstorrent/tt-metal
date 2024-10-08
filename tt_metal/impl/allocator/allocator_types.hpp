@@ -37,10 +37,12 @@ struct AllocatorConfig {
     size_t num_dram_channels = 0;
     size_t dram_bank_size = 0;
     std::vector<size_t> dram_bank_offsets = {};
+    uint32_t dram_unreserved_base = 0;
     //! worker specific configuration
+    uint32_t l1_unreserved_base = 0;
     CoreCoord worker_grid_size = {};
     size_t worker_l1_size = 0;
-    size_t l1_bank_size = 0;
+    std::optional<uint32_t> storage_core_bank_size = 0;
     size_t l1_small_size = 0;
     size_t trace_region_size = 0;
     std::unordered_map<CoreCoord, AllocCoreType> core_type_from_noc_coord_table = {};
@@ -48,6 +50,7 @@ struct AllocatorConfig {
     std::unordered_map<int, int> worker_log_to_physical_routing_y = {};
     BankMapping l1_bank_remap = {}; // for remapping which l1 bank points to which bank if we assume normal row-major assignment
     CoreCoord compute_grid_size = {};
+    uint32_t alignment = 0;
     void reset();
     ~AllocatorConfig() { reset(); }
 };
@@ -56,11 +59,6 @@ enum class MemoryAllocator {
     BASIC = 0,
     L1_BANKING = 1,
 };
-
-constexpr static std::uint32_t STORAGE_ONLY_RESERVED_SIZE = ((MEM_MAILBOX_BASE + ALLOCATOR_ALIGNMENT - 1) / ALLOCATOR_ALIGNMENT) * ALLOCATOR_ALIGNMENT;
-
-// Storage only cores only need to reserve mailbox space to hold barriers
-constexpr static std::uint32_t STORAGE_ONLY_UNRESERVED_BASE = STORAGE_ONLY_RESERVED_SIZE;
 
 namespace allocator {
 

@@ -26,8 +26,8 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
     if mesh_device.get_num_devices() < 64:
         pytest.skip("Test is only valid on TGG")
     # Trace requires program cache to be enabled
+    mesh_device.enable_async(True)
     for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(enable_async)
         mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -110,9 +110,7 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
 
     # Release trace buffer once workload is complete
     ttnn.release_trace(mesh_device, tid)
-
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(False)
+    mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize(
@@ -129,8 +127,8 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
         pytest.skip("Test is only valid on TGG")
 
     # Trace requires program cache to be enabled
+    mesh_device.enable_async(True)
     for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(enable_async)
         mesh_device.get_device(device_id).enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
@@ -282,5 +280,4 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
     ttnn.release_trace(mesh_device, tid_1)
     ttnn.release_trace(mesh_device, tid_2)
 
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(False)
+    mesh_device.enable_async(False)

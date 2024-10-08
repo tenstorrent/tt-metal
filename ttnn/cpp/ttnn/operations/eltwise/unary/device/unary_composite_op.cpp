@@ -10,7 +10,7 @@
 
 #include "third_party/magic_enum/magic_enum.hpp"
 #include "tt_metal/common/bfloat16.hpp"
-#include "ttnn/operations/data_movement/reshape/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"

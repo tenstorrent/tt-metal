@@ -54,7 +54,7 @@ elseif("$ENV{ARCH_NAME}" STREQUAL "blackhole")
     set(ALIAS_ARCH_NAME "blackhole")
 endif()
 
-set(GPP_FLAGS ${GPP_FLAGS} -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function)
+set(GPP_FLAGS ${GPP_FLAGS} -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -Os -fno-tree-loop-distribute-patterns)
 
 set(HW_LIB_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib)
 set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)

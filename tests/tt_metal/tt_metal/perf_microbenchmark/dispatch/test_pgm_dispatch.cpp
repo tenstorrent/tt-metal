@@ -44,6 +44,7 @@ bool trisc_enabled_g;
 bool lazy_g;
 bool time_just_finish_g;
 bool use_global_g;
+bool use_trace_g;
 
 void init(int argc, char **argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -70,6 +71,7 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
+        log_info(LogTest, "  -tr: enable trace (default disabled)");
         exit(0);
     }
 
@@ -89,6 +91,7 @@ void init(int argc, char **argv) {
     fast_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rf", 0);
     slow_kernel_cycles_g = test_args::get_command_option_uint32(input_args, "-rs", 0);
     nfast_kernels_g = test_args::get_command_option_uint32(input_args, "-nf", 0);
+    use_trace_g = test_args::has_command_option(input_args, "-tr");
     if (kernel_size_g < MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size is {} bytes", MIN_KERNEL_SIZE_BYTES);
         exit(0);
@@ -213,7 +216,12 @@ int main(int argc, char **argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::Device* device;
+        if (use_trace_g) {
+            device = tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000);
+        } else {
+            device = tt_metal::CreateDevice(device_id);
+        }
 
         CommandQueue& cq = device->command_queue();
 
@@ -228,18 +236,33 @@ int main(int argc, char **argv) {
                 EnqueueProgram(cq, program[1], false);
             }
         }
-        Finish(cq);
+
+        auto main_program_loop = [&]() {
+            for (int i = 0; i < iterations_g; i++) {
+                EnqueueProgram(cq, program[0], false);
+                if (nfast_kernels_g > 0) {
+                    EnqueueProgram(cq, program[1], false);
+                }
+            }
+        };
+        uint32_t tid = 0;
+        if (use_trace_g) {
+            tid = BeginTraceCapture(device, cq.id());
+            main_program_loop();
+            EndTraceCapture(device, cq.id(), tid);
+            Finish(cq);
+        }
 
         if (lazy_g) {
+            // Does this do anything?
             tt_metal::detail::SetLazyCommandQueueMode(true);
         }
 
         auto start = std::chrono::system_clock::now();
-        for (int i = 0; i < iterations_g; i++) {
-            EnqueueProgram(cq, program[0], false);
-            for (int j = 0; j < nfast_kernels_g; j++) {
-                EnqueueProgram(cq, program[1], false);
-            }
+        if (use_trace_g) {
+            EnqueueTrace(cq, tid, false);
+        } else {
+            main_program_loop();
         }
         if (time_just_finish_g) {
             start = std::chrono::system_clock::now();
@@ -247,6 +270,9 @@ int main(int argc, char **argv) {
         Finish(cq);
         auto end = std::chrono::system_clock::now();
 
+        if (use_trace_g) {
+            log_info(LogTest, "Running with trace enabled");
+        }
         log_info(LogTest, "Warmup iterations: {}", warmup_iterations_g);
         log_info(LogTest, "Iterations: {}", iterations_g);
         log_info(LogTest, "Grid: ({}-{}) ({} cores)", workers_g.start_coord.str(), workers_g.end_coord.str(), workers_g.size());

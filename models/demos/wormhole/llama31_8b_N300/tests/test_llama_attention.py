@@ -21,6 +21,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
@@ -71,12 +72,6 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        current_pos_attn_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch * 4),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
         attention_input = prepare_inputs_ttnn(
             tt_attention_input,
@@ -84,7 +79,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds):
             mesh_device,
         )
 
-        tt_out = tt_model([attention_input], current_pos_tensor, current_pos_attn_tensor, rot_mats=current_rot_mat)
+        tt_out = tt_model([attention_input], current_pos_tensor, rot_mats=current_rot_mat)
         # multi-device attention module returns replicated output
         tt_output_torch = (
             ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]

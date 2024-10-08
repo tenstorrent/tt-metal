@@ -54,9 +54,6 @@ volatile tt_l1_ptr uint8_t *const trisc_run =
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 
-volatile tt_l1_ptr uint32_t l1_buffer[16] __attribute__((section("l1_data"))) __attribute__((aligned(16)))
-__attribute__((used));
-
 #if !defined(UCK_CHLKC_MATH)
 uint32_t tt_l1_ptr *cb_l1_base __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
@@ -89,16 +86,6 @@ int main(int argc, char *argv[]) {
 #pragma GCC unroll 0
     for (int i = 0; i < 64; i++) regfile[i] = 0;
 
-    // Init L1 buffer with 1.0f (used for reduce max)
-    union {
-        float f;
-        uint32_t u;
-    } f2u = {.f = 1.0f};
-
-    // Save a little code space.  GCC fails to remove the loop variable so loop with a ptr
-#pragma GCC unroll 0
-    for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-
     reset_cfg_state_id();
 
     // Cleanup profiler buffer incase we never get the go message
@@ -107,18 +94,18 @@ int main(int argc, char *argv[]) {
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
-        uint32_t kernel_config_base = mailboxes->launch.kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+        uint32_t kernel_config_base = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.cb_offset);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
         kernel_init();

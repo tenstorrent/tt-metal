@@ -29,8 +29,8 @@
 | [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.04       | 12.3  | 41           | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
 | [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.20       | 21.4  | 23           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.10       | 14.1  | 26           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
-| [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
-| [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 15.1  | 20           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [Falcon40B (tensor parallel)](./models/demos/t3000/falcon40b)        | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 5.3   | 36           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.23       | 14.2  | 33           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 | [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 0.24       | 4.3   | 26           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
@@ -91,8 +91,9 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 
 ## TT-Metalium Tech Reports
 - [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md) (updated Sept 6th)
-- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th)
 - [Data Formats](./tech_reports/data_formats/data_formats.md) (updated Sept 7th)
+- [Handling special floating-point numbers](./tech_reports/Handling_Special_Value/special_values.md) (updated Oct 5th)
+- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th)
 - [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th)

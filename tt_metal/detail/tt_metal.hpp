@@ -21,6 +21,8 @@ namespace tt::tt_metal {
 
         bool DispatchStateCheck( bool isFastDispatch);
 
+        bool InWorkerThread();
+
         std::map<chip_id_t, Device *> CreateDevices(
             // TODO: delete this in favour of DevicePool
             const std::vector<chip_id_t>& device_ids,

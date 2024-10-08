@@ -221,9 +221,13 @@ Primary Operations
 
 .. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_groupnorm
+.. autofunction:: ttnn.operations.moreh.mean
 
-.. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
+.. autofunction:: ttnn.operations.moreh.mean_backward
+
+.. autofunction:: ttnn.operations.moreh.group_norm
+
+.. autofunction:: ttnn.operations.moreh.group_norm_backward
 
 .. autofunction:: ttnn.operations.moreh.norm
 

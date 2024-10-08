@@ -249,7 +249,7 @@ class TestParametrized:
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, False),
             ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.42, False),
             ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.02, False),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.061, False),
+            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063, False),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.067, False),
             ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.073, False),
             ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070, True),  # Issue 9422

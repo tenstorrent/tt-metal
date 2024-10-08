@@ -686,11 +686,12 @@ class resnet50:
             eltwise_binary_out_in_place=True,
         )
 
-        unpadded_shape = x.shape_without_padding()
+        unpadded_shape = x.shape
         x = ttnn.slice(
             x,
-            (0, 0, 0, 0),
-            (unpadded_shape[0], unpadded_shape[1], unpadded_shape[2], unpadded_shape[3]),
+            starts=(0, 0, 0, 0),
+            ends=(unpadded_shape[0], unpadded_shape[1], unpadded_shape[2], unpadded_shape[3]),
+            steps=(1, 1, 1, 1),
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
@@ -728,7 +729,7 @@ class resnet50:
         print(f"=================================== layer: 4, module: 3")
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
-        unpadded_shape = x.shape_without_padding()
+        unpadded_shape = x.shape
         x = ttnn.untilize_with_unpadding(
             x,
             output_tensor_end=(
@@ -821,7 +822,7 @@ class resnet50:
         )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
+        desired_shape = list(x.shape)
         desired_shape[-1] = 1000
         x = ttnn.untilize_with_unpadding(
             x,
@@ -941,7 +942,7 @@ class resnet50:
         x, x_height, x_width = self.layer4_module2(x, device, batch_size, x_height, x_width, conv_op_cache)
         x, x_height, x_width = self.layer4_module3(x, device, batch_size, x_height, x_width, conv_op_cache)
 
-        unpadded_shape = x.shape_without_padding()
+        unpadded_shape = x.shape
         x = ttnn.untilize_with_unpadding(
             x,
             output_tensor_end=(
@@ -1035,7 +1036,7 @@ class resnet50:
         )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
+        desired_shape = list(x.shape)
         desired_shape[-1] = 1000
         x = ttnn.untilize_with_unpadding(
             x,

@@ -41,8 +41,9 @@ num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig &a
         num_in_category(alloc_config.core_type_from_noc_coord_table, AllocCoreType::StorageOnly);
     uint32_t num_banks_per_storage_core = 0;
     if (num_storage_only_cores > 0) {
-        TT_ASSERT(alloc_config.worker_l1_size % alloc_config.l1_bank_size == 0);
-        num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.l1_bank_size;
+        TT_ASSERT(alloc_config.storage_core_bank_size.has_value());
+        TT_ASSERT(alloc_config.worker_l1_size % alloc_config.storage_core_bank_size.value() == 0);
+        num_banks_per_storage_core = alloc_config.worker_l1_size / alloc_config.storage_core_bank_size.value();
     }
     // L1 small region carve out is only for compute cores
     uint32_t num_l1_small_banks = (alloc_config.l1_small_size > 0) ? num_compute_and_storage_cores : 0;
@@ -124,9 +125,9 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
                     bank_ids.push_back(remapped_bank_id);
                     allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
                     int64_t bank_offset_bytes = 0;
-                    if (alloc_config.l1_bank_size != alloc_config.worker_l1_size) {
-                        uint64_t storage_core_offset = storage_bank_index * alloc_config.l1_bank_size;
-                        bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.l1_bank_size; // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
+                    if (alloc_config.storage_core_bank_size.value() != alloc_config.worker_l1_size) {
+                        uint64_t storage_core_offset = storage_bank_index * alloc_config.storage_core_bank_size.value();
+                        bank_offset_bytes = static_cast<int64_t>(storage_core_offset) - alloc_config.storage_core_bank_size.value(); // Assuming top-down here --  Not sure if this is hacky... need to specialize based off top-down cofnig flag or not?
                     } else if (num_banks.per_storage_core != 1) {
                         TT_THROW("Expected 1 bank per storage core if L1 bank size equals total worker L1 size but have {} banks", num_banks.per_storage_core);
                     }
@@ -169,25 +170,30 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         small_bank_id_to_bank_offset.size(),
         num_banks.total);
 
-    // There is only alloc_config.l1_bank_size bytes available for L1 buffers to be allocated in
-    uint64_t interleaved_address_limit = static_cast<uint64_t>(alloc_config.worker_l1_size - alloc_config.l1_bank_size) + STORAGE_ONLY_UNRESERVED_BASE;
+    // Storage only cores only need to reserve mailbox space to hold barriers
+    uint32_t storage_core_unreserved_base = ((MEM_MAILBOX_BASE + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
+
+    // There is only l1_bank_size bytes available for L1 buffers to be allocated in
+    uint64_t l1_bank_size = alloc_config.storage_core_bank_size.has_value()
+                                ? alloc_config.storage_core_bank_size.value()
+                                : (alloc_config.worker_l1_size - alloc_config.l1_unreserved_base);
+    uint64_t interleaved_address_limit = static_cast<uint64_t>(alloc_config.worker_l1_size - l1_bank_size) + storage_core_unreserved_base;
     uint64_t allocatable_l1_size =
-        static_cast<uint64_t>(alloc_config.worker_l1_size) - L1_UNRESERVED_BASE - alloc_config.l1_small_size;
-    // Assuming top down allocation for L1 buffers so the allocatable memory space is the top alloc_config.l1_bank_size bytes of L1
-    uint64_t alloc_offset = L1_UNRESERVED_BASE;
-    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, ALLOCATOR_ALIGNMENT, alloc_offset);
+        static_cast<uint64_t>(alloc_config.worker_l1_size) - alloc_config.l1_unreserved_base - alloc_config.l1_small_size;
+    // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
+    allocator.l1_manager = BankManager(BufferType::L1, bank_id_to_bank_offset, allocatable_l1_size, interleaved_address_limit, alloc_config.alignment, alloc_config.l1_unreserved_base);
 
     uint64_t small_interleaved_address_limit = alloc_config.worker_l1_size - alloc_config.l1_small_size;
-    uint64_t small_alloc_offset = alloc_offset + allocatable_l1_size;
+    uint64_t small_alloc_offset = alloc_config.l1_unreserved_base + allocatable_l1_size;
     TT_ASSERT(
-        (alloc_offset + alloc_config.l1_small_size) <= alloc_config.worker_l1_size,
+        (alloc_config.l1_unreserved_base + alloc_config.l1_small_size) <= alloc_config.worker_l1_size,
         "L1 small region extends past L1 size");
     allocator.l1_small_manager = BankManager(
         BufferType::L1_SMALL,
         small_bank_id_to_bank_offset,
         alloc_config.l1_small_size,
         small_interleaved_address_limit,
-        ALLOCATOR_ALIGNMENT,
+        alloc_config.alignment,
         small_alloc_offset);
 }
 

@@ -12,7 +12,6 @@
 #include "tt_metal/impl/allocator/basic_allocator.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
-#include "tt_metal/impl/trace/trace_buffer.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -32,6 +31,7 @@ class Program;
 class JitBuildEnv;
 class HWCommandQueue;
 class CommandQueue;
+class TraceBuffer;
 
 namespace detail {
 
@@ -115,28 +115,23 @@ class Device {
     CoreCoord logical_core_from_ethernet_core(const CoreCoord &physical_core) const;
 
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const;
+    std::vector<uint32_t> get_noc_encoding_for_active_eth_cores(NOC noc_index);
 
     std::unordered_set<chip_id_t> get_ethernet_connected_device_ids() const {
         return tt::Cluster::instance().get_ethernet_connected_device_ids(this->id_);
     }
 
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const {
-        return tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
-    }
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const;
 
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const {
-        auto active_ethernet_cores = tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
-        return active_ethernet_cores.find(logical_core) != active_ethernet_cores.end();
-    }
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const;
 
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const {
-        return tt::Cluster::instance().get_inactive_ethernet_cores(this->id_);
-    }
+    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const;
 
-    bool is_inactive_ethernet_core(CoreCoord logical_core) const {
-        auto inactive_ethernet_cores = tt::Cluster::instance().get_inactive_ethernet_cores(this->id_);
-        return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
-    }
+    bool is_inactive_ethernet_core(CoreCoord logical_core) const;
+
+    uint32_t num_eth_worker_cores() const;
+
+    uint32_t num_worker_cores() const;
 
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
@@ -173,6 +168,8 @@ class Device {
         BufferType buffer_type, const CoreCoord &logical_core) const;
 
     allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const;
+
+    uint32_t get_allocator_alignment() const;
 
     size_t get_l1_small_size() const;
 
@@ -230,14 +227,14 @@ class Device {
     void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void build_firmware();
-    void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg);
+    void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
     void reset_cores();
     void initialize_and_launch_firmware();
     void init_command_queue_host();
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
     void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
-                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false);
+                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
@@ -288,12 +285,14 @@ class Device {
     WorkExecutor work_executor;
     uint32_t worker_thread_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    LaunchMessageRingBufferState worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs;
     bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
-
+    uint32_t num_worker_cores_;
+    uint32_t num_eth_worker_cores_;
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() {
@@ -314,20 +313,20 @@ class Device {
         return program_cache.num_entries();
     }
 
-    inline bool in_main_thread() {
-        // Detect if an instruction is being called in the main thread or worker thread
-        return (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->work_executor.get_parent_thread_id())
-                or get_worker_mode() == WorkExecutorMode::SYNCHRONOUS;
-    }
    uint32_t trace_buffers_size = 0;
    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord phys_core) const;
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const;
+    // Returns address where allocator starts allocating buffer
+    template <typename T = DeviceAddr>
+    T get_base_allocator_addr(const HalMemType &mem_type) const;
 
     template <typename CoreRangeContainer>
     std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
+    bool dispatch_s_enabled() const;
+    bool distributed_dispatcher() const;
 
    private:
     void DisableAllocs();
@@ -354,6 +353,11 @@ inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys
 template <typename T>
 inline T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const {
     return hal.get_dev_addr<T>(this->get_programmable_core_type(phys_core), addr_type);
+}
+
+template <typename T>
+inline T Device::get_base_allocator_addr(const HalMemType &mem_type) const {
+    return allocator::get_unreserved_base_address(*this->allocator_, mem_type);
 }
 
 // TODO: Find a better home for this function

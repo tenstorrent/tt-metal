@@ -144,21 +144,6 @@ Example::
 
 """
 
-# Unsupported cases, which require a fallback: (found in bert, t5, bloom)
-# Shape([1, 128, 512])  <-> (1, 128, 8, 64)
-# Shape([1, 128, 384])  <-> (1, 128, 6, 64)
-# Shape([1, 384, 1024]) <-> (1, 384, 16, 64)
-# Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
-# Shape([1, 128, 28, 28]) <-> (-1, 128)
-# Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
-ttnn.register_python_operation(
-    name="ttnn.reshape",
-    golden_function=_golden_function,
-    preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
-    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    doc=doc,
-)(ttnn._ttnn.operations.core.reshape)
-
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
@@ -182,12 +167,13 @@ def from_torch(
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
-        tensor (torch.Tensor): The input tensor.
-        dtype (ttnn.DataType, optional): The desired `ttnn` data type. Defaults to `None`.
+        tensor (torch.Tensor): the input tensor.
+        dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
 
     Keyword Args:
-        layout (ttnn.Layout, optional): The desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
-        device (ttnn.Device, optional): The desired `ttnn` device. Defaults to `None`.
+        tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+        layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
 
@@ -197,7 +183,7 @@ def from_torch(
     Example:
         >>> tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
-        Tensor([ [1.375, -1.30469, -0.714844],
+        Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
@@ -274,7 +260,7 @@ def to_torch(
     Converts the `ttnn.Tensor` tensor into a `torch.Tensor`.
 
     Args:
-        tensor (ttnn.Tensor): The `ttnn.Tensor` to be converted to `torch.Tensor`.
+        tensor (ttnn.Tensor): the input tensor.
 
     Keyword Args:
         torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
@@ -449,13 +435,17 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
     Load tensor from a file.
 
     Args:
-        file_name (str | pathlib.Path): The file name.
+        file_name (str | pathlib.Path): the file name.
 
     Keyword Args:
-        device (ttnn.Device, optional): The device. Defaults to `None`.
+        device (ttnn.Device, optional): the device. Defaults to `None`.
 
     Returns:
-        ttnn.Tensor: The loaded tensor.
+        ttnn.Tensor: the loaded tensor.
+
+    Example:
+        >>> device = ttnn.open_device(0)
+        >>> tensor = ttnn.load_tensor(file_name=str(tensor.bin), device=device)
     """
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
@@ -472,8 +462,15 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distri
 
     Args:
         file_name (str | pathlib.Path): The file name.
-        tensor (ttnn.Tensor): The tensor.
+        tensor (ttnn.Tensor): the tensor to be dumped.
         distribute (Dict[str, str], optional): The distributed strategy. Only applicable to multi-device tensors. Defaults to `None`.
+
+    Returns:
+        `None`: tensor saved to a specified file.
+
+    Example:
+        >>> tensor = ttnn.ones([2, 3], bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
     """
     if distribute is None:
         distribute = dict()
@@ -495,10 +492,10 @@ def as_tensor(
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
-    Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
-        tensor (torch.Tensor): Input tensor
+        tensor (torch.Tensor): the input tensor.
         dtype (ttnn.DataType, optional): The `ttnn` data type.
 
     Keyword args:
@@ -508,7 +505,7 @@ def as_tensor(
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
-        use_device_tilizer (bool): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
+        use_device_tilizer (bool, optional): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
@@ -519,8 +516,8 @@ def as_tensor(
     Examples:
         >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
-        Tensor([ [1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
+        Tensor([[1.375, -1.30469, -0.714844],
+            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     dtype_name = dtype.name if dtype is not None else "None"

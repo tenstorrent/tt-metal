@@ -25,6 +25,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
@@ -123,7 +124,7 @@ def test_llama_model_inference(device, seq_len, use_program_cache, reset_seeds):
     for i in range(1):
         start_pos = 0
         # Run TT model
-        tt_out = tt_model(decode_input, None, None, rot_mats, transformation_mats, user_id=i, mode="prefill")
+        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=i, mode="prefill")
         # Convert ttnn tensor to torch tensor
         tt_output_torch = ttnn.to_torch(tt_out).view(batch, seq_len, -1)  # [seq, batch, hidden_dim]
 
