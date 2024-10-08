@@ -50,10 +50,10 @@ inline void reblock_and_untilize(
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
-                acquire_dst(tt::DstMode::Half);
+                acquire_dst();
                 copy_tile(interm_cb_id, tile_index, 0);
                 pack_tile(0, reblock_cb_id);
-                release_dst(tt::DstMode::Half);
+                release_dst();
             }
             block_offset += out_subblock_num_tiles;
         }
@@ -161,7 +161,7 @@ void MAIN {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                        acquire_dst(tt::DstMode::Half);
+                        acquire_dst();
 
                         if (enable_reload) {
                             copy_tile_to_dst_init_short();
@@ -202,7 +202,7 @@ void MAIN {
                         } else {
                             pack_matmul_subblock(matmul_partials_cb, out_subblock_num_tiles);
                         }
-                        release_dst(tt::DstMode::Half);
+                        release_dst();
 
                         in1_index_subblock_offset += out_subblock_w;
                     }
