@@ -71,7 +71,7 @@ void create_and_read_max_num_semaphores(
         ASSERT_TRUE(semaphore_id == i);
     }
 
-    program.finalize();
+    program.finalize(device);
 
     ASSERT_TRUE(tt_metal::detail::ConfigureDeviceWithProgram(device, program));
 

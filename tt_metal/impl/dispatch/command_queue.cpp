@@ -1323,7 +1323,7 @@ void EnqueueProgramCommand::assemble_device_commands(
 void EnqueueProgramCommand::process() {
     bool is_cached = true;
     if (not program.is_finalized()) {
-        program.finalize();
+        program.finalize(device);
         is_cached = false;
     }
 

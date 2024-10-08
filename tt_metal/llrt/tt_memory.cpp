@@ -20,6 +20,8 @@ namespace ll_api {
 memory::memory() {
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
+    text_size_ = 0;
+    packed_size_ = 0;
 }
 
 memory::memory(std::string const &path) : memory() {

@@ -35,6 +35,8 @@ class memory {
 
   std::vector<word_t> data_;
   std::vector<struct span> link_spans_;
+  uint32_t text_size_;
+  uint32_t packed_size_;
 
  public:
   memory();
@@ -45,6 +47,11 @@ class memory {
 
   // memory& operator=(memory &&src);
   bool operator==(const memory& other) const;
+
+  void set_text_size(uint32_t size) { this->text_size_ = size; }
+  void set_packed_size(uint32_t size) { this->packed_size_ = size; }
+  uint32_t get_text_size() const { return this->text_size_; }
+  uint32_t get_packed_size() const { return this->packed_size_; }
 
   size_t size() const { return data_.size(); }
 

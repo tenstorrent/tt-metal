@@ -336,8 +336,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
                 ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                uint32_t fw_size = binary_mem.get_text_size();
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
             }
             llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
@@ -348,8 +348,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
                 ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                uint32_t fw_size = binary_mem.get_text_size();
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
             }
             llrt::program_risc_startup_addr(this->id(), phys_core);
@@ -361,11 +361,12 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
             ll_api::memory binary_mem =
                 llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
-            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
+            uint32_t fw_size = binary_mem.get_text_size();
             if (riscv_id == 1) {
-                launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
+                // In this context, ncrisc_kernel_size16 is the size of the fw
+                launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
             }
-            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
+            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
             }
@@ -2769,6 +2770,7 @@ void Device::init_command_queue_device() {
     }
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
+    command_queue_program.finalize(this);
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
