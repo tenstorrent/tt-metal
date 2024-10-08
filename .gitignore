@@ -13,7 +13,7 @@ tt_debug
 build
 build_*
 /python_env/
-/tests/sweep_framework/data_movement/test_gen/
+/tests/sweep_framework/sweeps/data_movement/test_gen/
 
 /llk_out/
 /out/
