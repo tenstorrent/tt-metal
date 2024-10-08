@@ -26,10 +26,10 @@ using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
 ////////////////////////////////////////////////////////////////////////////////
-// This test measures the bandwidth of DRAM accesses of Tensix cores. It creates
-// a bfloat16 format DRAM buffer of a given input size. Every Tensix cores read
-// from or write to the buffer whrere the amount of each core accesses is
-// determined by split_work_to_cores function.
+// A tensix core that's next to a DRAM bank reads from the bank, and writes to
+// the neighbour receiver tensix core. It creates a bfloat16/bfloat8_b format
+// DRAM buffer of a given input size, and write it to the DRAM banks in the round
+// robin style.
 //
 // Disclaimer:
 //   - This benchmark is designed to support an input size larger than 4GB. But
@@ -270,8 +270,8 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
 void get_dram_reader_core_coords_blackhole(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
 
-    // hardcoded for blackhole
-    uint32_t full_grid_size_x = 17;
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    uint32_t full_grid_size_x = soc_d.grid_size.x;
 
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -357,8 +357,8 @@ void get_dram_reader_core_coords_blackhole(
 void get_l1_writer_core_coords_blackhole(
     tt_metal::Device* device, std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
 
-    // hardcoded for blackhole
-    uint32_t full_grid_size_x = 17;
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    uint32_t full_grid_size_x = soc_d.grid_size.x;
 
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -436,8 +436,8 @@ void get_l1_writer_core_coords_blackhole(
 void get_dram_reader_core_coords_grayskull(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
 
-    // hardcoded for grayskull
-    uint32_t full_grid_size_y = 12;
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    uint32_t full_grid_size_y = soc_d.grid_size.y;
 
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -522,8 +522,8 @@ void get_dram_reader_core_coords_grayskull(
 void get_l1_writer_core_coords_grayskull(
     tt_metal::Device* device, std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
 
-    // hardcoded for grayskull
-    uint32_t full_grid_size_y = 12;
+    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    uint32_t full_grid_size_y = soc_d.grid_size.y;
 
     // get all the logical coord
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

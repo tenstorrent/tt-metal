@@ -100,9 +100,9 @@ struct kernel_config_msg_t {
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
+    volatile uint8_t brisc_noc_mode;
     volatile uint8_t max_cb_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t brisc_noc_mode;
     volatile uint8_t enables;
 } __attribute__((packed));
 

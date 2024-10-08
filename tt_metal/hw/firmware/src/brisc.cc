@@ -439,9 +439,6 @@ int main() {
                 // This was not initialized in kernel_init
                 if (noc_mode == DM_DEDICATED_NOC) {
                     noc_local_state_init(noc_index);
-                } else {
-                    noc_local_state_init(NOC_0);
-                    noc_local_state_init(NOC_1);
                 }
             }
             WAYPOINT("D");
