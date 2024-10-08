@@ -111,7 +111,19 @@ void py_module(py::module& module) {
 
                 Args:
                     enable (bool): True to enable async mode, False to disable it.
-        )doc")
+            )doc")
+        .def(
+            "enable_program_cache",
+            &MeshDevice::enable_program_cache,
+            R"doc(
+                Enable program cache across all devices in the mesh.
+            )doc")
+        .def(
+            "disable_and_clear_program_cache",
+            &MeshDevice::disable_and_clear_program_cache,
+            R"doc(
+                Disable program cache across all devices in the mesh.
+            )doc")
         .def_property_readonly("shape", &MeshDevice::shape, R"doc(
             Get the shape of the device mesh.
 
