@@ -18,5 +18,6 @@ struct MorehSum {
 }  // namespace ttnn::operations::moreh::moreh_sum
 
 namespace ttnn {
-constexpr auto moreh_sum = ttnn::register_operation<"ttnn::moreh_sum", ttnn::operations::moreh::moreh_sum::MorehSum>();
+constexpr auto moreh_sum =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_sum", ttnn::operations::moreh::moreh_sum::MorehSum>();
 }

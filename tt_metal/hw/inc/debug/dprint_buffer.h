@@ -4,17 +4,10 @@
 
 #pragma once
 
+#include "tt_metal/hostdevcommon/dprint_common.h"
 #include <dev_msgs.h>
 
-// TODO: remove the HartFlags in dprint_server.hpp and drive from this
-enum DebugPrintHartIndex : unsigned int {
-    DPRINT_RISCV_INDEX_NC  = 0,
-    DPRINT_RISCV_INDEX_TR0 = 1,
-    DPRINT_RISCV_INDEX_TR1 = 2,
-    DPRINT_RISCV_INDEX_TR2 = 3,
-    DPRINT_RISCV_INDEX_BR  = 4,
-    DPRINT_RISCV_INDEX_ER  = 0,
-};
+#include "hostdevcommon/dprint_common.h"
 
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.
 inline uint8_t* get_debug_print_buffer() {

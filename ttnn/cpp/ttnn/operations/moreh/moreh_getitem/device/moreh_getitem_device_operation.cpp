@@ -19,7 +19,8 @@ void MorehGetItemOperation::validate_inputs(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.get_dtype();
-    TT_FATAL(dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
+    TT_FATAL(
+        dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
 
     // validate index tensors
     uint32_t index_size = index_tensors[0].get_shape()[-1];
@@ -53,7 +54,8 @@ void MorehGetItemOperation::validate_inputs(
     for (auto dim : operation_attributes.index_dims) {
         TT_FATAL(
             dim_start + i == dim,
-            "The value of index_dims={} must be consecutive integers.", operation_attributes.index_dims);
+            "The value of index_dims={} must be consecutive integers.",
+            operation_attributes.index_dims);
         i++;
     }
     if (!output_tensor.has_value()) {
@@ -184,7 +186,7 @@ MorehGetItemOperation::tensor_return_value_t MorehGetItemOperation::create_outpu
         tensor_args.input.get_dtype(),
         tensor_args.input.get_layout(),
         tensor_args.input.device(),
-        operation_attributes.output_memory_config);
+        operation_attributes.memory_config);
 };
 
 std::tuple<MorehGetItemOperation::operation_attributes_t, MorehGetItemOperation::tensor_args_t>
@@ -193,8 +195,8 @@ MorehGetItemOperation::invoke(
     const std::vector<Tensor>& index_tensors,
     const std::vector<uint32_t> index_dims,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig> output_memory_config) {
-    operation_attributes_t operation_attributes = {index_dims, output_memory_config.value_or(input.memory_config())};
+    const std::optional<MemoryConfig> memory_config) {
+    operation_attributes_t operation_attributes = {index_dims, memory_config.value_or(input.memory_config())};
     tensor_args_t tensor_args = {input, index_tensors, output};
     return {operation_attributes, tensor_args};
 }

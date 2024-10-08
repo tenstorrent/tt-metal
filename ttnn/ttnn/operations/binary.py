@@ -437,4 +437,22 @@ def _golden_function_ne_(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.ne_, golden_function=_golden_function_ne_)
 
 
+def _golden_function_gcd(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.gcd(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.gcd, golden_function=_golden_function_gcd)
+
+
+def _golden_function_lcm(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    return torch.lcm(input_tensor_a, input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.lcm, golden_function=_golden_function_lcm)
+
+
 __all__ = []

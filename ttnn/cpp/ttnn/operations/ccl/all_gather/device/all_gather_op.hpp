@@ -33,17 +33,13 @@ enum AllGatherBidirectionalMode {
     FULL_TENSOR
 };
 
-namespace all_gather_op {
-using ccl::Topology;
-}; // namespace all_gather_op
-
 using ccl::EriscDatamoverBuilder;
 
 class AllGatherConfig {
     static AllGatherBidirectionalMode choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op);
 
    public:
-    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, all_gather_op::Topology topology, std::size_t num_buffers_per_worker, bool fuse_op=false, const std::optional<size_t> user_defined_num_workers=std::nullopt);
+    AllGatherConfig(Tensor const& input_tensor, Tensor const& output_tensor, uint32_t dim, uint32_t ring_size, uint32_t num_links, ccl::Topology topology, std::size_t num_buffers_per_worker, bool fuse_op=false, const std::optional<size_t> user_defined_num_workers=std::nullopt);
 
     uint32_t get_erisc_handshake_address() const { return this->erisc_handshake_address; }
 
@@ -114,7 +110,7 @@ class AllGatherConfig {
     uint32_t semaphore_offset;
     uint32_t eth_buffers_l1_base_byte_address;
     uint32_t eth_sems_l1_base_byte_address;
-    const all_gather_op::Topology topology;
+    const ccl::Topology topology;
     AllGatherBidirectionalMode bidirectional_mode;
     bool is_sharded;
     bool enable_bidirectional;
@@ -133,7 +129,7 @@ struct AllGather {
     const std::optional<chip_id_t> receiver_device_id;
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
-    const all_gather_op::Topology topology;
+    const ccl::Topology topology;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -149,7 +145,7 @@ AllGather create_all_gather_struct(
     const std::optional<size_t> user_defined_num_workersm,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices,
-    const all_gather_op::Topology topology
+    const ccl::Topology topology
 );
 
 // All Gather Variants
@@ -164,7 +160,7 @@ operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology);
+    ccl::Topology topology);
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -174,7 +170,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel);
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
@@ -187,7 +183,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     const uint32_t ring_index,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
-    all_gather_op::Topology topology,
+    ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
@@ -204,7 +200,19 @@ Tensor all_gather(
     const uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear);
 
 } // namespace ccl
 } // namespace operations

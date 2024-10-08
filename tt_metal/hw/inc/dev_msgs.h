@@ -27,6 +27,7 @@
 // Messages for host to tell brisc to go
 constexpr uint32_t RUN_MSG_INIT = 0x40;
 constexpr uint32_t RUN_MSG_GO = 0x80;
+constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
@@ -88,22 +89,21 @@ struct kernel_config_msg_t {
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
-    volatile uint8_t enables;
     volatile uint8_t max_cb_index;
-    volatile uint8_t dispatch_core_x;
-    volatile uint8_t dispatch_core_y;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t pad1;
-    volatile uint16_t pad2;
+    volatile uint8_t pad;
+    volatile uint8_t enables;
 } __attribute__((packed));
 
 struct go_msg_t {
-    volatile uint32_t run;  // must be in last cacheline of this msg
+    volatile uint8_t pad;
+    volatile uint8_t master_x;
+    volatile uint8_t master_y;
+    volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
 } __attribute__((packed));
 
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
-    go_msg_t go;
 } __attribute__((packed));
 
 struct slave_sync_msg_t {
@@ -123,16 +123,17 @@ struct debug_waypoint_msg_t {
     volatile uint8_t waypoint[num_waypoint_bytes_per_riscv];
 };
 
-// TODO: Clean up this struct with #6738
 // This structure is populated by the device and read by the host
 struct debug_sanitize_noc_addr_msg_t {
     volatile uint64_t noc_addr;
     volatile uint32_t l1_addr;
     volatile uint32_t len;
-    volatile uint16_t which;
-    volatile uint16_t invalid;
-    volatile uint16_t multicast;
-    volatile uint16_t pad;
+    volatile uint16_t which_risc;
+    volatile uint16_t return_code;
+    volatile uint8_t is_multicast;
+    volatile uint8_t is_write;
+    volatile uint8_t is_target;
+    volatile uint8_t pad;
 };
 
 // Host -> device. Populated with the information on where we want to insert delays.
@@ -143,13 +144,16 @@ struct debug_insert_delays_msg_t {
     volatile uint8_t feedback = 0;                 // Stores the feedback about delays (used for testing)
 };
 
-enum debug_sanitize_noc_invalid_enum {
+enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
-    DebugSanitizeNocInvalidOK = 2,
-    DebugSanitizeNocInvalidL1 = 3,
-    DebugSanitizeNocInvalidUnicast = 4,
-    DebugSanitizeNocInvalidMulticast = 5,
-    DebugSanitizeNocInvalidAlignment = 6,
+    DebugSanitizeNocOK                    = 2,
+    DebugSanitizeNocAddrUnderflow         = 3,
+    DebugSanitizeNocAddrOverflow          = 4,
+    DebugSanitizeNocAddrZeroLength        = 5,
+    DebugSanitizeNocTargetInvalidXY       = 6,
+    DebugSanitizeNocMulticastNonWorker    = 7,
+    DebugSanitizeNocMulticastInvalidRange = 8,
+    DebugSanitizeNocAlignment             = 9,
 };
 
 struct debug_assert_msg_t {
@@ -275,11 +279,14 @@ struct core_info_msg_t {
     volatile uint8_t pad[29];
 };
 
+
+constexpr uint32_t launch_msg_buffer_num_entries = 4;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;
-    uint32_t pads_1[LAUNCH_NOC_ALIGMENT_PAD_COUNT];
-    struct launch_msg_t launch;
+    uint32_t launch_msg_rd_ptr;
+    struct launch_msg_t launch[launch_msg_buffer_num_entries];
+    struct go_msg_t go_message;
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;
     uint32_t pads_2[PROFILER_NOC_ALIGMENT_PAD_COUNT];
@@ -292,6 +299,7 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 
+// TODO: move these checks into the HAL?
 #ifndef TENSIX_FIRMWARE
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time
@@ -303,16 +311,21 @@ static_assert(
 #endif
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
 static_assert( eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE + sizeof(mailboxes_t) < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END);
+static_assert( MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
 static constexpr uint32_t ETH_LAUNCH_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static constexpr uint32_t ETH_PROFILER_CHECK = (eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE  + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert( ETH_LAUNCH_CHECK == 0);
 static_assert( ETH_PROFILER_CHECK == 0);
+static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
+static_assert(MEM_IERISC_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_IERISC_MAILBOX_END);
+static_assert(MEM_IERISC_MAILBOX_END <= MEM_IERISC_RESERVED2);
 #else
 static_assert(MEM_MAILBOX_BASE + sizeof(mailboxes_t) < MEM_MAILBOX_END);
 static constexpr uint32_t TENSIX_LAUNCH_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, launch)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static constexpr uint32_t TENSIX_PROFILER_CHECK = (MEM_MAILBOX_BASE + offsetof(mailboxes_t, profiler)) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT;
 static_assert( TENSIX_LAUNCH_CHECK == 0);
 static_assert( TENSIX_PROFILER_CHECK == 0);
+static_assert( sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 #endif
 #endif
 

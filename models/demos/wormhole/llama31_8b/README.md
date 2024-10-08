@@ -63,6 +63,12 @@ pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_de
 
 # Decode-only demo
 pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[general_weights]
+
+# Prefill & Decode with continuous batching
+pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching.py::test_LlamaModel_demo[batch_4-greedy-32L-text_completion-llama3]
+
+# Prefill & Decode with continuous batching & paged attention
+pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching_paged_attention.py::test_LlamaModel_demo[batch_4-greedy-32L-text_completion-llama3]
 ```
 
 We also provide an input file with 32 user question-prompt for instruct weights (don't forget to update your env flags to the correct instruct weights folder):
@@ -72,6 +78,12 @@ pytest models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py::test_llama_de
 
 # Decode-only demo
 pytest models/demos/wormhole/llama31_8b/demo/demo.py::test_llama_demo[instruct_weights]
+
+# Prefill & Decode with continuous batching
+pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching.py::test_LlamaModel_demo[batch_4-greedy-32L-chat_completion-llama3]
+
+# Prefill & Decode with continuous batching & paged attention
+pytest models/demos/wormhole/llama31_8b/demo/demo_continuous_batching_paged_attention.py::test_LlamaModel_demo[batch_4-greedy-32L-chat_completion-llama3]
 ```
 
 Both input files are provided inside `models/demos/wormhole/llama31_8b/demo/`.

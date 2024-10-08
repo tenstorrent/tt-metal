@@ -6,7 +6,6 @@
 #pragma once
 
 #include "ttnn/common/constants.hpp"
-#include "device/binary_backward_op.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
@@ -15,55 +14,77 @@ namespace ttnn {
 
 namespace operations::binary_backward {
 
-template <BinaryBackwardOpType binary_backward_op_type>
-struct ExecuteBinaryBackwardTensor {
+
+struct ExecuteBackwardAtan2 {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <BinaryBackwardOpType binary_backward_op_type>
-struct ExecuteBinaryBackwardFloatDefault {
+struct ExecuteBackwardXlogy {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        float parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <BinaryBackwardOpType binary_backward_op_type>
-struct ExecuteBinaryBackwardIntDefault {
+struct ExecuteBackwardHypot {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        int parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
-template <BinaryBackwardOpType binary_backward_op_type>
-struct ExecuteBinaryBackwardFloat {
+struct ExecuteBackwardLdexp {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_a_arg,
         const Tensor &input_tensor_b_arg,
-        float parameter,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor_a_arg.memory_config());
-        return OpHandler<binary_backward_op_type>::handle(grad_tensor_arg, input_tensor_a_arg, input_tensor_b_arg, parameter, output_memory_config);
-    }
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteBackwardLogaddexp {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteBackwardLogaddexp2 {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteBackwardSquaredDifference {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteBackwardMax {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteBackwardMin {
+    static std::vector<Tensor> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_a_arg,
+        const Tensor &input_tensor_b_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteBackwardMul  {
@@ -112,18 +133,37 @@ struct ExecuteBackwardMul  {
 
 struct ExecuteBackwardAssign  {
 
-    static std::vector<ttnn::Tensor> invoke(
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt);
 
-    static std::vector<ttnn::Tensor> invoke(
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
         const Tensor &other_tensor_arg,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt);
+
+    static std::vector<std::optional<ttnn::Tensor>> invoke(
+        const Tensor &grad_tensor_arg,
+        const Tensor &input_tensor_arg,
+        const Tensor &other_tensor_arg,
+        const std::vector<bool> &are_required_outputs = std::vector<bool>{true, true},
+        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        std::optional<Tensor> input_a_grad = std::nullopt,
+        std::optional<Tensor> input_b_grad = std::nullopt);
 
 };
 
@@ -440,15 +480,15 @@ struct ExecuteBackwardConcat {
 
 }  // operations::binary
 
-constexpr auto atan2_bw = ttnn::register_operation<"ttnn::atan2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::ATAN2_BW>>();
-constexpr auto xlogy_bw = ttnn::register_operation<"ttnn::xlogy_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::XLOGY_BW>>();
-constexpr auto hypot_bw = ttnn::register_operation<"ttnn::hypot_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::HYPOT_BW>>();
-constexpr auto ldexp_bw = ttnn::register_operation<"ttnn::ldexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LDEXP_BW>>();
-constexpr auto logaddexp_bw = ttnn::register_operation<"ttnn::logaddexp_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP_BW>>();
-constexpr auto logaddexp2_bw = ttnn::register_operation<"ttnn::logaddexp2_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::LOGADDEXP2_BW>>();
-constexpr auto squared_difference_bw = ttnn::register_operation<"ttnn::squared_difference_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::SQUARED_DIFFERENCE_BW>>();
-constexpr auto min_bw = ttnn::register_operation<"ttnn::min_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::MIN_BW>>();
-constexpr auto max_bw = ttnn::register_operation<"ttnn::max_bw", operations::binary_backward::ExecuteBinaryBackwardTensor<operations::binary_backward::BinaryBackwardOpType::MAX_BW>>();
+constexpr auto atan2_bw = ttnn::register_operation<"ttnn::atan2_bw", operations::binary_backward::ExecuteBackwardAtan2>();
+constexpr auto xlogy_bw = ttnn::register_operation<"ttnn::xlogy_bw", operations::binary_backward::ExecuteBackwardXlogy>();
+constexpr auto hypot_bw = ttnn::register_operation<"ttnn::hypot_bw", operations::binary_backward::ExecuteBackwardHypot>();
+constexpr auto ldexp_bw = ttnn::register_operation<"ttnn::ldexp_bw", operations::binary_backward::ExecuteBackwardLdexp>();
+constexpr auto logaddexp_bw = ttnn::register_operation<"ttnn::logaddexp_bw", operations::binary_backward::ExecuteBackwardLogaddexp>();
+constexpr auto logaddexp2_bw = ttnn::register_operation<"ttnn::logaddexp2_bw", operations::binary_backward::ExecuteBackwardLogaddexp2>();
+constexpr auto squared_difference_bw = ttnn::register_operation<"ttnn::squared_difference_bw", operations::binary_backward::ExecuteBackwardSquaredDifference>();
+constexpr auto min_bw = ttnn::register_operation<"ttnn::min_bw", operations::binary_backward::ExecuteBackwardMin>();
+constexpr auto max_bw = ttnn::register_operation<"ttnn::max_bw", operations::binary_backward::ExecuteBackwardMax>();
 
 
 constexpr auto subalpha_bw = ttnn::register_operation<

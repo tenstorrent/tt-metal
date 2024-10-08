@@ -1,0 +1,64 @@
+name: "(Single) Choose your pipeline"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
+        default: "Release"
+      build-with-tracy:
+        required: false
+        type: boolean
+        default: false
+      single-card-demo:
+        required: false
+        type: boolean
+        default: false
+      single-card-perf-models:
+        required: false
+        type: boolean
+        default: false
+      single-card-perf-device-models:
+        description: "perf-device (requires tracy build)"
+        required: false
+        type: boolean
+        default: false
+      single-card-nightly:
+        required: false
+        type: boolean
+        default: false
+
+run-name: ${{ inputs.description }}
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: ${{ inputs.build-with-tracy }}
+    secrets: inherit
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    if: ${{ inputs.single-card-demo }}
+  single-card-perf-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-models-impl.yaml
+    if: ${{ inputs.perf-models }}
+  single-card-perf-device-models-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/perf-device-models-impl.yaml
+    if: ${{ inputs.perf-device-models }}
+  single-card-nightly:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    if: ${{ inputs.single-card-nightly }}

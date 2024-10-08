@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-
+        uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
 
         ////////////////////////////////////////////////////////////////////////////
@@ -41,7 +41,11 @@ int main(int argc, char **argv) {
 
         tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp", core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = {l1_unreserved_base}
+            });
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
@@ -52,7 +56,7 @@ int main(int argc, char **argv) {
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> first_kernel_result;
-        tt_metal::detail::ReadFromDeviceL1(device, core, L1_UNRESERVED_BASE, sizeof(int), first_kernel_result);
+        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), first_kernel_result);
         log_info(LogVerif, "first kernel result = {}", first_kernel_result[0]);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -62,7 +66,7 @@ int main(int argc, char **argv) {
         tt_metal::detail::LaunchProgram(device, program);
 
         std::vector<uint32_t> second_kernel_result;
-        tt_metal::detail::ReadFromDeviceL1(device, core, L1_UNRESERVED_BASE, sizeof(int), second_kernel_result);
+        tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), second_kernel_result);
         log_info(LogVerif, "second kernel result = {}", second_kernel_result[0]);
 
         ////////////////////////////////////////////////////////////////////////////

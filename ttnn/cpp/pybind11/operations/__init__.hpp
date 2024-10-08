@@ -11,7 +11,6 @@
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
@@ -27,9 +26,6 @@
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
-#include "ttnn/operations/matmul/matmul_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
-#include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
@@ -42,7 +38,6 @@
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -75,7 +70,6 @@ void py_module(py::module& module) {
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_line_all_gather(m_ccl);
     ccl::py_bind_reduce_scatter(m_ccl);
 
     auto m_complex = module.def_submodule("complex", "complex tensor creation");
@@ -138,7 +132,6 @@ void py_module(py::module& module) {
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
 }
-
 }  // namespace operations
 
 }  // namespace ttnn

@@ -8,6 +8,7 @@
 #include <random>
 #include <tuple>
 
+#include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "device/tt_arch_types.h"
 #include "impl/device/device.hpp"
@@ -26,6 +27,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 
 using tt::tt_metal::Device;
 
@@ -41,8 +43,7 @@ class T3000TestDevice {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            devices_ = tt::tt_metal::detail::CreateDevices({0,1,2,3,4,5,6,7});
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            mesh_device_ = tt::tt_metal::MeshDevice::create(tt::tt_metal::MeshDeviceConfig(tt::tt_metal::MeshShape{2, 4}));
 
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
@@ -57,15 +58,12 @@ class T3000TestDevice {
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-        for (auto [device_id, device_ptr] : devices_) {
-            tt::tt_metal::CloseDevice(device_ptr);
-        }
+        mesh_device_->close_devices();
     }
 
-    std::map<chip_id_t, Device *> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
+    std::shared_ptr<tt::tt_metal::MeshDevice> mesh_device_;
 
    private:
     bool device_open;
@@ -420,23 +418,51 @@ int main (int argc, char** argv) {
     TT_ASSERT(std::all_of(max_concurrent_samples.begin(), max_concurrent_samples.end(), [](std::size_t n) { return n > 0; }));
 
     T3000TestDevice test_fixture;
+    auto view = test_fixture.mesh_device_->get_view();
 
-    // Device setup
-    std::vector<chip_id_t> device_ids = std::vector<chip_id_t>{0, 1, 2, 3, 4, 5, 6, 7};
-
-    auto get_device_list = [](std::map<chip_id_t, Device*> &all_devices, std::size_t n_hops) {
+    auto get_device_list = [](const std::shared_ptr<MeshDeviceView>& view, std::size_t n_hops) {
         switch (n_hops) {
             case 2:
-                return std::vector<Device*>{all_devices[0], all_devices[1]};
+                return std::vector<Device*>{
+                    view->get_device(0, 0),
+                    view->get_device(0, 1),
+                };
 
             case 4:
-                return std::vector<Device*>{all_devices[0], all_devices[1], all_devices[2], all_devices[3]};
+                return std::vector<Device*>{
+                    view->get_device(1, 1),
+                    view->get_device(0, 1),
+                    view->get_device(0, 2),
+                    view->get_device(1, 2),
+                };
 
             case 8:
-                return std::vector<Device*>{all_devices[0], all_devices[4], all_devices[5], all_devices[1], all_devices[2], all_devices[6], all_devices[7], all_devices[3]};
+                return std::vector<Device*>{
+                    view->get_device(1, 1),
+                    view->get_device(1, 0),
+                    view->get_device(0, 0),
+                    view->get_device(0, 1),
+                    view->get_device(0, 2),
+                    view->get_device(0, 3),
+                    view->get_device(1, 3),
+                    view->get_device(1, 2),
+                };
 
             case 12: // Does an extra loop through the inner ring
-                return std::vector<Device*>{all_devices[0], all_devices[4], all_devices[5], all_devices[1], all_devices[2], all_devices[3], all_devices[0], all_devices[1], all_devices[2], all_devices[6], all_devices[7], all_devices[3]};
+                return std::vector<Device*>{
+                    view->get_device(1, 1),
+                    view->get_device(1, 0),
+                    view->get_device(0, 0),
+                    view->get_device(0, 1),
+                    view->get_device(0, 2),
+                    view->get_device(1, 2),
+                    view->get_device(1, 1),
+                    view->get_device(0, 1),
+                    view->get_device(0, 2),
+                    view->get_device(0, 3),
+                    view->get_device(1, 3),
+                    view->get_device(1, 2),
+                };
 
             default:
                 TT_THROW("Unsupported hop_count");
@@ -448,7 +474,7 @@ int main (int argc, char** argv) {
         constexpr std::size_t placeholder_arg_value = 1;
         for (auto n_hops : hop_counts) {
 
-            auto devices = get_device_list(test_fixture.devices_, n_hops);
+            auto devices = get_device_list(view, n_hops);
             std::vector<hop_eth_sockets> hop_eth_sockets = build_eth_sockets_list(devices);
 
             for (auto max_concurrent_samples : max_concurrent_samples) {

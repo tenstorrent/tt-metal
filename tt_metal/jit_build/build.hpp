@@ -34,6 +34,12 @@ enum class JitBuildProcessorType {
     ETHERNET
 };
 
+struct JitBuiltStateConfig {
+    int processor_id = 0;
+    bool is_fw = false;
+    uint32_t dispatch_message_addr = 0;
+};
+
 // The build environment
 // Includes the path to the src/output and global defines, flags, etc
 // Device specific
@@ -83,6 +89,7 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 
     int core_id_;
     int is_fw_;
+    uint32_t dispatch_message_addr_;
     bool process_defines_at_compile;
 
     string out_path_;
@@ -102,18 +109,15 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
     void compile(const string& log_file, const string& out_path, const JitBuildSettings *settings) const;
     void compile_one(const string& log_file, const string& out_path, const JitBuildSettings *settings, const string& src, const string &obj) const;
     void link(const string& log_file, const string& out_path) const;
-    void elf_to_hex8(const string& log_file, const string& out_path) const;
-    void hex8_to_hex32(const string& log_file, const string& out_path) const;
     void weaken(const string& log_file, const string& out_path) const;
     void copy_kernel( const string& kernel_in_path, const string& op_out_path) const;
     void extract_zone_src_locations(const string& log_file) const;
 
   public:
-    JitBuildState(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
     virtual ~JitBuildState() = default;
     void finish_init();
 
-    virtual void pre_compile(const string& kernel_in_path, const string& op_out_path) const;
     void build(const JitBuildSettings *settings) const;
 
     const string& get_out_path() const { return this->out_path_; };
@@ -138,19 +142,19 @@ class JitBuildDataMovement : public JitBuildState {
   private:
 
   public:
-    JitBuildDataMovement(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 class JitBuildCompute : public JitBuildState {
   private:
   public:
-    JitBuildCompute(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 class JitBuildEthernet : public JitBuildState {
   private:
   public:
-    JitBuildEthernet(const JitBuildEnv& env, int which, bool is_fw = false);
+    JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 // Abstract base class for kernel specialization
@@ -165,9 +169,9 @@ class JitBuildSettings {
     bool use_multi_threaded_compile = true;
 };
 
-void jit_build(const JitBuildState& build, const JitBuildSettings *settings, const string& kernel_in_path);
-void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings *settings, const string& kernel_in_path);
-void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings *settings, const string& kernel_in_path);
+void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
+void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
+void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
 inline const string jit_build_get_kernel_compile_outpath(int build_key) {
     // TODO(pgk), get rid of this

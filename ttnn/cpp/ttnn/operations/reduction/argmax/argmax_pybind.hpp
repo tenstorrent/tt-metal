@@ -15,7 +15,7 @@ namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
-        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt, output_tensor : Optional[ttnn.Tensor] = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
+        R"doc(
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
@@ -33,13 +33,17 @@ void bind_reduction_argmax_operation(py::module& module) {
                 return torch.argmax(input_tensor, dim=dim)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for argmax.
+                input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                * :attr:`dim`: the dimension to reduce. If None, the argmax of the flattened input is returned. Currenly only supports (dim=-1, dim=3, and dim=None)
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+            Keyword args:
+                dim (int, optional): dimension to reduce. Defaults to `None`.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::argmax);

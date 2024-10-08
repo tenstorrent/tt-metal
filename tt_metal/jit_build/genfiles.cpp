@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "jit_build/genfiles.hpp"
+
 #include <bit>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
-#include "common/utils.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
+#include "common/utils.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
-#include "jit_build/genfiles.hpp"
 #include "jit_build/settings.hpp"
-
 #include "noc/noc_parameters.h"
 
 namespace fs = std::filesystem;
@@ -23,62 +23,104 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_kernel_cpp(const string& src_name, const string& dst_name, vector<string>& prolog)
-{
+static void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (auto s: prolog)
-        out << s;
-    out << "#include \"" << src_name << "\"\n";
+    for (const string& s : prolog) out << s;
+    out << src;
+}
+
+static void gen_kernel_cpp(const string& src, const string& dst_name) {
+    vector<string> empty_prolog;
+    gen_kernel_cpp(src, dst_name, empty_prolog);
+}
+
+static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path& file_path) {
+    const string& path_relative_to_dir = dir + file_path.string();
+    fs::path file_path_relative_to_dir(path_relative_to_dir);
+
+    if (!fs::exists(file_path_relative_to_dir)) {
+        file_path_relative_to_dir.clear();
+    }
+
+    return file_path_relative_to_dir;
+}
+
+static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
+    fs::path file_path_relative_to_dir;
+
+    if (llrt::OptionsG.is_root_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_root_dir(), file_path);
+    }
+
+    if (!fs::exists(file_path_relative_to_dir) && llrt::OptionsG.is_kernel_dir_specified()) {
+        file_path_relative_to_dir = get_file_path_relative_to_dir(llrt::OptionsG.get_kernel_dir(), file_path);
+    }
+
+    return file_path_relative_to_dir;
+}
+
+static fs::path get_file_path_relative_to_src(const fs::path& file_path) {
+    fs::path file_path_relative_to_src;
+    if (fs::exists(file_path)) {
+        file_path_relative_to_src = file_path;
+    } else {
+        // If the path doesn't exist as a absolute/relative path, then it must be relative to
+        // TT_METAL_HOME/TT_METAL_KERNEL_PATH.
+        file_path_relative_to_src = get_relative_file_path_from_config(file_path);
+    }
+    return file_path_relative_to_src;
 }
 
 static string get_absolute_path(const string& file_path_string) {
-    fs::path file_path(file_path_string);
+    const fs::path& file_path = get_file_path_relative_to_src(file_path_string);
 
-    // If the path doesn't exist as a absolute/relative path, then it must be relative to TT_METAL_HOME.
-    if (!fs::exists(file_path)) {
-        file_path = fs::path(llrt::OptionsG.get_root_dir() + file_path_string);
-        TT_FATAL(fs::exists(file_path), "Kernel file {} doesn't exist!", file_path_string);
-    }
+    const bool does_file_exist = fs::exists(file_path);
+    TT_FATAL(does_file_exist, "Kernel file {} doesn't exist!", file_path_string);
 
-    // Convert to absolute path and return
-    return fs::absolute(file_path).string();
+    const fs::path& absolute_file_path = fs::absolute(file_path);
+    return absolute_file_path.string();
 }
 
-void jit_build_genfiles_kernel_include(const JitBuildEnv& env,
-                                   const JitBuildSettings& settings,
-                                   const string& input_hlk_file_path) {
+static string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    switch (kernel_src.source_type_) {
+        case KernelSource::FILE_PATH: return "#include \"" + get_absolute_path(kernel_src.source_) + "\"\n";
+        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        default: {
+            TT_THROW("Unsupported kernel source type!");
+        }
+    }
+}
+
+void jit_build_genfiles_kernel_include(
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
-    vector<string> prolog;
-    gen_kernel_cpp(abs_file_path, kernel_header, prolog);
+    gen_kernel_cpp(kernel_src_to_include, kernel_header);
 }
-void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
-                                   const JitBuildSettings& settings,
-                                   const string& input_hlk_file_path)
-{
+
+void jit_build_genfiles_triscs_src(
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    string unpack_base        = out_dir + "chlkc_unpack";
-    string math_base          = out_dir + "chlkc_math";
-    string pack_base          = out_dir + "chlkc_pack";
-    string unpack_cpp         = unpack_base + ".cpp";
-    string unpack_llk_args_h  = unpack_base + "_llk_args.h";
-    string math_cpp           = math_base + ".cpp";
-    string math_llk_args_h    = math_base + "_llk_args.h";
-    string pack_cpp           = pack_base + ".cpp";
-    string pack_llk_args_h    = pack_base + "_llk_args.h";
+    string unpack_base = out_dir + "chlkc_unpack";
+    string math_base = out_dir + "chlkc_math";
+    string pack_base = out_dir + "chlkc_pack";
+    string unpack_cpp = unpack_base + ".cpp";
+    string unpack_llk_args_h = unpack_base + "_llk_args.h";
+    string math_cpp = math_base + ".cpp";
+    string math_llk_args_h = math_base + "_llk_args.h";
+    string pack_cpp = pack_base + ".cpp";
+    string pack_llk_args_h = pack_base + "_llk_args.h";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
@@ -91,10 +133,12 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
-    std::thread t0( [&]() { gen_kernel_cpp(abs_file_path, unpack_cpp, unpack_prolog); } );
-    std::thread t1( [&]() { gen_kernel_cpp(abs_file_path, math_cpp, math_prolog); } );
-    std::thread t2( [&]() { gen_kernel_cpp(abs_file_path, pack_cpp, pack_prolog); } );
-    t0.join(); t1.join(); t2.join();
+    std::thread t0([&]() { gen_kernel_cpp(kernel_src_to_include, unpack_cpp, unpack_prolog); });
+    std::thread t1([&]() { gen_kernel_cpp(kernel_src_to_include, math_cpp, math_prolog); });
+    std::thread t2([&]() { gen_kernel_cpp(kernel_src_to_include, pack_cpp, pack_prolog); });
+    t0.join();
+    t1.join();
+    t2.join();
 
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
@@ -102,12 +146,13 @@ void jit_build_genfiles_triscs_src(const JitBuildEnv& env,
     std::ofstream gen_defines_file;
     string generated_defines_fname = out_dir + "/defines_generated.h";
     gen_defines_file.open(generated_defines_fname, std::ios_base::out);
-    settings.process_defines([&gen_defines_file] (const string& define, const string& value) {
+    settings.process_defines([&gen_defines_file](const string& define, const string& value) {
         gen_defines_file << "#define " << define << " " << value << endl;
     });
 }
 
-static std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
+static std::pair<vector<DataFormat>, vector<DataFormat>> extend_unpack_data_format_vectors_to_all_cbs(
+    const vector<DataFormat>& src_formats, const vector<DataFormat>& dst_formats) {
     // for the purposes of consistency and brevity of the LLK code that uses these arrays,
     // extend unpack data formats to all 32 CBs
     // [out0...out7] is missing from the vector, insert invalid (not used by the unpacker)
@@ -116,27 +161,28 @@ static std::pair<vector<DataFormat>,vector<DataFormat>> extend_unpack_data_forma
     vector<DataFormat> dst_formats_all_cbs;
 
     // copy inputs and params
-    for (int i=0 ; i<16 ; i++) {
+    for (int i = 0; i < 16; i++) {
         src_formats_all_cbs.push_back(src_formats[i]);
         dst_formats_all_cbs.push_back(dst_formats[i]);
     }
 
     // insert invalid data format for output [out0...out7]
-    for (int i=0 ; i<8 ; i++) {
+    for (int i = 0; i < 8; i++) {
         src_formats_all_cbs.push_back(DataFormat::Invalid);
         dst_formats_all_cbs.push_back(DataFormat::Invalid);
     }
 
     // copy intermediates
-    for (int i=0 ; i<8 ; i++) {
-        src_formats_all_cbs.push_back(src_formats[16+i]);
-        dst_formats_all_cbs.push_back(dst_formats[16+i]);
+    for (int i = 0; i < 8; i++) {
+        src_formats_all_cbs.push_back(src_formats[16 + i]);
+        dst_formats_all_cbs.push_back(dst_formats[16 + i]);
     }
 
     return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
 }
 
-static std::pair<vector<DataFormat>,vector<DataFormat>> extend_pack_data_format_vectors_to_all_cbs(const vector<DataFormat> &src_formats, const vector<DataFormat> &dst_formats) {
+static std::pair<vector<DataFormat>, vector<DataFormat>> extend_pack_data_format_vectors_to_all_cbs(
+    const vector<DataFormat>& src_formats, const vector<DataFormat>& dst_formats) {
     // for the purposes of consistency and brevity of the LLK code that uses these arrays,
     // extend pack data formats to all 32 CBs
     // [in0...in7, param0...param7] are missing from the vector, insert invalid (not used by the unpacker)
@@ -145,13 +191,13 @@ static std::pair<vector<DataFormat>,vector<DataFormat>> extend_pack_data_format_
     vector<DataFormat> dst_formats_all_cbs;
 
     // insert invalid for inputs and params
-    for (int i=0 ; i<16 ; i++) {
+    for (int i = 0; i < 16; i++) {
         src_formats_all_cbs.push_back(DataFormat::Invalid);
         dst_formats_all_cbs.push_back(DataFormat::Invalid);
     }
 
     // copy outputs and intermediates
-    for (int i=0 ; i<16 ; i++) {
+    for (int i = 0; i < 16; i++) {
         src_formats_all_cbs.push_back(src_formats[i]);
         dst_formats_all_cbs.push_back(dst_formats[i]);
     }
@@ -167,7 +213,8 @@ static std::string data_format_vec_to_string(const vector<DataFormat> formats) {
     return formats_string;
 }
 
-static std::string create_formats_array_string(std::string array_type, std::string array_name, int array_size, std::string array_data) {
+static std::string create_formats_array_string(
+    std::string array_type, std::string array_name, int array_size, std::string array_data) {
     stringstream str_stream;
 
     str_stream << array_type << " " << array_name << "[" << array_size << "] = {" << endl;
@@ -178,21 +225,23 @@ static std::string create_formats_array_string(std::string array_type, std::stri
 }
 
 static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, bool preserve_fp32_precision) {
+generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, std::vector<UnpackToDestMode> unpack_to_dest_mode) {
 
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, preserve_fp32_precision);
+        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, unpack_to_dest_mode);
 
-    TT_ASSERT(src_formats.size() == 24 && dst_formats.size() == 24,
+    TT_ASSERT(
+        src_formats.size() == 24 && dst_formats.size() == 24,
         "There must be 8 unpack src/dst formats for each input, param, and intermediate operands.");
 
     vector<DataFormat> src_formats_all_cbs;
     vector<DataFormat> dst_formats_all_cbs;
-    tie(src_formats_all_cbs, dst_formats_all_cbs) = extend_unpack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
+    tie(src_formats_all_cbs, dst_formats_all_cbs) =
+        extend_unpack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
 
     TT_ASSERT(src_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
     TT_ASSERT(dst_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
@@ -200,30 +249,52 @@ generate_unpack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_ds
     return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
 }
 
-static void emit_unpack_data_formats(std::string unpack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
+static void emit_unpack_data_formats(
+    std::string unpack_data_format_descs,
+    std::vector<DataFormat> src_formats_all_cbs,
+    std::vector<DataFormat> dst_formats_all_cbs) {
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
-    file_stream << create_formats_array_string("constexpr std::int32_t", "unpack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string("constexpr std::int32_t", "unpack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
+    file_stream << create_formats_array_string(
+        "constexpr std::int32_t",
+        "unpack_src_format",
+        NUM_CIRCULAR_BUFFERS,
+        data_format_vec_to_string(src_formats_all_cbs));
+    file_stream << create_formats_array_string(
+        "constexpr std::int32_t",
+        "unpack_dst_format",
+        NUM_CIRCULAR_BUFFERS,
+        data_format_vec_to_string(dst_formats_all_cbs));
     file_stream.close();
 }
 
-static std::pair<std::vector<DataFormat>, std::vector<DataFormat>>
-generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
+static std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
+    tt_hlk_desc& desc, DataFormat unpack_conditional_dst_format, bool fp32_dest_acc_en, const tt::ARCH arch) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr,
-        desc.output_buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, false, arch);
+        desc.input_buf_dataformat_arr,
+        desc.param_buf_dataformat_arr,
+        desc.intermediate_buf_dataformat_arr,
+        desc.output_buf_dataformat_arr,
+        unpack_conditional_dst_format,
+        fp32_dest_acc_en,
+        false,
+        arch);
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.input_buf_dataformat_arr, desc.param_buf_dataformat_arr, desc.intermediate_buf_dataformat_arr, desc.output_buf_dataformat_arr);
+        desc.input_buf_dataformat_arr,
+        desc.param_buf_dataformat_arr,
+        desc.intermediate_buf_dataformat_arr,
+        desc.output_buf_dataformat_arr);
 
-    TT_ASSERT(src_formats.size() == 16 && dst_formats.size() == 16,
+    TT_ASSERT(
+        src_formats.size() == 16 && dst_formats.size() == 16,
         "There must be 8 pack src/dst formats for each output, and intermediate operands.");
 
     vector<DataFormat> src_formats_all_cbs;
     vector<DataFormat> dst_formats_all_cbs;
-    tie(src_formats_all_cbs, dst_formats_all_cbs) = extend_pack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
+    tie(src_formats_all_cbs, dst_formats_all_cbs) =
+        extend_pack_data_format_vectors_to_all_cbs(src_formats, dst_formats);
 
     TT_ASSERT(src_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
     TT_ASSERT(dst_formats_all_cbs.size() == NUM_CIRCULAR_BUFFERS);
@@ -231,21 +302,32 @@ generate_pack_data_formats(tt_hlk_desc& desc, DataFormat unpack_conditional_dst_
     return std::make_pair(src_formats_all_cbs, dst_formats_all_cbs);
 }
 
-static void emit_pack_data_formats(std::string pack_data_format_descs, std::vector<DataFormat> src_formats_all_cbs, std::vector<DataFormat> dst_formats_all_cbs) {
+static void emit_pack_data_formats(
+    std::string pack_data_format_descs,
+    std::vector<DataFormat> src_formats_all_cbs,
+    std::vector<DataFormat> dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
-    file_stream << create_formats_array_string("constexpr unsigned char", "pack_src_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(src_formats_all_cbs));
-    file_stream << create_formats_array_string("constexpr unsigned char", "pack_dst_format", NUM_CIRCULAR_BUFFERS, data_format_vec_to_string(dst_formats_all_cbs));
+    file_stream << create_formats_array_string(
+        "constexpr unsigned char",
+        "pack_src_format",
+        NUM_CIRCULAR_BUFFERS,
+        data_format_vec_to_string(src_formats_all_cbs));
+    file_stream << create_formats_array_string(
+        "constexpr unsigned char",
+        "pack_dst_format",
+        NUM_CIRCULAR_BUFFERS,
+        data_format_vec_to_string(dst_formats_all_cbs));
 
     // budabackend-style format array
-    // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16, data_format_vec_to_string(src_formats));
-    // file_stream << create_formats_array_string("const std::int32_t", "pack_dst_format", 16, data_format_vec_to_string(dst_formats));
+    // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,
+    // data_format_vec_to_string(src_formats)); file_stream << create_formats_array_string("const std::int32_t",
+    // "pack_dst_format", 16, data_format_vec_to_string(dst_formats));
 
     file_stream.close();
 }
 
 static void equalize_data_format_vectors(std::vector<DataFormat>& v1, std::vector<DataFormat>& v2) {
-
     // Check that the vectors have the same size
     if (v1.size() != v2.size()) {
         throw std::invalid_argument("vectors have different sizes");
@@ -299,12 +381,8 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
             (pack_exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     }
 
-    if ((tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) || options.preserve_fp32_precision) && options.fp32_dest_acc_en){
-        if (options.preserve_fp32_precision) {
-            unpack_conditional_dst_format = DataFormat::Float32;
-        } else {
-            unpack_conditional_dst_format = DataFormat::Tf32;
-        }
+    if (tt::is_all_fp32_formats(desc.input_buf_dataformat_arr) && options.fp32_dest_acc_en) {
+        unpack_conditional_dst_format = DataFormat::Tf32;
     }
 
     tt::check_valid_in_out_data_formats(
@@ -314,21 +392,69 @@ static void generate_data_format_descriptors(JitBuildOptions& options, const tt:
         desc.intermediate_buf_dataformat_arr);
 
     vector<DataFormat> unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs;
-    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.preserve_fp32_precision);
+    tie(unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs) = generate_unpack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode);
 
     vector<DataFormat> pack_src_formats_all_cbs, pack_dst_formats_all_cbs;
-    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) = generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
+    tie(pack_src_formats_all_cbs, pack_dst_formats_all_cbs) =
+        generate_pack_data_formats(desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, arch);
 
     // equalize "upack src" and "pack dst" data format vectors
     // both "unpack src" and "pack dst" refer to data in L1, "unpack src" == L1, and "pack dst" == L1
-    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be DataFromat::Invalid if the other is set)
-    // if both formats are DataFormat::Invalid then this CB is not used
-    // this allows any CB to be used as both in & out in non-compute kernels (readers/writers)
-    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
+    // in order to allow any CB to be read and written to/from L1, these formats should be the same (one cannot be
+    // DataFromat::Invalid if the other is set) if both formats are DataFormat::Invalid then this CB is not used this
+    // allows any CB to be used as both in & out in non-compute kernels (readers/writers)
+    // TODO: for any CB to be used as both in & out of compute kernels (ie intermediate), additional work is required to
+    // propagate formats to "unpack dst (SRCA/B REG)" / "pack src (DST REG)"
     equalize_data_format_vectors(unpack_src_formats_all_cbs, pack_dst_formats_all_cbs);
 
     emit_unpack_data_formats(unpack_data_format_descs, unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs);
     emit_pack_data_formats(pack_data_format_descs, pack_src_formats_all_cbs, pack_dst_formats_all_cbs);
+}
+
+static std::string array_to_string(const uint32_t arr[]) {
+    std::string formats_string = "";
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        formats_string += to_string((int)arr[i]) + ",";
+    }
+    return formats_string;
+}
+
+static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(unpack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint16_t", "unpack_tile_size", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_size_arr));
+    file_stream.close();
+}
+
+static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
+    ofstream file_stream;
+    file_stream.open(pack_tile_dims_descs);
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream.close();
+}
+
+static void generate_tile_dims_descriptors(JitBuildOptions& options, const tt::ARCH arch) {
+    string out_file_name_base = "chlkc_";
+    string out_file_name_suffix = "_tile_dims.h";
+    string unpack_tile_dims_descs = options.path + out_file_name_base + "unpack" + out_file_name_suffix;
+    string pack_tile_dims_descs = options.path + out_file_name_base + "pack" + out_file_name_suffix;
+
+    // assuming all cores within a op have the same desc
+    tt_hlk_desc& desc = options.hlk_desc;
+
+    emit_unpack_tile_dims(unpack_tile_dims_descs, desc);
+    emit_pack_tile_dims(pack_tile_dims_descs, desc);
 }
 
 static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
@@ -372,23 +498,23 @@ static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
-void jit_build_genfiles_descriptors(const JitBuildEnv& env,
-                                    JitBuildOptions& options)
-{
+void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
     ZoneScoped;
     const std::string tracyPrefix = "generate_descriptors_";
-    ZoneName( (tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
+        std::thread tt( [&]() { generate_tile_dims_descriptors(options, env.get_arch()); } );
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
         td.join();
+        tt.join();
         tm.join();
         ta.join();
         tf.join();
-    } catch (std::runtime_error &ex) {
+    } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
 }
@@ -399,9 +525,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map
-) {
+    uint32_t allocator_alignment) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
@@ -423,7 +547,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(ALLOCATOR_ALIGNMENT) - 1 << endl;
+    ss << "#define ALLOCATOR_ALIGNMENT " << allocator_alignment << endl;
+    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(allocator_alignment) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -452,12 +577,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-#if defined(TRACY_ENABLE)
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
-    ss << "extern uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
-    ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
-    ss << "#endif" << endl;
-#endif
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -465,12 +584,14 @@ std::string generate_bank_to_noc_coord_descriptor_string(
 
     ss << "uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
-        ss << "    {" << "\t// noc=" << noc << endl;
+        ss << "    {"
+           << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < dram_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, dram_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, dram_bank_map[bank_id].y);
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
-            ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
+            ss << "        " << xy << ","
+               << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
     }
@@ -483,51 +604,16 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "};" << endl;
     ss << endl;
 
-#if defined(TRACY_ENABLE)
-    /*
-     * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
-     * and the ceiled number of cores per DRAM banks.
-     *
-     * The logic of flat ID assignment can be optimized to lower NOC traffic. With this design the heuristic can be implemented
-     * in host and device just does look up to the table.
-     *
-     * For DRAM banks in particular, integer division of flat_id/core_count_per_dram gives the dram bank id and the modulo
-     * is the offset.
-     * */
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC))" << endl;
-    ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
-    ss << core_count_per_dram <<  ";" << endl;
-    ss << endl;
-
-    ss << "uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
-    for (unsigned int x = 0; x < grid_size.x; x++) {
-        ss << "    {" << endl;
-        for (unsigned int y = 0; y < grid_size.y; y++) {
-            CoreCoord core = {x,y};
-            if (profiler_flat_id_map.find(core) == profiler_flat_id_map.end()){
-                ss << "        " << 255 << "," << endl;
-            }
-            else{
-                ss << "        " << profiler_flat_id_map.at(core) << "," << endl;
-            }
-        }
-        ss << "    }," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "#endif" << endl;
-
-#endif
-
-
     ss << "uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
-        ss << "    {" << "\t// noc=" << noc << endl;
+        ss << "    {"
+           << "\t// noc=" << noc << endl;
         for (unsigned int bank_id = 0; bank_id < l1_bank_map.size(); bank_id++) {
             uint16_t noc_x = NOC_0_X(noc, grid_size.x, l1_bank_map[bank_id].x);
             uint16_t noc_y = NOC_0_Y(noc, grid_size.y, l1_bank_map[bank_id].y);
             uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
-            ss << "        " << xy << "," << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
+            ss << "        " << xy << ","
+               << "\t// NOC_X=" << noc_x << " NOC_Y=" << noc_y << endl;
         }
         ss << "    }," << endl;
     }
@@ -551,10 +637,14 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map
-) {
-    string output_string = generate_bank_to_noc_coord_descriptor_string(grid_size, dram_bank_map, dram_bank_offset_map, l1_bank_map, l1_bank_offset_map, core_count_per_dram, profiler_flat_id_map);
+    uint32_t allocator_alignment) {
+    string output_string = generate_bank_to_noc_coord_descriptor_string(
+        grid_size,
+        dram_bank_map,
+        dram_bank_offset_map,
+        l1_bank_map,
+        l1_bank_offset_map,
+        allocator_alignment);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");
@@ -589,4 +679,4 @@ static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& co
     return ss.str();
 }
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

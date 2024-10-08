@@ -368,6 +368,7 @@ all_binary_ops = [
         "op": ttnn.add,
         "name": "ttnn.add",
     },
+    {"op": ttnn.add, "name": "ttnn.add_sharded", "use_sharded_tensors": [True, True]},
     {
         "op": ttnn.sub,
         "name": "ttnn.sub",
@@ -501,6 +502,12 @@ all_binary_ops = [
         "shape_func": bcast_h_shape_func,
     },
     {
+        "op": bcast_add_h,
+        "name": "ttnn.bcast_add_h_sharded",
+        "use_sharded_tensors": [True, False],
+        "shape_func": bcast_h_shape_func,
+    },
+    {
         "op": bcast_add_w,
         "name": "ttnn.bcast_add_w",
         "shape_func": bcast_w_shape_func,
@@ -516,6 +523,12 @@ all_binary_ops = [
         "shape_func": bcast_h_shape_func,
     },
     {
+        "op": bcast_sub_h,
+        "name": "ttnn.bcast_sub_h_sharded",
+        "use_sharded_tensors": [True, False],
+        "shape_func": bcast_h_shape_func,
+    },
+    {
         "op": bcast_sub_w,
         "name": "ttnn.bcast_sub_w",
         "shape_func": bcast_w_shape_func,
@@ -528,6 +541,12 @@ all_binary_ops = [
     {
         "op": bcast_mul_h,
         "name": "ttnn.bcast_mul_h",
+        "shape_func": bcast_h_shape_func,
+    },
+    {
+        "op": bcast_mul_h,
+        "name": "ttnn.bcast_mul_h_sharded",
+        "use_sharded_tensors": [True, False],
         "shape_func": bcast_h_shape_func,
     },
     {
@@ -1112,7 +1131,7 @@ def threshold(x):
 
 
 def reshape(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
     ttnn.reshape(x, [shape[-4], shape[-3], shape[-1], shape[-2]])
 
 
@@ -1149,7 +1168,7 @@ def tilize(x):
 
 
 def tilize_with_val_padding(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     output_tensor_shape = [shape[-4], shape[-3], shape[-2] + 32, shape[-1] + 32]
 
@@ -1157,7 +1176,7 @@ def tilize_with_val_padding(x):
 
 
 def untilize_with_unpadding(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     unpadded_shape_end = [
         shape[0] - 1,
@@ -1170,7 +1189,7 @@ def untilize_with_unpadding(x):
 
 
 def pad(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     padding = [
         (0, 0),
@@ -1183,7 +1202,7 @@ def pad(x):
 
 
 def ttnn_slice(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     output_tensor_end = (
         shape[0],
@@ -1204,7 +1223,9 @@ def arange(x):
 
 
 def full(x):
-    ttnn.full(shape=x.get_legacy_shape(), fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.full(
+        shape=x.shape.with_tile_padding(), fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device()
+    )
 
 
 def full_like(x):
@@ -1212,15 +1233,15 @@ def full_like(x):
 
 
 def ones(x):
-    ttnn.ones(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.ones(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def zeros(x):
-    ttnn.zeros(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.zeros(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def empty(x):
-    ttnn.empty(shape=x.get_legacy_shape(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.empty(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def sum_dim_0(x):
@@ -1292,7 +1313,7 @@ def rsqrt_slow(x):
 
 
 def fill_rm(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     ttnn.fill_rm(
         N=shape[0],
@@ -1308,7 +1329,7 @@ def fill_rm(x):
 
 
 def fill_ones_rm(x):
-    shape = x.get_legacy_shape()
+    shape = x.shape.with_tile_padding()
 
     ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 
@@ -2266,7 +2287,7 @@ all_unary_ops = [
     },
     {
         "op": primary_moreh_norm_3,
-        "name": "tt_lib.operations.primary.moreh_norm_dim_3",
+        "name": "ttnn.operations.moreh.norm_dim_3",
     },
     {
         "op": fused_softmax,
@@ -2377,7 +2398,7 @@ def group_norm(x, y, z):
 
 
 def primary_moreh_groupnorm(x, y, z):
-    tt_lib.operations.primary.moreh_groupnorm(
+    ttnn.operations.moreh.group_norm(
         input=x, num_groups=4, eps=0.0001, gamma=y, beta=y, are_required_outputs=(True, True, True), mean=z, rstd=z
     )
 

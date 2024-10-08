@@ -14,24 +14,13 @@
 //
 #pragma once
 
-#include "dprint.h"
-
-// Add the ability to skip NOC logging, we can't have the tunneling cores stalling waiting for the
-// print server.
-#if !defined(SKIP_NOC_LOGGING)
-#define LOG_LEN(l) DPRINT << NOC_LOG_XFER(l);
-#define LOG_READ_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
-#define LOG_WRITE_LEN_FROM_STATE(noc_id) LOG_LEN(NOC_CMD_BUF_READ_REG(noc_id, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
-#else
-#define LOG_LEN(l)
-#define LOG_READ_LEN_FROM_STATE(noc_id)
-#define LOG_WRITE_LEN_FROM_STATE(noc_id)
-#endif
+// NOC logging enabled independently of watcher, need to include it here because it hooks into DEBUG_SANITIZE_NOC_*
+#include "noc_logging.h"
 
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
-    (defined(WATCHER_ENABLED)) && (!defined(WATCHER_DISABLE_NOC_SANITIZE))
+    defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
 
@@ -48,6 +37,9 @@ typedef bool debug_sanitize_noc_dir_t;
 #define DEBUG_SANITIZE_NOC_MULTICAST true
 #define DEBUG_SANITIZE_NOC_UNICAST false
 typedef bool debug_sanitize_noc_cast_t;
+#define DEBUG_SANITIZE_NOC_TARGET true
+#define DEBUG_SANITIZE_NOC_LOCAL false
+typedef bool debug_sanitize_noc_which_core_t;
 
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
@@ -90,24 +82,55 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y) {
 }
 
 // TODO(PGK): remove soft reset when fw is downloaded at init
-#define DEBUG_VALID_REG_ADDR(a, l)                                                      \
-    (((((a) >= NOC_OVERLAY_START_ADDR) &&                                               \
-       ((a) < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) || \
-      ((a) == RISCV_DEBUG_REG_SOFT_RESET_0)) &&                                         \
-     (l) == 4)
-#define DEBUG_VALID_WORKER_ADDR(a, l) ((a >= MEM_L1_BASE) && (a + l <= MEM_L1_BASE + MEM_L1_SIZE) && ((a) + (l) > (a)))
-inline bool debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
-    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
-    return ((addr) >= core_info->noc_pcie_addr_base) && ((addr) + (len) <= core_info->noc_pcie_addr_end) &&
-           ((addr) + (len) > (addr));
-}
-inline bool debug_valid_dram_addr(uint64_t addr, uint64_t len) {
-    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
-    return ((addr) >= core_info->noc_dram_addr_base) && ((addr) + (len) <= core_info->noc_dram_addr_end) &&
-           ((addr) + (len) > (addr));
+inline bool debug_valid_reg_addr(uint64_t addr, uint64_t len) {
+    return (((addr >= NOC_OVERLAY_START_ADDR) &&
+             (addr < NOC_OVERLAY_START_ADDR + NOC_STREAM_REG_SPACE_SIZE * NOC_NUM_STREAMS)) ||
+            (addr == RISCV_DEBUG_REG_SOFT_RESET_0)) &&
+           (len == 4);
 }
 
-#define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
+inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len) {
+    if (addr + len <= addr)
+        return DebugSanitizeNocAddrZeroLength;
+    if (addr < MEM_L1_BASE)
+        return DebugSanitizeNocAddrUnderflow;
+    if (addr + len > MEM_L1_BASE + MEM_L1_SIZE)
+        return DebugSanitizeNocAddrOverflow;
+    return DebugSanitizeNocOK;
+}
+
+inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
+    if (addr + len <= addr)
+        return DebugSanitizeNocAddrZeroLength;
+
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    if (addr < core_info->noc_pcie_addr_base)
+        return DebugSanitizeNocAddrUnderflow;
+    if (addr + len > core_info->noc_pcie_addr_end)
+        return DebugSanitizeNocAddrOverflow;
+    return DebugSanitizeNocOK;
+}
+inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
+    if (addr + len <= addr)
+        return DebugSanitizeNocAddrZeroLength;
+
+    core_info_msg_t tt_l1_ptr *core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    if (addr < core_info->noc_dram_addr_base)
+        return DebugSanitizeNocAddrUnderflow;
+    if (addr + len > core_info->noc_dram_addr_end)
+        return DebugSanitizeNocAddrOverflow;
+    return DebugSanitizeNocOK;
+}
+
+inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len) {
+    if (addr + len <= addr)
+        return DebugSanitizeNocAddrZeroLength;
+    if (addr < MEM_ETH_BASE)
+        return DebugSanitizeNocAddrUnderflow;
+    if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE)
+        return DebugSanitizeNocAddrOverflow;
+    return DebugSanitizeNocOK;
+}
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
@@ -118,23 +141,30 @@ inline void debug_sanitize_post_noc_addr_and_hang(
     uint32_t l1_addr,
     uint32_t len,
     debug_sanitize_noc_cast_t multicast,
-    uint16_t invalid) {
+    debug_sanitize_noc_dir_t dir,
+    debug_sanitize_noc_which_core_t which_core,
+    uint16_t return_code) {
+    if (return_code == DebugSanitizeNocOK)
+        return;
+
     debug_sanitize_noc_addr_msg_t tt_l1_ptr *v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize_noc);
 
-    if (v[noc_id].invalid == DebugSanitizeNocInvalidOK) {
+    if (v[noc_id].return_code == DebugSanitizeNocOK) {
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
-        v[noc_id].which = debug_get_which_riscv();
-        v[noc_id].multicast = multicast;
-        v[noc_id].invalid = invalid;
+        v[noc_id].which_risc = debug_get_which_riscv();
+        v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
+        v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
+        v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
+        v[noc_id].return_code = return_code;
     }
 
 #if defined(COMPILE_FOR_ERISC)
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
-    tt_l1_ptr launch_msg_t *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
-    launch_msg->go.run = RUN_MSG_DONE;
+    tt_l1_ptr go_msg_t *go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_message);
+    go_message_ptr->signal = RUN_MSG_DONE;
 
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.
@@ -176,53 +206,46 @@ uint32_t debug_sanitize_noc_addr(
         AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end);
 
         // Multicast supports workers only
-        if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX || (x > x_end || y > y_end)) {
-            debug_sanitize_post_noc_addr_and_hang(
-                noc_id, noc_addr, l1_addr, noc_len, multicast, DebugSanitizeNocInvalidMulticast);
-        }
+        uint16_t return_code = DebugSanitizeNocOK;
+        if (core_type != AddressableCoreType::TENSIX || end_core_type != AddressableCoreType::TENSIX)
+            return_code = DebugSanitizeNocMulticastNonWorker;
+        if (x > x_end || y > y_end)
+            return_code = DebugSanitizeNocMulticastInvalidRange;
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, return_code);
     }
 
     // Check noc addr, we save the alignment requirement from the noc src/dst because the L1 address
     // needs to match alignment.
     // Reads and writes may have different alignment requirements, see noc_parameters.h for details.
     uint32_t alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;  // Default alignment, only override in ceratin cases.
-    uint32_t invalid = multicast ? DebugSanitizeNocInvalidMulticast : DebugSanitizeNocInvalidUnicast;
     if (core_type == AddressableCoreType::PCIE) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_PCIE_READ_ALIGNMENT_BYTES : NOC_PCIE_WRITE_ALIGNMENT_BYTES) - 1;
-        if (!debug_valid_pcie_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
-        }
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, debug_valid_pcie_addr(noc_local_addr, noc_len));
     } else if (core_type == AddressableCoreType::DRAM) {
         alignment_mask = (dir == DEBUG_SANITIZE_NOC_READ ? NOC_DRAM_READ_ALIGNMENT_BYTES : NOC_DRAM_WRITE_ALIGNMENT_BYTES) - 1;
-        if (!debug_valid_dram_addr(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
-        }
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, debug_valid_dram_addr(noc_local_addr, noc_len));
 #ifndef ARCH_GRAYSKULL
     } else if (core_type == AddressableCoreType::ETH) {
-        if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_ETH_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len)) {
+            debug_sanitize_post_noc_addr_and_hang(
+                noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, debug_valid_eth_addr(noc_local_addr, noc_len));
         }
 #endif
     } else if (core_type == AddressableCoreType::TENSIX) {
-        if (!DEBUG_VALID_REG_ADDR(noc_local_addr, noc_len) && !DEBUG_VALID_WORKER_ADDR(noc_local_addr, noc_len)) {
-            debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
+        if (!debug_valid_reg_addr(noc_local_addr, noc_len) && !debug_valid_worker_addr(noc_local_addr, noc_len)) {
+            debug_sanitize_post_noc_addr_and_hang(
+                noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, debug_valid_worker_addr(noc_local_addr, noc_len));
         }
     } else {
         // Bad XY
-        debug_sanitize_post_noc_addr_and_hang(noc_id, noc_addr, l1_addr, noc_len, multicast, invalid);
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id, noc_addr, l1_addr, noc_len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocTargetInvalidXY);
     }
 
     return alignment_mask;
-}
-
-void debug_sanitize_worker_addr(uint8_t noc_id, uint32_t addr, uint32_t len) {
-    // Regs are exempt from standard L1 validation
-    if (DEBUG_VALID_REG_ADDR(addr, len))
-        return;
-
-    if (!DEBUG_VALID_WORKER_ADDR(addr, len)) {
-        debug_sanitize_post_noc_addr_and_hang(noc_id, addr, 0, len, false, DebugSanitizeNocInvalidL1);
-    }
 }
 
 void debug_sanitize_noc_and_worker_addr(
@@ -235,14 +258,14 @@ void debug_sanitize_noc_and_worker_addr(
     // Check noc addr, get any extra alignment req for worker.
     uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir);
 
-    // Check worker addr
-    debug_sanitize_worker_addr(noc_id, worker_addr, len);
+    // Check worker addr and alignment, but these don't apply to regs.
+    if (!debug_valid_reg_addr(worker_addr, len)) {
+        debug_sanitize_post_noc_addr_and_hang(
+            noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, debug_valid_worker_addr(worker_addr, len));
 
-    // Check alignment, but not for reg addresses.
-    if (!DEBUG_VALID_REG_ADDR(worker_addr, len)) {
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
             debug_sanitize_post_noc_addr_and_hang(
-                noc_id, noc_addr, worker_addr, len, multicast, DebugSanitizeNocInvalidAlignment);
+                noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocAlignment);
         }
     }
 }

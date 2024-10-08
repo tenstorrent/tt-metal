@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -450,7 +451,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
     if (needs_shard_or_reshard) {
         if (input_tensor.get_shape()[0] != 1 or input_tensor.get_shape()[1] != 1) {
             // reshape to [1, 1, N*H*W, C]
-            input_tensor = ttnn::operations::core::reshape(
+            input_tensor = ttnn::reshape(
                 input_tensor,
                 ttnn::Shape(std::array<uint32_t, 4>{
                     1,
@@ -555,9 +556,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
     uint32_t window_w = weights_shape[3];
+    uint32_t out_channel_padding = tt::round_up(out_channels, 32) - out_channels;
     tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
         {tt::round_up(out_channels, 32), tt::round_up(in_channels, input_channels_alignment), window_h, window_w}));
-
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
         if (bias_tensor.has_value()) {
@@ -570,7 +571,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
-
     weight_tensor_ = ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
     // for conv op, pad the weights to block shape
@@ -581,6 +581,22 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
     }
+
+    uint32_t weight_matrix_height = in_channels * window_h * window_w;
+    int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
+    TT_FATAL(weight_matrix_height_padding >= 0," Matrix Height Padding can't be negative");
+
+    // convert_conv_weight_tensor adds the padding to the base shape.
+    // Reshape the weights to remove padding from the base shape.
+    weight_tensor_.set_shape(
+        ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
+        std::array<std::array<uint32_t, 2>, 4>{
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, weight_matrix_height_padding},
+            std::array<uint32_t, 2>{0, out_channel_padding}
+    }));
+
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
@@ -779,7 +795,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 conv_config.math_fidelity,
                 opt_conv_op_parallel_config,
                 opt_conv_op_block_config,
-                0,
                 conv_out_memory_config,
                 conv_config.dtype,
                 {batch_size, input_height, input_width, in_channels},
@@ -824,7 +839,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.math_fidelity,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
-            0,
             conv_out_memory_config,
             conv_config.dtype,
             {batch_size, input_height, input_width, in_channels},

@@ -28,14 +28,6 @@ namespace tt_metal {
 
 class Device;
 
-enum class BufferType {
-    DRAM,
-    L1,
-    SYSTEM_MEMORY,
-    L1_SMALL,
-    TRACE,
-};
-
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
     CoreRangeSet grid;
@@ -233,7 +225,7 @@ class Buffer {
 
     DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
 
-    uint32_t alignment() const { return ALLOCATOR_ALIGNMENT; }
+    uint32_t alignment() const;
 
     DeviceAddr aligned_page_size() const { return align(page_size_, this->alignment());}
 

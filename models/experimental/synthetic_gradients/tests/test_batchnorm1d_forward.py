@@ -32,7 +32,7 @@ def tt_batch_norm(
 ):
     H = 32
     W = bn_size
-    batch_size = x.get_legacy_shape()[0]
+    batch_size = x.shape.with_tile_padding()[0]
     print("batch_size:", batch_size)
     epsilon_torch = torch.tensor([[[W * [eps]]]])
     epsilon_padded = pad_activation(epsilon_torch)

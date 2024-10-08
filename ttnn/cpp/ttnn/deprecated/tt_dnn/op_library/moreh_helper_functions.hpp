@@ -29,7 +29,7 @@ inline bool is_dram(const Buffer *buffer) { return buffer->buffer_type() == Buff
 
 inline bool is_scalar(const Tensor &tensor) {
     // TODO(dongjin): current impl requires finding a scalar in a 2d shape
-    const auto &shape = tensor.get_legacy_shape().without_padding();
+    const auto &shape = tensor.get_logical_shape();
     const uint32_t rank = shape.rank();
 
     // TODO(dongjin): refactor dot op
@@ -41,7 +41,7 @@ inline bool is_scalar(const Tensor &tensor) {
 
 inline bool is_1d_tensor(const Tensor &tensor) {
     // TODO(dongjin): current impl requires finding a 1d in a 2d shape
-    const auto &shape = tensor.get_legacy_shape().without_padding();
+    const auto &shape = tensor.get_logical_shape();
     const uint32_t rank = shape.rank();
 
     // TODO(dongjin): refactor dot op
@@ -52,8 +52,8 @@ inline bool is_1d_tensor(const Tensor &tensor) {
 }
 
 inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
-    const auto &tensor_a_shape = tensor_a.get_legacy_shape().without_padding();
-    const auto &tensor_b_shape = tensor_b.get_legacy_shape().without_padding();
+    const auto &tensor_a_shape = tensor_a.get_logical_shape();
+    const auto &tensor_b_shape = tensor_b.get_logical_shape();
     return (tensor_a_shape == tensor_b_shape);
 }
 
@@ -86,7 +86,7 @@ struct ComputeKernelArg {
 struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    bool preserve_fp32_precision = false;
+    vector<UnpackToDestMode> unpack_to_dest_mode;
     bool math_approx_mode = false;
     std::map<std::string, std::string> defines;
 };
@@ -99,7 +99,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    bool preserve_fp32_precision = false);
+    vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program,
@@ -109,7 +109,7 @@ struct ComputeKernelConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4,
     bool fp32_dest_acc_en = false,
     bool math_approx_mode = false,
-    bool preserve_fp32_precision = false);
+    vector<UnpackToDestMode> unpack_to_dest_mode = {});
 
 [[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
     Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeKernelConfig config);
@@ -293,7 +293,7 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
 uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape);
+void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape);
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim);
 
@@ -304,9 +304,9 @@ void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank)
 std::vector<int64_t> get_dim(
     const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank);
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape& shape);
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape);
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim);
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim);
 
 }  // namespace primary
 }  // namespace operations

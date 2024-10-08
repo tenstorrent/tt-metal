@@ -222,9 +222,11 @@ void watcher_init(Device *device) {
         data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
         data->sanitize_noc[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data->sanitize_noc[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data->sanitize_noc[i].multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data->sanitize_noc[i].invalid = DebugSanitizeNocInvalidOK;
+        data->sanitize_noc[i].which_risc = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->sanitize_noc[i].return_code = DebugSanitizeNocOK;
+        data->sanitize_noc[i].is_multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data->sanitize_noc[i].is_write = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data->sanitize_noc[i].is_target = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
     }
 
     // Initialize debug asserts to not tripped.

@@ -13,6 +13,7 @@
 #include <vector>
 #include <memory>
 #include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/utils.hpp"
 
 enum class CoreType;
 
@@ -38,7 +39,16 @@ enum class HalMemAddrType : uint8_t {
     KERNEL_CONFIG = 5,
     UNRESERVED = 6,
     CORE_INFO = 7,
-    COUNT = 8
+    GO_MSG = 8,
+    LAUNCH_MSG_BUFFER_RD_PTR = 9,
+    COUNT = 10
+};
+
+enum class HalMemType : uint8_t {
+    L1 = 0,
+    DRAM = 1,
+    HOST = 2,
+    COUNT = 3
 };
 
 using DeviceAddr = std::uint64_t;
@@ -68,13 +78,13 @@ class HalCoreInfoType {
 
 template <typename T>
 inline T HalCoreInfoType::get_dev_addr(HalMemAddrType addr_type) const {
-    uint32_t index = static_cast<std::underlying_type<HalMemAddrType>::type>(addr_type);
+    uint32_t index = utils::underlying_type<HalMemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
     return reinterpret_cast<T>(this->mem_map_bases_[index]);
 }
 
 inline uint32_t HalCoreInfoType::get_dev_size(HalMemAddrType addr_type) const {
-    uint32_t index = static_cast<std::underlying_type<HalMemAddrType>::type>(addr_type);
+    uint32_t index = utils::underlying_type<HalMemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_sizes_.size());
     return this->mem_map_sizes_[index];
 }
@@ -84,6 +94,7 @@ class Hal {
     std::mutex lock;
     bool initialized_;
     std::vector<HalCoreInfoType> core_info_;
+    std::vector<uint32_t> mem_alignments_;
 
     void initialize_gs();
     void initialize_wh();
@@ -107,6 +118,8 @@ class Hal {
     T get_dev_addr(uint32_t programmable_core_type_index, HalMemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const;
 
+    uint32_t get_alignment(HalMemType memory_type) const;
+
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
 };
 
@@ -124,7 +137,7 @@ inline CoreType Hal::get_core_type(uint32_t core_type_index) const {
 
 template <typename T>
 inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const {
-    uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
+    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_addr<T>(addr_type);
 }
@@ -136,9 +149,15 @@ inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalMemAddrType
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalMemAddrType addr_type) const {
-    uint32_t index = static_cast<std::underlying_type<HalProgrammableCoreType>::type>(programmable_core_type);
+    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_size(addr_type);
+}
+
+inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_alignments_.size());
+    return this->mem_alignments_[index];
 }
 
 inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {

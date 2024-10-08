@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 /** @file */
 
@@ -48,6 +49,13 @@ class Buffer;
  * Return value: size_t
  */
 size_t GetNumAvailableDevices();
+
+/**
+ * Returns whether Tenstorrent devices are in a Galaxy cluster
+ *
+ * Return value: bool
+ */
+bool IsGalaxyCluster();
 
 /**
  * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
@@ -114,16 +122,34 @@ Program CreateProgram();
  *
  * Return value: Kernel ID (uintptr_t)
  *
- * | Argument     | Description                                                                                                                          | Type                                                     | Valid Range | Required |
- * |--------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
- * | program      | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
- * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME.                  | const std::string &                                      |             | Yes      |
- * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
- * | config       | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ * | Argument     | Description                                                                                                                                 | Type                                                     | Valid Range | Required |
+ * |--------------|---------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program      | The program to which this kernel will be added to                                                                                           | Program &                                                |             | Yes      |
+ * | file_name    | Path to kernel src. Assumed to be absolute/relative to CWD, but will fall back to relative path from TT_METAL_HOME/TT_METAL_KERNEL_PATH.    | const std::string &                                      |             | Yes      |
+ * | core_spec    | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on        | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config       | Config for data movement or compute kernel                                                                                                  | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
  */
 KernelHandle CreateKernel(
     Program &program,
     const std::string &file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+
+/**
+ * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument           | Description                                                                                                                          | Type                                                     | Valid Range | Required |
+ * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
+ * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                      |             | Yes      |
+ * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ */
+KernelHandle CreateKernelFromString(
+    Program &program,
+    const std::string &kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 

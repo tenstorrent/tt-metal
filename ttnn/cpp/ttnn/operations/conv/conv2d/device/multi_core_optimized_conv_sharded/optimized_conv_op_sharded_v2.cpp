@@ -51,7 +51,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
@@ -348,7 +347,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool fuse_relu,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     bool use_shallow_conv_variant,
     bool transpose_mcast,
     Tensor& output,
@@ -532,7 +530,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles, extra_padding_for_32B_alignment);
+            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -554,7 +552,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Error");
         TT_FATAL(bias.value().buffer() != nullptr, "Error");
-        auto bias_shape_without_padding = bias.value().get_legacy_shape().without_padding();
+        auto bias_shape_without_padding = bias.value().get_logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 
@@ -685,17 +683,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         bias_ntiles =
             bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
-
-    auto [conv_output_size_h, conv_output_size_w] = optimized_conv_op_utils::compute_opt_conv_output_face_shape(
-        conv_act_size_h,
-        conv_act_size_w,
-        filter_h,
-        filter_w,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        extra_padding_for_32B_alignment);
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t conv_output_size_h = output_shape[1];
+    uint32_t conv_output_size_w = output_shape[2];
 
     std::map<string, string> reader_defines;
 
@@ -1694,7 +1684,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     MathFidelity math_fidelity,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
-    uint32_t extra_padding_for_32B_alignment,
     DataType output_dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
     bool use_shallow_conv_variant,
@@ -1745,7 +1734,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         fuse_relu,
         parallelization_config,
         block_config,
-        extra_padding_for_32B_alignment,
         use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,
@@ -1769,7 +1757,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         fuse_relu,
         parallelization_config,
         block_config,
-        extra_padding_for_32B_alignment,
         use_shallow_conv_variant,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         output,

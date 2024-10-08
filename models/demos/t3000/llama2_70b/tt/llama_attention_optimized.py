@@ -7,6 +7,7 @@ import math
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
 
 
 class TtLlamaAttention_optimized:
@@ -238,7 +239,7 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        d = fused_query_key_value.get_legacy_shape()[-1]
+        d = fused_query_key_value.shape.with_tile_padding()[-1]
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
             ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
@@ -312,13 +313,10 @@ class TtLlamaAttention_optimized:
             )
 
         else:
-            # Have to reshape back since sdpa expects batch in dim 1
-            keys_reshaped = ttnn.reshape(keys, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-            values_reshaped = ttnn.reshape(values, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
             attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
                 query_layer,
-                keys_reshaped,
-                values_reshaped,
+                keys,
+                values,
                 # [start_pos for _ in range(self.max_batch_size)],
                 cur_pos_tensor=cache_idxs,
                 scale=self.scale,
@@ -338,23 +336,19 @@ class TtLlamaAttention_optimized:
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
 
-        attn_output = ttnn.all_gather(
-            attn_output,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
-
-        attn_output = ttnn.matmul(
+        _, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
             attn_output,
             self.wo,
+            dim=3,
+            all_gather_core_grid_offset=(0, 4),
+            num_links=1,
+            memory_config_ag=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-        )  # seqlen, 1, batch, hidden_size
+        )
 
-        return attn_output
+        return tt_matmul_out_tensor
 
     def prefill_forward(self, xs, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
@@ -381,7 +375,14 @@ class TtLlamaAttention_optimized:
             pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_qkv = None
+            pc_qkv = matmul_2d_config_from_tensor_shapes(
+                xs.shape,
+                self.qkv.shape,
+                grid=ttnn.CoreGrid(y=min(8, xs.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         fused_query_key_value = ttnn.linear(
             xs,
@@ -498,7 +499,14 @@ class TtLlamaAttention_optimized:
             pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_dense_out = None
+            pc_dense_out = matmul_2d_config_from_tensor_shapes(
+                attn_output.shape,
+                self.wo.shape,
+                grid=ttnn.CoreGrid(y=min(8, attn_output.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         attn_output = ttnn.linear(
             attn_output,

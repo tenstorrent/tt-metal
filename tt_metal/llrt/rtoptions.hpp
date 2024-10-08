@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -24,33 +25,25 @@ namespace llrt {
 
 static inline const char *get_core_type_name(CoreType ct) {
     switch (ct) {
-        case CoreType::ARC:
-            return "ARC";
-        case CoreType::DRAM:
-            return "DRAM";
-        case CoreType::ETH:
-            return "ethernet";
-        case CoreType::PCIE:
-            return "PCIE";
-        case CoreType::WORKER:
-            return "worker";
-        case CoreType::HARVESTED:
-            return "harvested";
-        case CoreType::ROUTER_ONLY:
-            return "router_only";
-        default:
-            return "UNKNOWN";
+        case CoreType::ARC: return "ARC";
+        case CoreType::DRAM: return "DRAM";
+        case CoreType::ETH: return "ethernet";
+        case CoreType::PCIE: return "PCIE";
+        case CoreType::WORKER: return "worker";
+        case CoreType::HARVESTED: return "harvested";
+        case CoreType::ROUTER_ONLY: return "router_only";
+        default: return "UNKNOWN";
     }
 }
 
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {
-    RISCV_NC  = 1,
+    RISCV_NC = 1,
     RISCV_TR0 = 2,
     RISCV_TR1 = 4,
     RISCV_TR2 = 8,
-    RISCV_BR  = 16,
-    RISCV_ER  = 32
+    RISCV_BR = 16,
+    RISCV_ER = 32
 };
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
@@ -87,10 +80,15 @@ struct TargetSelection {
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
+    bool one_file_per_risc = false;
 };
 
 class RunTimeOptions {
+    bool is_root_dir_env_var_set = false;
     std::string root_dir;
+
+    bool is_kernel_dir_env_var_set = false;
+    std::string kernel_dir;
 
     bool build_map_enabled = false;
 
@@ -100,7 +98,7 @@ class RunTimeOptions {
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
     bool watcher_noinline = false;
-    bool dprint_noc_transfer_data = false;
+    bool record_noc_transfer_data = false;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
@@ -115,6 +113,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
 
     bool skip_loading_fw = false;
+    bool skip_reset_cores_on_init = false;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;
@@ -129,7 +128,11 @@ class RunTimeOptions {
    public:
     RunTimeOptions();
 
+    inline bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
     const std::string &get_root_dir();
+
+    inline bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
+    const std::string &get_kernel_dir() const;
 
     inline bool get_build_map_enabled() { return build_map_enabled; }
 
@@ -154,6 +157,7 @@ class RunTimeOptions {
     inline bool watcher_pause_disabled() { return watcher_feature_disabled(watcher_pause_str); }
     inline bool watcher_ring_buffer_disabled() { return watcher_feature_disabled(watcher_ring_buffer_str); }
     inline bool watcher_stack_usage_disabled() { return watcher_feature_disabled(watcher_stack_usage_str); }
+    inline bool watcher_dispatch_disabled() { return watcher_feature_disabled(watcher_dispatch_str); }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -206,13 +210,19 @@ class RunTimeOptions {
     inline void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
         feature_targets[feature].file_name = file_name;
     }
+    inline bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) {
+        return feature_targets[feature].one_file_per_risc;
+    }
+    inline void set_feature_one_file_per_risc(RunTimeDebugFeatures feature, bool one_file_per_risc) {
+        feature_targets[feature].one_file_per_risc = one_file_per_risc;
+    }
     inline TargetSelection get_feature_targets(RunTimeDebugFeatures feature) { return feature_targets[feature]; }
     inline void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
         feature_targets[feature] = targets;
     }
 
-    inline bool get_dprint_noc_transfers() { return dprint_noc_transfer_data; }
-    inline void set_dprint_noc_transfers(bool val) { dprint_noc_transfer_data = val; }
+    inline bool get_record_noc_transfers() { return record_noc_transfer_data; }
+    inline void set_record_noc_transfers(bool val) { record_noc_transfer_data = val; }
 
     inline bool get_validate_kernel_binaries() { return validate_kernel_binaries; }
     inline void set_validate_kernel_binaries(bool val) { validate_kernel_binaries = val; }
@@ -253,6 +263,7 @@ class RunTimeOptions {
     inline void set_clear_l1(bool clear) { clear_l1 = clear; }
 
     inline bool get_skip_loading_fw() { return skip_loading_fw; }
+    inline bool get_skip_reset_cores_on_init() { return skip_reset_cores_on_init; }
 
     // Whether to compile with -g to include DWARF debug info in the binary.
     inline bool get_riscv_debug_info_enabled() { return riscv_debug_info_enabled; }
@@ -276,6 +287,7 @@ class RunTimeOptions {
     void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
@@ -288,10 +300,14 @@ class RunTimeOptions {
     const std::string watcher_pause_str = "PAUSE";
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
+    const std::string watcher_dispatch_str = "DISPATCH";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string &name) {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
     }
+
+    // Helper function to generate a message string when an environment variable has not been set
+    std::string generate_env_var_not_set_message(const std::string &env_var) const;
 };
 
 extern RunTimeOptions OptionsG;

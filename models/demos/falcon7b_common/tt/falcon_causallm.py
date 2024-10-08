@@ -24,7 +24,7 @@ def falcon_lm_head_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    seq_len = input_tensor_a.get_legacy_shape()[2]
+    seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 512:
         # TODO: Review if this path is used? If not, we can delete
         return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
@@ -148,7 +148,7 @@ class TtFalconCausalLM(TtFalconModelShared):
         )
 
         if llm_mode == "prefill":
-            if self.model_config["PREFILL_OPTIMIZED_MODE"] and hidden_states.get_legacy_shape()[-2] > 512:
+            if self.model_config["PREFILL_OPTIMIZED_MODE"] and hidden_states.shape.with_tile_padding()[-2] > 512:
                 lm_logits = falcon_lm_head_matmul_2d(
                     hidden_states,
                     self.lm_head_sliced_weights,

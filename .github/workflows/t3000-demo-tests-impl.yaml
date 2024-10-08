@@ -1,4 +1,4 @@
-name: "(internal) T3000 demo tests impl"
+name: "[internal] T3000 demo tests impl"
 
 on:
   workflow_call:
@@ -28,6 +28,11 @@ jobs:
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
+      - name: Ensure weka mount is active
+        run: |
+          sudo systemctl restart mnt-MLPerf.mount
+          sudo /etc/rc.local
+          ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

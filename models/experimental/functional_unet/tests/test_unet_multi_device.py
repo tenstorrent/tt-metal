@@ -17,6 +17,7 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
+    UNET_FULL_MODEL_PCC,
 )
 
 
@@ -51,4 +52,4 @@ def test_unet_multi_device_model(batch, groups, mesh_device, use_program_cache, 
     torch_output_tensor = model(torch_input)
     output_tensor = ttnn_model(ttnn_input)
 
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=UNET_FULL_MODEL_PCC)

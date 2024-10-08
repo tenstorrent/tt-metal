@@ -7,23 +7,14 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_adamw/moreh_adamw_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm/moreh_groupnorm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_groupnorm_backward/moreh_groupnorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_linear/moreh_linear_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_linear_backward/moreh_linear_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss/moreh_nll_loss_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sgd/moreh_sgd_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
@@ -54,32 +45,6 @@ void py_module_types(py::module& m_primary) {
 }
 
 void py_module(py::module& m_primary) {
-    // moreh_adamw
-    m_primary.def(
-        "moreh_adamw",
-        &moreh_adamw,
-        py::arg("param_in").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("exp_avg_in").noconvert(),
-        py::arg("exp_avg_sq_in").noconvert(),
-        py::arg("lr").noconvert() = 0.001f,
-        py::arg("beta1").noconvert() = 0.9f,
-        py::arg("beta2").noconvert() = 0.999f,
-        py::arg("eps").noconvert() = 1e-8f,
-        py::arg("weight_decay").noconvert() = 0.01f,
-        py::arg("step").noconvert(),
-        py::arg("amsgrad").noconvert() = false,
-        py::arg("max_exp_avg_sq_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_out").noconvert() = std::nullopt,
-        py::arg("exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("max_exp_avg_sq_out").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_adamw operation.
-        )doc");
-
     // moreh_clip_grad_norm
     m_primary.def(
         "moreh_clip_grad_norm_",
@@ -124,40 +89,6 @@ void py_module(py::module& m_primary) {
         "Performs a moreh_bmm_backward operation.
     )doc");
 
-    m_primary.def(
-        "moreh_linear",
-        &moreh_linear,
-        py::arg("input").noconvert(),
-        py::arg("weight").noconvert(),
-        py::kw_only(),
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_linear operation.
-    )doc");
-
-    m_primary.def(
-        "moreh_linear_backward",
-        &moreh_linear_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("weight").noconvert(),
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("weight_grad").noconvert() = std::nullopt,
-        py::arg("bias_grad").noconvert() = std::nullopt,
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("weight_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("bias_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_linear_backward operation.
-    )doc");
-
     // moreh_matmul
     m_primary.def(
         "moreh_matmul",
@@ -188,34 +119,6 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_matmul_backward operation.
     )doc");
-
-    // moreh_nll_loss
-    m_primary.def(
-        "moreh_nll_loss",
-        &moreh_nll_loss,
-        py::arg("input_tensor").noconvert(),
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("divisor_tensor").noconvert() = std::nullopt,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("reduction_mean").noconvert(),
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss operation. Returns an output tensor.");
-
-    // moreh_nll_loss_unreduced
-    m_primary.def(
-        "moreh_nll_loss_unreduced",
-        &moreh_nll_loss_unreduced,
-        py::arg("input_tensor").noconvert(),
-        py::arg("target_tensor").noconvert(),
-        py::arg("weight_tensor").noconvert() = std::nullopt,
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("ignore_index").noconvert(),
-        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a nll_loss_unreduced operation. Returns an output tensor.");
 
     m_primary.def(
         "moreh_layernorm",
@@ -357,70 +260,6 @@ void py_module(py::module& m_primary) {
         py::kw_only(),
         py::arg("dim").noconvert(),
         "Performs cumsum backward operation. Returns an input_grad tensor.");
-
-    m_primary.def(
-        "moreh_sgd",
-        &moreh_sgd,
-        py::arg("param_in").noconvert(),
-        py::arg("grad").noconvert(),
-        py::arg("momentum_buffer_in").noconvert() = std::nullopt,
-        py::arg("param_out").noconvert() = std::nullopt,
-        py::arg("momentum_buffer_out").noconvert() = std::nullopt,
-        py::arg("lr").noconvert(),
-        py::arg("momentum").noconvert(),
-        py::arg("dampening").noconvert(),
-        py::arg("weight_decay").noconvert(),
-        py::arg("nesterov").noconvert(),
-        py::arg("momentum_initialized").noconvert(),
-        py::arg("param_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("momentum_buffer_out_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a SGD operation.");
-
-    // moreh_groupnorm
-    m_primary.def(
-        "moreh_groupnorm",
-        &moreh_groupnorm,
-        py::arg("input").noconvert(),
-        py::arg("num_groups").noconvert(),
-        py::arg("eps").noconvert() = 1e-5f,
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, false, false},
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("mean").noconvert() = std::nullopt,
-        py::arg("rstd").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("mean_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("rstd_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Performs a moreh_groupnorm operation.
-    )doc");
-
-    // moreh_groupnorm_backward
-    m_primary.def(
-        "moreh_groupnorm_backward",
-        &moreh_groupnorm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mean").noconvert(),
-        py::arg("rstd").noconvert(),
-        py::arg("num_groups").noconvert(),
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true, true},
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("gamma_grad").noconvert() = std::nullopt,
-        py::arg("beta_grad").noconvert() = std::nullopt,
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("gamma_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("beta_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
-        Performs a moreh_groupnorm_backward operation.
-    )doc");
-
-
 }
 
 }  // namespace

@@ -195,7 +195,7 @@ KernelGroup::KernelGroup(
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
     this->launch_msg.kernel_config.max_cb_index = last_cb_index + 1;
-    this->launch_msg.go.run = RUN_MSG_GO;
+    this->go_msg.signal = RUN_MSG_GO;
 }
 
 CoreType KernelGroup::get_core_type() const {
@@ -333,7 +333,10 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
     }
 }
 
-void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size) {
+void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t size, uint64_t base_address) {
+    if (this->l1_regions.empty()) {
+        this->l1_regions.emplace_back(base_address, base_address);
+    }
     auto &last_region = this->l1_regions.back();
     if (address < last_region.second) {
         TT_THROW(
@@ -449,18 +452,19 @@ void Program::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void Program::allocate_circular_buffers() {
+void Program::allocate_circular_buffers(const Device *device) {
     ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
         return;
     }
 
+    uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
     for (std::shared_ptr<CircularBuffer> circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
         }
 
-        uint64_t computed_addr = L1_UNRESERVED_BASE;
+        uint64_t computed_addr = base_cb_address;
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             // Need the max available address across all cores circular buffer is placed on
             for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
@@ -480,7 +484,7 @@ void Program::allocate_circular_buffers() {
                         // `core_range` but also intersecting `cb_allocator.core_range`
                         continue;
                     }
-                    cb_allocator.mark_address(computed_addr, circular_buffer->size());
+                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), base_cb_address);
                 }
             }
         }
@@ -501,7 +505,10 @@ void Program::validate_circular_buffer_region(const Device *device) const {
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
-        uint64_t cb_region_end = cb_allocator.get_cb_region_end();
+        if (cb_allocator.l1_regions.empty()) {
+            continue;
+        }
+        uint64_t cb_region_end = cb_allocator.l1_regions.back().second; //cb_allocator.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
             TT_THROW(
                 "Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} "
@@ -591,6 +598,37 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
     }
 }
 
+void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
+    ZoneScoped;
+    for (const auto &logical_cr : crs) {
+        auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
+        for (const auto &circular_buffer : cbs_on_core) {
+            for (auto buffer_index : circular_buffer->buffer_indices()) {
+                auto tile = circular_buffer->tile(buffer_index);
+                if (tile.has_value()) {
+                    build_options.set_cb_tile_dims_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_num_faces(),
+                        tile->get_partial_face(),
+                        tile->get_face_shape()[0],
+                        tile->get_narrow_tile(),
+                        tile->get_tile_shape()[0],
+                        tile->get_tile_shape()[1]);
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        tile->get_tile_size(circular_buffer->data_format(buffer_index)));
+                } else {
+                    Tile t;
+                    build_options.set_cb_tile_size_all_cores(
+                        static_cast<CB>(buffer_index),
+                        t.get_tile_size(circular_buffer->data_format(buffer_index)));
+                }
+
+            }
+        }
+    }
+}
+
 void Program::invalidate_compile() {
     for (auto &[device_id, compile_needed] : compile_needed_) {
         compile_needed = true;
@@ -598,13 +636,22 @@ void Program::invalidate_compile() {
 }
 
 void Program::populate_dispatch_data(Device *device) {
-    static const map<RISCV, uint32_t> processor_to_local_mem_addr = {
-        {RISCV::BRISC, MEM_BRISC_INIT_LOCAL_L1_BASE},
-        {RISCV::NCRISC, MEM_NCRISC_INIT_LOCAL_L1_BASE},
-        {RISCV::TRISC0, MEM_TRISC0_INIT_LOCAL_L1_BASE},
-        {RISCV::TRISC1, MEM_TRISC1_INIT_LOCAL_L1_BASE},
-        {RISCV::TRISC2, MEM_TRISC2_INIT_LOCAL_L1_BASE},
-        {RISCV::ERISC, eth_l1_mem::address_map::FIRMWARE_BASE}};
+    static const uint32_t processor_to_firmware_base[] = {
+        MEM_BRISC_FIRMWARE_BASE,
+        MEM_NCRISC_FIRMWARE_BASE,
+        MEM_TRISC0_FIRMWARE_BASE,
+        MEM_TRISC1_FIRMWARE_BASE,
+        MEM_TRISC2_FIRMWARE_BASE,
+        eth_l1_mem::address_map::FIRMWARE_BASE
+    };
+    static const uint32_t processor_to_firmware_size[] = {
+        MEM_BRISC_FIRMWARE_SIZE,
+        MEM_NCRISC_INIT_IRAM_L1_SIZE,
+        MEM_TRISC0_FIRMWARE_SIZE,
+        MEM_TRISC1_FIRMWARE_SIZE,
+        MEM_TRISC2_FIRMWARE_SIZE,
+        eth_l1_mem::address_map::FIRMWARE_SIZE
+    };
 
     auto extract_dst_noc_unicast_info =
         [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
@@ -680,15 +727,25 @@ void Program::populate_dispatch_data(Device *device) {
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory &kernel_bin = binaries[sub_kernel_index];
+
+                // Spans are now packed into one
+                // TODO: code below can be simplified w/ a single span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
+                TT_ASSERT(kernel_bin.num_spans() == 1);
+
+                uint32_t max_kernel_bin_size = processor_to_firmware_size[sub_kernels[sub_kernel_index]];
+
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
+
+                    max_kernel_bin_size -= dst - processor_to_firmware_base[sub_kernels[sub_kernel_index]];
+
                     uint64_t relo_addr =
-                        tt::llrt::relocate_dev_addr(dst, processor_to_local_mem_addr.at(sub_kernels[sub_kernel_index]));
+                        tt::llrt::relocate_dev_addr(dst);
 
                     dst_base_addrs[transfer_info_index] = (uint32_t)relo_addr;
                     page_offsets[transfer_info_index] =
@@ -701,7 +758,14 @@ void Program::populate_dispatch_data(Device *device) {
                         align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
+
+                uint32_t bin_size = kernel_bin.size() * sizeof(uint32_t);
+                // TODO: remove this check when the ring buffer is in place (checked there)
+                TT_FATAL(bin_size <= max_kernel_bin_size,
+                    "Kernel binary size, {}, overflowed kernel binary storage size, {}",
+                     bin_size, max_kernel_bin_size);
             }
+
             kernel_bins_transfer_info kb_transfer_info = {
                 .dst_base_addrs = dst_base_addrs, .page_offsets = page_offsets, .lengths = lengths, .riscvs = riscvs};
             kernel_transfer_info.insert({kernel_id, kb_transfer_info});
@@ -780,6 +844,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     this->get_program_config(programmable_core_type_index).rta_offset = base_offset;
 
+    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
         for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
             max_rtas[dispatch_class] = 0;
@@ -813,7 +878,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         }
 
         kg.total_rta_size = offset;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
 
@@ -839,7 +904,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
         this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
         offset += size;
-        offset = align(offset, L1_ALIGNMENT);
+        offset = align(offset, l1_alignment);
     }
     total_crta_size = offset;
 
@@ -882,7 +947,7 @@ uint32_t Program::finalize_sems(uint32_t programmable_core_type_index, uint32_t 
         }
     }
 
-    uint32_t sem_size = (max_id + 1) * L1_ALIGNMENT;
+    uint32_t sem_size = (max_id + 1) * hal.get_alignment(HalMemType::L1);
 
     this->program_configs_[programmable_core_type_index].sem_offset = base_offset;
     this->program_configs_[programmable_core_type_index].sem_size = sem_size;
@@ -945,11 +1010,11 @@ void Program::finalize() {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t offset = 0;
         offset = finalize_rt_args(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_sems(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         offset = finalize_cbs(index, offset);
-        TT_ASSERT(offset == align(offset, L1_ALIGNMENT));
+        TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
         this->get_program_config_size(index) = offset;
     }
 
@@ -1018,6 +1083,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
                     JitBuildOptions build_options(device->build_env());
                     kernel->set_build_options(build_options);
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
+                    this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
@@ -1114,6 +1180,18 @@ uint32_t Program::get_cb_size(Device *device, CoreCoord logical_core, CoreType c
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
+}
+
+// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
+bool Program::runs_on_noc_unicast_only_cores() {
+    return (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+            this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).size());
+}
+
+// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
+bool Program::runs_on_noc_multicast_only_cores() {
+    return (hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
+            this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)).size());
 }
 
 Program::~Program() {}

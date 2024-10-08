@@ -183,7 +183,9 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_GO: break;
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_REMOTE_WRITE: break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_SET_UNICAST_ONLY_CORES: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -194,7 +196,7 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
 
 // Returns the number of bytes taken up by this prefetch command (including header).
 uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream &iq_file) {
-    uint32_t stride = dispatch_constants::ISSUE_Q_ALIGNMENT;  // Default stride matches alignment.
+    uint32_t stride = hal.get_alignment(HalMemType::HOST);  // Default stride matches alignment.
     CQPrefetchCmdId cmd_id = cmd->base.cmd_id;
 
     if (cmd_id < CQ_PREFETCH_CMD_MAX_COUNT) {
@@ -248,13 +250,6 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                     val(cmd->debug.size),
                     val(cmd->debug.stride));
                 stride = cmd->debug.stride;
-                break;
-            case CQ_PREFETCH_CMD_WAIT_FOR_EVENT:
-                iq_file << fmt::format(
-                    " (sync_event={:#08x}, sync_event_addr={:#08x})",
-                    val(cmd->event_wait.sync_event),
-                    val(cmd->event_wait.sync_event_addr));
-                stride = CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
                 break;
             // These commands don't have any additional data to dump.
             case CQ_PREFETCH_CMD_ILLEGAL: break;
@@ -384,7 +379,7 @@ void dump_issue_queue_entries(
     uint32_t issue_write_ptr =
         get_cq_issue_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
     uint32_t issue_q_bytes = cq_interface.issue_fifo_size << 4;
-    uint32_t issue_q_base_addr = cq_interface.offset + CQ_START;
+    uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     vector<uint8_t> read_data;
@@ -418,21 +413,21 @@ void dump_issue_queue_entries(
         CQPrefetchCmd *cmd = (CQPrefetchCmd *)(read_data.data() + page_offset);
         if (cmd->base.cmd_id < CQ_PREFETCH_CMD_MAX_COUNT && cmd->base.cmd_id != CQ_PREFETCH_CMD_ILLEGAL) {
             if (last_span_invalid) {
-                if (curr_addr == last_span_start + dispatch_constants::ISSUE_Q_ALIGNMENT) {
+                if (curr_addr == last_span_start + hal.get_alignment(HalMemType::HOST)) {
                     iq_file << fmt::format("{:#010x}: No valid prefetch command detected.", last_span_start);
                 } else {
                     iq_file << fmt::format(
                         "{:#010x}-{:#010x}: No valid prefetch commands detected.",
                         last_span_start,
-                        curr_addr - dispatch_constants::ISSUE_Q_ALIGNMENT);
+                        curr_addr - hal.get_alignment(HalMemType::HOST));
                 }
                 last_span_invalid = false;
                 if (last_span_start <= (issue_write_ptr) &&
-                    curr_addr - dispatch_constants::ISSUE_Q_ALIGNMENT >= (issue_write_ptr)) {
+                    curr_addr - hal.get_alignment(HalMemType::HOST) >= (issue_write_ptr)) {
                     iq_file << fmt::format(" << write_ptr (0x{:08x})", issue_write_ptr);
                 }
                 if (last_span_start <= (issue_read_ptr) &&
-                    curr_addr - dispatch_constants::ISSUE_Q_ALIGNMENT >= (issue_read_ptr)) {
+                    curr_addr - hal.get_alignment(HalMemType::HOST) >= (issue_read_ptr)) {
                     iq_file << fmt::format(" << read_ptr (0x{:08x})", issue_read_ptr);
                 }
                 iq_file << std::endl;
@@ -442,8 +437,8 @@ void dump_issue_queue_entries(
 
             // Check for a bad stride (happen to have a valid cmd_id, overwritten values, etc.)
             if (cmd_stride + offset >= issue_q_bytes || cmd_stride == 0 ||
-                cmd_stride % dispatch_constants::ISSUE_Q_ALIGNMENT != 0) {
-                cmd_stride = dispatch_constants::ISSUE_Q_ALIGNMENT;
+                cmd_stride % hal.get_alignment(HalMemType::HOST) != 0) {
+                cmd_stride = hal.get_alignment(HalMemType::HOST);
                 iq_file << " (bad stride)";
             }
 
@@ -456,7 +451,7 @@ void dump_issue_queue_entries(
             // If it's a RELAY_INLINE command, then the data inside is dispatch commands, show them.
             if ((cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE ||
                  cmd->base.cmd_id == CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH) &&
-                cmd_stride > dispatch_constants::ISSUE_Q_ALIGNMENT) {
+                cmd_stride > hal.get_alignment(HalMemType::HOST)) {
                 uint32_t dispatch_offset = offset + sizeof(CQPrefetchCmd);
                 uint32_t dispatch_curr_addr = issue_q_base_addr + dispatch_offset;
                 while (dispatch_offset < offset + cmd_stride) {
@@ -491,7 +486,7 @@ void dump_issue_queue_entries(
             if (!last_span_invalid)
                 last_span_start = curr_addr;
             last_span_invalid = true;
-            offset += dispatch_constants::ISSUE_Q_ALIGNMENT;
+            offset += hal.get_alignment(HalMemType::HOST);
         }
         print_progress_bar((float)offset / issue_q_bytes + 0.005);
     }
@@ -540,7 +535,7 @@ void dump_command_queue_raw_data(
             get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
             << 4;
         bytes_to_read = cq_interface.issue_fifo_size << 4;
-        base_addr = cq_interface.offset + CQ_START;
+        base_addr = cq_interface.offset + cq_interface.cq_start;
         queue_type_name = "Issue";
     } else {
         TT_THROW("Unrecognized CQ type: {}", queue_type);

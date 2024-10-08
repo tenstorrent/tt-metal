@@ -16,13 +16,12 @@ namespace ttnn::operations::moreh::moreh_mean {
 MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::MorehMeanNCFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
 
     auto input = tensor_args.input;
-    auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
     auto compute_kernel_config =
@@ -99,10 +98,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     std::vector<uint32_t> writer_compile_time_args;
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -115,6 +112,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -124,10 +122,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         },
         ComputeKernelConfig{
             .math_fidelity = math_fidelity,
-            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
-            // .preserve_fp32_precision = fp32_dest_acc_en,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
 
@@ -165,10 +161,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(),
-             units_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(output))});
+            {output.buffer()->address(), units_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
 
         tile_offset += units_per_core;
     }
@@ -186,20 +179,20 @@ void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto src_buffer_address = tensor_args.input.buffer()->address();
+    auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
+            runtime_args[0] = src_buffer_address;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            runtime_args[0] = dst_buffer_address;
         }
     }
 }

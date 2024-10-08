@@ -79,7 +79,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, L1_ALIGNMENT);
+        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type) {
@@ -95,7 +95,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     }
 
     bool fits_in_cb =
-        (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1
+        (output_tensor.device()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <= (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1
                                                         ? output_tensor.buffer()->address()
                                                         : output_tensor.device()->l1_size_per_core());
 

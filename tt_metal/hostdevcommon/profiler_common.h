@@ -41,6 +41,7 @@ namespace kernel_profiler{
         NOC_X,
         NOC_Y,
         FLAT_ID,
+        CORE_COUNT_PER_DRAM,
         DROPPED_ZONES,
         PROFILER_DONE,
     };

@@ -9,7 +9,7 @@ import pytest
 from models.utility_functions import comp_allclose_and_pcc, is_wormhole_b0
 from loguru import logger
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
@@ -74,7 +74,7 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
         torch_target, torch_weight, output_grad, torch_input.grad, device
     )
 
-    tt_input_grad = ttnn.moreh_nll_loss_unreduced_backward(
+    tt_input_grad = ttnn.operations.moreh.nll_loss_unreduced_backward(
         tt_target,
         tt_output_grad,
         weight_tensor=tt_weight,
@@ -91,6 +91,96 @@ def run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, devi
     logger.debug(f"Output pcc={out}")
 
     assert passing
+
+
+def run_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, device, compute_kernel_options=None):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+
+    (torch_input, torch_target, torch_weight, torch_output) = get_torch_tensors(shape)
+
+    if none_weight:
+        torch_weight = None
+
+    nll_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=ignore_index, reduction="none")
+    torch_loss = nll_loss(torch_input, torch_target)
+
+    (tt_input, tt_target, tt_weight, tt_output) = get_tt_tensors(
+        torch_input, torch_target, torch_weight, torch_output, device
+    )
+
+    reduction_mode = "none"
+
+    tt_loss = ttnn.operations.moreh.nll_loss(
+        tt_input,
+        tt_target,
+        reduction_mode,
+        weight_tensor=tt_weight,
+        divisor_tensor=None,
+        output_tensor=tt_output,
+        ignore_index=ignore_index,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    tt_loss_to_cpu = to_cpu(tt_loss, torch_target.shape)
+
+    rtol = atol = 0.05
+    passing, out = comp_allclose_and_pcc(torch_loss, tt_loss_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    logger.debug(f"Out passing (param)={passing}")
+    logger.debug(f"Output pcc={out}")
+
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (5, 10),
+        (500, 100),
+        (4, 3, 2, 4, 50, 70),
+    ],
+)
+@pytest.mark.parametrize("ignore_index", [1])
+@pytest.mark.parametrize("none_weight", [True, False])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, compute_kernel_options, device, use_program_cache):
+    torch.manual_seed(0)
+
+    run_moreh_nll_loss_unreduced(
+        shape, ignore_index, none_weight, device, compute_kernel_options=compute_kernel_options
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (5, 10),
+        (5, 10, 10),
+        (5, 10, 10, 20),
+    ],
+)
+def test_moreh_nll_loss_unreduced_callback(shape, device, use_program_cache):
+    torch.manual_seed(0)
+
+    ignore_index = 1
+    num_program_cache_entries_list = []
+
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
+
+        run_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )
 
 
 @pytest.mark.parametrize(
@@ -128,7 +218,21 @@ def test_moreh_nll_loss_unreduced_backward(
 def test_moreh_nll_loss_unreduced_backward_test_callback(shape, none_weight, device, ignore_index, use_program_cache):
     torch.manual_seed(0)
 
-    for _ in range(2):
+    num_program_cache_entries_list = []
+    for i in range(4):
+        if i < 2:
+            none_weight = True
+        else:
+            none_weight = False
+
         run_moreh_nll_loss_unreduced_backward(shape, ignore_index, none_weight, device)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_npu(torch_dummy, device)
+
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert (
+        num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+        and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
+    )

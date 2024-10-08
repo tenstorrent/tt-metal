@@ -61,9 +61,9 @@ OPS_CSV_HEADER = [
     "DEVICE COMPUTE CB RESERVE BACK [ns]",
     "INPUTS",
     "OUTPUTS",
-    "COMPUTE KERNEL PATH",
+    "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
-    "DATA MOVEMENT KERNEL PATH",
+    "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
@@ -177,6 +177,18 @@ def get_device_op_data(ops):
     return deviceOps
 
 
+def device_log_ops_compare(op):
+    if (
+        "timeseries" in op
+        and len(op["timeseries"]) > 0
+        and len(op["timeseries"][0]) > 0
+        and "run_host_id" in op["timeseries"][0][0]
+    ):
+        return int(op["timeseries"][0][0]["run_host_id"])
+    else:
+        return 0
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(ops, deviceLogFolder):
     deviceOps = get_device_op_data(ops)
@@ -190,6 +202,7 @@ def append_device_data(ops, deviceLogFolder):
         for device in deviceOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+            deviceOpsTime.sort(key=device_log_ops_compare)
             if len(deviceOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
@@ -209,7 +222,7 @@ def append_device_data(ops, deviceLogFolder):
                     ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}. Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
                 else:
                     assert (
-                        True
+                        False
                     ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
                 cores = set()
@@ -477,17 +490,17 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
                 if "kernel_info" in opData.keys():
-                    rowDict["COMPUTE KERNEL PATH"] = []
+                    rowDict["COMPUTE KERNEL SOURCE"] = []
                     rowDict["COMPUTE KERNEL HASH"] = []
-                    rowDict["DATA MOVEMENT KERNEL PATH"] = []
+                    rowDict["DATA MOVEMENT KERNEL SOURCE"] = []
                     rowDict["DATA MOVEMENT KERNEL HASH"] = []
                     for computeKernel in opData["kernel_info"]["compute_kernels"]:
                         rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
-                        rowDict["COMPUTE KERNEL PATH"].append(computeKernel["path"])
+                        rowDict["COMPUTE KERNEL SOURCE"].append(computeKernel["source"])
                         rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
 
                     for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
-                        rowDict["DATA MOVEMENT KERNEL PATH"].append(dmKernel["path"])
+                        rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
                         rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
 
                 if "core_usage" in opData.keys():

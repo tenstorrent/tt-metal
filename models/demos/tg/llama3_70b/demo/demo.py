@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 import json
 import torch
@@ -15,9 +15,9 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from transformers.generation.utils import top_k_top_p_filtering
 from models.demos.tg.llama3_70b.tt.llama_generation_galaxy import TtLlamaModelForGeneration
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     string_similarity_score,
     load_llama_state_dict,
@@ -74,6 +74,54 @@ def construct_arg(**kwargs):
     tt_args = TTArgs(**{k: v for k, v in kwargs.items() if hasattr(TTArgs, k)})
     data_args = DataArgs(**{k: v for k, v in kwargs.items() if hasattr(DataArgs, k)})
     return DemoArgs(model=model_args, tt=tt_args, data=data_args)
+
+
+def nearest_power_of_2(n):
+    return 2 ** (n - 1).bit_length()
+
+
+def get_prompts_for_compilation(tokenized, prompts):
+    # tokenized shape (batch_size, seq_len)
+    tokenized_len = [len(t) for t in tokenized]
+    # pad tokenized_len to be power of 2 and 32 at least
+    padded_tokenized_len = [max(32, nearest_power_of_2(l)) for l in tokenized_len]
+    # Get indexes of first occurences of each unique length
+    unique_lengths = list(set(padded_tokenized_len))
+    # Get indexes of unique_lenghts in tokenized_len
+    indexes = [padded_tokenized_len.index(l) for l in unique_lengths]
+    # Get tokenized and prompts for compilation
+    return [tokenized[i] for i in indexes], [prompts[i] for i in indexes]
+
+
+def demo_warmup(args):
+    # Skip if model_implementation is not tt
+    if args.model.implementation != "tt":
+        return
+    # Copy and modify arguments
+    model_args = replace(args.model, num_layers=1)
+    tt_args = replace(args.tt)
+    data_args = replace(args.data, max_output_tokens=2)
+
+    generator = build_generator(model_args, tt_args)
+    # Load the model and tokenizer
+    model, tokenizer = generator.model, generator.tokenizer
+
+    tokenized, prompts = load_prompts_file(model_args, data_args, tokenizer)
+    # Get all prompts whose padded tokens are of different multiples of 32
+    target_tokenized, target_prompts = get_prompts_for_compilation(tokenized, prompts)
+
+    # Run decode
+    with torch.no_grad():
+        run_decode(
+            model_args,
+            tt_args,
+            data_args,
+            model=model,
+            tokenizer=tokenizer,
+            prompt_tokens=target_tokenized,
+            prompts=target_prompts,
+            compilation=True,
+        )
 
 
 def run_demo(args):
@@ -218,6 +266,7 @@ def run_decode(
     prompts,
     return_logits=False,
     return_full_logits=False,
+    compilation=False,
 ):
     """
     return_logits: return the logits for the last token
@@ -243,6 +292,7 @@ def run_decode(
         )
 
     # prepare inputs
+    total_time_to_first_token_start = time()
     tokens, input_text_mask, finished_mask = initialize_inputs(tokenizer, prompt_tokens, bsz, total_len)
     prev_pos = 0
 
@@ -255,6 +305,9 @@ def run_decode(
         input_tokens = tokens[:, prev_pos:cur_pos]
         logits = model.forward(input_tokens, prev_pos)
 
+        if cur_pos == min_prompt_len:
+            total_time_to_first_token_end = time()
+
         next_logits = logits[:, -1, :]  # batch, vocab of last token
         next_token = sampling_func(next_logits)
 
@@ -262,20 +315,35 @@ def run_decode(
             tokenizer, tokens, input_text_mask, finished_mask, prompt_lens, cur_pos, next_token
         )
         latencies.append(time() - start)
-
+        # If compilation run for 2 iterations (prefill+decode)
+        if compilation and min_prompt_len + 2 == cur_pos:
+            break
+        elif compilation:
+            continue
         if all(eos_reached):
             break
 
         # Decode the entire sequence generated so far and log it
-        for user_id in range(max(0, bsz - 3), bsz):
-            text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
+        for user_id in range(max(0, bsz - 5), bsz):
+            eos_found = False
+            for eos_idx, tk in enumerate(tokens[user_id, : cur_pos + 1].tolist()):
+                if tk == tokenizer.eos_id:
+                    text = tokenizer.decode(tokens[user_id, :eos_idx].tolist())
+                    eos_found = True
+            if not eos_found:
+                text = tokenizer.decode(tokens[user_id, : cur_pos + 1].tolist())
             if data_args.print_output_as_generated:
                 logger.info(f"Loop {cur_pos} user {user_id}: {text}\n")
 
         if return_full_logits:
             full_logits.append(logits.clone().detach())
+    # Just run forward pass if compilation
+    if compilation:
+        logger.info("Compilation of single layer complete")
+        return
+    total_time_to_first_token = total_time_to_first_token_end - total_time_to_first_token_start
 
-    latency_printout(latencies, model_args, total_len - min_prompt_len)
+    latency_printout(latencies, model_args, total_len - min_prompt_len, total_time_to_first_token, len(prompt_lens))
     output = get_all_text(tokenizer, tokens, prompt_tokens, output_tokens)
 
     if return_logits:
@@ -286,7 +354,7 @@ def run_decode(
     return output
 
 
-def latency_printout(latencies, model_args, generated_len):
+def latency_printout(latencies, model_args, generated_len, total_time_to_first_token, num_users):
     latencies = [
         latency for token_pos, latency in enumerate(latencies) if token_pos % 32 != 0
     ]  # We recompute program_cache for multiples of 32
@@ -307,7 +375,9 @@ def latency_printout(latencies, model_args, generated_len):
         overall_tokens_per_second / model_args.max_batch_size if model_args.max_batch_size != 0 else 0
     )
     throughput = 1000 * overall_time / overall_tokens if overall_tokens != 0 else 0
+    avg_time_to_first_token = total_time_to_first_token / num_users
 
+    logger.info(f"Average time to first token: {avg_time_to_first_token:.1f} s")
     logger.info(f"Overall throughput: {throughput:.1f} ms @ {overall_tokens_per_second:.1f} tokens/s")
     logger.info(f"Tokens per second per user: {tokens_per_second_per_user:.1f} tokens/s/u")
     logger.info(f"User latency: {1000 * mean_latency:.1f} ms @ {tokens_per_second:.1f} tokens/s")
@@ -364,7 +434,7 @@ def top_pk_logits_efficient(logits, p=0.9, k=10, temperature=1.0, return_probs=F
     ),
     ids=("chat_completion", "text_completion"),
 )
-@pytest.mark.parametrize("decode_only", (True,), ids=("decode_only",))
+@pytest.mark.parametrize("decode_only", (True, False), ids=("decode_only", "prefill_decode"))
 @pytest.mark.parametrize("num_layers", (1, 2, 10, 80), ids=("1L", "2L", "10L", "80L"))
 @pytest.mark.parametrize(
     "implementation, skip_model_load, n_devices",
@@ -432,13 +502,13 @@ def test_LlamaModel_demo(
     ## Get model config
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
+        max_batch_size=max_batch_size,
+        max_context_len=max_context_len,
     )
 
     check_mesh_device(mesh_device, model_config)
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        device.enable_async(True)
+    mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,
@@ -463,4 +533,7 @@ def test_LlamaModel_demo(
         decode_only=decode_only,
         ground_truth=ground_truth,
     )
+    # Warmup the model
+    demo_warmup(args)
+    # Run the demo
     run_demo(args)

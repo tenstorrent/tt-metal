@@ -16,13 +16,12 @@ namespace ttnn::operations::moreh::moreh_mean {
 MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::MorehMeanWFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
 
     auto input = tensor_args.input;
-    auto output = output_tensor;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
     const auto shape = input.get_shape();
@@ -82,8 +81,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto bfloat_scaler_value = *(new class bfloat16(scaler));
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
@@ -127,6 +125,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         1,                       // NC
         origin_W,
     };
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,
@@ -138,9 +137,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
         ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
-            // .preserve_fp32_precision = fp32_dest_acc_en,
-            .preserve_fp32_precision = false,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
 
@@ -190,20 +187,20 @@ void MorehMeanOperation::MorehMeanWFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto src_buffer_address = tensor_args.input.buffer()->address();
+    auto dst_buffer_address = tensor_return_value.buffer()->address();
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
+            runtime_args[0] = src_buffer_address;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            runtime_args[0] = dst_buffer_address;
         }
     }
 }

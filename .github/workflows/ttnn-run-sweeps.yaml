@@ -11,33 +11,97 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
-          - line_all_gather
-          - logical_and_
-          - eltwise.unary.relu.relu_interleaved
-          - eltwise.unary.gelu.gelu_interleaved
-          - eltwise.unary.cos.cos_interleaved
-          - eltwise.unary.sin.sin_interleaved
-          - eltwise.unary.clamp.clamp_interleaved
-          - eltwise.unary.clip.clip_interleaved
-          - eltwise.unary.cbrt.cbrt_interleaved
-          - eltwise.unary.rsub.rsub_interleaved
-          - eltwise.unary.frac.frac_interleaved
-          - eltwise.unary.ceil.ceil_interleaved
-          - eltwise.unary.trunc.trunc_interleaved
-          - eltwise.unary.floor.floor_interleaved
-          - eltwise.unary.exp.exp_interleaved
-          - eltwise.unary.exp2.exp2_interleaved
-          - eltwise.unary.expm1.expm1_interleaved
-          - eltwise.unary.tanh.tanh_interleaved
-          - eltwise.binary.subtract.subtract_interleaved
-          - eltwise.binary.multiply.multiply_interleaved
-          - eltwise.binary.div.div_interleaved
-          - eltwise.binary.div_no_nan.div_no_nan_interleaved
-          - eltwise.binary.logical_or.logical_or_interleaved
-          - eltwise.composite.binary.addalpha.addalpha_interleaved
-          - eltwise.composite.binary.subalpha.subalpha_interleaved
-          - eltwise.ternary.addcmul.addcmul_interleaved
-          - eltwise.ternary.addcdiv.addcdiv_interleaved
+          - ccl.line_all_gather
+          - ccl.all_gather_n300
+          - eltwise.unary.relu.relu
+          - eltwise.unary.gelu.gelu
+          - eltwise.unary.cos.cos
+          - eltwise.unary.sin.sin
+          - eltwise.unary.clamp.clamp
+          - eltwise.unary.clip.clip
+          - eltwise.unary.cbrt.cbrt
+          - eltwise.unary.rsub.rsub
+          - eltwise.unary.rdiv.rdiv
+          - eltwise.unary.frac.frac
+          - eltwise.unary.ceil.ceil
+          - eltwise.unary.trunc.trunc
+          - eltwise.unary.floor.floor
+          - eltwise.unary.clone.clone
+          - eltwise.unary.elu.elu
+          - eltwise.unary.erfc.erfc
+          - eltwise.unary.exp.exp
+          - eltwise.unary.exp2.exp2
+          - eltwise.unary.expm1.expm1
+          - eltwise.unary.tanh.tanh
+          - eltwise.unary.sign.sign
+          - eltwise.unary.rad2deg.rad2deg
+          - eltwise.unary.deg2rad.deg2rad
+          - eltwise.unary.relu6.relu6
+          - eltwise.unary.log.log
+          - eltwise.unary.log1p.log1p
+          - eltwise.unary.log2.log2
+          - eltwise.unary.log10.log10
+          - eltwise.unary.bitwise.bitwise_and
+          - eltwise.unary.bitwise.bitwise_left_shift
+          - eltwise.unary.bitwise.bitwise_not
+          - eltwise.unary.bitwise.bitwise_or
+          - eltwise.unary.bitwise.bitwise_right_shift
+          - eltwise.unary.bitwise.bitwise_xor
+          - eltwise.unary.log_sigmoid.log_sigmoid
+          - eltwise.unary.logical_not.logical_not_
+          - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_output
+          - eltwise.unary.erf.erf
+          - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.i0.i0
+          - eltwise.unary.silu.silu
+          - eltwise.unary.glu.glu
+          - eltwise.unary.lgamma.lgamma
+          - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate
+          - eltwise.unary.tril.tril
+          - eltwise.unary.triu.triu
+          - eltwise.unary.normalize_hw.normalize_hw
+          - eltwise.unary.normalize_global.normalize_global
+          - eltwise.unary.heaviside.heaviside
+          - eltwise.unary.hardtanh.hardtanh
+          - eltwise.unary.hardswish.hardswish
+          - eltwise.unary.hardsigmoid.hardsigmoid
+          - eltwise.unary.hardshrink.hardshrink
+          - eltwise.unary.softmax.softmax
+          - eltwise.unary.identity.identity
+          - eltwise.unary.neg.neg
+          - eltwise.unary.sinh.sinh
+          - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_max.relu_max
+          - eltwise.binary.subtract.subtract
+          - eltwise.binary.multiply.multiply
+          - eltwise.binary.div.div
+          - eltwise.binary.div_no_nan.div_no_nan
+          - eltwise.binary.logical_or.logical_or_
+          - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_xor.logical_xor_
+          - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_and.logical_and_
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_output
+          - eltwise.binary.polyval.polyval
+          - eltwise.binary.remainder.remainder
+          - eltwise.binary.bcast.bcast_h_sharded
+          - eltwise.binary.bcast.bcast
+          - eltwise.binary.fmod.fmod
+          - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.hypot.hypot
+          - eltwise.composite.binary.addalpha.addalpha
+          - eltwise.composite.binary.subalpha.subalpha
+          - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.maximum.maximum
+          - eltwise.ternary.addcmul.addcmul
+          - eltwise.ternary.addcdiv.addcdiv
+          - eltwise.ternary.mac.mac
+          - eltwise.ternary.where.where
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -52,10 +116,20 @@ on:
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
+          - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
-          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute
           - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.transpose.transpose_pytorch2
+          - data_movement.transpose.transpose_interleaved
+          - data_movement.transpose.t_pytorch2
+          - data_movement.copy.copy
+          - data_movement.expand.expand_pytorch2
+          - data_movement.fill.fill_pytorch2
+          - data_movement.index_select.index_select_pytorch2
+          - data_movement.split.split_with_sizes_pytorch2
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

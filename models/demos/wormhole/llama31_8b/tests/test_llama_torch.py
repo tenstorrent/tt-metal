@@ -10,6 +10,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Trans
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 
+@torch.no_grad()
 def test_llama_torch_inference():
     iterations = 20
 
@@ -65,5 +66,4 @@ def test_llama_torch_inference():
 
             all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of ref outputs
 
-        # TODO print all 32 users
         print("[User 0] Ref generation: ", "".join(tokenizer.decode(all_outputs_ref)))

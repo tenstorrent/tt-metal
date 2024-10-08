@@ -83,16 +83,11 @@ void kernel_main() {
         .page_size = 1024 * element_size,
     };
 
-    const InterleavedAddrGen<index0_is_dram> index0 = {
-        .bank_base_address = index0_addr, .page_size = INDEX_TILE_SIZE};
-    const InterleavedAddrGen<index1_is_dram> index1 = {
-        .bank_base_address = index1_addr, .page_size = INDEX_TILE_SIZE};
-    const InterleavedAddrGen<index2_is_dram> index2 = {
-        .bank_base_address = index2_addr, .page_size = INDEX_TILE_SIZE};
-    const InterleavedAddrGen<index3_is_dram> index3 = {
-        .bank_base_address = index3_addr, .page_size = INDEX_TILE_SIZE};
-    const InterleavedAddrGen<index4_is_dram> index4 = {
-        .bank_base_address = index4_addr, .page_size = INDEX_TILE_SIZE};
+    const InterleavedAddrGen<index0_is_dram> index0 = {.bank_base_address = index0_addr, .page_size = INDEX_TILE_SIZE};
+    const InterleavedAddrGen<index1_is_dram> index1 = {.bank_base_address = index1_addr, .page_size = INDEX_TILE_SIZE};
+    const InterleavedAddrGen<index2_is_dram> index2 = {.bank_base_address = index2_addr, .page_size = INDEX_TILE_SIZE};
+    const InterleavedAddrGen<index3_is_dram> index3 = {.bank_base_address = index3_addr, .page_size = INDEX_TILE_SIZE};
+    const InterleavedAddrGen<index4_is_dram> index4 = {.bank_base_address = index4_addr, .page_size = INDEX_TILE_SIZE};
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,
@@ -136,13 +131,12 @@ void kernel_main() {
 
     uint32_t w_index;
 
-    #define NOC_MINIMUM_READ_SIZE (32)
-    #define INDEX_SIZE (4)
+#define NOC_MINIMUM_READ_SIZE (32)
+#define INDEX_SIZE (4)
 
     uint32_t end_id = start_id + num_sticks;
     uint32_t index_size_w = output_size_w;
     for (uint32_t i = start_id; i < end_id; ++i) {
-
         uint32_t index_w_index = i % num_alignment_width;
         uint32_t index_off = index_w_index * num_elements_per_alignment;
         uint32_t index_start = index_off;
@@ -150,7 +144,6 @@ void kernel_main() {
 
         uint32_t j = 0;
         for (uint32_t index_index = index_start; index_index < index_end; index_index++, j++) {
-
             // compute src noc id
             uint32_t output_stick_h = (i / num_alignment_width);
             uint32_t output_stick_w = index_index / FACE_WIDTH;
@@ -174,7 +167,7 @@ void kernel_main() {
                         index_noc_id = index_index / TILE_HEIGHT;
                     }
 
-                    #ifdef TILIZE_INDEX
+#ifdef TILIZE_INDEX
                     if (dim == 0) {
                         index_noc_addr = get_noc_addr(index_noc_id, index0);
                     }
@@ -197,7 +190,8 @@ void kernel_main() {
                         volatile tt_l1_ptr int32_t* index_l1_ptr =
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                         uint32_t index_dim_offset = index_index % FACE_WIDTH;
-                        if ((index_index % TILE_WIDTH) >= 16) index_dim_offset += 256;
+                        if ((index_index % TILE_WIDTH) >= 16)
+                            index_dim_offset += 256;
 
                         int32_t index_val = index_l1_ptr[index_dim_offset];
 
@@ -212,8 +206,10 @@ void kernel_main() {
                             reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                         uint32_t index_dim_offset;
                         uint32_t index_tile_idx = index_index % TILE_WIDTH;
-                        if (index_tile_idx < FACE_WIDTH) index_dim_offset = index_tile_idx;
-                        else index_dim_offset = index_tile_idx + 256 - 16;
+                        if (index_tile_idx < FACE_WIDTH)
+                            index_dim_offset = index_tile_idx;
+                        else
+                            index_dim_offset = index_tile_idx + 256 - 16;
 
                         int32_t index_val = index_l1_ptr[index_dim_offset];
 
@@ -223,9 +219,10 @@ void kernel_main() {
 
                         input_stick_idx += index_val * input_stick_idx_stride;
                     }
-                    #endif
-                    #ifdef ROW_MAJOR_INDEX
-                    uint32_t noc_offset = ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
+#endif
+#ifdef ROW_MAJOR_INDEX
+                    uint32_t noc_offset =
+                        ((uint32_t)((index_index * INDEX_SIZE) / NOC_MINIMUM_READ_SIZE)) * NOC_MINIMUM_READ_SIZE;
                     if (dim == 0) {
                         index_noc_addr = get_noc_addr(0, index0, noc_offset);
                     }
@@ -257,12 +254,11 @@ void kernel_main() {
                     if (dim == 4) {
                         w_index = index_val;
                         input_stick_idx += index_val / FACE_WIDTH;
-                    }
-                    else {
+                    } else {
                         input_stick_idx += index_val * input_stick_idx_stride;
                     }
 
-                    #endif
+#endif
                 } else {
                     uint32_t index_val;
 
@@ -281,16 +277,20 @@ void kernel_main() {
             cb_reserve_back(cb_in0, 1);
             uint32_t l1_write_addr = get_write_ptr(cb_in0);
 
-            Idx5d stick_index_5d = get_stick_indices(input_stick_idx, input_size_c_without_padding, input_size_d_without_padding, input_size_h_without_padding, input_num_stick_width);
+            Idx5d stick_index_5d = get_stick_indices(
+                input_stick_idx,
+                input_size_c_without_padding,
+                input_size_d_without_padding,
+                input_size_h_without_padding,
+                input_num_stick_width);
             Idx5d tile_index_5d = get_tile_indices(stick_index_5d);
 
-            uint32_t noc_id =   tile_index_5d.n * input_noc_id_stride_n +
-                                tile_index_5d.c * input_noc_id_stride_c +
-                                tile_index_5d.d * input_noc_id_stride_d +
-                                tile_index_5d.h * input_noc_id_stride_h +
-                                tile_index_5d.w;
+            uint32_t noc_id = tile_index_5d.n * input_noc_id_stride_n + tile_index_5d.c * input_noc_id_stride_c +
+                              tile_index_5d.d * input_noc_id_stride_d + tile_index_5d.h * input_noc_id_stride_h +
+                              tile_index_5d.w;
 
-            uint32_t noc_offset = get_noc_offset_in_tile(stick_index_5d.h , stick_index_5d.w, tile_index_5d.h, element_size);
+            uint32_t noc_offset =
+                get_noc_offset_in_tile(stick_index_5d.h, stick_index_5d.w, tile_index_5d.h, element_size);
 
             if (num_elements_per_alignment == 8) {
                 noc_offset += ((w_index / 8) % 2) * NOC_MINIMUM_READ_SIZE;
@@ -302,10 +302,12 @@ void kernel_main() {
             noc_async_read_barrier();
 
             if (element_size == 4) {
-                volatile tt_l1_ptr uint32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
+                volatile tt_l1_ptr uint32_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
                 index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
             } else if (element_size == 2) {
-                volatile tt_l1_ptr uint16_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+                volatile tt_l1_ptr uint16_t* index_l1_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
                 index_l1_ptr[0] = index_l1_ptr[w_index % num_elements_per_alignment];
             }
 

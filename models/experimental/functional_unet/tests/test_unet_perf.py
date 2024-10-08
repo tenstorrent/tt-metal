@@ -19,6 +19,7 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
+    UNET_FULL_MODEL_PCC,
 )
 
 from models.perf.perf_utils import prep_perf_report
@@ -33,19 +34,19 @@ from models.utility_functions import (
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((2, 1, 683.0),),
+    ((2, 1, 773.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    inference_time_key = "AVG DEVICE FW SAMPLES/S"
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     post_processed_results = run_device_perf(
         command, subdir="unet_shallow", num_iterations=1, cols=cols, batch_size=batch
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
-        post_processed_results, margin=0.02, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.01, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"unet-shallow_batch-{batch}_groups-{groups}",
@@ -127,7 +128,7 @@ def test_unet_perf_e2e(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    assert_with_pcc(torch_output_tensor, ttnn_tensor, UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -219,4 +220,4 @@ def test_unet_data_parallel_perf_e2e(
     )
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=UNET_FULL_MODEL_PCC)

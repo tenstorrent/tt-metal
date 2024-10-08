@@ -22,7 +22,7 @@ def run_ssm_1d_sum_reduce(H: int, W: int, latent_size: int, dtype, in_mem_config
     x = ttnn.Tensor(x, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
     actual = ttnn.experimental.hc_sum_reduce(x, memory_config=out_mem_config, dtype=dtype)
 
-    assert list(actual.get_legacy_shape()) == [1, 1, H, W // latent_size]
+    assert list(actual.shape.with_tile_padding()) == [1, 1, H, W // latent_size]
     assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)

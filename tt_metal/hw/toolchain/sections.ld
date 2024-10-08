@@ -8,25 +8,32 @@
   any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
-/*
-   Firmware text/ldm start at the start of the section
-   Kernel text/ldm start where firmware left off
-*/
-__firmware_start = DEFINED(__fw_export_end_text) ? __fw_export_end_text : ORIGIN(REGION_CODE);
-__ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION_DATA);
-
-/*
-  Need a 32B separation between FW end and Kernel start on eriscs to
-    ensure kernel does not get cached into i$ because we cannot flush the i$.
-  FW must align to 32 byte boundary so Kernel begins aligned to meet noc
-    alignment constraints
-*/
-#if LD_TARGET == IERISC
-__padding = 31;
-__alignment = 32;
+#if defined(TYPE_FIRMWARE)
+/* Start of the appropriate region. */
+#define TEXT_START ORIGIN(REGION_CODE)
+#define DATA_START ORIGIN(REGION_DATA)
+#elif defined(TYPE_KERNEL)
+/* Where firmware ended. */
+#define TEXT_START __fw_export_end_text
+#define DATA_START __fw_export_ldm_end
+#else
+#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
 #endif
-__padding = 0;
-__alignment = 16;
+
+#if defined(TYPE_FIRMWARE)
+/* Need separation beteen end of firmware and start of kernel, so that
+   they don't share unflushable i$ cache lines.  */
+#if defined(TARGET_IERISC)
+#define MEM_PAD MEM_IERISC_KERNEL_PAD
+#else
+#define MEM_PAD 0
+#endif
+/* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
+#define MEM_ALIGN 16
+#else
+#define MEM_PAD 0
+#define MEM_ALIGN 4
+#endif
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -36,9 +43,12 @@ SEARCH_DIR("/opt/riscv32i/riscv32-unknown-elf/lib");
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
-  PROVIDE (__executable_start = __firmware_start);
-  .init __firmware_start :
+  .init TEXT_START :
   {
+    /* Because TEXT_START might not be the start of a region, we
+       need to force this section to be emitted so that following sections
+       do not restart the region, if this one is empty.  */
+    . = .;
     KEEP (*(SORT_NONE(.init)))
   } > REGION_CODE
   .text           :
@@ -58,26 +68,24 @@ SECTIONS
 
   l1_data :
   {
-    *(l1_data)
-  } > REGION_CODE
-  l1_data_noinit (NOLOAD) :
-  {
-    *(l1_data_noinit)
+    *(l1_data_test_only)
   } > REGION_CODE
 
-  . += __padding;
-  . = ALIGN(__alignment);
+  . = ALIGN(. + MEM_PAD, MEM_ALIGN);
 
-  PROVIDE (__etext = .);
-  PROVIDE (_etext = .);
-  PROVIDE (etext = .);
-  __fw_export_end_text = DEFINED(__fw_export_end_text) ? __fw_export_end_text : .;
+#if defined(TYPE_FIRMWARE)
+  __fw_export_end_text = .;
+  PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+#endif
+
+#if defined(TYPE_KERNEL)
+  __kernel_init_local_l1_base = .;
+#endif
 
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .ldm_data __ldm_start :
+  .data DATA_START :
   {
-    /* ldm is copied in 4 byte chunks */
-    . = ALIGN(4);
+     . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
@@ -111,16 +119,15 @@ SECTIONS
     SORT(CONSTRUCTORS)
     *(.data1)
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
-
-    /* bss is initialized with 4 byte writes */
-    . = ALIGN(4);
     __ldm_data_end = .;
+  }
+  .bss ALIGN(4):
+  {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-    . = ALIGN(4);
     *(.dynbss)
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
@@ -128,30 +135,25 @@ SECTIONS
     __ldm_bss_end = .;
   } > REGION_DATA
 
-  /* Use __ldm_bss_end to pick up where the last REGION_DATA ended
-     This is needed because of the way kernel REGION_DATA picks up where firmware
-     ended.  If the section above is empty (highly unlikely) we don't want to
-     re-start at the origion of REGION_DATA
-  */
-  local_data_noinit __ldm_bss_end (NOLOAD) :
+  local_data_noinit (NOLOAD) :
   {
     *(local_data_noinit)
   } > REGION_DATA
 
-  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
-     alignment constraints */
-  . = ALIGN(16);
-  _edata = .; PROVIDE (edata = .);
-  _end = .; PROVIDE (end = .);
-  __fw_export_ldm_end = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : _end;
+#ifdef TYPE_FIRMWARE
+  . = ALIGN(MEM_ALIGN);
+  __fw_export_ldm_end = .;
+#endif
 
+#ifdef TYPE_FIRMWARE
   /* Move to end of local memory for stack */
   .stack :
   {
     __stack_bottom = .;
-   . += __firmware_stack_size;
+   . += FIRMWARE_STACK_SIZE;
     __stack_top = .;
   } > REGION_STACK
+#endif
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

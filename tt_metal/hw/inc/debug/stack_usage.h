@@ -7,7 +7,7 @@
 #include "watcher_common.h"
 
 // We don't control the stack size for active erisc, and share the stack with base FW, so don't implement for ERISC.
-#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC)
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_STACK_USAGE) && !defined(COMPILE_FOR_ERISC) && !defined(FORCE_WATCHER_OFF)
 
 #define STACK_DIRTY_PATTERN 0xBABABABA
 
@@ -78,7 +78,8 @@ void dirty_stack_memory() {
 void record_stack_usage() {
     // Write the pause flag for this core into the memory mailbox for host to read.
     debug_stack_usage_t tt_l1_ptr *stack_usage_msg = GET_MAILBOX_ADDRESS_DEV(watcher.stack_usage);
-    launch_msg_t tt_l1_ptr *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch);
+    uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    launch_msg_t tt_l1_ptr *launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     uint32_t stack_size = get_stack_size();
 
     uint32_t tt_l1_ptr *stack_ptr = (uint32_t tt_l1_ptr *) get_stack_base();

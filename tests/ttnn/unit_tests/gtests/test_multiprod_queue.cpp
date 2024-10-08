@@ -25,7 +25,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
     // Test thread safety.
     Device* device = this->device_;
     // Enable async engine and set queue setting to lock_based
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
     MemoryConfig mem_cfg = MemoryConfig{
@@ -101,7 +101,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
     // Use write_event to stall reader and read_event to stall writer.
     Device* device = this->device_;
     // Enable async engine and set queue setting to lock_based
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
     MemoryConfig mem_cfg = MemoryConfig{

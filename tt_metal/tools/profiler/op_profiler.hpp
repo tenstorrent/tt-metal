@@ -154,12 +154,12 @@ static inline json get_kernels_json(const Program& program) {
             MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;
             json computeKernelObj;
             computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
-            computeKernelObj["path"] = computeKernel->kernel_path_file_name();
+            computeKernelObj["source"] = computeKernel->kernel_source().source_;
             computeKernelObj["name"] = computeKernel->get_full_kernel_name();
             computeKernels.push_back(computeKernelObj);
         } else {
             json datamovementKernelObj;
-            datamovementKernelObj["path"] = kernel->kernel_path_file_name();
+            datamovementKernelObj["source"] = kernel->kernel_source().source_;
             datamovementKernelObj["name"] = kernel->get_full_kernel_name();
             datamovementKernels.push_back(datamovementKernelObj);
         }
@@ -329,7 +329,6 @@ inline std::string op_meta_data_serialized_json(
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value) {
-
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
 

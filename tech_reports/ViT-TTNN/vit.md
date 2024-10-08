@@ -6,7 +6,7 @@ Authors: Vishal Shenoy, Mohamed Bahnas
   - [1. Overview](#1-overview)
   - [2. ViT TT-NN Optimization Techniques](#2-vit-tt-nn-optimization-techniques)
     - [2.1 Sharding on all relevant OPs](#21-sharding-on-all-relevant-ops)
-    - [2.2 Matmul sharding variants](#22-matmul-sharding-variants) 
+    - [2.2 Matmul sharding variants in ViT](#22-matmul-sharding-variants-in-vit) 
     - [2.3 Transformer optimizations](#23-transformer-optimizations)
   - [3. ViT TT-NN Code Structure](#3-vit-tt-nn-code-structure)
     - [3.1 Top-level modules](#31-top-level-modules)
@@ -32,40 +32,44 @@ Authors: Vishal Shenoy, Mohamed Bahnas
 
 ## 1. Overview
 
-The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision procesing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently.
+The [Vision Transformer](https://arxiv.org/pdf/2010.11929) (ViT) is a transformer model that is utilized for vision processing tasks. The ViT architecture in TT-NN leverages the self-attention mechanism, originally designed for NLP tasks, to process image data by treating each image as a sequence of patches. This walkthrough explains the key components of the ViT model and demonstrates how the Tenstorrent TT-NN library implements these components efficiently.
 For more details on the architecture, please refer to the [References](#7-references).
 
 ## 2. ViT TT-NN Optimization Techniques
 
 The implemented optimization techniques in TT-NN compared to the conventional flow are:
 ### 2.1 Sharding on all relevant OPs
-  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by elminating the need for data movement inter-tensix-cores between the consecutive OPs. 
+  - Applying sharding techniques to harvest the optimum utilization of the computation OPs, by eliminating the need for data movement inter-tensix-cores between the consecutive OPs. 
   - For more details, please refer to the [related tech-report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md#42-sharding) 
   - Sharding Concepts
 ![Sharding Concept](images/sharding_concept.png) 
   - Illustrative example 
 ![Sharding Example](images/sharding_example.png)   
-### 2.2 Matmul sharding variants
+### 2.2 Matmul sharding variants in ViT
 #### 2.2.1 Matmul Reuse (BMM)
-The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attenttion module, where both inputs (in0 and in1) as well as the output are height sharded. There no mutli-case (mcast) technique applied on the inputs here. Each core will be respsonsible for the Matmul of single head of one image of the batch.
+The batch Matmul(BMM) Reuse case used in ViT model is in the Multi-head Self Attention module, where both inputs (in0 and in1) as well as the output are height sharded. There no multi-cast (mcast) technique applied on the inputs here. Each core will be responsible for the Matmul of single head of one image of the batch.
+
 ![BMM Height](images/bmm_height.png) 
 #### 2.2.2 Matmul Reuse Mcast (2D)
 The Reuse Mcast case used in ViT model is the block sharded Matmul cases in QKV generation as well as the Feed-Forward Network.
-The implemented config is Block sharded as Row_Major, where the in0 outer dimension (M) is sharded along the y-axis of the core grid. On the inner dimension of in0, the sharded slices are mcasted along the x-direction of the core grid. The mcast process is done in turn from one core to all other cores in the row, so the whole inner dimension of in0 exists per each core during its Matmul operation. 
-The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
-Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
+  - The implemented config is Block sharded orientation is Row_Major, where the in0 outer dimension (M) is sharded along the y-axis of the core grid. On the inner dimension of in0, the sharded slices are mcasted along the x-direction of the core grid. The mcast process is done in turn from one core to all other cores in the row, so the whole inner dimension of in0 exists per each core during its Matmul operation.
+  - Please note that the Row_Major term mentioned here is referring to the sharded blocks placement on the core grid. It's different than the Row_Major data layout that is compared to the Tile layout in the report [tensor_layouts](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md)  
+  - The in1 is interleaved (on L1 or DRAM) and its slices along the N (outer) dimension are mcasted along the cores in the same column, where each slide has the full inner dimension (K). This is aligned with the previously mentioned mcast of in0 slices.
+  - Worth to mention that in some cases it may be better to implement the Column_Major (and mcast transposed = True) config, where the in0 M dimension is sharded along the x-axis of the core as shown in the figure. All the mcast techniques in the Column_Major will be transposed with respect to the Row_Major config mentioned in the previous paragraph.
+
 ![Mcast Block](images/block_mcast.png)
 #### 2.2.3 Matmul Reuse Mcast (1D)
 The other Reuse Mcast case (not used in ViT) is the height sharded on in0, while in1 is still interleaved, as shown in the figure.
+
 ![Mcast Height](images/height_mcast.png)
 
 ### 2.3 Transformer optimizations
   - Merging Q,K,V Linear operations in one large OP for higher utilization of Tensix computation power.
   - Customized tensor manipulation operations that are highly optimized as Transformer-based OPs in TT-NN.
   - Pre-processing of model weights, to apply the data format conversion as well as merging and transposing to match the OP configuration.
-  - Fusing GeLU OP with its perceding Linear OP
+  - Fusing GeLU OP with its preceding Linear OP
 
-    ![Multi-Head Attenion in TT-NN](images/mha_ttnn_1.png) 
+    ![Multi-Head Attention in TT-NN](images/mha_ttnn_1.png) 
   ![](images/mha_ttnn_2.png)  
 
 
@@ -119,7 +123,7 @@ def vit(
 ```
 
 ### 3.2 Embeddings module
-ViT Embeddings module includes: Patch + Position embeddings and Linear projection of flattended patches
+ViT Embeddings module includes: Patch + Position embeddings and Linear projection of flattened patches
 
 ```python
 def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=False):
@@ -137,7 +141,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     folded_pixel_values = ttnn.to_memory_config(folded_pixel_values, memory_config=ttnn.L1_MEMORY_CONFIG)
     folded_pixel_values = ttnn.to_layout(folded_pixel_values, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
-    # linear projction of flattened patches
+    # linear projection of flattened patches
     patch_embedding_output = ttnn.linear(
         folded_pixel_values,
         parameters.projection.weight,
@@ -280,7 +284,7 @@ Where:
 - `dim` is the embedding dimension.
 
 ### 4.2 Sharding parametrization 
-The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consequtive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
+The input and output of each OP is either sharded or interleaved, and there is a sharding config for each OP. Optimally, the consecutive OPs will have the same sharding scheme, so the intermediate results are stored in the local Tensix L1 to minimize the data movement between OPs.
 Here are the parameters used in the OP sharding scheme:
 ```python
     core_grid = ttnn.CoreGrid(y=batch_size, x=12)
@@ -344,7 +348,7 @@ context_layer = ttnn.matmul(attention_probs, value)
 ```
 
 #### 4.4.1 Q,K,V Generation using the Fused Linear OP
-The encoder input is matrix-multiplied by the Q,K,V weights to generate the individual Query, Key, Value tensors. In the TT-NN implementation, the input is multiplied by the pre-fused weights to generate the merged 3 tensors that will be split in a following step. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensic core grid.
+The encoder input is matrix-multiplied by the Q,K,V weights to generate the individual Query, Key, Value tensors. In the TT-NN implementation, the input is multiplied by the pre-fused weights to generate the merged 3 tensors that will be split in a following step. The fused linear operation objective is to maximize the utilization by increasing the workload that is computed simultaneously on the Tensix core grid.
 
 **Optimized Code**:
 

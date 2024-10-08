@@ -21,6 +21,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
@@ -52,8 +53,6 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         state_dict=state_dict,
         layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        rot_mat=None,
-        start_pos=generation_start_pos,
     )
 
     seqlen = 1
@@ -62,7 +61,6 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
     freqs_cis = torch.complex(cos, sin)
 
-    # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
         print(f"[Decoder] Generating token {i}")
 
@@ -70,17 +68,16 @@ def test_llama_decoder_inference(device, use_program_cache, reset_seeds):
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
         current_pos = generation_start_pos + i
+        current_pos_tensor = ttnn.from_torch(torch.tensor([current_pos] * batch), device=device, dtype=ttnn.int32)
 
-        decode_input, pos = prepare_inputs_ttnn(
+        decode_input = prepare_inputs_ttnn(
             tt_decode_input,
-            current_pos,
             model_args.dim,
-            model_args.sliding_window,
             tt_model.device,
         )
 
         # Run TT model
-        tt_out = tt_model(decode_input, pos, rot_mat=current_rot_mat)
+        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
         tt_output_torch = (
             ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, hidden_dim]

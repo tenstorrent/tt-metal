@@ -54,7 +54,7 @@ def float_to_bits(x):
 
 
 def torch_random(shape, low, high, dtype):
-    if dtype == torch.int64:
+    if dtype in [torch.int64, torch.int32, torch.int16, torch.int8]:
         return torch.randint(low, high, shape, dtype=dtype)
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
@@ -290,7 +290,7 @@ def pad_by_zero(
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.get_legacy_shape()[-1] == desired_shape[-1] and x.get_legacy_shape()[-2] == desired_shape[-2]:
+    if x.shape.with_tile_padding()[-1] == desired_shape[-1] and x.shape.with_tile_padding()[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()

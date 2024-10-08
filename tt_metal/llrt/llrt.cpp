@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <unistd.h>
+
 #include "llrt.hpp"
 #include "hal.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
@@ -20,56 +22,53 @@ namespace tt {
 // llrt = lower-level runtime
 namespace llrt {
 
-namespace fs = std::filesystem;
-
-using std::endl;
-using std::move;
-using std::string;
-using std::to_string;
+using std::uint16_t;
 using std::uint32_t;
-using std::unordered_map;
-using std::vector;
+using std::uint64_t;
 
-struct HexNameToMemVectorCache {
-    using lock = std::unique_lock<std::mutex>;
-    // maps from RisckCacheMapKey to hex file path
-    static HexNameToMemVectorCache &inst() {
-        static HexNameToMemVectorCache inst_;
-        return inst_;
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
+
+    static const uint32_t processor_to_fw_base_addr[] = {
+        MEM_BRISC_FIRMWARE_BASE,
+        MEM_NCRISC_FIRMWARE_BASE,
+        MEM_TRISC0_FIRMWARE_BASE,
+        MEM_TRISC1_FIRMWARE_BASE,
+        MEM_TRISC2_FIRMWARE_BASE,
+        eth_l1_mem::address_map::FIRMWARE_BASE,
+        MEM_IERISC_FIRMWARE_BASE,
+    };
+
+    static struct {
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+      std::mutex mutex;
+      std::condition_variable cvar;
+    } cache;
+
+    std::unique_lock lock(cache.mutex);
+    auto [slot, inserted] = cache.map.try_emplace(path);
+    if (inserted) {
+      // We're the first with PATH. Create and insert.
+      lock.unlock();
+      auto *ptr = new ll_api::memory(path);
+
+      if (pack_spans == PackSpans::PACK) {
+          uint64_t data_start = MEM_LOCAL_BASE;
+          uint64_t text_start = processor_to_fw_base_addr[riscv_id];
+          ptr->pack_data_into_text(text_start, data_start);
+      }
+
+      lock.lock();
+      // maps have iterator stability, so SLOT is still valid.
+      slot->second = decltype(slot->second)(ptr);
+      // We can't wake just those waiting on this slot, so wake them
+      // all. Should be a rare event anyway.
+      cache.cvar.notify_all();
+    } else if (!slot->second) {
+        // Someone else is creating the initial entry, wait for them.
+        cache.cvar.wait(lock, [=] { return bool(slot->second); });
     }
 
-    bool exists(const string &path) {
-        lock l(mutex_);
-        return cache_.find(path) != cache_.end();
-    }
-    ll_api::memory &get(const string &path) {
-        lock l(mutex_);
-        return cache_[path];
-    }
-    void add(const string &path, ll_api::memory &mem) {
-        lock l(mutex_);
-        cache_[path] = mem;
-    }
-
-    unordered_map<string, ll_api::memory> cache_;
-    std::mutex mutex_;
-};
-
-ll_api::memory get_risc_binary(string path) {
-
-    if (HexNameToMemVectorCache::inst().exists(path)) {
-        return HexNameToMemVectorCache::inst().get(path);
-    }
-
-    fs::path bin_file(path);
-
-    std::ifstream hex_istream(path);
-    ll_api::memory mem(hex_istream);
-
-    // add this path to binary cache
-    HexNameToMemVectorCache::inst().add(path, mem);
-
-    return mem;
+    return *slot->second.get();
 }
 
 // Return the code size in 16 byte units
@@ -101,7 +100,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
             break;
         case 5:
             range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::COMMAND_Q_BASE;
+            range_max = eth_l1_mem::address_map::FIRMWARE_BASE + eth_l1_mem::address_map::FIRMWARE_SIZE;
             break;
         case 6:
             range_min = MEM_IERISC_FIRMWARE_BASE;
@@ -139,8 +138,8 @@ void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vec
     tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
-    vector<std::uint32_t> read_hex_vec;
+std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
+    std::vector<uint32_t> read_hex_vec;
     tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }
@@ -150,17 +149,18 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
 
     uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
-    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
+    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
+    uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
     tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        tt::Cluster::instance().write_core((void *)&msg->go, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
+        tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
 }
 
@@ -224,13 +224,13 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
 
     uint64_t local_init_addr;
     switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
+        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
+        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
+        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH; break;
+        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH; break;
+        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH; break;
         case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
-        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE; break;
+        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH; break;
     }
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
@@ -281,14 +281,14 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
-    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
+    uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalMemAddrType::GO_MSG);
 
-    auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+    auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        // read a single uint32_t even though launch.run is smaller than that
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, go.run) & 3));
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr & ~0x3, sizeof(uint32_t));
+        go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
+        uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(
                 stderr,
@@ -297,14 +297,13 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                run == run_state || run == RUN_MSG_DONE,
                 "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;
     };
-
-    return get_mailbox_is_done(run_mailbox_addr);
+    return get_mailbox_is_done(go_msg_addr);
 }
 
 void wait_until_cores_done(
@@ -329,6 +328,7 @@ void wait_until_cores_done(
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
+            usleep(100000);
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
@@ -344,6 +344,12 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+        // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
+        // slow down for remote devices. So when debugging with these features, add a small delay to allow other
+        // host-driven transactions through.
+        if (llrt::OptionsG.get_watcher_enabled() ||
+            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
