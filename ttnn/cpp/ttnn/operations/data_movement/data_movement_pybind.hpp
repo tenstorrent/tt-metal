@@ -24,7 +24,6 @@
 #include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_pybind.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave_pybind.hpp"
-#include "ttnn/operations/data_movement/reshape/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
@@ -67,7 +66,6 @@ void py_module(py::module& module) {
     detail::bind_untilize_with_unpadding(module);
     detail::py_bind_assign(module);
     detail::py_bind_bcast(module);
-    detail::py_bind_clone(module);
     detail::py_bind_copy(module);
     detail::py_bind_move(module);
     py_bind_interleaved_to_sharded(module);

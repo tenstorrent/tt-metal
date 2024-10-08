@@ -9,15 +9,15 @@ void CloneOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     if (operation_attributes.dtype != input.get_dtype())
-        TT_FATAL(input.get_layout() == Layout::TILE, "dtype conversion is only supported with tile layout");
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "input to clone must be on device");
-    TT_FATAL(input.buffer() != nullptr, "input to clone must be allocated in buffer on device");
+        TT_FATAL(input.get_layout() == Layout::TILE, "Clone: data type conversion is only supported with tile layout");
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Clone: input must be on device");
+    TT_FATAL(input.buffer() != nullptr, "Clone: input must be allocated in buffer on device");
     TT_FATAL(
         input.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "clone does not currently support sharding");
+        "Clone: not currently support sharding");
     TT_FATAL(
         operation_attributes.memory_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "clone does not currently support sharding");
+        "Clone: not currently support sharding");
 }
 
 CloneOperation::program_factory_t CloneOperation::select_program_factory(
