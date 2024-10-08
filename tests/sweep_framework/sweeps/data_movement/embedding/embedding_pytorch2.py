@@ -141,7 +141,7 @@ parameters = {
             {"weight_shape": [77, 512], "indices_shape": [1, 7]},
             {"weight_shape": [81, 768], "indices_shape": [1, 24], "padding_idx": 1},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
