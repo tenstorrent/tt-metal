@@ -11,8 +11,8 @@ namespace ttnn::operations::uniform {
 
 Tensor Uniform::invoke(
     const Tensor &input_tensor,
-    const int32_t from,
-    const int32_t to,
+    const float from,
+    const float to,
     const std::optional<ttnn::MemoryConfig> &memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return prim::uniform(input_tensor, from, to, memory_config, compute_kernel_config);

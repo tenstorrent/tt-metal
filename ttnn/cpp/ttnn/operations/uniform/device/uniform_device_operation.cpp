@@ -37,8 +37,8 @@ UniformDeviceOperation::tensor_return_value_t UniformDeviceOperation::create_out
 std::tuple<UniformDeviceOperation::operation_attributes_t, UniformDeviceOperation::tensor_args_t>
 UniformDeviceOperation::invoke(
     const Tensor& input_tensor,
-    const int32_t from,
-    const int32_t to,
+    const float from,
+    const float to,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     return {
@@ -47,7 +47,7 @@ UniformDeviceOperation::invoke(
             to,
             memory_config.value_or(input_tensor.memory_config()),
             init_device_compute_kernel_config(
-                input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+                input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, true)},
         tensor_args_t{input_tensor}};
 }
 

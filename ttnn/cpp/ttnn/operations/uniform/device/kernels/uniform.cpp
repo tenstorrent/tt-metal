@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_unary/dropout.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -46,22 +47,32 @@ inline void my_llk_math_eltwise_unary_sfpu_dropout(uint dst_index, int vector_mo
 ALWI void my_dropout_tile(uint32_t idst) { MATH((my_llk_math_eltwise_unary_sfpu_dropout<APPROX>(idst))); }
 
 void MAIN {
-    // constexpr auto cb_in0 = tt::CB::c_in0;
+    const uint32_t start_id = get_arg_val<uint32_t>(0);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(1);
+    const uint32_t end_id = start_id + num_tiles;
+
+    // DPRINT << "Start " << start_id << " " << end_id << ENDL();
+
     constexpr auto cb_out0 = tt::CB::c_out0;
 
     unary_op_init_common(cb_out0);
-    dropout_tile_init(0xDEADBEEF);
 
-    tile_regs_acquire();
+    for (uint32_t i = start_id; i < end_id; ++i) {
+        cb_reserve_back(cb_out0, 1);
+        dropout_tile_init(0xDEADBEEF);
+        // dropout_tile_init(i * 23);
 
-    my_dropout_tile(0);
+        tile_regs_acquire();
 
-    tile_regs_commit();
+        my_dropout_tile(0);
 
-    tile_regs_wait();
-    pack_tile(0, cb_out0);
-    tile_regs_release();
+        tile_regs_commit();
 
-    cb_push_back(cb_out0, 1);
+        tile_regs_wait();
+        pack_tile(0, cb_out0);
+        tile_regs_release();
+
+        cb_push_back(cb_out0, 1);
+    }
 }
 }  // namespace NAMESPACE

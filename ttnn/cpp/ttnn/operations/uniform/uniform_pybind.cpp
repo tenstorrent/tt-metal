@@ -13,7 +13,7 @@
 
 namespace py = pybind11;
 
-namespace ttnn::operations::moreh::uniform {
+namespace ttnn::operations::uniform {
 
 void bind_uniform_operation(py::module &module) {
     bind_registered_operation(
@@ -27,4 +27,4 @@ void bind_uniform_operation(py::module &module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }
-}  // namespace ttnn::operations::moreh::uniform
+}  // namespace ttnn::operations::uniform

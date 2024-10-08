@@ -15,8 +15,8 @@ namespace ttnn::operations::uniform {
 struct Uniform {
     static Tensor invoke(
         const Tensor &input_tensor,
-        const int32_t from,
-        const int32_t to,
+        const float from,
+        const float to,
         const std::optional<ttnn::MemoryConfig> &memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };

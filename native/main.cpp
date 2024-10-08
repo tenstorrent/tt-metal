@@ -12,73 +12,7 @@
 using namespace tt;
 using namespace tt_metal;
 
-void create(const Tensor &output, const ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    Device *device = output.device();
-
-    auto grid = CoreCoord(0, 0);
-
-    uint32_t units_to_divide = output.volume() / constants::TILE_HEIGHT / constants::TILE_WIDTH;
-    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(grid, units_to_divide);
-
-    CommandQueue &cq = device->command_queue();
-    Program program = Program();
-
-    tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
-    constexpr uint32_t single_tile_size = 4 * 1024;
-
-    constexpr uint32_t src0_cb_index = CB::c_in0;
-    constexpr uint32_t num_input_tiles = 1;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, grid, cb_src0_config);
-
-    constexpr uint32_t output_cb_index = CB::c_out0;
-    constexpr uint32_t num_output_tiles = 1;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float32}})
-            .set_page_size(output_cb_index, single_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, grid, cb_output_config);
-
-    const std::string kernels_dir_path = "native/kernels/";
-    const std::vector<uint32_t> reader_compile_time_args{};
-    const std::string reader_file_path = kernels_dir_path + "reader.cpp";
-    const std::vector<uint32_t> writer_compile_time_args{};
-    const std::string writer_file_path = kernels_dir_path + "writer.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{};
-    const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
-
-    KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
-    KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    KernelHandle eltwise_binary_kernel_id = CreateKernel(
-        program,
-        compute_file_path,
-        all_cores,
-        ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-        });
-
-    CoreCoord core = {0, 0};
-    SetRuntimeArgs(program, reader_kernel_id, core, {});
-    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address()});
-    // tt::operations::primary::CreateCircularBuffer(program, all_cores, data_format, {{CB::c_in0, 2, data}});
-
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
-}
-
 int main() {
-    printf("Hello, World!\n");
-    /* Silicon accelerator setup */
     Device *device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
@@ -100,57 +34,55 @@ int main() {
     uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
     uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
 
-    /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
+    auto grid = device->compute_with_storage_grid_size();
+    uint32_t units_to_divide = 1;
+    auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+        split_work_to_cores(grid, units_to_divide);
+    std::cout << "All coressss: " << all_cores.num_cores() << std::endl;
+
     constexpr uint32_t src0_cb_index = CB::c_in0;
     constexpr uint32_t num_input_tiles = 1;
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t output_cb_index = CB::c_out0;
     constexpr uint32_t num_output_tiles = 1;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float32}})
             .set_page_size(output_cb_index, single_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    /* Specify data movement kernels for reading/writing data to/from DRAM */
-    KernelHandle binary_reader_kernel_id = CreateKernel(
+    const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
+    const std::vector<uint32_t> reader_compile_time_args{};
+    const std::string reader_file_path = kernels_dir_path + "reader.cpp";
+    const std::vector<uint32_t> writer_compile_time_args{};
+    const std::string writer_file_path = kernels_dir_path + "writer.cpp";
+    const std::vector<uint32_t> compute_compile_time_args{};
+    const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
+
+    KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+        program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    KernelHandle writer_kernel_id = tt_metal::CreateKernel(
+        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(
+        device->arch(), ttnn::init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4));
+    std::cout << "fp32_dest_acc_en" << fp32_dest_acc_en << " " << "math_approx_mode" << math_approx_mode << std::endl;
+    KernelHandle compute_kernel_id = CreateKernel(
         program,
-        "native/kernels/reader.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        "native/kernels/writer.cpp",
-        core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-    /* Set the parameters that the compute kernel will use */
-    vector<uint32_t> compute_kernel_args = {};
-
-    /* Use the add_tiles operation in the compute kernel */
-    KernelHandle eltwise_binary_kernel_id = CreateKernel(
-        program,
-        "native/kernels/uniform.cpp",
-        core,
+        compute_file_path,
+        all_cores,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compute_kernel_args,
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = false,
+            .math_approx_mode = true,
+            .compile_args = compute_compile_time_args,
         });
 
-    /* Create source data and write to DRAM */
-    std::vector<uint32_t> src0_vec(1024);
-    std::vector<uint32_t> src1_vec(1024);
-
-    /* Configure program and runtime kernel arguments, then execute */
-    SetRuntimeArgs(program, binary_reader_kernel_id, core, {});
-    SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
+    SetRuntimeArgs(program, reader_kernel_id, core, {});
+    SetRuntimeArgs(program, compute_kernel_id, core, {});
+    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);

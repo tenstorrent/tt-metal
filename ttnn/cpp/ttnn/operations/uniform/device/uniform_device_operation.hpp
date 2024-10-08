@@ -17,8 +17,8 @@ namespace ttnn::operations::uniform {
 
 struct UniformDeviceOperation {
     struct operation_attributes_t {
-        const int32_t from = 0;
-        const int32_t to = 1;
+        const float from = 0;
+        const float to = 1;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -33,8 +33,7 @@ struct UniformDeviceOperation {
 
     struct Factory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -68,8 +67,8 @@ struct UniformDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const int32_t from,
-        const int32_t to,
+        const float from,
+        const float to,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
