@@ -219,6 +219,7 @@ def run_mamba_demo(
     cache_dir: Optional[str] = None,
     display: bool = True,
     prefill_chunk_size: int = 32,
+    assert_on_performance_measurements: bool = True,
 ):
     profiler = BenchmarkProfiler()
     profiler.start("run")
@@ -345,6 +346,8 @@ def run_mamba_demo(
     prefill_time_to_token_per_user = prefill_stats.mean_throughput_per_user
     decode_time_to_token_per_user = decode_stats.mean_throughput_per_user
 
+    time_to_first_token = 1 / (prefill_time_to_token_per_user + decode_time_to_token_per_user)  # t/s/u
+
     measurements = {
         "total_demo_time": profiler.get_duration("run"),
         "compile_prefill": profiler.get_duration("compile_prefill"),
@@ -352,10 +355,10 @@ def run_mamba_demo(
         "inference_prefill": prefill_stats.total_time,
         "inference_decode": decode_stats.total_time,
         "prefill_t/s": prefill_stats.mean_throughput,
-        "prefill_time_to_token": prefill_stats.total_time,
+        "prefill_time_to_token": time_to_first_token,
         "decode_t/s": decode_stats.mean_throughput,
         "decode_t/s/u": decode_stats.mean_throughput_per_user,
-        "prefill_decode_t/s/u": 1 / (prefill_time_to_token_per_user + decode_time_to_token_per_user),  # t/s/u
+        "prefill_decode_t/s/u": time_to_first_token,
         "token_verification": 1,  # This is checked by the caller - but we could also do a match here
     }
 
@@ -367,7 +370,7 @@ def run_mamba_demo(
     logger.info(
         f"Decode throughput: {decode_stats.mean_throughput:.1f} t/s, {decode_stats.mean_throughput_per_user:.2f} t/s/u"
     )
-    logger.info(f"Time to first token: {(1e3 * measurements['prefill_decode_t/s/u']):.2f} ms")
+    logger.info(f"Time to first token: {(1e3 * time_to_first_token):.2f} ms")
 
     chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 270.0}  # perf is different for different chunk sizes
     targets = {
@@ -390,7 +393,10 @@ def run_mamba_demo(
         output_sequence_length=tokenized_prompts.shape[1] + generated_sequence_length,
     )
 
-    verify_perf(measurements, targets)
+    if assert_on_performance_measurements:
+        verify_perf(measurements, targets)
+    else:
+        logger.warning(f"Skipping performance checks (this is expected for functional tests)")
 
     return DemoResult(generated_text=token_display.sequences)
 
