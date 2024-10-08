@@ -48,7 +48,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     Tensor np_out_host = np_out.cpu();
     const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(np_out_host.get_storage()).buffer).begin();
     // Enable Asynchronous Execution and test ttnn runtime APIs
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     // Events for host - device synchronization
     auto write_event = std::make_shared<Event>();
     auto workload_event = std::make_shared<Event>();
@@ -94,7 +94,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
     Device* device = this->device_;
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -150,7 +150,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // We must ensure that the deallocate step, which can run after the buffer has been destroyed
     // does not rely on stale buffer state, after the buffer has been destroyed on host
     Device* device = this->device_;
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,

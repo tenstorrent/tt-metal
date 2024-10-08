@@ -364,12 +364,25 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
             for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
                 if (devices.find(t[ts]) != devices.end()) {
                     devices[t[ts]]->close();
+                    // When a device is closed, its worker thread is joined. Stop tracking this
+                    // worker thread.
+                    tt::DevicePool::instance().unregister_worker_thread_for_device(devices[t[ts]]);
                 }
             }
         }
         //finally close the mmio device
         dev->close();
+        tt::DevicePool::instance().unregister_worker_thread_for_device(dev);
     }
+}
+
+bool InWorkerThread() {
+    bool in_worker_thread = false;
+    if (tt::DevicePool::is_instantiated()) {
+        auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
+        in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
+    }
+    return in_worker_thread;
 }
 
 void print_page(

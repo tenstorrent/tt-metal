@@ -104,7 +104,7 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
 
 TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
     Device* device = this->devices_[0];
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
     std::size_t input_a_addr = 0;
     std::size_t input_b_addr = 0;
@@ -154,14 +154,14 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
             EXPECT_EQ(bfloat16(buf[j]), bfloat16(static_cast<float>(i - 2 * i * i)));
         }
     }
-    device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+    device->enable_async(false);
 }
 
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
 TEST_F(CommonFixture, TestAsyncRefCountManager) {
     Device* device = this->devices_[0];
-    device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
+    device->enable_async(true);
 
     log_info(LogTest, "Testing Device tensor copy assignment");
     for (int i = 0; i < 5; i++) {
@@ -214,40 +214,8 @@ TEST_F(CommonFixture, TestAsyncRefCountManager) {
     tensor_to_self_assign = std::move(tensor_to_self_assign);
     EXPECT_EQ(tensor_to_self_assign.device_buffer()->address(), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
-    device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+    device->enable_async(false);
 }
-
-// TEST_F(CommonFixture, TestAsyncEltwiseBinaryAutoFormat) {
-//     // Test usecase where both inputs and outputs are on host and autoformat is used
-//     Device* device = this->devices_[0];
-//     device->set_worker_mode(WorkExecutorMode::ASYNCHRONOUS);
-//     AutoFormat::SetDefaultDevice(device);
-
-//     for (int i = 0; i < 5; i++) {
-//         // Initialize tensors and keep them on host. Since none of the tensors are divisible by tile dims, the inputs
-//         // and outputs are on host.
-//         Tensor input_tensor_a =
-//             ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
-//         Tensor input_tensor_b =
-//             ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
-//         Tensor input_tensor_c =
-//             ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1023, 1023}), static_cast<float>(i), DataType::BFLOAT16);
-//         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
-//         Tensor output_tensor_device_2 = neg(ttnn::subtract(output_tensor_device, input_tensor_c));
-
-//         EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1023, 1023})));
-//         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
-
-//         Tensor output_tensor_host = output_tensor_device_2.cpu();
-//         // Verify output data
-//         auto& buf =
-//             std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(output_tensor_host.get_storage()).buffer);
-//         for (int j = 0; j < 1023 * 1023; j++) {
-//             EXPECT_EQ(bfloat16(buf[j]), bfloat16(static_cast<float>(i - 2 * i * i)));
-//         }
-//     }
-//     device->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
-// }
 
 TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     // Test 2 data paths here (resembles async mode):

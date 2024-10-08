@@ -3239,6 +3239,15 @@ void Device::set_worker_mode(const WorkExecutorMode& mode) {
 void Device::enable_async(bool enable) {
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
+    // If a worker thread is spawned for a device, register/track it in a runtime structure.
+    // If a worker thread is destroyed, remove it from the structure.
+    // This is required for checking if a call is made from an application thread or a worker thread.
+    // See InWorkerThread().
+    if (enable) {
+        tt::DevicePool::instance().register_worker_thread_for_device(this, this->work_executor.get_worker_thread_id());
+    } else {
+        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
+    }
 }
 
 bool Device::using_slow_dispatch() const {
