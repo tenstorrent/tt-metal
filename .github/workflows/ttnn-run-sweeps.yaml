@@ -56,7 +56,6 @@ on:
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
           - eltwise.unary.glu.glu
-          - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
