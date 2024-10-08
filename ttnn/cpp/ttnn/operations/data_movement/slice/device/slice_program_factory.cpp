@@ -949,13 +949,20 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 }
 
 operation::ProgramWithCallbacks slice_multi_core(
-    const Tensor& a, Tensor& output, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end, const std::optional<tt::tt_metal::LegacyShape>& step) {
-    const std::optional<tt::tt_metal::LegacyShape> step_modified = step.has_value() ? (std::all_of(step->begin(), step->end(), [](int32_t i) { return i == 1; }) ? std::nullopt : step ): std::nullopt;
+    const Tensor& a, Tensor& output, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end, const tt::tt_metal::LegacyShape &step) {
+
+    bool has_step = false;
+    for (int i = 0; i < step.size(); i++) {
+        if (step[i] != 1) {
+            has_step = true;
+            break;
+        }
+    }
     switch (a.get_layout()) {
         case Layout::ROW_MAJOR: return a.is_sharded() ?
             slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end) :
-            (step_modified.has_value() ?
-                slice_rm_strided_single_core(a, output, output_tensor_start, output_tensor_end, step_modified.value()) :
+            (has_step ?
+                slice_rm_strided_single_core(a, output, output_tensor_start, output_tensor_end, step) :
                 slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
         case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");

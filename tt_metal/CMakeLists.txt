@@ -52,3 +52,8 @@ set_target_properties(tt_metal PROPERTIES
     INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
     ADDITIONAL_CLEAN_FILES "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
+
+if(BUILD_PROGRAMMING_EXAMPLES)
+    add_subdirectory(programming_examples)
+endif(BUILD_PROGRAMMING_EXAMPLES)
+

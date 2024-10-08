@@ -30,7 +30,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log(uint dst_index, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::log, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu<SfpuType::log, APPROXIMATE>(dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -41,7 +41,7 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
 //abs
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_abs(uint dst_index, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::abs, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu<SfpuType::abs, APPROXIMATE>(dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -52,7 +52,7 @@ inline void llk_math_eltwise_unary_sfpu_abs_init() {
 //log with base
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log_with_base(uint dst_index, uint base, int vector_mode = VectorMode::RC) {
-  llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode, base);
+  llk_math_eltwise_unary_sfpu<SfpuType::log_with_base, APPROXIMATE>(dst_index, vector_mode, base);
 }
 
 template <bool APPROXIMATE>
@@ -62,7 +62,7 @@ inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_tanh(uint dst_index, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::tanh, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu<SfpuType::tanh, APPROXIMATE>(dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -73,7 +73,7 @@ inline void llk_math_eltwise_unary_sfpu_tanh_init() {
 inline void llk_math_eltwise_unary_sfpu_dropout(
     uint dst_index, int vector_mode, int integer_dropout, int scale_factor) {
     constexpr bool dont_care = false;
-    llk_math_eltwise_unary_sfpu<SfpuType::dropout, dont_care, DstSync::SyncHalf>(
+    llk_math_eltwise_unary_sfpu<SfpuType::dropout, dont_care>(
         dst_index, vector_mode, integer_dropout, scale_factor);
 }
 
@@ -86,7 +86,7 @@ inline void llk_math_eltwise_unary_sfpu_dropout_init(uint seed = 0) {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_max(uint dst_index, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::max, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu<SfpuType::max, APPROXIMATE>(dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>
@@ -96,7 +96,7 @@ inline void llk_math_eltwise_unary_sfpu_max_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_square(uint dst_index, int vector_mode = VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu<SfpuType::square, APPROXIMATE, DstSync::SyncHalf>(dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu<SfpuType::square, APPROXIMATE>(dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>

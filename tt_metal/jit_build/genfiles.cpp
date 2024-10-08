@@ -473,6 +473,22 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+static void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
+    string dst_sync_mode_descriptor = options.path + "chlkc_dst_sync_mode.h";
+
+    ofstream file_stream;
+
+    file_stream.open(dst_sync_mode_descriptor);
+
+    if (options.dst_full_sync_en) {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << endl;
+    } else {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << endl;
+    }
+
+    file_stream.close();
+}
+
 static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
@@ -509,11 +525,13 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
+        std::thread ts( [&]() { generate_dst_sync_mode_descriptor(options); } );
         td.join();
         tt.join();
         tm.join();
         ta.join();
         tf.join();
+        ts.join();
     } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
@@ -524,7 +542,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map) {
+    std::vector<int32_t>& l1_bank_offset_map,
+    uint32_t allocator_alignment) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
@@ -546,7 +565,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(ALLOCATOR_ALIGNMENT) - 1 << endl;
+    ss << "#define ALLOCATOR_ALIGNMENT " << allocator_alignment << endl;
+    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(allocator_alignment) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -634,13 +654,15 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map) {
+    std::vector<int32_t>& l1_bank_offset_map,
+    uint32_t allocator_alignment) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
-        l1_bank_offset_map);
+        l1_bank_offset_map,
+        allocator_alignment);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

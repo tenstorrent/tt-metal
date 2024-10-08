@@ -1346,3 +1346,30 @@ def test_matmul_in0_in1_bias_sharded(
         matmul_output = matmul_output + bias_tensor
 
     assert_with_pcc(matmul_output, tt_mm_out, pcc=0.993)
+
+
+@pytest.mark.parametrize("M", [32, 128])
+@pytest.mark.parametrize("K", [32, 128])
+@pytest.mark.parametrize("N", [32, 128])
+def test_alternating_dst_sync_mode_matmul(device, M, K, N):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.randn([1, 1, M, K], dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn([1, 1, K, N], dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Half sync mode
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b, core_grid=ttnn.CoreGrid(y=4, x=4))
+    # Full sync mode
+    output2 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    # Half sync mode
+    output3 = ttnn.matmul(input_tensor_a, input_tensor_b, core_grid=ttnn.CoreGrid(y=4, x=4))
+
+    pcc = 0.99
+    output_tensor = ttnn.to_torch(output1)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    output_tensor = ttnn.to_torch(output2)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    output_tensor = ttnn.to_torch(output3)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)

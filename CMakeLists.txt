@@ -65,17 +65,35 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
+############################################################################################################################
+# Project Options
+#   The following options and their defaults impact what artifacts get built
+############################################################################################################################
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
-message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
-
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
-
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
-
 option(ENABLE_LIBCXX "Enable using libc++" ON)
-
-
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
+option(BUILD_SHARED_LIBS "Create shared libraries" ON)
+option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
+option(ENABLE_MSAN "Enable build with MemorySanitizer" OFF)
+option(ENABLE_TSAN "Enable build with ThreadSanitizer" OFF)
+option(ENABLE_UBSAN "Enable build with UndefinedBehaviorSanitizer" OFF)
+option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming examples" OFF)
+option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
+option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
+
+message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
+message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
+message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
+message(STATUS "Build with TSAN: ${ENABLE_TSAN}")
+message(STATUS "Build with UBSAN: ${ENABLE_UBSAN}")
+message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
+message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
+message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
+message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+############################################################################################################################
+
 if(ENABLE_BUILD_TIME_TRACE)
     if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
         message(STATUS "Adding compile option: -ftime-trace")
@@ -85,35 +103,18 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
-# Default to building everything as a shared lib
-option(BUILD_SHARED_LIBS "Create shared libraries" ON)
-message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
-
-option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
-message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
-
 set(SANITIZER_ENABLED ${ENABLE_ASAN})
-
-option(ENABLE_MSAN "Enable build with MemorySanitizer" OFF)
-message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
-
 if(SANITIZER_ENABLED AND ENABLE_MSAN)
     message(FATAL_ERROR "Multiple sanitizers are not supported")
 elseif(ENABLE_MSAN)
     set(SANITIZER_ENABLED ${ENABLE_MSAN})
 endif()
 
-option(ENABLE_TSAN "Enable build with ThreadSanitizer" OFF)
-message(STATUS "Build with TSAN: ${ENABLE_TSAN}")
-
 if(SANITIZER_ENABLED AND ENABLE_TSAN)
     message(FATAL_ERROR "Multiple sanitizers are not supported")
 elseif(ENABLE_TSAN)
     set(SANITIZER_ENABLED ${ENABLE_TSAN})
 endif()
-
-option(ENABLE_UBSAN "Enable build with UndefinedBehaviorSanitizer" OFF)
-message(STATUS "Build with UBSAN: ${ENABLE_UBSAN}")
 
 if(SANITIZER_ENABLED AND ENABLE_UBSAN)
     message(FATAL_ERROR "Multiple sanitizers are not supported")
@@ -253,8 +254,6 @@ endif()
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
 add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
 
-option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
-option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)

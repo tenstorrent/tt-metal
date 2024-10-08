@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 using namespace tt;
 namespace ttnn {
@@ -450,7 +451,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
     if (needs_shard_or_reshard) {
         if (input_tensor.get_shape()[0] != 1 or input_tensor.get_shape()[1] != 1) {
             // reshape to [1, 1, N*H*W, C]
-            input_tensor = ttnn::operations::core::reshape(
+            input_tensor = ttnn::reshape(
                 input_tensor,
                 ttnn::Shape(std::array<uint32_t, 4>{
                     1,
@@ -794,7 +795,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 conv_config.math_fidelity,
                 opt_conv_op_parallel_config,
                 opt_conv_op_block_config,
-                0,
                 conv_out_memory_config,
                 conv_config.dtype,
                 {batch_size, input_height, input_width, in_channels},
@@ -839,7 +839,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.math_fidelity,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
-            0,
             conv_out_memory_config,
             conv_config.dtype,
             {batch_size, input_height, input_width, in_channels},

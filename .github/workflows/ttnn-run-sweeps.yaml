@@ -48,7 +48,9 @@ on:
           - eltwise.unary.bitwise.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_xor
           - eltwise.unary.log_sigmoid.log_sigmoid
-          - eltwise.unary.logical_not_.logical_not_
+          - eltwise.unary.logical_not.logical_not_
+          - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
@@ -79,22 +81,25 @@ on:
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
-          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
-          - eltwise.binary.logical_and_output.logical_and_output
-          - eltwise.binary.logical_or_output.logical_or_output
-          - eltwise.binary.logical_or_.logical_or_
-          - eltwise.binary.logical_xor_.logical_xor_
-          - eltwise.binary.logical_and_.logical_and_
+          - eltwise.binary.logical_and.logical_and_
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.squared_difference.squared_difference
+          - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.fmod.fmod
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
+          - eltwise.binary.xlogy.xlogy
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -120,8 +125,9 @@ on:
           - data_movement.concat.concat_pytorch2
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
-          - data_movement.permute.permute_pytorch2_rm
+          - data_movement.permute.permute
           - data_movement.permute.permute_pytorch2_tiled
+          - data_movement.permute.permute_pytorch2_rm
           - data_movement.transpose.transpose_pytorch2
           - data_movement.transpose.transpose_interleaved
           - data_movement.transpose.t_pytorch2

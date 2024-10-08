@@ -20,18 +20,18 @@ namespace ternary_backward {
 namespace detail {
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
         {2}
 
         Args:
-            grad_tensor (ttnn.Tensor): the input tensor.
+            grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
             input_tensor_c (ttnn.Tensor or Number): the input tensor.
-            alpha (float, nuber): the alpha value.
+            alpha (float): the alpha value.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -39,7 +39,8 @@ void bind_ternary_backward(py::module& module, const ternary_backward_operation_
         Returns:
             List of ttnn.Tensor: the output tensor.
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -51,8 +52,8 @@ void bind_ternary_backward(py::module& module, const ternary_backward_operation_
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        supported_dtype,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -80,7 +81,7 @@ void bind_ternary_backward(py::module& module, const ternary_backward_operation_
 }
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward_op(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward_op(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -101,7 +102,8 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
             List of ttnn.Tensor: the output tensor.
 
 
-        {3}
+        Note:
+            {3}
 
 
         Note : bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
@@ -118,8 +120,8 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
 
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        supported_dtype,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -160,7 +162,7 @@ void bind_ternary_backward_op(py::module& module, const ternary_backward_operati
 }
 
 template <typename ternary_backward_operation_t>
-void bind_ternary_backward_optional_output(py::module& module, const ternary_backward_operation_t& operation, std::string_view description, std::string_view supported_dtype) {
+void bind_ternary_backward_optional_output(py::module& module, const ternary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -182,7 +184,8 @@ void bind_ternary_backward_optional_output(py::module& module, const ternary_bac
             List of ttnn.Tensor: the output tensor.
 
 
-        {3}
+        Note:
+            {3}
 
         Example:
 
@@ -194,8 +197,8 @@ void bind_ternary_backward_optional_output(py::module& module, const ternary_bac
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        supported_dtype,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -233,62 +236,66 @@ void py_module(py::module& module) {
     detail::bind_ternary_backward(
         module,
         ttnn::addcmul_bw,
+        R"doc(Performs backward operations for addcmul of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
 
-        Note : bfloat8_b/bfloat4_b supports only on TILE_LAYOUT)doc",
-        R"doc(Performs backward operations for addcmul of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
+        )doc");
 
     detail::bind_ternary_backward(
         module,
         ttnn::addcdiv_bw,
+        R"doc(Performs backward operations for addcdiv of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc",
-        R"doc(Performs backward operations for addcdiv of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_ternary_backward_optional_output(
         module,
         ttnn::where_bw,
+        R"doc(Performs backward operations for where of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc",
-        R"doc(Performs backward operations for where of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_ternary_backward_op(
         module,
         ttnn::lerp_bw,
+        R"doc(Performs backward operations for lerp of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks: For Inputs : :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c`
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
 
         Supported dtypes, layouts, and ranks: For Inputs : :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`scalar`
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
 
-        )doc",
-        R"doc(Performs backward operations for lerp of :attr:`input_tensor_a` , :attr:`input_tensor_b` and :attr:`input_tensor_c` or :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+        )doc");
 
 }
 
