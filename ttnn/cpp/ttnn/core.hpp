@@ -6,7 +6,7 @@
 #include <csignal>
 #include <optional>
 
-#include "magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
 #include "ttnn/tensor/types.hpp"

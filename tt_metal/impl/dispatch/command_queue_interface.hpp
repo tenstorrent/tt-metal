@@ -13,7 +13,7 @@
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-#include "magic_enum.hpp"
+#include <magic_enum.hpp>
 
 using namespace tt::tt_metal;
 

@@ -8,7 +8,7 @@
 #include <cmath>
 #include <sstream>
 
-#include "magic_enum.hpp"
+#include <magic_enum.hpp>
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

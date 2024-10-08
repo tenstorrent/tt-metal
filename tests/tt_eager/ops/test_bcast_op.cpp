@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "common/constants.hpp"
-#include "magic_enum.hpp"
+#include <magic_enum.hpp>
 #include <ttnn/operations/numpy/functions.hpp>
 
 #include <algorithm>
