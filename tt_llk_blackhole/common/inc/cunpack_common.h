@@ -241,10 +241,7 @@ namespace ckernel::unpacker
                                    ((uint)unpA_dst_format_masked == (uint)DataFormat::Int32) ||
                                    ((uint)unpB_dst_format_masked == (uint)DataFormat::Int32);
 
-      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK |
-                                       ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
-      alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcA = unpA_dst_format_masked;
-      alu_payload.f.ALU_FORMAT_SPEC_REG1_SrcB = row_pool ? ((uint) DataFormat::Float16 | (exp_width<<2)) : unpB_dst_format_masked;
+      constexpr uint alu_format_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK | ALU_FORMAT_SPEC_REG0_SrcBUnsigned_MASK;
 
       if ((uint)unpA_src_format == (uint)DataFormat::UInt8) {
          alu_payload.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
@@ -257,10 +254,9 @@ namespace ckernel::unpacker
       // NOTE: This assumes these config fields are adjacent and in same register!!
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_FORMAT_SPEC_REG0_SrcA_ADDR32);
       static_assert(ALU_ACC_CTRL_Fp32_enabled_ADDR32 == ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32);
-      constexpr uint alu_dest_format_mask = ALU_ACC_CTRL_INT8_math_enabled_MASK | ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK;
+      constexpr uint alu_dest_format_mask = ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK | ALU_ACC_CTRL_Fp32_enabled_MASK;
       alu_payload.f.ALU_ACC_CTRL_Fp32_enabled = fp32_dest_acc_en;
       alu_payload.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = fp32_dest_acc_en;
-      alu_payload.f.ALU_ACC_CTRL_INT8_math_enabled = int8_math_enabled;
       constexpr uint alu_stoch_rnd_mask = ALU_ROUNDING_MODE_Fpu_srnd_en_MASK | ALU_ROUNDING_MODE_Gasket_srnd_en_MASK | ALU_ROUNDING_MODE_Packer_srnd_en_MASK;
       alu_payload.f.ALU_ROUNDING_MODE_Fpu_srnd_en = fpu_srnd_en;
       alu_payload.f.ALU_ROUNDING_MODE_Gasket_srnd_en = pack_srnd_en;
