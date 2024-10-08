@@ -49,29 +49,56 @@ void reduce_c() {
     // Postcondition: in0_cb has rows*cols produced
     // Precondition: scale_cb has 1 produced
     // Postcondition: out_cb has rows produced
+    if constexpr (pool_type == PoolType::SUM) {
+        // mm_init(in0_cb, scale_cb);
+        mm_block_init_short(in0_cb, scale_cb, false /*transpose*/, 1 /*ct_dim*/, 1 /*rt_dim*/, 1 /*kt_dim*/);
 
-    reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        const uint32_t num_tiles = rows * cols;
+        cb_wait_front(scale_cb, 1);
+        cb_wait_front(in0_cb, num_tiles);
+        cb_reserve_back(out_cb, rows);
 
-    const uint32_t num_tiles = rows * cols;
-    cb_wait_front(scale_cb, 1);
-    cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+        constexpr uint32_t reduce_dst_idx = 0;
 
-    constexpr uint32_t reduce_dst_idx = 0;
+        for (uint32_t i = 0; i < rows; i++) {
+            acquire_dst(tt::DstMode::Half);
+            for (uint32_t j = 0; j < cols; j++) {
+                // matmul_tiles(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx, false);
+                matmul_block(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx, false, 1, 1, 1);
+            }
 
-    for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx);
+            cb_reserve_back(out_cb, 1);
+            pack_tile(reduce_dst_idx, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst(tt::DstMode::Half);
         }
 
-        cb_reserve_back(out_cb, 1);
-        pack_tile(reduce_dst_idx, out_cb);
-        cb_push_back(out_cb, 1);
-        release_dst();
+    } else {
+        reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+
+        const uint32_t num_tiles = rows * cols;
+        cb_wait_front(scale_cb, 1);
+        cb_wait_front(in0_cb, num_tiles);
+        cb_reserve_back(out_cb, rows);
+
+        constexpr uint32_t reduce_dst_idx = 0;
+
+        for (uint32_t i = 0; i < rows; i++) {
+            acquire_dst(tt::DstMode::Half);
+            for (uint32_t j = 0; j < cols; j++) {
+                reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx);
+            }
+
+            cb_reserve_back(out_cb, 1);
+            pack_tile(reduce_dst_idx, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst(tt::DstMode::Half);
+        }
+
+        reduce_revert_delta<reduce_dim>(out_cb);
+
     }
 
-   reduce_revert_delta<reduce_dim>(out_cb);
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
@@ -101,7 +128,7 @@ void sub_exp_block_bcast_cols_inplace() {
     // Postcondition: in1_cb has rows produced
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
-    exp_tile_init<true>();
+    exp_tile_init<false>();
     cb_wait_front(in0_cb, rows*cols);
     cb_wait_front(in1_cb, rows);
 
@@ -113,7 +140,7 @@ void sub_exp_block_bcast_cols_inplace() {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile<true>(j);
+                exp_tile<false>(j);
             }
             tile_regs_commit();
             cb_pop_front(in0_cb, dst_tiles);
@@ -226,7 +253,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init();
-    exp_tile_init<true>();
+    exp_tile_init<false>();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -237,7 +264,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<true>(0);
+        exp_tile<false>(0);
 
         pack_tile(0, out_cb);
 
@@ -452,7 +479,7 @@ void MAIN {
                     sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
-                    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
+                    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, tt::CB::c_in6, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
 
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
