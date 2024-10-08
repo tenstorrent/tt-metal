@@ -68,6 +68,7 @@ class TtLlamaMLP(LightweightModule):
             pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
             x_in = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
         else:  # Update the program configs based for prefill
+            x_in = x
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
                 x_in = ttnn.reshape(x_in, [1, seq_len // 1024, 1024, -1])
@@ -75,7 +76,6 @@ class TtLlamaMLP(LightweightModule):
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
             else:
-                x_in = x
                 pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"](seq_len)
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"](seq_len)
                 pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"](seq_len)
@@ -101,8 +101,8 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(x)
-        ttnn.deallocate(x_in)
+        x.deallocate(True)
+        x_in.deallocate(True)
 
         w2_in = ttnn.multiply(
             w1_out,
@@ -112,8 +112,8 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
         )
 
-        ttnn.deallocate(w1_out)
-        ttnn.deallocate(w3_out)
+        w3_out.deallocate(True)
+        w1_out.deallocate(True)
         # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
         w2_out = ttnn.linear(
             w2_in,
@@ -125,7 +125,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(w2_in)
+        w2_in.deallocate(True)
 
         if mode == "decode":
             w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
@@ -139,7 +139,6 @@ class TtLlamaMLP(LightweightModule):
             w2_out_reduced = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
-            ttnn.deallocate(w2_out)
             return w2_out_reduced
         else:
             return w2_out

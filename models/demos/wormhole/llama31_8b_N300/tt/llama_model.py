@@ -177,6 +177,9 @@ class LMHead(nn.Module):
         x = ttnn.interleaved_to_sharded(x, self.args.get_model_config()["LM_HEAD_INPUT_MEMCFG"])
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
+            # print(f"weight: {weight.shape}, {weight.memory_config()}")
+            # print(f"x: {x.shape}")
+            # print(f"pc: {pc}")
             output = ttnn.linear(
                 x,
                 weight,
