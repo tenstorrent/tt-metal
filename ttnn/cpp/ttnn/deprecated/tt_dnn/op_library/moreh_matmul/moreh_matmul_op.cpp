@@ -32,18 +32,16 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-tt::tt_metal::LegacyShape compute_output_shape(
+ttnn::SimpleShape compute_output_shape(
     const tt::tt_metal::LegacyShape& input_shape,
     const tt::tt_metal::LegacyShape& other_shape,
     bool transpose_input,
     bool transpose_other) {
-    const auto& input_shape_wo_padding = input_shape.without_padding();
-    const auto& other_shape_wo_padding = other_shape.without_padding();
+    const auto& logical_input_shape = input_shape.logical_shape();
+    const auto& logical_other_shape = other_shape.logical_shape();
 
-    auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
-    auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);
-    auto h_wo_padding = (transpose_input) ? (input_shape_wo_padding[-1]) : (input_shape_wo_padding[-2]);
-    auto w_wo_padding = (transpose_other) ? (other_shape_wo_padding[-2]) : (other_shape_wo_padding[-1]);
+    auto h = (transpose_input) ? (logical_input_shape[-1]) : (logical_input_shape[-2]);
+    auto w = (transpose_other) ? (logical_other_shape[-2]) : (logical_other_shape[-1]);
 
     std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -72,12 +70,7 @@ tt::tt_metal::LegacyShape compute_output_shape(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
-    auto padding = output_shape.padding();
-    // padding for t logmatrix dims
-    padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
-    padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {ttnn::SimpleShape(std::move(output_dim))};
 }
 
 }  // namespace
@@ -159,7 +152,7 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 }
 
 // Must be provided in the case where an optional output tensor was not provided
-std::vector<tt::tt_metal::LegacyShape> MorehMatmul::compute_output_shapes(
+std::vector<ttnn::SimpleShape> MorehMatmul::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     return {compute_output_shape(
         input_tensors.at(0).get_legacy_shape(),

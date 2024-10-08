@@ -546,7 +546,7 @@ struct DeviceOperation final {
         compute_output_shapes_impl_{
             [](const storage_t& storage, const Tensors& input_tensors) -> const std::vector<tt::tt_metal::LegacyShape> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                return operation.compute_output_shapes(input_tensors);
+                return {}; //operation.compute_output_shapes(input_tensors);
             }},
         create_output_tensors_impl_{
             [](const storage_t& storage,

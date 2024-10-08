@@ -32,12 +32,12 @@ auto generic_create_output_tensors(
     OutputTensors output_tensors;
     output_tensors.reserve(output_shapes.size());
     for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(
+        /*output_tensors.emplace_back(create_device_tensor(
             output_shape,
             output_dtype.value_or(input_tensors.at(0).get_dtype()),
             output_layout,
             input_tensor.device(),
-            output_mem_config.value_or(input_tensors.at(0).memory_config()), tile));
+            output_mem_config.value_or(input_tensors.at(0).memory_config()), tile));*/
     }
     return output_tensors;
 }
