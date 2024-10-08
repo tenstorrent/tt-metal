@@ -127,7 +127,6 @@ on:
           - data_movement.slice.slice_pytorch2_tiled
           - data_movement.permute.permute
           - data_movement.permute.permute_pytorch2_tiled
-<<<<<<< HEAD
           - data_movement.permute.permute_pytorch2_rm
           - data_movement.transpose.transpose_pytorch2
           - data_movement.transpose.transpose_interleaved
@@ -143,14 +142,12 @@ on:
           - data_movement.unsqueeze.unsqueeze_pytorch_2
           - data_movement.embedding.embedding_pytorch_2
           - data_movement.view.view_pytorch_2
-=======
           - data_movement.stack.stack_pytorch2
           - data_movement.repeat.repeat_pytorch2
           - data_movement.split.split_pytorch2
           - data_movement.unsqueeze.unsqueeze_pytorch2
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
->>>>>>> #11621: fixed sweep workflow names
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
