@@ -79,7 +79,7 @@ on:
           - eltwise.unary_backward.mul_bw.mul_bw
           - eltwise.unary_backward.softplus_bw.softplus_bw
           - eltwise.unary_backward.threshold_bw.threshold_bw
-          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.div_bw.div_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
