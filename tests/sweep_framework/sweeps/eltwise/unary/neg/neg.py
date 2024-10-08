@@ -40,7 +40,7 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Row Major layout is not supported"
     return False, None
 
@@ -64,7 +64,9 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float16), input_a_dtype
     )(input_shape)
-    torch_output_tensor = -torch_input_tensor_a
+
+    golden_function = ttnn.get_golden_function(ttnn.neg)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
