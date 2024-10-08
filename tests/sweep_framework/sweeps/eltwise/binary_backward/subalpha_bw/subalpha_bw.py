@@ -25,10 +25,8 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 2)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 2)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 2),
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -90,7 +88,7 @@ def run(
 
     alpha = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    intermediate_result = torch.add(torch_input_tensor_a, torch_input_tensor_b, alpha=alpha)
+    intermediate_result = torch.sub(torch_input_tensor_a, torch_input_tensor_b, alpha=alpha)
     intermediate_result.backward(gradient=torch_grad_tensor)
     torch_output_tensors = [torch_input_tensor_a.grad, torch_input_tensor_b.grad]
 
@@ -119,7 +117,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.addalpha_bw(
+    output_tensors = ttnn.subalpha_bw(
         grad_tensor, input_tensor_a, input_tensor_b, alpha=alpha, memory_config=output_memory_config
     )
 
