@@ -8,8 +8,8 @@
 #include <thread>
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
-namespace tt::tt_metal
-{
+namespace tt::tt_metal {
+inline namespace v0 {
     class Device;
     struct Event
     {
@@ -31,4 +31,5 @@ namespace tt::tt_metal
             TT_ASSERT(cq_id != -1, "Event must have initialized cq_id");
         }
     };
-}
+}  // namespace v0
+}  // namespace tt::tt_metal
