@@ -116,6 +116,7 @@ class LMHead(nn.Module):
 
         split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
         split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+        # TODO remove prints
         print(f"split_sizes: {split_sizes}")
 
         # Split the output weights
@@ -133,16 +134,13 @@ class LMHead(nn.Module):
                 start = device * size_per_device + sum(split_sizes[:i])
                 end = start + split_size
                 device_splits.append(torch_output_weights[:, start:end])
-                # print(f"device {device}: {start} {end} (split size: {split_size})")
 
             # Concatenate the splits from all devices
             combined_split = torch.cat(device_splits, dim=-1)
-            # print(f"combined_split shape: {combined_split.shape}")
 
             memory_config = args.create_dram_sharded_mem_config(
                 k=args.dim, n=combined_split.shape[-1] // self.num_devices
             )
-            # print(f"memory_config: {memory_config}")
             self.output_weights.append(
                 ttnn.as_tensor(
                     combined_split,
@@ -173,13 +171,9 @@ class LMHead(nn.Module):
         ]
 
     def forward(self, x: ttnn.Tensor):
-        # print(f"LM_HEAD_INPUT_MEMCFG: {self.args.get_model_config()['LM_HEAD_INPUT_MEMCFG']}")
         x = ttnn.interleaved_to_sharded(x, self.args.get_model_config()["LM_HEAD_INPUT_MEMCFG"])
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
-            # print(f"weight: {weight.shape}, {weight.memory_config()}")
-            # print(f"x: {x.shape}")
-            # print(f"pc: {pc}")
             output = ttnn.linear(
                 x,
                 weight,
