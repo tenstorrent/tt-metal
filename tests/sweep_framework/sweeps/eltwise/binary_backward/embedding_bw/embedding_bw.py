@@ -40,7 +40,7 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
     "xfail": {
-        "embedding_args": gen_shapes([1, 32, 32, 128], [4, 2080, 4128, 550], [1, 32, 32, 32], 32),
+        "embedding_args": gen_shapes([1, 32, 32, 288], [4, 2080, 4128, 550], [1, 32, 32, 32], 32),
         "input_dtype": [ttnn.bfloat16],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -136,6 +136,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor).squeeze()
     e2e_perf = stop_measuring_time(start_time)
 
-    info_string = f"{input_dtype}. {weight_dtype}, {grad_dtype}"
-
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf, info_string]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
