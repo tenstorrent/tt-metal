@@ -24,10 +24,6 @@ class DevicePool {
         return *_inst;
     }
 
-    static bool is_instantiated() {
-        return (_inst != nullptr);
-    }
-
     static void initialize(
         std::vector<chip_id_t> device_ids,
         const uint8_t num_hw_cqs,
