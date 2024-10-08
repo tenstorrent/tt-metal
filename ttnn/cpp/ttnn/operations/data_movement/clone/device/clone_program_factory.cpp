@@ -24,12 +24,12 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
     uint32_t input_unit_size =
-        tilized ? TileSize(input_cb_data_format) : input.get_legacy_shape()[-1] * input.element_size();
+        tilized ? TileSize(input_cb_data_format) : input.get_logical_shape()[-1] * input.element_size();
     uint32_t output_unit_size =
-        tilized ? TileSize(output_cb_data_format) : output.get_legacy_shape()[-1] * output.element_size();
+        tilized ? TileSize(output_cb_data_format) : output.get_logical_shape()[-1] * output.element_size();
 
     uint32_t num_units =
-        tilized ? output.volume() / constants::TILE_HW : output.volume() / output.get_legacy_shape()[-1];
+        tilized ? output.volume() / constants::TILE_HW : output.volume() / output.get_logical_shape()[-1];
 
     Device* device = output.device();
 
