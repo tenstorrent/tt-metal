@@ -4,6 +4,10 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
+#include <string>
+#include "host_api.hpp"
+#include "impl/kernels/kernel_types.hpp"
+#include "impl/program/program.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 
 // Test sync w/ semaphores betweeen eth/tensix cores
@@ -256,4 +260,72 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);
     }
+}
+
+TEST_F(CommonFixture, TestSmallKernelSizeTensix) {
+    Device *device = devices_[0];
+    CoreCoord core = {0, 0};
+    Program program = CreateProgram();
+
+    const uint32_t kernel_size_in_bytes = 16;
+
+    const string& kernel_file_path = "";
+    const std::map<string, string> defines = {
+        {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
+    };
+    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+    CreateKernel(program, kernel_file_path, core, config);
+
+    this->RunProgram(device, program);
+}
+
+TEST_F(CommonFixture, TestLargeKernelSizeTensix) {
+    Device *device = devices_[0];
+    CoreCoord core = {0, 0};
+    Program program = CreateProgram();
+
+    const uint32_t kernel_size_in_bytes = 2097152; // 2 ** 21
+
+    const string& kernel_file_path = "";
+    const std::map<string, string> defines = {
+        {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
+    };
+    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+    CreateKernel(program, kernel_file_path, core, config);
+
+    this->RunProgram(device, program);
+}
+
+TEST_F(CommonFixture, TestKernelWithLongRuntimeTensix) {
+    Device *device = devices_[0];
+    CoreCoord core = {0, 0};
+    Program program = CreateProgram();
+
+    const uint32_t kernel_runtime_in_seconds = 50;
+
+    const string& kernel_file_path = "";
+    const std::map<string, string> defines = {
+        {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_in_seconds)}
+    };
+    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+    CreateKernel(program, kernel_file_path, core, config);
+
+    this->RunProgram(device, program);
+}
+
+TEST_F(CommonFixture, TestKernelWithShortRuntimeTensix) {
+    Device *device = devices_[0];
+    CoreCoord core = {0, 0};
+    Program program = CreateProgram();
+
+    const uint32_t kernel_runtime_in_seconds = 1;
+
+    const string& kernel_file_path = "";
+    const std::map<string, string> defines = {
+        {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_in_seconds)}
+    };
+    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+    CreateKernel(program, kernel_file_path, core, config);
+
+    this->RunProgram(device, program);
 }
