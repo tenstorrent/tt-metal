@@ -47,9 +47,9 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
-        const std::vector<tt::tt_metal::LegacyShape> output_shape_required = this->compute_output_shapes(input_tensors);
+        const std::vector<ttnn::SimpleShape> output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        TT_FATAL(out_tensor.get_logical_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
     }
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
@@ -109,9 +109,9 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(const std::vector<Tens
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::SimpleShape> EltwiseBinaryBroadcast::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+    return {input_tensor.get_logical_shape()};
 }
 
 
@@ -131,7 +131,7 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vec
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+        return {create_device_tensor(ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()), input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
     } else {
         return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
