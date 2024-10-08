@@ -39,20 +39,15 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
-SEARCH_DIR("/opt/riscv32i/riscv32-unknown-elf/lib");
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
-  .init TEXT_START :
+  .text TEXT_START :
   {
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
        do not restart the region, if this one is empty.  */
     . = .;
-    KEEP (*(SORT_NONE(.init)))
-  } > REGION_CODE
-  .text           :
-  {
+    *(.start)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
@@ -61,9 +56,12 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
   } > REGION_CODE
-  .fini           :
+  .init.fini :
   {
-    KEEP (*(SORT_NONE(.fini)))
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init))
+    KEEP (*(.fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_CODE
 
   l1_data :
