@@ -7,6 +7,7 @@ import math
 import pytest
 from loguru import logger
 import os
+import itertools
 
 ##### PyTorch imports #####
 import torch
@@ -93,13 +94,21 @@ class TilePositionEmbedding(nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "input_shape, dim, gated, max_num_tiles",
+    "gated",
     [
-        ((1, 32, 4, 1032), 1280, True, 4),
-        ((1, 4, 4, 1032), 1280, True, 4),
-        ((1, 1, 4, 1032), 1280, True, 4),
-        ((1, 1, 4, 1032), 1280, False, 4),
-        ((1, 32, 4, 1032), 1280, False, 4),
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, dim, max_num_tiles",
+    [
+        ((1, 32, 4, 1032), 1280, 4),
+        ((1, 8, 4, 1032), 1280, 4),
+        ((1, 4, 4, 1032), 1280, 4),
+        ((1, 1, 4, 1032), 1280, 4),
+        ((1, 1, 4, 1024), 1280, 4),
+        # ((1, 32, 16, 1032), 1280, 16), # Large test, takes some time
     ],
 )
 @pytest.mark.parametrize(
@@ -152,7 +161,15 @@ def test_llama_conv2d_inference(
     )
     logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
 
-    aspect_ratios = torch.ones(bsz * num_concurrent_media, 2, dtype=torch.int64)  # Collapse
+    # Generate all possible aspect ratios (H * W must be less than or equal to max_num_tiles)
+    aspect_ratios = list(itertools.product(range(1, max_num_tiles + 1), repeat=2))
+    aspect_ratios = [x for x in aspect_ratios if x[0] * x[1] <= max_num_tiles]
+
+    # Repeat the aspect ratios to match the batch size
+    if len(aspect_ratios) < bsz * num_concurrent_media:
+        aspect_ratios = aspect_ratios * (bsz * num_concurrent_media // len(aspect_ratios) + 1)
+
+    aspect_ratios = torch.tensor(aspect_ratios[: bsz * num_concurrent_media], dtype=torch.int64)
     logger.info(f"Aspects ratios shape: {aspect_ratios.shape}")
 
     tt_aspect_ratios = aspect_ratios.tolist()
