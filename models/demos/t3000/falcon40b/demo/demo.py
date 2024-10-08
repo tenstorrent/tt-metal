@@ -527,8 +527,7 @@ def run_falcon_demo_kv(
     if not perf_mode:
         print_output_prompts(generated_ids, tokenizer)
 
-    for device in devices:
-        device.disable_and_clear_program_cache()
+    mesh_device.disable_and_clear_program_cache()
 
     generated_text = tokenizer.batch_decode(generated_ids.tolist())
 

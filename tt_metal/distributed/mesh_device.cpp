@@ -408,6 +408,18 @@ void MeshDevice::enable_async(bool enable) {
     }
 }
 
+void MeshDevice::enable_program_cache() {
+    for (auto device : this->devices) {
+        device->enable_program_cache();
+    }
+}
+
+void MeshDevice::disable_and_clear_program_cache() {
+    for (auto device : this->devices) {
+        device->disable_and_clear_program_cache();
+    }
+}
+
 std::vector<int> get_t3k_physical_device_ids_ring() {
     auto& instance = SystemMesh::instance();
     auto num_devices = instance.get_num_devices();

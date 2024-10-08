@@ -296,8 +296,7 @@ def test_t3k_falcon_causal_lm_with_trace(
     num_loops,
 ):
     t3k_mesh_device.enable_async(enable_async)
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_program_cache()
+    t3k_mesh_device.enable_program_cache()
 
     torch.manual_seed(0)
     batch = device_batch_size * t3k_mesh_device.get_num_devices()

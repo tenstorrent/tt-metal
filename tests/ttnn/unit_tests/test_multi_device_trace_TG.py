@@ -27,8 +27,7 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
         pytest.skip("Test is only valid on Galaxy")
     # Trace requires program cache to be enabled
     mesh_device.enable_async(True)
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_program_cache()
+    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
@@ -129,8 +128,7 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
 
     # Trace requires program cache to be enabled
     mesh_device.enable_async(True)
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_program_cache()
+    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
