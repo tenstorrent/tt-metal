@@ -231,7 +231,9 @@ class TtLlamaAttention(LightweightModule):
         q_heads_1BQD = ttnn.linear(
             q_heads_pre_rot_1BQD,
             rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
+            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
+                q_heads_pre_rot_1BQD.shape[-2], q_heads_pre_rot_1BQD.shape[-1], rot_mat.shape[-1]
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
@@ -240,7 +242,9 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1BKD = ttnn.linear(
             k_heads_pre_rot_1BKD,
             rot_mat,
-            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"],
+            program_config=self.model_config["ROT_MAT_BMM_PROGCFG"](
+                k_heads_pre_rot_1BKD.shape[-2], k_heads_pre_rot_1BKD.shape[-1], rot_mat.shape[-1]
+            ),
             memory_config=k_heads_pre_rot_1BKD.memory_config(),
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,

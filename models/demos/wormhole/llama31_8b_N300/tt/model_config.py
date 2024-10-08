@@ -387,13 +387,13 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["ROT_MAT_BMM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+            self.model_config["ROT_MAT_BMM_PROGCFG"] = lambda m, k, n: ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=grid_by_batch,
-                in0_block_w=4,
+                in0_block_w=math.ceil(k / 32),
                 out_subblock_h=1,
-                out_subblock_w=4,
-                per_core_M=1,
-                per_core_N=4,
+                out_subblock_w=1,  # TODO How to choose this subblock size?
+                per_core_M=math.ceil(m / 32),
+                per_core_N=math.ceil(n / 32),
             )
             self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
