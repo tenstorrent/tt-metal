@@ -123,6 +123,28 @@ struct ExecuteUnaryCompositeClamp {
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
+struct ExecuteUnaryCompositeClampMin {
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        float min,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryCompositeClampMax {
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        float max,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryCompositeClip {
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        std::optional<float> min = std::nullopt,
+        std::optional<float> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+};
+
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithInt {
 
@@ -270,10 +292,16 @@ constexpr auto hardtanh = ttnn::register_operation_with_auto_launch_op<
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
 constexpr auto clip = ttnn::register_operation_with_auto_launch_op<
     "ttnn::clip",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::CLIP>>();
+    operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::clamp",
     operations::unary::ExecuteUnaryCompositeClamp>();
+constexpr auto clamp_min = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::clamp_min",
+    operations::unary::ExecuteUnaryCompositeClampMin>();
+constexpr auto clamp_max = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::clamp_max",
+    operations::unary::ExecuteUnaryCompositeClampMax>();
 constexpr auto selu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();

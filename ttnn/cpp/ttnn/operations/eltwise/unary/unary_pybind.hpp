@@ -1127,7 +1127,7 @@ void bind_unary_composite_float(py::module& module, const unary_operation_t& ope
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2}
+            {2} (float): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -1555,18 +1555,28 @@ void py_module(py::module& module) {
         "min", "min value", -1.0f,
         "max", "max value", 1.0f,
         R"doc(Performs hardtanh function on :attr:`input_tensor`, :attr:`min`, :attr:`max`.)doc");
-    detail::bind_unary_composite_floats(
+    detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clip,
-        "low", "Low value",
-        "high", "High value",
-        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
+        "min", "Minimum value", std::nullopt,
+        "max", "Maximum value", std::nullopt,
+        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clamp,
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
         R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
+    detail::bind_unary_composite_float(
+        module,
+        ttnn::clamp_min,
+        "min", "Minimum value",
+        R"doc(Performs clamp min function on :attr:`input_tensor`, :attr:`min`)doc");
+    detail::bind_unary_composite_float(
+        module,
+        ttnn::clamp_max,
+        "max", "Maximum value",
+        R"doc(Performs clamp max function on :attr:`input_tensor`, :attr:`max`)doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,
