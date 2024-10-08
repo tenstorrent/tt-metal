@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <optional>
-
 #include "common/constants.hpp"
 #include "common/core_coord.h"
 #include "tt_metal/common/work_split.hpp"
@@ -47,15 +44,11 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
-    const std::vector<uint32_t> reader_compile_time_args{};
-    const std::string reader_file_path = kernels_dir_path + "reader.cpp";
     const std::vector<uint32_t> writer_compile_time_args{};
     const std::string writer_file_path = kernels_dir_path + "writer.cpp";
     const std::vector<uint32_t> compute_compile_time_args{};
     const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
 
-    KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program, reader_file_path, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
