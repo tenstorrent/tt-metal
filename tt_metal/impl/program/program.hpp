@@ -42,13 +42,13 @@ namespace detail{
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
 }
 
-typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
+typedef std::array<std::optional<KernelHandle>, static_cast<size_t>(HalProcessorClassType::COUNT)> kernel_id_array_t;
 
 struct KernelGroup {
     uint32_t programmable_core_type_index;
     CoreRangeSet core_ranges;
     kernel_id_array_t kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
+    uint32_t rta_sizes[size_t(HalProcessorClassType::COUNT)];
     uint32_t total_rta_size;
     uint32_t kernel_bin_sizes[MaxProcessorsPerCoreType];
     launch_msg_t launch_msg;
@@ -71,8 +71,8 @@ struct KernelGroup {
 // Contains the program's worker memory map
 struct ProgramConfig {
     uint32_t rta_offset;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    std::array<uint32_t, size_t(HalProcessorClassType::COUNT)> crta_offsets;
+    std::array<uint32_t, size_t(HalProcessorClassType::COUNT)> crta_sizes;
     uint32_t sem_offset;
     uint32_t sem_size;
     uint32_t cb_offset;

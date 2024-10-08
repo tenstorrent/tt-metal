@@ -8,6 +8,7 @@
 
 #include "llrt/hal.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
+#include "hw/inc/blackhole/core_config.h"
 #include "hw/inc/blackhole/dev_mem_map.h"
 #include "hw/inc/blackhole/eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
@@ -22,7 +23,6 @@ namespace tt_metal {
 
 HalCoreInfoType create_idle_eth_mem_map() {
 
-    constexpr uint32_t num_proc_per_idle_eth_core = 1;
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
@@ -53,7 +53,13 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
+    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
+    std::vector<uint8_t> processor_types(1, 0);
+    for (auto dispatch_class_idx = 0; dispatch_class_idx < processor_classes.size(); dispatch_class_idx++) {
+        processor_classes[dispatch_class_idx] = processor_types;
+    }
+
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal
