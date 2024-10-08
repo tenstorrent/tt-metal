@@ -187,7 +187,6 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, hidden_dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-        dense_outputs = []
         assert self.max_batch_size * self.n_kv_heads < 64
         ###
         # QKV matmuls
@@ -202,7 +201,9 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
         )
+        ttnn.deallocate(x)
         ttnn.deallocate(x_sharded)
+
         xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(xqkv_fused_sharded)
 
@@ -304,6 +305,7 @@ class TtLlamaAttention(LightweightModule):
             num_heads=self.n_local_heads,
         )
         ttnn.deallocate(attn_output_11BH)
+        ttnn.deallocate(attn_output_1G4D)
 
         dense_out_sharded = ttnn.linear(
             attn_output_cat,
@@ -313,9 +315,10 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )  # seqlen, 1, batch, hidden_size
 
-        ttnn.deallocate(attn_output_cat)
         dense_out = ttnn.sharded_to_interleaved(dense_out_sharded, ttnn.L1_MEMORY_CONFIG)
-        dense_outputs.append(dense_out)
+
+        ttnn.deallocate(attn_output_cat)
+        ttnn.deallocate(dense_out_sharded)
 
         # All reduce
         if self.num_devices > 1:
@@ -323,6 +326,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            ttnn.deallocate(dense_out)
             return dense_out_reduced
         else:
             return dense_out
@@ -416,9 +420,8 @@ class TtLlamaAttention(LightweightModule):
                 user_id,
             )
 
-        if seq_len > 256:
-            ttnn.deallocate(k_fill)
-            ttnn.deallocate(v_fill)
+        ttnn.deallocate(k_fill)
+        ttnn.deallocate(v_fill)
 
         self.layer_past = [keys_BKSD, values_BKSD]
 
@@ -429,11 +432,17 @@ class TtLlamaAttention(LightweightModule):
 
         v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
 
+        ttnn.deallocate(k_heads_1KSD_8b)
+        ttnn.deallocate(v_heads_1VSD_8b)
+
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
+
         q_heads_84SD_8b = ttnn.reshape(
             q_heads_1QSD_8b, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
         )
+        ttnn.deallocate(q_heads_1QSD_8b)
+
         attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_84SD_8b,
             k_heads_K1SD_8b,
@@ -449,6 +458,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(v_heads_V1SD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        ttnn.deallocate(attn_output_84SD)
 
         ###
         # Output matmul
@@ -481,6 +491,7 @@ class TtLlamaAttention(LightweightModule):
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            ttnn.deallocate(output_11SH)
             return dense_out_reduced
         else:
             return output_11SH
