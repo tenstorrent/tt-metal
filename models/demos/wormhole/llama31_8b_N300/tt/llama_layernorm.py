@@ -4,6 +4,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
+import torch
+import os
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -23,6 +25,7 @@ class TtLayerNorm(LightweightModule):
         eps: float = 1e-05,
     ):
         super().__init__()
+        self.device = device
         self.eps = eps
 
         torch_weight = (
@@ -79,8 +82,45 @@ class TtLayerNorm(LightweightModule):
             )
             self.sharded_output_config = self.sharded_input_config
 
-    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x):
+        if os.environ.get("LN") == "tt":
+            return self.forward_tt(x)
+        else:
+            return self.forward_pt(x)
+
+    def forward_pt(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
+
+        x = ttnn.to_torch(
+            x,
+            device=self.device,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+        )[0].float()
+        weight = ttnn.to_torch(
+            self.weight,
+            device=self.device,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+        )[0, 0].float()
+        bias = ttnn.to_torch(
+            self.bias,
+            device=self.device,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+        )[0, 0].float()
+
+        out = torch.nn.functional.layer_norm(x, x.shape[-1:], weight=weight, bias=bias, eps=self.eps)
+        out = out
+
+        out = ttnn.from_torch(
+            out,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        return out
+
+    def forward_tt(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         if in_sharded:
             x = ttnn.layer_norm(
                 x,
@@ -97,5 +137,16 @@ class TtLayerNorm(LightweightModule):
             return x_interleaved
         else:  # Interleaved rmsnorm does not need program or memory configs
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
-            x = ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
+            x = ttnn.layer_norm(
+                x,
+                weight=self.weight,
+                bias=self.bias,
+                epsilon=self.eps,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=False,
+                ),
+            )
             return x

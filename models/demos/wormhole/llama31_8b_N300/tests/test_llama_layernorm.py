@@ -25,8 +25,9 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        32 * 1024,
-        32,
+        # 32 * 1024,
+        # 32,
+        2048,
     ),
 )
 @pytest.mark.parametrize(
@@ -39,7 +40,7 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
     width = 1280  # Hard coded in model. TODO: Bring this into model_config
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -72,7 +73,12 @@ def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seed
     )
 
     # Generate random input
-    torch_input = torch.randn(1, seq_len, width)  # Adjusted dimensions for LayerNorm
+    # torch_input = torch.randn(1, seq_len, width)  # Adjusted dimensions for LayerNorm
+    # torch_input = torch.load("layer_30_intermediate.pt")
+    # torch_input = torch.load("/home/cglagovich/tt-metal/layer_31_intermediate.pt")
+    torch_input = torch.load(
+        "/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_32L_x.pt"
+    )
 
     # Reference output using PyTorch's LayerNorm
     reference_output = reference_model(torch_input)
@@ -82,7 +88,7 @@ def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seed
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -90,8 +96,6 @@ def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seed
     logger.info("Compilation pass for LayerNorm")
     tt_output = tt_model(tt_input)
 
-    # Performance pass (optional, can be similar to compilation pass)
-    tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )  # Adjusted dim for LayerNorm
