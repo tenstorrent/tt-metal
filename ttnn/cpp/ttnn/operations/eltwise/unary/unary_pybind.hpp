@@ -1853,8 +1853,9 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
            |    BFLOAT16                |          TILE                   |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
-        
+
         )doc");
+
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]",
         R"doc(Supported dtypes, layouts, and ranks:
 
