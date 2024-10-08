@@ -126,10 +126,10 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 /models/ @tt-rkim @uaydonat
 /models/*/**
 models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
-functional_*/ @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
-models/demos @eyonland @patrickroberts @yan-zaretskiy @cfjchu @xanderchin
+functional_*/ @uaydonat @esmalTT
+models/demos @uaydonat @tt-rkim
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-models/demos/wormhole @uaydonat @eyonland
+models/demos/wormhole @uaydonat @tt-rkim
 models/demos/t3000 @uaydonat
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
@@ -145,7 +145,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/grayskull @uaydonat @eyonland
+models/demos/grayskull @uaydonat @tt-rkim
 models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat @tt-rkim
