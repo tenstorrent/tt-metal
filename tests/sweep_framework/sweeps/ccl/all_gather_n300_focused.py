@@ -23,6 +23,9 @@ TIMEOUT = 30
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 
 n_chips = 2
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+
 input_shapes = [
     (1, 1, 1, 1),
     (1, 1, 1, 16),
@@ -42,7 +45,16 @@ input_shapes = [
     (17, 17, 17, 17),
 ]
 
-rands = [0, 13, 98, 39]
+rands = [0, 13, 97, 37]
+
+for w in rands:
+    for z in rands:
+        for y in rands:
+            for x in rands:
+                if w != 0 and z != 0:
+                    input_shapes.append((w, z, y * TILE_HEIGHT + 17, x * TILE_WIDTH + 19))
+
+rands = [1, 13, 97, 37]
 
 for w in rands:
     for z in rands:
@@ -61,7 +73,7 @@ input_shapes_large = [
     (1, 1, max_size // 32, 32),
 ]
 
-rand_divisors = [1, 13, 98, 39, 101]
+rand_divisors = [1, 13, 97, 37, 101]
 
 # Rotate the remainder through each dim
 for z in rand_divisors:
