@@ -256,6 +256,15 @@ def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
     return torch.max(input_tensor_a, torch.tensor(lower_limit))
 
 
+def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope, **kwargs):
+    import torch
+
+    return torch.nn.functional.leaky_relu(input_tensor_a, negative_slope)
+
+
+ttnn.attach_golden_function(ttnn.leaky_relu, golden_function=_golden_function_leaky_relu)
+
+
 ttnn.attach_golden_function(ttnn.relu_min, golden_function=_golden_function_relu_min)
 
 

@@ -62,7 +62,9 @@ def run(
     input_shape = (*batch_sizes, height, width)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    torch_output_tensor = torch.nn.functional.leaky_relu(torch_input_tensor, negative_slope)
+
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    torch_output_tensor = golden_function(torch_input_tensor, negative_slope=negative_slope)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=dtype, device=device, memory_config=input_memory_config, layout=layout
