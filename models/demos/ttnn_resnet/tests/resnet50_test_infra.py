@@ -14,6 +14,7 @@ from ttnn.model_preprocessing import (
 from models.utility_functions import (
     is_wormhole_b0,
     is_grayskull,
+    is_blackhole,
     divup,
     _nearest_y,
 )
@@ -237,9 +238,14 @@ class ResNet50TestInfra:
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
         if self.batch_size == 16:
-            core_grid = ttnn.CoreGrid(y=8, x=6)
+            if is_blackhole():
+                core_grid = ttnn.CoreGrid(y=5, x=13)
+            else:
+                core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
-            if is_grayskull():
+            if is_blackhole():
+                core_grid = ttnn.CoreGrid(y=5, x=13)
+            elif is_grayskull():
                 core_grid = ttnn.CoreGrid(y=8, x=10)
             elif is_wormhole_b0():
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
