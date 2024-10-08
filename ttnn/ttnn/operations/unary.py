@@ -313,7 +313,7 @@ def _golden_function_clamp_max(input_tensor_a, max, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clamp_max, golden_function=_golden_function_clamp_max)
 
 
-def _golden_function_clip(input_tensor_a, min, max, *args, **kwargs):
+def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
     return torch.clip(input=input_tensor_a, min=min, max=max)

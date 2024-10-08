@@ -1627,12 +1627,12 @@ void py_module(py::module& module) {
         "min", "min value", -1.0f,
         "max", "max value", 1.0f,
         R"doc(Performs hardtanh function on :attr:`input_tensor`, :attr:`min`, :attr:`max`.)doc");
-    detail::bind_unary_composite_floats(
+    detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clip,
-        "low", "Low value",
-        "high", "High value",
-        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
+        "min", "Minimum value", std::nullopt,
+        "max", "Maximum value", std::nullopt,
+        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clamp,
