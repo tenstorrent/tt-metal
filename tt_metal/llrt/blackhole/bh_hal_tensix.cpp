@@ -6,11 +6,15 @@
 
 #include "llrt/hal.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
+#include "hw/inc/blackhole/core_config.h"
 #include "hw/inc/blackhole/dev_mem_map.h"
 #include "hw/inc/blackhole/eth_l1_address_map.h"  // XXXX FIXME
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
+
+#include <magic_enum.hpp>
+#include <numeric>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 
@@ -20,7 +24,6 @@ namespace tt_metal {
 
 HalCoreInfoType create_tensix_mem_map() {
 
-    constexpr uint32_t num_proc_per_tensix_core = 5;
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
@@ -50,7 +53,16 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes, true};
+    std::vector<std::vector<uint8_t>> processor_classes(NumTensixDispatchClasses);
+    std::vector<uint8_t> processor_types;
+    for (uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
+        uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
+        processor_types.resize(num_processors);
+        std::iota(processor_types.begin(), processor_types.end(), 0);
+        processor_classes[processor_class_idx] = processor_types;
+    }
+
+    return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true};
 }
 
 }  // namespace tt_metal
