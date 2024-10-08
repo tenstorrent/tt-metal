@@ -149,7 +149,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
     model_args = TtModelArgs(mesh_device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    # model_args.n_layers = 1
 
     logger.info("Loading weights...")
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -183,7 +183,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
     embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device. Starting inference...")
-    max_generated_tokens = 220  # Maximum number of tokens to generate per user
+    max_generated_tokens = 100  # Maximum number of tokens to generate per user
     num_tokens_generated_decode = []
     for batch_idx, input_prompts in enumerate(batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -465,7 +465,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
