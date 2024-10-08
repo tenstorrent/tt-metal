@@ -75,7 +75,7 @@ inline void llk_math_eltwise_unary_sfpu(
     uint param4 = 0,
     uint param5 = 0) {
 
-    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(dst_index);
+    _llk_math_eltwise_unary_sfpu_start_<DST_SYNC_MODE>(dst_index);
     if (vector_mode == (int)VectorMode::R) {
         // Do a row vector, Face0 + Face1 -- first iteration
         const int ITERATIONS = 1;

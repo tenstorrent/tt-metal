@@ -17,7 +17,7 @@ template <
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(uint dst_index, uint operand = 0 /* unused */) {
 
-    _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, DstSync::SyncHalf, is_fp32_dest_acc_en>(dst_index);
+    _llk_math_eltwise_unary_datacopy_<type, src_b_bcast_type, DST_SYNC_MODE, is_fp32_dest_acc_en>(dst_index);
 }
 
 template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE,  bool is_fp32_dest_acc_en = false, bool unpack_to_dest = false>

@@ -51,12 +51,12 @@ A MeshDevice can be instantiated over a collection of physically connected devic
 With the N300 form-factor, it houses two wormhole chips. The host is connected to the "left" chip via PCIe and the "left" chip is connected to the "right" chip via two ethernet links. Each ethernet link has a 200 Gbps bi-directional bandwidth. For N300, one of the ethernet links connecting the "left" chip to the "right" chip is reserved for fast-dispatch. At the user-level, this means only a single ethernet link is made available for use. The N300 represents the smallest multi-device configuration that we can instantiate a MeshDevice over.
 
 <!-- ![image1](images/image1.png){width=15 height=15} -->
-<img src="../CCL/images/t3000.png" style="width:500px;"/>
+<img src="../EthernetMultichip/images/t3000.png" style="width:500px;"/>
 
 *Figure 1: T3000 System Topology. T3000 is composed of 4x N300 wormhole cards, totalling 8 wormhole chips, connected in a 2x4 mesh configuration. Each pair of wormhole-chips are connected via two ethernet links.*
 
 
-<img src="../CCL/images/TG.png" style="width:500px;"/>
+<img src="../EthernetMultichip/images/TG.png" style="width:500px;"/>
 
 *Figure 2: TG System Topology. TG is composed of 16x N300 wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
@@ -256,7 +256,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 ## 5. MeshDevice and Collective Communication Library (CCL)
 
-The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../CCL/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
+The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
 
 ### 5.1 CCL Operations
 
@@ -267,7 +267,7 @@ CCL supports several collective operations, including:
 3. All-Reduce (planned)
 4. Send/Receive (planned)
 
-Our library of supported operations can be found [here](../CCL/CclDeveloperGuide.md#op-list-op-list).
+Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
 ### 5.2 All-Gather
 

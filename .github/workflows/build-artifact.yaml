@@ -111,7 +111,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples"
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"

@@ -125,6 +125,10 @@ void DevicePool::initialize(
     _inst->trace_region_size = trace_region_size;
     _inst->num_hw_cqs = num_hw_cqs;
     _inst->l1_bank_remap = l1_bank_remap;
+    // Track the thread where the Device Pool was created. Certain functions
+    // modifying the state of this instance, for example those responsible for
+    // (un)registering worker threads, can only be called in the creation thread
+    _inst->device_pool_creation_thread_id = std::this_thread::get_id();
 
      // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
@@ -250,6 +254,32 @@ void DevicePool::add_devices_to_pool(std::vector<chip_id_t> device_ids) {
     }
 }
 
+void DevicePool::register_worker_thread_for_device(Device* device, std::thread::id worker_thread_id) {
+    TT_FATAL(std::this_thread::get_id() == this->device_pool_creation_thread_id, "Worker threads can only be registered in the thread where the Device(s) were created");
+    auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
+    if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
+        TT_FATAL(worker_thread_handle->second == worker_thread_id, "Cannot register more than one worker thread per device.");;
+    } else {
+        TT_FATAL(this->worker_thread_ids.find(worker_thread_id) == this->worker_thread_ids.end(), "Cannot register a single worker thread on multiple devices");
+    }
+
+    this->device_to_worker_thread_id.insert({device, worker_thread_id});
+    this->worker_thread_ids.insert(worker_thread_id);
+}
+
+void DevicePool::unregister_worker_thread_for_device(Device* device) {
+    TT_FATAL(std::this_thread::get_id() == this->device_pool_creation_thread_id, "Worker threads can only be unregistered in the thread where the Device(s) were created");
+    auto worker_thread_handle = this->device_to_worker_thread_id.find(device);
+    if (worker_thread_handle != this->device_to_worker_thread_id.end()) {
+        this->worker_thread_ids.erase(worker_thread_handle->second);
+        this->device_to_worker_thread_id.erase(device);
+    }
+}
+
+const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const {
+    return this->worker_thread_ids;
+}
+
 void DevicePool::init_firmware_on_active_devices() const {
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -325,7 +355,7 @@ std::vector<Device*> DevicePool::get_all_active_devices() const {
     return user_devices;
 }
 
-bool DevicePool::close_device(chip_id_t device_id) const {
+bool DevicePool::close_device(chip_id_t device_id) {
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -333,6 +363,9 @@ bool DevicePool::close_device(chip_id_t device_id) const {
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
         if (this->is_device_active(mmio_controlled_device_id)) {
             pass &= this->devices[mmio_controlled_device_id]->close();
+            // When a device is closed, its worker thread is joined. Stop tracking this
+            // worker thread.
+            this->unregister_worker_thread_for_device(this->devices[mmio_controlled_device_id].get());
         }
     }
     return pass;
