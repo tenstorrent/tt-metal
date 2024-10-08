@@ -21,14 +21,13 @@
 
 #include <kernel_includes.hpp>
 
-uint8_t noc_index = NOC_INDEX;
 extern uint32_t __kernel_init_local_l1_base[];
 
 void kernel_launch() {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
     firmware_kernel_common_init((void tt_l1_ptr *)__kernel_init_local_l1_base);
 
-    noc_local_state_init(noc_index);
+    noc_local_state_init(NOC_INDEX);
 
     kernel_main();
 }

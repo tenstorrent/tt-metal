@@ -105,6 +105,7 @@ void DataMovementKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 void ComputeKernel::process_defines(
@@ -112,12 +113,16 @@ void ComputeKernel::process_defines(
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
+    // pass default noc mode as compute does not need it, just for compile to pass
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
 void EthernetKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
+    // pass default noc mode as eth does not need it, just for compile to pass
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
 void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {

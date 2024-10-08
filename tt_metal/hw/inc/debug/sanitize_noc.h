@@ -24,7 +24,6 @@
 
 #include "watcher_common.h"
 
-extern uint8_t noc_index;
 
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"

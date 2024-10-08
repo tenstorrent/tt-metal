@@ -160,6 +160,7 @@ KernelGroup::KernelGroup(
     this->programmable_core_type_index = programmable_core_type_index;
     this->core_ranges = this->core_ranges.merge(new_ranges);
     this->kernel_ids = kernel_ids;
+    this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 
     std::memset(&this->launch_msg, 0, sizeof(launch_msg_t));
 
@@ -183,10 +184,18 @@ KernelGroup::KernelGroup(
                 if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
+                    // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
+                    if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    }
                 } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
+                    // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
+                    if (this->launch_msg.kernel_config.brisc_noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    }
                     this->launch_msg.kernel_config.ncrisc_kernel_size16 = kernel->get_binary_size16();
                 }
             }
