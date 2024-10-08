@@ -688,7 +688,8 @@ void Device::configure_kernel_variant(
     NOC upstream_noc_index,
     NOC downstream_noc_index,
     bool is_active_eth_core,
-    bool send_to_brisc) {
+    bool send_to_brisc,
+    bool force_watcher_no_inline) {
 
     const auto& grid_size = this->grid_size();
 
@@ -711,6 +712,9 @@ void Device::configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
+    if (force_watcher_no_inline) {
+        defines.at("WATCHER_NOINLINE") = std::to_string(force_watcher_no_inline);
+    }
     if (llrt::OptionsG.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
@@ -2185,7 +2189,11 @@ void Device::compile_command_queue_programs() {
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
-                my_noc_index
+                my_noc_index,
+                false,
+                false,
+                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
             );
 
             auto [tensix_num_worker_cores, tensix_worker_physical_grid] = get_physical_worker_grid_config(this->id(), num_hw_cqs, dispatch_core_type);
@@ -2337,7 +2345,11 @@ void Device::compile_command_queue_programs() {
                     std::map<string, string> {},
                     my_noc_index,
                     my_noc_index,
-                    my_noc_index
+                    my_noc_index,
+                    false,
+                    false,
+                    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                    tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -2514,7 +2526,11 @@ void Device::compile_command_queue_programs() {
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
-                my_noc_index
+                my_noc_index,
+                false,
+                false,
+                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
