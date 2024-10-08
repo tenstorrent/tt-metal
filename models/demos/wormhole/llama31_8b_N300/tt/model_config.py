@@ -57,14 +57,12 @@ DEFAULT_LLAMA3_1_8B_PARAMS = {
 class TtModelArgs:
     paged_attention_config = None
 
-    # TODO Update these params based on the loaded model
-
-    # Parameters for our use
+    # TODO Update these params. In init we update the max_seq_len to 32k if it's a single device
     max_batch_size = 1
-    # max_seq_len = 131072
-    max_seq_len = 8192 * 4 * 4  # 128k
-    kv_seq_len = 8192 * 4 * 4  # 128k
-    sliding_window = 8192 * 4 * 4  # 128k
+    # Context length for Llama models (if single device, reduce to 32k in init)
+    max_seq_len = 8192 * 16  # 128k
+    kv_seq_len = 8192 * 16  # 128k
+    sliding_window = 8192 * 16  # 128k
 
     tile_size = 32
 
@@ -98,6 +96,12 @@ class TtModelArgs:
         self.num_devices = mesh_device.get_num_devices()
         device = mesh_device.get_devices()[0]
         device_name = {1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+
+        # A single device cannot fit the full 128k context length
+        if self.num_devices == 1:
+            self.max_seq_len = 8192 * 4  # 32k
+            self.kv_seq_len = 8192 * 4  # 32k
+            self.sliding_window = 8192 * 4  # 32k
 
         # Default folder location for weights and cached files
         LLAMA_DIR = os.getenv("LLAMA_DIR")
