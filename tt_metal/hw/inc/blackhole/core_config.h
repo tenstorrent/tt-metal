@@ -24,21 +24,26 @@ enum class AddressableCoreType : uint8_t {
 };
 
 enum class TensixProcessorTypes : uint8_t {
-    BRISC  = 0,
-    NCRISC = 1,
-    TRISC0 = 2,
-    TRISC1 = 3,
-    TRISC2 = 4,
-
     DM0    = 0,
     DM1    = 1,
     MATH0  = 2,
     MATH1  = 3,
     MATH2  = 4,
+    COUNT  = 5
 };
 
 enum class EthProcessorTypes : uint8_t {
     DM0    = 0,
+    DM1    = 1,
+    COUNT  = 2
+};
+
+enum class DramProcessorTypes : uint8_t {
+    DM0     = 0,
+    COUNT   = 1
 };
 
 constexpr uint8_t MaxProcessorsPerCoreType = 5;
+constexpr uint8_t NumTensixDispatchClasses = 3;
+constexpr uint8_t NumEthDispatchClasses = 2;
+constexpr uint8_t NumDramDispatchClasses = 1;
