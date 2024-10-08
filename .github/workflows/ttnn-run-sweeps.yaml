@@ -158,6 +158,7 @@ on:
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
