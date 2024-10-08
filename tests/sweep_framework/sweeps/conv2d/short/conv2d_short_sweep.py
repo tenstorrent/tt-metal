@@ -17,6 +17,8 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_common import run, mesh_de
 parameters = {
     "short_sweep_suite": {
         "input_specs": [
+            # Contains following params
+            # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_x, stride_y, pad_x, pad_y, groups, bias, dilation]
             [1, 32, 1, 28, 28, 3, 3, 1, 1, 0, 0, 1, True, 1],
             [1, 32, 1, 28, 28, 3, 3, 1, 1, 0, 0, 1, True, 1],
             [1, 100, 100, 14, 14, 3, 3, 1, 1, 1, 1, 100, False, 1],
@@ -429,11 +431,11 @@ parameters = {
         "enable_act_double_buffer": [False],
         "enable_split_reader": [False],
         "enable_subblock_padding": [False],
-        "activations_dtype": [ttnn.bfloat16],
-        "weights_dtype": [ttnn.bfloat16],
+        "activations_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "weights_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
-        "fp32_accum": [False],
-        "packer_l1_acc": [False],
+        "fp32_accum": [True],
+        "packer_l1_acc": [True],
         "override_sharding_config": [False],
         "core_grid": [None],
         "use_shallow_conv_variant": [False],

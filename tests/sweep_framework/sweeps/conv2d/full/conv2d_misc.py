@@ -25,7 +25,7 @@ TIMEOUT = 30
 # fp32_accum
 # packer_l1_acc
 
-# Keeping rest of the params constant as they do not affect sharding
+# Keeping rest of the params constant
 # batches
 # activations
 # kernels
@@ -59,7 +59,7 @@ TIMEOUT = 30
 # use_shallow_conv_variant
 # deallocate_activation
 
-# Keeping rest of the params constant as they do not affect sharding
+# Keeping rest of the params constant
 # batches
 # activations
 # kernels
