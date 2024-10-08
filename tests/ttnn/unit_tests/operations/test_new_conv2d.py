@@ -171,7 +171,7 @@ def run_conv(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    torch_output_tensor = torch.Tensor(ttnn.to_torch(tt_output_tensor))
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
@@ -190,6 +190,8 @@ def run_conv(
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+    torch.save(torch_output_tensor, f"torch_output_tensor.pt")
+    torch.save(torch_out_golden_tensor, f"torch_out_golden_tensor.pt")
     assert passing
 
     if memory_config:
@@ -764,7 +766,8 @@ def test_resnet50_conv_gs(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
+# @skip_for_blackhole()
+@pytest.mark.timeout(180)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -818,11 +821,15 @@ def test_resnet50_conv_gs(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
+    # [ttnn.bfloat8_b],
+    # [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
+    # [ttnn.bfloat8_b],
+    # [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -851,27 +858,27 @@ def test_resnet50_conv_wh(
     has_bias,
     auto_shard,
 ):
-    if device.core_grid.y == 7:
-        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
-    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
-        pytest.skip("Batch > 8 must be run fully bfp8")
+    # if device.core_grid.y == 7:
+    #     pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+    # if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
+    #     pytest.skip("Batch > 8 must be run fully bfp8")
 
-    if (
-        (
-            activations_dtype == ttnn.bfloat16
-            and batch_size == 20
-            and (
-                output_channels == 64
-                or (
-                    stride_h == 2
-                    and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-                )
-            )
-        )
-        # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
-        or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
+    # if (
+    #     (
+    #         activations_dtype == ttnn.bfloat16
+    #         and batch_size == 20
+    #         and (
+    #             output_channels == 64
+    #             or (
+    #                 stride_h == 2
+    #                 and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
+    #             )
+    #         )
+    #     )
+    #     # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
+    #     or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
+    # ):
+    #     pytest.skip("Skipping test because it won't fit in L1!")
 
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(

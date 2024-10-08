@@ -46,12 +46,12 @@ def test_resnet_50(
     use_pretrained_weight,
     model_location_generator,
 ):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
-        pytest.skip("Test is not supported on n300 (8,7) grid")
+    # if batch_size == 8:
+    #     pytest.skip("Skipping batch size 8 due to memory config issue")
+    # if is_wormhole_b0() and batch_size == 20:
+    #     pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+    # if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+    #     pytest.skip("Test is not supported on n300 (8,7) grid")
 
     test_infra = create_test_infra(
         device,
