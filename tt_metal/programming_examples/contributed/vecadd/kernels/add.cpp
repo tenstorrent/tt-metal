@@ -36,7 +36,7 @@ void MAIN {
     // Loop over all the tiles and perform the computation
     for(uint32_t i = 0; i < n_tiles; i++) {
         // Make sure there is a valid register we can use.
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
@@ -51,7 +51,7 @@ void MAIN {
         cb_pop_front(cb_in0, 1);
         cb_pop_front(cb_in1, 1);
         // Release the held register
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 }

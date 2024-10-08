@@ -58,7 +58,7 @@ void MAIN {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                    acquire_dst(tt::DstMode::Half);
+                    acquire_dst();
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -99,7 +99,7 @@ void MAIN {
                                 pack_tile(i, mm_bias_intermediate_cb_id);
                             }
                             cb_push_back(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                            release_dst(tt::DstMode::Half);
+                            release_dst();
 
                             // Redundant wait since we know data was just pushed
                             cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
@@ -109,7 +109,7 @@ void MAIN {
                             unpack_reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                             // reconfigure packer df for out
                             pack_reconfig_data_format(out_cb_id);
-                            acquire_dst(tt::DstMode::Half);
+                            acquire_dst();
                             for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                                 uint32_t bcast_tile_idx = in1_index_subblock_offset;
                                 for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
@@ -158,7 +158,7 @@ void MAIN {
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    release_dst(tt::DstMode::Half);
+                    release_dst();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;

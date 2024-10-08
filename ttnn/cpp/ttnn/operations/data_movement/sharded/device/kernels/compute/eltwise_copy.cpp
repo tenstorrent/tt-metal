@@ -15,7 +15,7 @@ void MAIN {
     unary_op_init_common(tt::CB::c_in0);
     for(uint32_t b=0;b<per_core_tile_cnt;++b)
     {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
 
         // Pop tile after tile, copy to DST and pack
         cb_wait_front(tt::CB::c_in0, 1);
@@ -27,7 +27,7 @@ void MAIN {
         cb_pop_front(tt::CB::c_in0, 1);
         cb_push_back(tt::CB::c_out0, 1);
 
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 }

@@ -25,13 +25,13 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(tt::CB::c_in1, onetile);
             for (uint32_t ht = 0; ht < Ht_per_batch_b; ht+=h_blk) {
-                acquire_dst(tt::DstMode::Half);
+                acquire_dst();
                 for (uint32_t htr = 0; htr<h_blk; htr++) {
                     uint32_t current_index = b_offset + (ht + htr) * Wt + wt;
                     BCAST_OP<BroadcastType::ROW>(tt::CB::c_in0, tt::CB::c_in1, current_index, 0, htr);
                     pack_tile<true>(htr, tt::CB::c_out0, current_index);
                 }
-                release_dst(tt::DstMode::Half);
+                release_dst();
             }
             cb_pop_front(tt::CB::c_in1, onetile);
         }

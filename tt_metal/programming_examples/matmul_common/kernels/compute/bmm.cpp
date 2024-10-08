@@ -31,7 +31,7 @@ void MAIN {
     for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) // output tile of C
     for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C) // output tile index of C
     {
-        acquire_dst(tt::DstMode::Full);
+        acquire_dst();
         for (uint32_t kt = 0; kt < Kt; kt++) {
             cb_wait_front(tt::CB::c_in0, onetile);
             cb_wait_front(tt::CB::c_in1, onetile);
@@ -46,7 +46,7 @@ void MAIN {
         pack_tile(0, tt::CB::c_out0);
         cb_push_back(tt::CB::c_out0, onetile);
 
-        release_dst(tt::DstMode::Full);
+        release_dst();
     }
 
 

@@ -23,14 +23,14 @@ void MAIN {
 
             cb_reserve_back(tt::CB::c_out0, onetile);
 
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
 
             cb_wait_front(tt::CB::c_in0, onetile);
             BCAST_OP<BroadcastType::COL>(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0);
             pack_tile(0, tt::CB::c_out0);
             cb_pop_front(tt::CB::c_in0, onetile);
 
-            release_dst(tt::DstMode::Half);
+            release_dst();
 
             cb_push_back(tt::CB::c_out0, onetile);
 

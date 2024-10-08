@@ -17,15 +17,11 @@ namespace ckernel {
  *
  * This is only available on the compute engine.
  *
- * DOX-TODO(Describe meanings of dst_mode values).
- *
  * Return value: None
  *
- * | Argument | Description                                                | Type     | Valid Range         | Required |
- * |----------|------------------------------------------------------------|----------|---------------------|----------|
- * | dst_mode | Specifies how the destination register is going to be used | DstMode  | Full, Half, Tile    | True     |
+ * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
  */
-ALWI void acquire_dst(tt::DstMode mode) {
+ALWI void acquire_dst() {
     MATH(( llk_math_wait_for_dest_available()  ));
 
     PACK(( llk_packer_wait_for_math_done()  ));
@@ -58,13 +54,9 @@ ALWI void tile_regs_wait() {
  *
  * Return value: None
  *
- * DOX-TODO(Describe meanings of dst_mode values).
- *
- * | Argument | Description                                                | Type     | Valid Range                                 | Required |
- * |----------|------------------------------------------------------------|----------|---------------------------------------------|----------|
- * | dst_mode | Specifies how the destination register is going to be used | uint32_t | DstMode::Full, DstMode::Half, DstMode::Tile | True     |
+ * How the destination register will be shared and synchronized between TRISC threads will depend on the compute kernel configuration.
  */
-ALWI void release_dst(tt::DstMode mode) {
+ALWI void release_dst() {
     MATH(( llk_math_dest_section_done()  ));
 
     PACK(( llk_pack_dest_section_done()  ));

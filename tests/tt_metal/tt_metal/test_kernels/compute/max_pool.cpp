@@ -75,14 +75,14 @@ inline void reduce_h(uint32_t out_nelems,
     uint32_t base_tile_id = 0;
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         uint32_t dst_i = 0; // TODO [AS]: Use more than one dst tile at a time
         for (uint32_t hw_i = 0; hw_i < in_ntiles_hw; ++hw_i) {
             uint32_t tile_i = base_tile_id + hw_i;
             reduce_tile(in_cb_id, in_scalar_cb_id, tile_i, 0, dst_i);
         }
         pack_tile(dst_i, out_cb_id);
-        release_dst(tt::DstMode::Half);
+        release_dst();
         base_tile_id += in_ntiles_hw;
     }
     reduce_revert_delta(out_cb_id);

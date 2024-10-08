@@ -9,8 +9,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/matmul.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {

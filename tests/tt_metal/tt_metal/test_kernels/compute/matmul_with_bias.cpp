@@ -24,7 +24,7 @@ void MAIN {
     uint32_t with_bias = get_compile_time_arg_val(7);
 
 
-    acquire_dst(tt::DstMode::Full);
+    acquire_dst();
 
     mm_init();
     for(uint32_t b=0;b<block_cnt;++b)
@@ -61,9 +61,9 @@ void MAIN {
             pack_tile(i, tt::CB::c_intermed0);
         }
         cb_push_back(tt::CB::c_intermed0, out_block_tile_cnt);
-        release_dst(tt::DstMode::Full);
+        release_dst();
 
-        acquire_dst(tt::DstMode::Full);
+        acquire_dst();
 
         add_bcast_rows_init_short();
         cb_wait_front(tt::CB::c_intermed0, out_block_tile_cnt);
@@ -88,6 +88,6 @@ void MAIN {
     }
 
     cb_push_back(tt::CB::c_out0, out_block_tile_cnt);
-    release_dst(tt::DstMode::Full);
+    release_dst();
 }
 }

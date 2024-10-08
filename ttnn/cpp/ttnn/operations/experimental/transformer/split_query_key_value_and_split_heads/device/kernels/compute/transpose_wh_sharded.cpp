@@ -24,10 +24,10 @@ void MAIN {
         cb_wait_front(cb_im0, 1);
         cb_reserve_back(cb_out1, 1);
 
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         transpose_wh_tile(cb_im0, 0, 0);
         pack_tile(0, cb_out1);
-        release_dst(tt::DstMode::Half);
+        release_dst();
 
         cb_push_back(cb_out1, 1);
         cb_pop_front(cb_im0, 1);

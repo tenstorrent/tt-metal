@@ -20,8 +20,8 @@
 
 #define DEBUG_PRINT 0
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 inline void tilize_in(
     uint32_t in_cb_id,
