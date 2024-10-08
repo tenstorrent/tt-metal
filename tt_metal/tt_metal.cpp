@@ -377,10 +377,16 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 }
 
 bool InWorkerThread() {
-    bool in_worker_thread = false;
-    if (tt::DevicePool::is_instantiated()) {
+    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
+    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
+    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
+    // each function call significantly degrades runtime perf.
+    thread_local static bool in_worker_thread = false;
+    thread_local static bool is_thread_status_checked = false;
+    if (not is_thread_status_checked) {
         auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
         in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
+        is_thread_status_checked = true;
     }
     return in_worker_thread;
 }

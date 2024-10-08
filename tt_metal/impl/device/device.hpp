@@ -241,7 +241,7 @@ class Device {
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
     void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
-                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false);
+                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
