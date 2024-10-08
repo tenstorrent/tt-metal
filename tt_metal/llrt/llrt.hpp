@@ -55,7 +55,6 @@ using WorkerCores = std::vector<WorkerCore>;
 
 enum class PackSpans { PACK, NO_PACK };
 ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0, PackSpans pack_spans = PackSpans::NO_PACK);
-uint16_t get_binary_code_size16(const ll_api::memory &mem, int riscv_id);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 

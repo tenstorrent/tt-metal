@@ -1458,7 +1458,7 @@ void EnqueueProgramCommand::process() {
 
     bool is_finalized = program.is_finalized();
     if (not is_finalized) {
-        program.finalize();
+        program.finalize(device);
     }
 
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =

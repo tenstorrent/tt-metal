@@ -679,7 +679,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
         detail::DispatchStateCheck(force_slow_dispatch);
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
-            program.finalize();
+            program.finalize(device);
         }
 
         detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
