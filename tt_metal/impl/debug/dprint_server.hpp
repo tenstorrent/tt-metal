@@ -11,8 +11,10 @@
 namespace tt {
 
 namespace tt_metal {
+inline namespace v0 {
     class Device;
-}
+}  // namespace v0
+}  // namespace tt_metal
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the

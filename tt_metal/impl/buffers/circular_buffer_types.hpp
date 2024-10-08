@@ -17,6 +17,7 @@
 #include "tt_metal/impl/tile/tile.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
@@ -151,4 +152,5 @@ class CircularBufferConfig {
     std::optional<uint32_t> max_size_ = std::nullopt;
 };
 
+}  // namespace v0
 }  // namespace tt::tt_metal

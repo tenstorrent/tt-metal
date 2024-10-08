@@ -19,13 +19,20 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
+inline namespace v0 {
+
 class Buffer;
 class Kernel;
 class CircularBuffer;
 class Device;
 class Program;
-class JitBuildOptions;
 class CircularBufferConfig;
+
+}  // namespace v0
+
+class EnqueueProgramCommand;
+class HWCommandQueue;
+class JitBuildOptions;
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
     KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
@@ -70,9 +77,9 @@ struct ProgramConfig {
     uint32_t cb_size;
 };
 
-class Program {
-    friend class KernelGroup;
+inline namespace v0 {
 
+class Program {
    public:
     Program();
 
@@ -254,10 +261,11 @@ class Program {
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
-    friend class HWCommandQueue;
-    friend class EnqueueProgramCommand;
+    friend HWCommandQueue;
+    friend EnqueueProgramCommand;
 };
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

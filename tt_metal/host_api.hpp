@@ -30,6 +30,7 @@ class CoreRangeSet;
 namespace tt {
 
 namespace tt_metal {
+inline namespace v0 {
 
 class Program;
 class Device;
@@ -657,6 +658,7 @@ bool EventQuery(const std::shared_ptr<Event> &event);
  */
 void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

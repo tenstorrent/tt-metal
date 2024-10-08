@@ -157,14 +157,14 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
     return semaphore_id;
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args) {
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRange &core_range,
@@ -179,7 +179,7 @@ inline void SetRuntimeArgs(
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRangeSet &core_range_set,
@@ -196,7 +196,7 @@ inline void SetRuntimeArgs(
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
     const std::shared_ptr<Kernel> kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
@@ -227,7 +227,7 @@ inline void SetRuntimeArgs(
         core_spec);
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
     const std::shared_ptr<Kernel> kernel,
     const std::vector<CoreCoord> &core_spec,
@@ -877,6 +877,8 @@ void DeallocateBuffer(Buffer *buffer) {
 
 }  // namespace detail
 
+inline namespace v0 {
+
 size_t GetNumAvailableDevices() {
     return tt::Cluster::instance().number_of_user_devices();
 }
@@ -1119,7 +1121,7 @@ void SetRuntimeArgs(
         not CommandQueue::async_mode_set(),
         "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast "
         "Dispatch.");
-    std::visit([&](auto &&core_spec) { SetRuntimeArgs(program, kernel_id, core_spec, runtime_args); }, core_spec);
+    std::visit([&](auto &&core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
 void SetRuntimeArgs(
@@ -1147,7 +1149,7 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
 void SetRuntimeArgs(
@@ -1161,7 +1163,7 @@ void SetRuntimeArgs(
         core_spec.size(),
         runtime_args.size());
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
 void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
@@ -1222,6 +1224,7 @@ void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
     }
 }
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

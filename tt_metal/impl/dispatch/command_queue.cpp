@@ -2840,6 +2840,8 @@ void EnqueueDeallocateBuffer(
     });
 }
 
+inline namespace v0 {
+
 void EnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -2889,22 +2891,6 @@ void EnqueueReadBuffer(
         .type = EnqueueCommandType::ENQUEUE_READ_BUFFER, .blocking = blocking, .buffer = buffer, .dst = dst});
 }
 
-void EnqueueReadBufferImpl(
-    CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void* dst,
-    bool blocking) {
-    std::visit(
-        [&cq, dst, blocking](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (
-                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking);
-            }
-        },
-        buffer);
-}
-
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
@@ -2915,34 +2901,11 @@ void EnqueueWriteBuffer(
         .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = src});
 }
 
-void EnqueueWriteBufferImpl(
-    CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    HostDataType src,
-    bool blocking) {
-    cq.hw_command_queue().enqueue_write_buffer(buffer, src, blocking);
-}
-
 void EnqueueProgram(
     CommandQueue& cq, Program& program, bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = &program});
-}
-
-void EnqueueProgramImpl(
-    CommandQueue& cq, Program& program, bool blocking) {
-    ZoneScoped;
-
-    Device* device = cq.device();
-    detail::CompileProgram(device, program);
-    program.allocate_circular_buffers(device);
-    detail::ValidateCircularBufferRegion(program, device);
-    cq.hw_command_queue().enqueue_program(program, blocking);
-    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-    // leaks on device.
-    program.release_buffers();
-
 }
 
 void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
@@ -2954,10 +2917,6 @@ void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     });
 }
 
-void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    cq.hw_command_queue().enqueue_record_event(event);
-}
-
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
@@ -2965,19 +2924,6 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
         .blocking = false,
         .event = event,
     });
-}
-
-void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    event->wait_until_ready();  // Block until event populated. Worker thread.
-    log_trace(
-        tt::LogMetal,
-        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event->device->id(),
-        event->cq_id,
-        event->event_id,
-        cq.device()->id(),
-        cq.id());
-    cq.hw_command_queue().enqueue_wait_for_event(event);
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
@@ -3028,14 +2974,72 @@ void Finish(CommandQueue& cq) {
         tt::watcher_get_log_file_name());
 }
 
-void FinishImpl(CommandQueue& cq) { cq.hw_command_queue().finish(); }
-
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_TRACE, .blocking = blocking, .trace_id = trace_id});
 }
+
+}  // namespace v0
+
+void EnqueueReadBufferImpl(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void* dst,
+    bool blocking) {
+    std::visit(
+        [&cq, dst, blocking](auto&& b) {
+            using T = std::decay_t<decltype(b)>;
+            if constexpr (
+                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
+                cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking);
+            }
+        },
+        buffer);
+}
+
+void EnqueueWriteBufferImpl(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    bool blocking) {
+    cq.hw_command_queue().enqueue_write_buffer(buffer, src, blocking);
+}
+
+void EnqueueProgramImpl(
+    CommandQueue& cq, Program& program, bool blocking) {
+    ZoneScoped;
+
+    Device* device = cq.device();
+    detail::CompileProgram(device, program);
+    program.allocate_circular_buffers(device);
+    detail::ValidateCircularBufferRegion(program, device);
+    cq.hw_command_queue().enqueue_program(program, blocking);
+    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+    // leaks on device.
+    program.release_buffers();
+
+}
+
+void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    cq.hw_command_queue().enqueue_record_event(event);
+}
+
+void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    event->wait_until_ready();  // Block until event populated. Worker thread.
+    log_trace(
+        tt::LogMetal,
+        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+        event->device->id(),
+        event->cq_id,
+        event->event_id,
+        cq.device()->id(),
+        cq.id());
+    cq.hw_command_queue().enqueue_wait_for_event(event);
+}
+
+void FinishImpl(CommandQueue& cq) { cq.hw_command_queue().finish(); }
 
 void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     cq.hw_command_queue().enqueue_trace(trace_id, blocking);

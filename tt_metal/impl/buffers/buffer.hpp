@@ -22,11 +22,12 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "llrt/hal.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
+inline namespace v0 {
 
 class Device;
+
+}  // namespace v0
 
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
@@ -101,6 +102,8 @@ struct ShardSpecBuffer {
     }
 };
 
+inline namespace v0 {
+
 struct BufferConfig {
     Device *device;
     DeviceAddr size;       // Size in bytes
@@ -124,6 +127,8 @@ struct ShardedBufferConfig {
     bool allocate = true;
 };
 
+}  // namespace v0
+
 bool is_sharded(const TensorMemoryLayout &layout);
 
 struct BufferPageMapping {
@@ -139,6 +144,8 @@ struct BufferPageMapping {
     std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
 };
+
+inline namespace v0 {
 
 class Buffer {
    public:
@@ -278,6 +285,8 @@ class Buffer {
     std::optional<bool> bottom_up_;
 };
 
+}  // namespace v0
+
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
 
 namespace detail {
@@ -310,6 +319,8 @@ class buffer_map_t {
 extern buffer_map_t BUFFER_MAP;
 }  // namespace detail
 
+inline namespace v0 {
+
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
     const std::shared_ptr<std::vector<uint16_t>>,
@@ -319,9 +330,8 @@ using HostDataType = std::variant<
     const std::shared_ptr<std::vector<bfloat16>>,
     const void *>;
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace v0
+}  // namespace tt::tt_metal
 
 namespace tt::stl::json {
 template <>

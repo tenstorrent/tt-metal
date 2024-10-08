@@ -8,9 +8,8 @@
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
+inline namespace v0 {
 
 class CircularBuffer {
    public:
@@ -66,6 +65,5 @@ class CircularBuffer {
     // add a callback to invalidate circular buffer allocation
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace v0
+}  // namespace tt::tt_metal
