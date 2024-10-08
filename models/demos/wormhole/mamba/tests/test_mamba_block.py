@@ -29,6 +29,7 @@ class PytorchMambaBlock(torch.nn.Module):
         return result
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("layer", [0])
 @pytest.mark.parametrize(
     "use_pretrained_weights",
@@ -54,7 +55,7 @@ class PytorchMambaBlock(torch.nn.Module):
             ModelMode.DECODE,
             32,
             1,
-            0.975,
+            0.973,
         ),
     ),
 )

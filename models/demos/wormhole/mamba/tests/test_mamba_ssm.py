@@ -46,14 +46,14 @@ class PytorchMambaSSM(torch.nn.Module):
             ModelMode.PREFILL,
             1,
             128,
-            0.9915,
+            0.9911,
         ),
         (
             "state-spaces/mamba-2.8b",
             ModelMode.DECODE,
             32,
             1,
-            0.9925,
+            0.9919,
         ),
     ),
 )

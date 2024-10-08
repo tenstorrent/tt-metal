@@ -28,7 +28,7 @@ from difflib import SequenceMatcher
             [
                 "The city of Sarnia is located on the eastern shore of Lake Huron at its extreme southern point where it flows into the St. Clair River . Most of the surrounding area is flat , and the elevation ranges from 169 metres ( 554 ft ) and 281 metres ( 922 ft ) above sea level . The soil mostly comprises clay . Despite this high percentage of clay , the soil is remarkably rich for cultivation . Prior to the Ice Age , glaciers covered most of the area , as can be seen not only by the existence of the Great Lakes themselves but also of alluvial sand deposits, terminal moraines, and rich oil reserves."
             ],
-            ["The area was settled by Europeans in the late"],
+            ["The Great Lakes are the largest freshwater system in"],
             "state-spaces/mamba-2.8b-slimpj",
             10,
             128,

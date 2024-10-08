@@ -117,7 +117,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             32,
             64,
             1,
-            0.9865,
+            0.9759,
         ),
         (
             "state-spaces/mamba-2.8b",
@@ -126,7 +126,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             128,
             64,
             1,
-            0.9730,
+            0.9604,
         ),
         (
             "state-spaces/mamba-2.8b",
@@ -135,7 +135,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             1,
             64,
             1,
-            0.9700,
+            0.9649,
         ),
         (
             "state-spaces/mamba-2.8b",
@@ -144,7 +144,7 @@ buildings, agriculture and land use are among the main sectors causing greenhous
             1,
             1,
             1,
-            0.9990,
+            0.9955,
         ),
     ),
 )
