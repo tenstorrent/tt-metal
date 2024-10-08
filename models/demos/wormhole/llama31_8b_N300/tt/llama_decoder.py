@@ -95,11 +95,7 @@ class TtTransformerBlock(LightweightModule):
             mode,
             page_table,
         )
-        ttnn.deallocate(attn_norm)
         h = ttnn.add(x, r, memory_config=skip_mem_cfg)
-        ttnn.deallocate(x)
         r = self.feed_forward.forward(self.ffn_norm(h), mode)
         out = ttnn.add(h, r, memory_config=skip_mem_cfg)
-        ttnn.deallocate(h)
-        ttnn.deallocate(r)
         return out
