@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
 #include <random>
+#include <string>
 
+#include "core_coord.h"
+#include "logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -22,7 +26,7 @@ constexpr uint32_t DEFAULT_BATCH_SIZE_K = 512;
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
 //
-// Test read bw and latency from host/dram/l1
+// Test read/write bw and latency from host/dram/l1
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
@@ -30,6 +34,7 @@ uint32_t iterations_g = DEFAULT_ITERATIONS;
 uint32_t warmup_iterations_g = DEFAULT_WARMUP_ITERATIONS;
 CoreRange worker_g = {{0, 0}, {0, 0}};
 CoreCoord src_worker_g = {0, 0};
+CoreRange mcast_src_workers_g = {{0, 0}, {0, 0}};
 uint32_t page_size_g;
 uint32_t page_count_g;
 uint32_t source_mem_g;
@@ -53,15 +58,17 @@ void init(int argc, char **argv) {
         log_info(LogTest, "  -i: iterations (default {})", DEFAULT_ITERATIONS);
         log_info(LogTest, "  -bs: batch size in K of data to xfer in one iteration (default {}K)", DEFAULT_BATCH_SIZE_K);
         log_info(LogTest, "  -p: page size (default {})", DEFAULT_PAGE_SIZE);
-        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs, 4:HOST_READ, 5:HOST_WRITE (default 0:PCIe)");
+        log_info(LogTest, "  -m: source mem, 0:PCIe, 1:DRAM, 2:L1, 3:ALL_DRAMs, 4:HOST_READ, 5:HOST_WRITE, 6:MULTICAST_WRITE (default 0:PCIe)");
         log_info(LogTest, "  -l: measure latency (default is bandwidth)");
-        log_info(LogTest, "  -rx: X of core to issue read (default {})", 1);
-        log_info(LogTest, "  -ry: Y of core to issue read (default {})", 0);
+        log_info(LogTest, "  -rx: X of core to issue read or write (default {})", 1);
+        log_info(LogTest, "  -ry: Y of core to issue read or write (default {})", 0);
+        log_info(LogTest, "  -sx: when reading from L1, X of core to read from. when issuing a multicast write, X of start core to write to. (default {})", 0);
+        log_info(LogTest, "  -sy: when reading from L1, Y of core to read from. when issuing a multicast write, Y of start core to write to. (default {})", 0);
+        log_info(LogTest, "  -tx: when issuing a multicast write, X of end core to write to (default {})", 0);
+        log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
         log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
-        log_info(LogTest, "  -sx: when reading from L1, X of core to read from (default {})", 0);
-        log_info(LogTest, "  -sy: when reading from L1, Y of core to read (default {})", 0);
         log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
-        log_info(LogTest, "  -o: use read_one_packet API.  restrices page size to 8K max (default {})", 0);
+        log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
         log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, " -hr: hammer write_reg while executing (for PCIe test)");
         log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
@@ -80,9 +87,11 @@ void init(int argc, char **argv) {
     hammer_pcie_type_g = test_args::get_command_option_uint32(input_args, "-hpt", 0);
     time_just_finish_g = test_args::has_command_option(input_args, "-f");
     source_mem_g = test_args::get_command_option_uint32(input_args, "-m", 0);
-    dram_channel_g = test_args::get_command_option_uint32(input_args, "-c", 0);
     uint32_t src_core_x = test_args::get_command_option_uint32(input_args, "-sx", 0);
     uint32_t src_core_y = test_args::get_command_option_uint32(input_args, "-sy", 0);
+    uint32_t mcast_end_core_x = test_args::get_command_option_uint32(input_args, "-tx", 0);
+    uint32_t mcast_end_core_y = test_args::get_command_option_uint32(input_args, "-ty", 0);
+    dram_channel_g = test_args::get_command_option_uint32(input_args, "-c", 0);
     uint32_t size_bytes = test_args::get_command_option_uint32(input_args, "-bs", DEFAULT_BATCH_SIZE_K) * 1024;
     latency_g = test_args::has_command_option(input_args, "-l");
     page_size_g = test_args::get_command_option_uint32(input_args, "-p", DEFAULT_PAGE_SIZE);
@@ -96,6 +105,25 @@ void init(int argc, char **argv) {
 
     worker_g = CoreRange({core_x, core_y}, {core_x, core_y});
     src_worker_g = {src_core_x, src_core_y};
+
+    if (source_mem_g == 6)
+    {
+        if (mcast_end_core_x < src_core_x || mcast_end_core_y < src_core_y)
+        {
+            log_info(LogTest, "X of end core must be >= X of start core, Y of end core must be >= Y of start core");
+            exit(-1);
+        }
+
+        mcast_src_workers_g = CoreRange({src_core_x, src_core_y}, {mcast_end_core_x, mcast_end_core_y});
+
+        if (mcast_src_workers_g.intersects(worker_g)) {
+            log_info(
+                LogTest,
+                "Multicast destination rectangle and core that issues the multicast cannot overlap - Multicast "
+                "destination rectangle: {} Master core: {}", mcast_src_workers_g.str(), worker_g.start_coord.str());
+            exit(-1);
+        }
+    }
 }
 
 #define CACHE_LINE_SIZE 64
@@ -136,6 +164,10 @@ int main(int argc, char **argv) {
         uint32_t noc_addr_x, noc_addr_y;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
+        uint32_t issue_mcast = 0;
+        uint32_t num_mcast_dests = mcast_src_workers_g.size();
+        uint32_t mcast_noc_addr_end_x = 0;
+        uint32_t mcast_noc_addr_end_y = 0;
 
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
@@ -202,6 +234,18 @@ int main(int argc, char **argv) {
                 noc_addr_y = w.y;
             }
             break;
+        case 6:
+            {
+                src_mem = "FROM_L1_TO_MCAST";
+                issue_mcast = 1;
+                CoreCoord start = device->physical_core_from_logical_core(mcast_src_workers_g.start_coord, CoreType::WORKER);
+                CoreCoord end = device->physical_core_from_logical_core(mcast_src_workers_g.end_coord, CoreType::WORKER);
+                noc_addr_x = start.x;
+                noc_addr_y = start.y;
+                mcast_noc_addr_end_x = end.x;
+                mcast_noc_addr_end_y = end.y;
+            }
+            break;
         }
 
         std::map<string, string> defines = {
@@ -212,7 +256,11 @@ int main(int argc, char **argv) {
             {"NOC_ADDR_Y", std::to_string(noc_addr_y)},
             {"NOC_MEM_ADDR", std::to_string(noc_mem_addr)},
             {"READ_ONE_PACKET", std::to_string(read_one_packet_g)},
-            {"DRAM_BANKED", std::to_string(dram_banked)}
+            {"DRAM_BANKED", std::to_string(dram_banked)},
+            {"ISSUE_MCAST", std::to_string(issue_mcast)},
+            {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
+            {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
+            {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}
         };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
@@ -243,11 +291,23 @@ int main(int argc, char **argv) {
             log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, w.x, w.y);
         } else if (source_mem_g == 5) {
             log_info(LogTest, "Writing: {} - core ({}, {})", src_mem, w.x, w.y);
+        } else if (source_mem_g == 6) {
+            log_info(LogTest, "Writing: {} - core grid [({}, {}) - ({}, {})]", src_mem, noc_addr_x, noc_addr_y, mcast_noc_addr_end_x, mcast_noc_addr_end_y);
         } else {
             log_info(LogTest, "Reading: {} - core ({}, {})", src_mem, noc_addr_x, noc_addr_y);
         }
-        if (source_mem_g != 4) {
-            log_info(LogTest, "Using API: {}", read_one_packet_g ? "noc_async_read_one_packet" : "noc_async_read");
+        if (source_mem_g < 4 || source_mem_g == 6) {
+            std::string api;
+            if (issue_mcast) {
+                api = "noc_async_write_multicast";
+            }
+            else if (read_one_packet_g) {
+                api = "noc_async_read_one_packet";
+            }
+            else {
+                api = "noc_async_read";
+            }
+            log_info(LogTest, "Using API: {}", api);
             log_info(LogTest, "Lazy: {}", lazy_g);
             log_info(LogTest, "Page size ({}): {}", page_size_as_runtime_arg_g ? "runtime arg" : "compile time define", page_size_g);
             log_info(LogTest, "Size per iteration: {}", page_count_g * page_size_g);
@@ -259,7 +319,7 @@ int main(int argc, char **argv) {
 
         vector<uint32_t>blank(page_size_g / sizeof(uint32_t));
         std::chrono::duration<double> elapsed_seconds;
-        if (source_mem_g < 4) {
+        if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {
                 EnqueueProgram(cq, program, false);
@@ -313,7 +373,7 @@ int main(int argc, char **argv) {
             Finish(cq);
             auto end = std::chrono::system_clock::now();
             elapsed_seconds = (end-start);
-        } else {
+        } else if (source_mem_g == 4 || source_mem_g == 5) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
