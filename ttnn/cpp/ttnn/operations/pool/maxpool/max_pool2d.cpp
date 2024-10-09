@@ -12,7 +12,16 @@
 namespace ttnn {
 namespace operations::pool {
 
-Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation) {
+Tensor MaxPool2DOp::invoke(uint8_t queue_id,
+                           const Tensor& input_tensor, 
+                           uint32_t batch_size,
+                           uint32_t input_h, uint32_t input_w,
+                           uint32_t channels,
+                           std::array<uint32_t, 2> kernel_size,
+                           std::array<uint32_t, 2> stride,
+                           std::array<uint32_t, 2> padding,
+                           std::array<uint32_t, 2> dilation,
+                           TensorMemoryLayout sharding_strategy) {
 
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
@@ -36,7 +45,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_
     if (!memory_config.shard_spec.has_value()) {
         // Input is not sharded. Perform sharding.
         parallel_config = conv::conv2d::determine_parallel_config(
-                                            TensorMemoryLayout::HEIGHT_SHARDED,
+                                            sharding_strategy,
                                             batch_size,
                                             0,          // in_channels -- not used
                                             output_shape[1],

@@ -16,7 +16,16 @@ namespace ttnn {
 namespace operations::pool {
 
 struct MaxPool2DOp {
-    static Tensor invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation);
+    static Tensor invoke(uint8_t queue_id,
+                         const Tensor& input_tensor,
+                         uint32_t batch_size,
+                         uint32_t input_h, uint32_t input_w,
+                         uint32_t channels,
+                         std::array<uint32_t, 2> kernel_size,
+                         std::array<uint32_t, 2> stride,
+                         std::array<uint32_t, 2> padding,
+                         std::array<uint32_t, 2> dilation,
+                         TensorMemoryLayout sharding_strategy = TensorMemoryLayout::HEIGHT_SHARDED);
 
 };
 
