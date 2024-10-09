@@ -269,7 +269,7 @@ class TtLlamaModel_optimized:
             rot_mats = ttnn.as_tensor(
                 rot_mat,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
@@ -299,6 +299,7 @@ class TtLlamaModel_optimized:
         mode="decode",
         page_table=None,
         return_tokens=False,  # if true, return tokens for decode mode
+        return_rot_mat_rm=False,  # if true, also return rot_mat in row-major layout for decode
     ):
         tt_inp, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.prepare_inputs(
             tokens, start_pos, valid_seq_len=valid_seq_len, mode=mode, page_table=page_table
@@ -308,19 +309,21 @@ class TtLlamaModel_optimized:
             tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             tt_inp_emb = self.tt_embd(tt_inp)
             tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            rot_mat = ttnn.to_device(
-                rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"]
-            )
+            rot_mat_rm = ttnn.to_device(rot_mat, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+            rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
             cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if tt_page_table is not None:
                 tt_page_table = ttnn.to_device(tt_page_table, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             tt_inp_emb = tt_inp
 
-        return_out = []
-        if mode == "decode" and return_tokens:
-            return_out.append(tt_inp)
-        return_out.extend([tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table])
+        return_out = [tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table]
+        if mode == "decode":
+            if return_tokens:
+                return_out.append(tt_inp)
+            if return_rot_mat_rm:
+                return_out.append(rot_mat_rm)
         return tuple(return_out)
 
     def __call__(
