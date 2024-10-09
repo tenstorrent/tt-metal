@@ -119,8 +119,21 @@ class TtLlamaModelForGeneration:
 
     def capture_trace(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         # Get inputs on device
-        tt_inp, tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs(
-            tokens, start_pos, mode="decode", page_table=page_table, return_tokens=True
+        (
+            tt_inp_emb,
+            start_pos,
+            rot_mat,
+            cache_idxs_tt,
+            tt_page_table,
+            tt_inp,
+            rot_mat_rm,
+        ) = self.tt_model.prepare_device_inputs(
+            tokens,
+            start_pos,
+            mode="decode",
+            page_table=page_table,
+            return_tokens=True,
+            return_rot_mat_rm=True,
         )
 
         # Compile model
@@ -140,6 +153,8 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+        rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+        rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
@@ -153,7 +168,7 @@ class TtLlamaModelForGeneration:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits, tt_page_table
+        return trace_id, tt_inp, rot_mat_rm, cache_idxs_tt, tt_logits, tt_page_table
 
     def delete_trace(self, trace_id):
         ttnn.release_trace(self.mesh_device, trace_id)
