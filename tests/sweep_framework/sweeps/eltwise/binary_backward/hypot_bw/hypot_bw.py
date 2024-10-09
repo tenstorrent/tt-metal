@@ -30,6 +30,19 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -45,9 +58,6 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Inputs to eltwise binary must be tilized"
-    if (test_vector["input_a_dtype"] == ttnn.bfloat8_b or
-        test_vector["input_b_dtype"] == ttnn.bfloat8_b):
-        return True, "bfloat8_b is not supported for input tensors"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b
         or test_vector["input_a_dtype"] == ttnn.bfloat8_b
@@ -91,7 +101,7 @@ def run(
     torch_input_tensor_b.requires_grad = True
     torch_input_tensor_b.retain_grad()
 
-    intermediate_result = torch.xlogy(torch_input_tensor_a, torch_input_tensor_b)
+    intermediate_result = torch.hypot(torch_input_tensor_a, torch_input_tensor_b)
     intermediate_result.backward(gradient=torch_grad_tensor)
     torch_output_tensors = [torch_input_tensor_a.grad, torch_input_tensor_b.grad]
 
@@ -120,9 +130,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.xlogy_bw(
-        grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config
-    )
+    output_tensors = ttnn.hypot_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
 
     passed = []
     output_string = ""
