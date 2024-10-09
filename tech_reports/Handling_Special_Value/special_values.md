@@ -24,7 +24,7 @@ denormals       |    all     |     0x0
 --------------------------------------------
 ```
 
-## Detection of special numbers and debugging
+## Detection of special numbers
 
 TT Hardware is not fully IEEE compliant, however, some operations are following the standard when it comes to special number handling:
 
@@ -66,8 +66,15 @@ Each Tensix core has a register that programmer can read at any point in the ker
 
 Compute API funcitons are provided to read and clear flags:
 ```
-  TODO: Add API functions
+ALWI uint32_t get_compute_special_value_flags()
+ALWI uint32_t get_compute_special_value_flags_fpu(uint32_t special_value_flags_reg)
+ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_reg)
+ALWI void clear_compute_special_value_flags()
+ALWI void store_compute_special_value_flags_to_l1(uint32_t l1_addr)
 ```
+All APIs execute on MATH thread only (trisc1).
+
+## Debugging
 
 Given that detection of `NaN`/`Inf` is only done at the output of FPU/SFPU operations, there are some cases of special numbers which can be undetected:
 1. Special numbers appeared as input operands
