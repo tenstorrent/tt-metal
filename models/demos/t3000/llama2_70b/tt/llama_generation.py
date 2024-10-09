@@ -117,16 +117,22 @@ class TtLlamaModelForGeneration:
                 tokens, start_pos, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens
             )
 
-    def capture_trace(self, tokens: torch.Tensor, start_pos: int):
-        tt_inp, start_pos, rot_mat, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
+    def capture_trace(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
+        # Get inputs on device
+        tt_inp, tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs(
+            tokens, start_pos, mode="decode", page_table=page_table, return_tokens=True
+        )
 
         # Compile model
-        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_inp_emb = self.tt_model.tt_embd(tt_inp)
-        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
+        tt_logits = self.tt_model(
+            tt_inp_emb,
+            rot_mat,
+            start_pos,
+            cache_idxs=cache_idxs_tt,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
+            mode="decode",
+        )
 
         # Capture trace
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -134,18 +140,35 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
+        tt_logits = self.tt_model(
+            tt_inp_emb,
+            rot_mat,
+            start_pos,
+            cache_idxs=cache_idxs_tt,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
+            mode="decode",
+        )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
+        return trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits, tt_page_table
 
     def delete_trace(self, trace_id):
         ttnn.release_trace(self.mesh_device, trace_id)
 
     def decode_forward_trace(
-        self, tokens: torch.Tensor, start_pos: int, trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        trace_id,
+        tt_inp,
+        rot_mat,
+        cache_idxs_tt,
+        tt_logits,
+        page_table=None,
+        tt_page_table=None,
     ):
         batch = tokens.shape[0]
 
@@ -155,10 +178,13 @@ class TtLlamaModelForGeneration:
             start_pos,
             updated_rot_mat,
             updated_cache_idxs_tt,
-        ) = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
+            updated_tt_page_table,
+        ) = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode", page_table=page_table)
         ttnn.copy_host_to_device_tensor(updated_tt_inp, tt_inp)
         ttnn.copy_host_to_device_tensor(updated_rot_mat, rot_mat)
         ttnn.copy_host_to_device_tensor(updated_cache_idxs_tt, cache_idxs_tt)
+        if page_table is not None:
+            ttnn.copy_host_to_device_tensor(updated_tt_page_table, tt_page_table)
 
         # Run TT model
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
@@ -173,29 +199,18 @@ class TtLlamaModelForGeneration:
 
     def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
         batch = tokens.shape[0]
-        tt_inp, start_pos, rot_mat, cache_idxs_tt = self.tt_model.prepare_inputs(tokens, start_pos, mode="decode")
-        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_inp_emb = self.tt_model.tt_embd(tt_inp)
-        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if isinstance(page_table, torch.Tensor):
-            # Support vLLM tensor page_table input
-            page_table = ttnn.as_tensor(
-                page_table,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-            )
+        # Get inputs on device
+        tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs(
+            tokens, start_pos, mode="decode", page_table=page_table
+        )
+
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,
             start_pos,
             cache_idxs=cache_idxs_tt,
-            page_table=page_table,
+            page_table=tt_page_table,
             kv_cache=kv_cache,
             mode="decode",
         )
@@ -218,20 +233,9 @@ class TtLlamaModelForGeneration:
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
 
-        tt_inp_emb, start_pos, rot_mat, _ = self.tt_model.prepare_inputs(
-            tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill"
+        tt_inp_emb, start_pos, rot_mat, _, tt_page_table = self.tt_model.prepare_device_inputs(
+            tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill", page_table=page_table
         )
-
-        if isinstance(page_table, torch.Tensor):
-            # Support vLLM tensor page_table input
-            page_table = ttnn.as_tensor(
-                page_table,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-            )
 
         tt_logits = self.tt_model(
             tt_inp_emb,
@@ -239,13 +243,14 @@ class TtLlamaModelForGeneration:
             start_pos,
             user_id=user_id,
             last_token_idx=last_token_idx,
-            page_table=page_table,
+            page_table=tt_page_table,
             kv_cache=kv_cache,
             mode="prefill",
         )
 
         del tt_inp_emb
         del rot_mat
+        del tt_page_table
 
         logits = self._process_logits(tt_logits)
         logits = logits.squeeze(1)
