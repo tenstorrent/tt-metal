@@ -26,9 +26,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 4)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 4)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 4),
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
+        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
+        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -43,8 +43,11 @@ parameters = {
 
 # TO-DO: Create an issue on this, since these constrictions are not mentioned in the documentation
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-#    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-#        return True, "Inputs to eltwise binary must be tilized"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Inputs to eltwise binary must be tilized"
+    if (test_vector["input_a_dtype"] == ttnn.bfloat8_b or
+        test_vector["input_b_dtype"] == ttnn.bfloat8_b):
+        return True, "bfloat8_b is not supported for input tensors"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b
         or test_vector["input_a_dtype"] == ttnn.bfloat8_b
@@ -138,19 +141,3 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [(passed, output_string), e2e_perf]
-
-
-from tests.sweep_framework.permutations import *
-for suite in parameters.keys():
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        #if invalidate_vector(vector)[0]:
-        #    continue
-        passed, _ = run(**vector, device=device)
-        if passed[0] != True:
-            print(passed)
-
-    ttnn.close_device(device)
