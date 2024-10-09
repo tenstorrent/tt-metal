@@ -424,7 +424,7 @@ void bind_unary_operation_with_dim_parameter(
 }
 
 template <typename unary_operation_t>
-void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description) {
+void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description, const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {7}
@@ -442,6 +442,9 @@ void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, con
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {8}
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2}, {4} = {6})
@@ -453,7 +456,8 @@ void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, con
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        note);
 
     bind_registered_operation(
         module,
@@ -1431,7 +1435,19 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.");
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
+
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "slope", "The slope parameter for the Leaky ReLU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0");
@@ -1586,7 +1602,19 @@ void py_module(py::module& module) {
 
         Input tensor must have BFLOAT16 data type.
 
-        Output tensor will have BFLOAT16 data type.)doc");
+        Output tensor will have BFLOAT16 data type.)doc",
+
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
 
 }
 
