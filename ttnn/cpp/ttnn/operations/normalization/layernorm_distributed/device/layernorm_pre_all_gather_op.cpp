@@ -11,7 +11,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 
 #include <optional>
 

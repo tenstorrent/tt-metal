@@ -55,3 +55,9 @@ CPMAddPackage(
   GITHUB_REPOSITORY boost-ext/reflect
   GIT_TAG v1.1.1
 )
+
+CPMAddPackage(
+  NAME magic_enum
+  GITHUB_REPOSITORY Neargye/magic_enum
+  GIT_TAG v0.9.6
+)

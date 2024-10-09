@@ -11,7 +11,7 @@
 
 #include "common/bfloat16.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
