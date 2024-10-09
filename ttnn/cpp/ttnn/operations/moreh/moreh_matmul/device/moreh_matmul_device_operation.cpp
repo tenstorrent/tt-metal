@@ -237,7 +237,7 @@ MorehMatmulOperation::invoke(
             transpose_input,
             transpose_other,
             output_memory_config.value_or(input.memory_config()),
-            compute_kernel_config},
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)},
         MorehMatmulOperation::tensor_args_t{input, other, output, bias}};
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul
