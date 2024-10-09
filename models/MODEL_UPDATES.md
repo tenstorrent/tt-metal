@@ -4,6 +4,13 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## October 7, 2024
+
+### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
+- Added support for continuous batching
+- Added paged caching support for PagedAttention
+- Added a demo which runs with TT-NN tracing (23 t/s/u decode on main)
+
 ## September 23, 2024
 
 ### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
