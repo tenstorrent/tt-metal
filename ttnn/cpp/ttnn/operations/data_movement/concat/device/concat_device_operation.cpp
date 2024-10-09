@@ -61,11 +61,11 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ConcatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::LegacyShape shape_out = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::SimpleShape> ConcatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    ttnn::SimpleShape shape_out = input_tensors[0].get_logical_shape();
     shape_out[this->dim] = 0;
     for (const Tensor &in_ref : input_tensors) {
-        tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
+        ttnn::SimpleShape curr_shape = in_ref.get_logical_shape();
         shape_out[this->dim] += curr_shape[this->dim];
     }
     return {shape_out};

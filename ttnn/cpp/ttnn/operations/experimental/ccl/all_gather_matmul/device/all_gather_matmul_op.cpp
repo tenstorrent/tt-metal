@@ -54,15 +54,15 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::SimpleShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather shape
-    tt::tt_metal::LegacyShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
-    tt::tt_metal::LegacyShape datacopy_output_shape = all_gather_output_shape;
+    ttnn::SimpleShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
+    ttnn::SimpleShape datacopy_output_shape = all_gather_output_shape;
 
 
     // Matmul shape
-    tt::tt_metal::LegacyShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
+    ttnn::SimpleShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }

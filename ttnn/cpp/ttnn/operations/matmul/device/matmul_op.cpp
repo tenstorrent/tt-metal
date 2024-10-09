@@ -1298,29 +1298,24 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const tt::tt_metal::LegacyShape& input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const tt::tt_metal::LegacyShape& input_shape_b = input_tensors.at(1).get_legacy_shape();
+std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
+    ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    tt::tt_metal::LegacyShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
     for (auto index = 0; index < rank_difference; index++) {
         TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
-        dimensions_pads.push_back(input_shape_b.padding()[index]);
     }
     for (auto index = 0; index < a_rank - 1; index++) {
         output_shape[rank_difference + index] = input_shape_a[index];
-        dimensions_pads.push_back(input_shape_a.padding()[index]);
     }
     output_shape[-1] = input_shape_b[-1];
-    dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {std::move(output_shape)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

@@ -165,10 +165,10 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto shape = input_tensors[0].get_logical_shape();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

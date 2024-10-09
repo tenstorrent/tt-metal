@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_dot_backward_single_core(
 struct MorehDotBackward {
     void validate(
         const std::vector<Tensor> &inputs, const std::vector<std::optional<const Tensor>> &optional_inputs) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &inputs) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &inputs) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &inputs,

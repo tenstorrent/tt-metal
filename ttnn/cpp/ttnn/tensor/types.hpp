@@ -69,6 +69,8 @@ private:
     std::vector<uint32_t> value;
 };
 
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+
 } // namespace ttnn
 
 inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {

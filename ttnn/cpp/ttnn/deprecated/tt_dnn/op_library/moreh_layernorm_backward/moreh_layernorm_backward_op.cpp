@@ -62,10 +62,10 @@ void MorehLayerNormBackwardInputGrad::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehLayerNormBackwardInputGrad::compute_output_shapes(
+std::vector<ttnn::SimpleShape> MorehLayerNormBackwardInputGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     auto input = input_tensors.at(0);
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_logical_shape();
 
     // The shapes of the input and output are always the same.
     return {input_shape};
@@ -131,7 +131,7 @@ void MorehLayerNormBackwardGammaBetaGrad::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
+std::vector<ttnn::SimpleShape> MorehLayerNormBackwardGammaBetaGrad::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
     TT_THROW("The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
     return {};

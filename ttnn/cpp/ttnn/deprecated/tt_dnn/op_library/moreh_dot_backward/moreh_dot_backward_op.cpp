@@ -63,7 +63,7 @@ void MorehDotBackward::validate(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehDotBackward::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<ttnn::SimpleShape> MorehDotBackward::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 }

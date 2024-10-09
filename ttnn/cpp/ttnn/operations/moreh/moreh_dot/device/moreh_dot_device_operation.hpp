@@ -23,7 +23,7 @@ struct MorehDotOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = Shape;
+    using shape_return_value_t = SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct SingleCore {

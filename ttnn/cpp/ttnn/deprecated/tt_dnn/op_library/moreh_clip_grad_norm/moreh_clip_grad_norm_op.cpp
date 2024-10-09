@@ -48,7 +48,7 @@ void MorehClipGradNormStep1::validate(
     check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
 
-std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<ttnn::SimpleShape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep1::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
@@ -105,7 +105,7 @@ void MorehClipGradNormStep2::validate(const std::vector<Tensor> &input_tensors) 
     check_tensor(total_norm, "moreh_clip_grad_norm_step2", "total_norm");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<ttnn::SimpleShape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep2::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
@@ -146,7 +146,7 @@ void MorehClipGradNormStep3::validate(
     check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
+std::vector<ttnn::SimpleShape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
 
 std::vector<Tensor> MorehClipGradNormStep3::create_output_tensors(const std::vector<Tensor> &) const { return {}; }
 
