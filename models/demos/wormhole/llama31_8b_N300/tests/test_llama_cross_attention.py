@@ -25,8 +25,12 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
+    "vision_seq_len",
     (5120,),
+)
+@pytest.mark.parametrize(
+    "text_seq_len",
+    (2048,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -37,7 +41,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_cross_attention_inference(seq_len, mesh_device, use_program_cache, reset_seeds):
+def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
     pcc = 0.99
 
@@ -78,7 +82,7 @@ def test_llama_cross_attention_inference(seq_len, mesh_device, use_program_cache
         norm_eps=norm_eps,
     )
 
-    pt_xattn_tokens = (torch.rand(batch, seq_len, dim) * 2) - 1
+    pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
     tt_xattn_tokens = prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
@@ -88,29 +92,16 @@ def test_llama_cross_attention_inference(seq_len, mesh_device, use_program_cache
     """
     Test compute_xattn_kv_cache
     """
-    # pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
-    # # pt_xattn_cache = [x.view(batch, n_heads, seq_len, head_dim)[:,::n_heads//n_kv_heads] for x in pt_xattn_cache]
-    # # pt_xattn_cache = pt_xattn_cache.view(batch, seq_len, -1)
-
-    # tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_xattn_tokens)
-    # tt_xattn_cache_torch = ttnn.to_torch(tt_xattn_cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))#.view(batch, seq_len, -1)
-    # # breakpoint()
-    # passing, pcc_message = comp_pcc(pt_xattn_cache, tt_xattn_cache_torch, pcc)
-
-    # logger.info(comp_allclose(pt_xattn_cache, tt_xattn_cache_torch))
-    # logger.info(pcc_message)
-
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
     pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
     ]
-    # pt_xattn_cache_chunks = [x.view(batch, n_kv_heads, seq_len, head_dim) for x in pt_xattn_cache_chunks]
 
     tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_xattn_tokens)
     tt_xattn_cache_torch = [
         ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
-            batch, n_kv_heads, seq_len, head_dim
+            batch, n_kv_heads, vision_seq_len, head_dim
         )
         for x in tt_xattn_cache
     ]
@@ -127,11 +118,78 @@ def test_llama_cross_attention_inference(seq_len, mesh_device, use_program_cache
             logger.warning(f"compute_xattn_kv_cache Failed!")
             all_tests_pass = False
 
-    if passing:
-        logger.info(f"Llama_Attention Passed!")
-    else:
-        logger.warning(f"Llama_Attention Failed!")
-        all_tests_pass = False
+    """
+    Test forward, prefill and decode!
+    """
+    for i in range(10):
+        seq_len = text_seq_len if i == 0 else 1
+        pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
+        tt_x = pt_x.clone()
+        tt_x = prepare_inputs_ttnn_prefill(
+            tt_x,
+            mesh_device,
+        )
+
+        xattn_mask = torch.bernoulli(
+            torch.full(
+                (
+                    batch,
+                    seq_len,
+                    vision_seq_len,
+                ),
+                0.25,
+            )
+        )
+        xattn_mask = xattn_mask.unsqueeze(1)
+        xattn_mask = xattn_mask * -1e9
+
+        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+        tt_xattn_mask = ttnn.from_torch(
+            xattn_mask_expand,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        full_text_mask = torch.bernoulli(
+            torch.full(
+                (
+                    batch,
+                    seq_len,
+                ),
+                0.75 if seq_len != 1 else 1.0,
+            )
+        )
+        full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
+        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        tt_full_text_mask = ttnn.from_torch(
+            full_text_mask_expand,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        pt_out = reference_model.forward(
+            pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
+        )
+
+        tt_out = tt_model(
+            tt_x, xattn_mask=tt_xattn_mask, full_text_row_masked_out_mask=tt_full_text_mask, xattn_cache=tt_xattn_cache
+        )
+
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+            0, ..., :seq_len, :
+        ].view(batch, seq_len, dim)
+        # tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))#.view(batch, text_seq_len, -1)
+
+        passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc)
+        logger.info(comp_allclose(pt_out, tt_output_torch))
+        logger.info(pcc_message)
+        all_tests_pass = all_tests_pass and passing
 
     if all_tests_pass:
         logger.info("Llama Attention output Passed!")
