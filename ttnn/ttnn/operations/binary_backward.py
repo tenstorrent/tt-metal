@@ -70,14 +70,6 @@ def _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, in
     return golden_tensor
 
 
-ttnn.attach_golden_function(
-    ttnn.lt_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_comparison_ops(
-        torch.lt, grad, a, b, *args, **kwargs
-    ),
-)
-
-
 def _golden_function_backward_with_dim(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, dimension=None, *args, **kwargs
 ):
@@ -145,16 +137,6 @@ def _golden_function_backward_with_string(
     input_tensor_b.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
-
-
-def _golden_function_comparison_ops(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
-    import torch
-
-    if isinstance(input_tensor_b, (float, int)):
-        golden_tensor = [torch.zeros_like(input_tensor_a)]
-    else:
-        golden_tensor = [torch.zeros_like(input_tensor_a), torch.zeros_like(input_tensor_b)]
     return golden_tensor
 
 

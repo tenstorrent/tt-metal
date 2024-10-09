@@ -513,10 +513,6 @@ constexpr auto addalpha_bw = ttnn::register_operation<
     "ttnn::addalpha_bw",
     operations::binary_backward::ExecuteAddalphaBW>();
 
-constexpr auto lt_bw = ttnn::register_operation<
-    "ttnn::lt_bw",
-    operations::binary_backward::ExecuteBackwardLT>();
-
 constexpr auto add_bw = ttnn::register_operation<
     "ttnn::add_bw",
     operations::binary_backward::ExecuteBackwardAdd>();

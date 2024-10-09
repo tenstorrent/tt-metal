@@ -1843,36 +1843,6 @@ def log_bw(x, y, *args, **kwargs):
     return in_data.grad
 
 
-def gt_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
-
-
-def lt_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
-
-
-def ne_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
-
-
 def rsub_bw(x, y, z, *args, **kwargs):
     grad_data = x
     in_data = y
