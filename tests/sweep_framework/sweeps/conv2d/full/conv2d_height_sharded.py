@@ -12,7 +12,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-from tests.sweep_framework.sweeps.conv2d.full.conv2d_common import run, get_input_specs, mesh_device_fixture
+from tests.sweep_framework.sweep_utils.conv2d_common import run_full, get_input_specs, mesh_device_fixture
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -64,7 +64,7 @@ parameters = {
         "enable_act_double_buffer": [True, False],
         "enable_split_reader": [True, False],
         "enable_subblock_padding": [True, False],
-        # Parameters-to-check starts
+        # Parameters-to-check ends
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -84,3 +84,56 @@ parameters = {
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
+
+
+def run(
+    input_specs,
+    input_channels,
+    output_channels,
+    sharding_scheme,
+    transpose_mcast,
+    output_layout,
+    has_bias,
+    enable_act_double_buffer,
+    enable_split_reader,
+    enable_subblock_padding,
+    activations_dtype,
+    weights_dtype,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    groups,
+    override_sharding_config,
+    core_grid,
+    use_shallow_conv_variant,
+    deallocate_activation,
+    enable_auto_formatting,
+    padded_input_channels=None,
+    *,
+    device,
+) -> list:
+    return run_full(
+        input_specs,
+        input_channels,
+        output_channels,
+        sharding_scheme,
+        transpose_mcast,
+        output_layout,
+        has_bias,
+        enable_act_double_buffer,
+        enable_split_reader,
+        enable_subblock_padding,
+        activations_dtype,
+        weights_dtype,
+        math_fidelity,
+        fp32_accum,
+        packer_l1_acc,
+        groups,
+        override_sharding_config,
+        core_grid,
+        use_shallow_conv_variant,
+        deallocate_activation,
+        enable_auto_formatting,
+        device,
+        padded_input_channels,
+    )

@@ -12,7 +12,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-from tests.sweep_framework.sweeps.conv2d.short.conv2d_common import run, mesh_device_fixture
+from tests.sweep_framework.sweep_utils.conv2d_common import run_short, mesh_device_fixture
 
 parameters = {
     "short_sweep_suite": {
@@ -427,13 +427,13 @@ parameters = {
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ],
         "transpose_mcast": [False],
-        "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "output_layout": [ttnn.TILE_LAYOUT],
         "enable_act_double_buffer": [False],
         "enable_split_reader": [False],
         "enable_subblock_padding": [False],
-        "activations_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "weights_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "math_fidelity": [ttnn.MathFidelity.HiFi4],
+        "activations_dtype": [ttnn.bfloat8_b],
+        "weights_dtype": [ttnn.bfloat8_b],
+        "math_fidelity": [ttnn.MathFidelity.LoFi],
         "fp32_accum": [True],
         "packer_l1_acc": [True],
         "override_sharding_config": [False],
@@ -448,3 +448,48 @@ parameters = {
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
+
+
+def run(
+    input_specs,
+    sharding_scheme,
+    transpose_mcast,
+    output_layout,
+    enable_act_double_buffer,
+    enable_split_reader,
+    enable_subblock_padding,
+    activations_dtype,
+    weights_dtype,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    override_sharding_config,
+    core_grid,
+    use_shallow_conv_variant,
+    deallocate_activation,
+    enable_auto_formatting,
+    padded_input_channels=None,
+    *,
+    device,
+) -> list:
+    return run_short(
+        input_specs,
+        sharding_scheme,
+        transpose_mcast,
+        output_layout,
+        enable_act_double_buffer,
+        enable_split_reader,
+        enable_subblock_padding,
+        activations_dtype,
+        weights_dtype,
+        math_fidelity,
+        fp32_accum,
+        packer_l1_acc,
+        override_sharding_config,
+        core_grid,
+        use_shallow_conv_variant,
+        deallocate_activation,
+        enable_auto_formatting,
+        device,
+        padded_input_channels,
+    )

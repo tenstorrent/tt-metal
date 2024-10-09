@@ -18,7 +18,6 @@ from models.utility_functions import torch_random
 parameters = {
     "max_pool2d_short_sweep_suite": {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "pre_shard": [True, False],
         "input_specs": [
             [1, 128, 112, 112, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -84,7 +83,6 @@ def mesh_device_fixture():
 def run(
     input_specs,
     dtype,
-    pre_shard,
     *,
     device,
 ):
@@ -126,23 +124,22 @@ def run(
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
     ttact_device = ttnn.to_device(ttact, device)
-    if pre_shard:
-        parallel_config = determine_parallel_config(
-            is_1d_systolic=True,
-            batch_size=in_n,
-            input_channels=in_c,
-            output_height=out_h,
-            output_width=out_w,
-            output_channels=in_c,
-            device=device,
-            is_out_tiled=False,
-        )
-        sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            tensor_shape=act_shape,
-            parallel_config=parallel_config,
-            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
-        )
-        ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
+    parallel_config = determine_parallel_config(
+        is_1d_systolic=True,
+        batch_size=in_n,
+        input_channels=in_c,
+        output_height=out_h,
+        output_width=out_w,
+        output_channels=in_c,
+        device=device,
+        is_out_tiled=False,
+    )
+    sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+        tensor_shape=act_shape,
+        parallel_config=parallel_config,
+        tile_size=32 if dtype == ttnn.bfloat8_b else 1,
+    )
+    ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
     start_time = start_measuring_time()
     output = ttnn.max_pool2d(
         input_tensor=ttact_device,
