@@ -36,8 +36,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     auto step = operation_attributes.step;
     auto amsgrad = operation_attributes.amsgrad;
 
-    auto compute_kernel_config =
-        init_device_compute_kernel_config(param_in.device()->arch(), operation_attributes.compute_kernel_config);
+    auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
 
