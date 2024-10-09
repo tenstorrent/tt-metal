@@ -26,7 +26,7 @@ struct MaxPool2DOp {
                          std::array<uint32_t, 2> stride,
                          std::array<uint32_t, 2> padding,
                          std::array<uint32_t, 2> dilation, T* device,
-                         TensorMemoryLayout sharding_strategy = TensorMemoryLayout::HEIGHT_SHARDED);
+                         TensorMemoryLayout applied_shard_scheme = TensorMemoryLayout::INTERLEAVED); // using INTERLEAVED as default
 
 };
 
