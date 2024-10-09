@@ -27,6 +27,7 @@
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
+#include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
@@ -92,6 +93,9 @@ void py_module(py::module& module) {
 
     auto m_embedding_backward = module.def_submodule("embedding_backward", "embedding backward operations");
     embedding_backward::py_bind_embedding_backward(m_embedding_backward);
+
+    auto m_like = module.def_submodule("full", "full operation");
+    full::bind_full_operation(m_like);
 
     auto m_loss = module.def_submodule("loss", "loss operations");
     loss::py_bind_loss_functions(m_loss);
