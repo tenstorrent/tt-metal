@@ -21,6 +21,7 @@
 namespace tt {
 
 namespace tt_metal {
+inline namespace v0 {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
 #if defined(TRACY_ENABLE)
@@ -45,6 +46,8 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
     detail::DumpDeviceProfileResults(device, cores_in_program);
 #endif
 }
+
+}  // namespace v0
 
 namespace detail {
 

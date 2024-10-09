@@ -23,14 +23,19 @@
 namespace tt {
 
 namespace tt_metal {
-
 // Fwd declares
 enum class BufferType;
+
+inline namespace v0 {
+
 class Buffer;
 class Program;
+class CommandQueue;
+
+}  // namespace v0
+
 class JitBuildEnv;
 class HWCommandQueue;
-class CommandQueue;
 class TraceBuffer;
 
 namespace detail {
@@ -53,6 +58,8 @@ static constexpr float  NAN_BH = NAN_WHB0;
 static constexpr float  INF_GS = 1.6948e38;
 static constexpr float  INF_WHB0 = 1.7014e+38;
 static constexpr float  INF_BH = INF_WHB0;
+
+inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device {
@@ -234,7 +241,7 @@ class Device {
     void init_command_queue_device();
     void initialize_synchronous_sw_cmd_queue();
     void configure_kernel_variant(Program& program, string path, std::vector<uint32_t> compile_args, CoreCoord kernel_core, CoreCoord Kernel_physical_core,
-                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false);
+                                  CoreType dispatch_core_type, CoreCoord upstream_physical_core, CoreCoord downstream_physical_core, CoreCoord downstream_slave_physical_core, std::map<string, string> defines_in, NOC my_noc_index, NOC upstream_noc_index, NOC downstream_noc_index, bool is_active_eth_core = false, bool send_to_brisc = false, bool force_watcher_no_inline = false);
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
@@ -333,6 +340,8 @@ class Device {
     void EnableAllocs();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
 };
+
+}  // namespace v0
 
 inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys_core) const {
 

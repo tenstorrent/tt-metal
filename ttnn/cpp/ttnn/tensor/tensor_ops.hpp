@@ -7,11 +7,14 @@
 
 namespace tt::tt_metal {
 struct Tensor;
-class CommandQueue;
 struct MemoryConfig;
-class Device;
 class MeshDevice;
-}
+
+inline namespace v0 {
+class CommandQueue;
+class Device;
+}  // namespace v0
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tensor_ops {
 

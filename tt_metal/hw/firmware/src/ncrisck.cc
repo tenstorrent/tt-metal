@@ -19,7 +19,6 @@
 
 #include "kernel_includes.hpp"
 
-uint8_t noc_index = NOC_INDEX;
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -44,7 +43,12 @@ void kernel_launch() {
     firmware_kernel_common_init((void tt_l1_ptr *)(MEM_NCRISC_INIT_IRAM_L1_BASE + (uint32_t)__kernel_init_local_l1_base - MEM_NCRISC_IRAM_BASE));
 #endif
 
-    noc_local_state_init(noc_index);
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        noc_local_state_init(NOC_INDEX);
+    } else {
+        noc_local_state_init(NOC_0);
+        noc_local_state_init(NOC_1);
+    }
 
     kernel_main();
 #endif
