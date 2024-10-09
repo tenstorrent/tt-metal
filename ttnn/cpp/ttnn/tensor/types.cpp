@@ -7,8 +7,8 @@
 
 namespace ttnn {
 
-SimpleShape SimpleShape::get_physical_shape(Layout layout, const std::optional<Tile>& tile) const {
-    SimpleShape padded_shape = *this;
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile) {
+    SimpleShape physical_shape = logical_shape;
     if (layout == Layout::TILE) {
         auto tile_height = tt::constants::TILE_HEIGHT;
         auto tile_width = tt::constants::TILE_WIDTH;
@@ -17,15 +17,15 @@ SimpleShape SimpleShape::get_physical_shape(Layout layout, const std::optional<T
             tile_height = tile_shape[0];
             tile_width = tile_shape[1];
         }
-        auto rank = padded_shape.rank();
+        auto rank = physical_shape.rank();
         if (rank >= 1) {
-            padded_shape[rank - 1] = (padded_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
+            physical_shape[rank - 1] = (physical_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
             if (rank >= 2) {
-                padded_shape[rank - 2] = (padded_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
+                physical_shape[rank - 2] = (physical_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
             }
         }
     }
-    return padded_shape;
+    return physical_shape;
 }
 
 }
