@@ -106,7 +106,7 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
     }
 
     if (tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" + to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED)) + " ";
+        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" + to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) + " ";
     }
 
     if (tt::llrt::OptionsG.get_record_noc_transfers()) {

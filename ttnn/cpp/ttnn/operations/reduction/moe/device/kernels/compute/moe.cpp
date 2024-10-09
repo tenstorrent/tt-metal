@@ -75,14 +75,14 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_wait_front(in1_cb, cols);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_reconfig_data_format(in0_cb);
             pack_tile(0, in0_cb);
             cb_push_back(in0_cb, 1);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
     }
     cb_pop_front(in1_cb, cols);
@@ -96,14 +96,14 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
@@ -118,13 +118,13 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_tile(0, in0_cb);
             cb_push_back(in0_cb, 1);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -138,14 +138,14 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     eqz_tile_init();
     cb_wait_front(in0_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         eqz_tile(0);
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
         pack_reconfig_data_format(in0_cb);
         pack_tile(0, in0_cb);
         cb_push_back(in0_cb, 1);
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 
@@ -157,14 +157,14 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
     cb_wait_front(in_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         copy_tile(in_cb, 0, 0);
         cb_pop_front(in_cb, 1);
         recip_tile(0);
         cb_reserve_back(in_cb, 1);
         pack_tile(0, in_cb);
         cb_push_back(in_cb, 1);
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 
@@ -187,7 +187,7 @@ void reduce_c() {
     constexpr uint32_t reduce_dst_idx = 0;
 
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx);
         }
@@ -196,7 +196,7 @@ void reduce_c() {
         pack_reconfig_data_format(out_cb);
         pack_tile(reduce_dst_idx, out_cb);
         cb_push_back(out_cb, 1);
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 
    reduce_revert_delta<reduce_dim>(out_cb);
@@ -223,7 +223,7 @@ void top_k() {
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt+=2) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             // local sort into k groups
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
@@ -253,7 +253,7 @@ void top_k() {
 
             cb_pop_front(input_cb_index, 2);
             cb_pop_front(index_cb_index, 2);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
 
         cb_push_back(input_transposed_cb_index, Wt);
@@ -271,7 +271,7 @@ void top_k() {
 
             for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
                 uint32_t right_ind = left_ind + (1 << m_iter);
-                acquire_dst(tt::DstMode::Half);
+                acquire_dst();
 
                 copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
                 copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
@@ -295,7 +295,7 @@ void top_k() {
                 // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values for topk, which was in index_dest_start
                 pack_reconfig_data_format(index_transposed_cb_index);
                 pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
-                release_dst(tt::DstMode::Half);
+                release_dst();
                 a = !a;
             }
 
@@ -317,12 +317,12 @@ void top_k() {
         pack_reconfig_data_format(input_transposed_cb_index);
         cb_wait_front(input_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             cb_reserve_back(values_cb_index, 1);
             transpose_wh_tile(input_transposed_cb_index, i, 0);
             pack_tile(0, values_cb_index);
             cb_push_back(values_cb_index, 1);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
         cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_transposed_cb_index, Wt);
@@ -333,12 +333,12 @@ void top_k() {
         pack_reconfig_data_format(index_transposed_cb_index);
         cb_wait_front(index_transposed_cb_index, Kt);
         for (uint32_t i = 0; i < Kt; ++i) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             cb_reserve_back(output_ind_cb_index, 1);
             transpose_wh_tile(index_transposed_cb_index, i, 0);
             pack_tile(0, output_ind_cb_index);
             cb_push_back(output_ind_cb_index, 1);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);

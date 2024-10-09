@@ -21,7 +21,7 @@ void MAIN {
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CB::c_out0, per_core_block_dim);
         for(uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
 
             // Pop tile after tile, copy to DST and pack
             cb_wait_front(tt::CB::c_in0, 1);
@@ -34,7 +34,7 @@ void MAIN {
 
             cb_pop_front(tt::CB::c_in0, 1);
 
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
         cb_push_back(tt::CB::c_out0, per_core_block_dim);
     }

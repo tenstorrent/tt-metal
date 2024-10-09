@@ -20,9 +20,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     auto dim = operation_attributes.dim;
 
     auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device *device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
@@ -36,7 +34,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
         tt::operations::primary::extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile{input_shape[dim]};
     const auto num_output_tiles{output.volume() / tt::constants::TILE_HW};
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 
     log_debug(

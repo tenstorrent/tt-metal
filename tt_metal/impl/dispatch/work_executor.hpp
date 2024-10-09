@@ -102,8 +102,6 @@ class WorkExecutor {
         this->work_executor_mode = default_worker_executor_mode();
         this->worker_queue_mode = default_worker_queue_mode();
         this->worker_state = WorkerState::IDLE;
-        this->worker_queue.parent_thread_id = 0;
-        this->worker_queue.worker_thread_id = 0;
         set_process_priority(0);
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
             this->set_worker_queue_mode(this->worker_queue_mode);
@@ -142,7 +140,7 @@ class WorkExecutor {
 
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or
+        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
             not(this->worker_state == WorkerState::RUNNING)) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
@@ -163,7 +161,7 @@ class WorkExecutor {
     inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
         // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
         ZoneScopedN("PushWork");
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == this->worker_queue.worker_thread_id.load() or
+        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
             not(this->worker_state == WorkerState::RUNNING)) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
@@ -183,7 +181,7 @@ class WorkExecutor {
 
     inline void synchronize() {
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS and
-            not(std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_queue.worker_thread_id.load())) {
+            not(std::this_thread::get_id() == worker_queue.worker_thread_id.load())) {
             // Blocking = wait for queue flushed. Worker thread cannot explcitly insert a synchronize, otherwise we have
             // a deadlock.
             this->worker_queue.push([]() {});  // Send flush command (i.e. empty function)
@@ -224,7 +222,9 @@ class WorkExecutor {
 
     WorkerQueueMode get_worker_queue_mode() { return worker_queue_mode; }
 
-    inline std::size_t get_parent_thread_id() { return this->worker_queue.parent_thread_id; }
+    inline std::thread::id get_parent_thread_id() { return this->worker_queue.parent_thread_id; }
+
+    inline std::thread::id get_worker_thread_id() { return this->worker_queue.worker_thread_id; }
 
    private:
     std::thread worker_thread;
@@ -235,10 +235,10 @@ class WorkExecutor {
     std::mutex cv_mutex;
 
     inline void start_worker() {
-        this->worker_queue.parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
+        this->worker_queue.parent_thread_id = std::this_thread::get_id();
         this->worker_state = WorkerState::RUNNING;
         this->worker_thread = std::thread(&WorkExecutor::run_worker, this);
-        this->worker_queue.worker_thread_id = std::hash<std::thread::id>{}(this->worker_thread.get_id());
+        this->worker_queue.worker_thread_id = this->worker_thread.get_id();
         // Bind a worker tied to a device to a specific CPU core in round robin fashion. Thread affinity == Better Perf.
         set_device_thread_affinity(this->worker_thread, this->cpu_core_for_worker);
     }

@@ -27,7 +27,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 32),
-        "mode": [None, "min", "max"],
+        "mode": ["both", "min", "max"],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -60,9 +60,9 @@ def run(
     low, high = gen_low_high_scalars()
 
     if mode == "min":
-        low, high = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item(), None
+        high = None
     elif mode == "max":
-        low, high = None, torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+        low = None
 
     torch_output_tensor = torch.clamp(torch_input_tensor_a, low, high)
 

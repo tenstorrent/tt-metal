@@ -28,6 +28,7 @@ jobs:
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV

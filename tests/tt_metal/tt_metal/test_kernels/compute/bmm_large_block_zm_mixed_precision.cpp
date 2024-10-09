@@ -46,7 +46,7 @@ void MAIN {
                 int in1_index_subblock_offset = 0;
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
 
-                    acquire_dst(tt::DstMode::Half);
+                    acquire_dst();
 
                     if (enable_reload) {
                         // Reconfigure input
@@ -98,7 +98,7 @@ void MAIN {
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                     }
 
-                    release_dst(tt::DstMode::Half);
+                    release_dst();
                     in1_index_subblock_offset += out_subblock_w;
                 }
                 in0_index_subblock_offset += in0_subblock_num_tiles;

@@ -56,7 +56,7 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
         } else {
             tensor_impl::validate_on_device_dtype_and_layout(
                 target_device,
-                async_safe_tensor.get_legacy_shape(),
+                async_safe_tensor.get_padded_shape(),
                 async_safe_tensor.get_dtype(),
                 async_safe_tensor.get_layout());
             auto local_tensor =

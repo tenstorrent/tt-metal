@@ -17,6 +17,7 @@ struct ReconfigConfig {
     bool explicit_reconfig = false;
     bool split_src_reconfig = false;
     bool l1_acc = false;
+    bool dst_full_sync_en = false;
 };
 
 /// @brief Does Dramx3 --> Reader --> CB --> Add with acc --> CB --> Writer --> Dram
@@ -142,7 +143,8 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/reconfig.cpp",
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines});
+        tt_metal::ComputeConfig{.dst_full_sync_en = test_config.dst_full_sync_en,
+                                .compile_args = compute_kernel_args, .defines = defines});
 
     SetRuntimeArgs(
         program,
@@ -275,14 +277,18 @@ TEST_F(DeviceFixture, TileCopyReconfigExplicitSplit) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::reconfig::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-        .explicit_reconfig = true,
-        .split_src_reconfig = true
-    };
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+            .num_tiles = 1,
+            .ublock_size_tiles = 1,
+            .explicit_reconfig = true,
+            .split_src_reconfig = true,
+            .dst_full_sync_en = dst_full_sync_en
+        };
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+        }
     }
 }
 
@@ -291,14 +297,18 @@ TEST_F(DeviceFixture, TileCopyReconfigExplicitJoined) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::reconfig::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-        .explicit_reconfig = true,
-        .split_src_reconfig = false
-    };
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+            .num_tiles = 1,
+            .ublock_size_tiles = 1,
+            .explicit_reconfig = true,
+            .split_src_reconfig = false,
+            .dst_full_sync_en = dst_full_sync_en
+        };
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+        }
     }
 }
 
@@ -307,14 +317,18 @@ TEST_F(DeviceFixture, TileCopyReconfigImplicitSplit) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::reconfig::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-        .explicit_reconfig = false,
-        .split_src_reconfig = true
-    };
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+            .num_tiles = 1,
+            .ublock_size_tiles = 1,
+            .explicit_reconfig = false,
+            .split_src_reconfig = true,
+            .dst_full_sync_en = dst_full_sync_en
+        };
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+        }
     }
 }
 
@@ -323,14 +337,18 @@ TEST_F(DeviceFixture, TileCopyReconfigImplicitJoined) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::reconfig::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-        .explicit_reconfig = false,
-        .split_src_reconfig = false
-    };
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+            .num_tiles = 1,
+            .ublock_size_tiles = 1,
+            .explicit_reconfig = false,
+            .split_src_reconfig = false,
+            .dst_full_sync_en = dst_full_sync_en
+        };
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+        }
     }
 }
 
@@ -339,16 +357,20 @@ TEST_F(DeviceFixture, TileCopyReconfigL1Acc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::reconfig::ReconfigConfig test_config = {
-        .num_tiles = 1,
-        .ublock_size_tiles = 1,
-    };
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        test_config.l1_acc = false;
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-        log_info(LogTest, "Passed without L1 accumulation");
-        test_config.l1_acc = true;
-        ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-        log_info(LogTest, "Passed with L1 accumulation");
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+            .num_tiles = 1,
+            .ublock_size_tiles = 1,
+            .dst_full_sync_en = dst_full_sync_en
+        };
+        for (unsigned int id = 0; id < num_devices_; id++) {
+            test_config.l1_acc = false;
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+            log_info(LogTest, "Passed without L1 accumulation");
+            test_config.l1_acc = true;
+            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+            log_info(LogTest, "Passed with L1 accumulation");
+        }
     }
 }

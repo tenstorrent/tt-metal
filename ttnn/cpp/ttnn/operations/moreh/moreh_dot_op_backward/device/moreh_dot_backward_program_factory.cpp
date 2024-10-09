@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+
 #include "moreh_dot_backward_device_operation.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
@@ -17,9 +19,8 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
     const auto& other = tensor_args.other;
-    const auto& input_grad = tensor_args.input_grad;
-    const auto& other_grad = tensor_args.other_grad;
-
+    const auto& input_grad = tensor_return_value.at(0);
+    const auto& other_grad = tensor_return_value.at(1);
     Program program{};
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
@@ -95,9 +96,9 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     };
 
     const auto reader_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_dot_backward/kernels/reader_moreh_dot_backward.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_op_backward/device/kernels/reader_moreh_dot_backward.cpp";
     const auto writer_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_dot_backward/kernels/writer_moreh_dot_backward.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_op_backward/device/kernels/writer_moreh_dot_backward.cpp";
 
     const auto reader_kernel_id =
         tt::operations::primary::CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
@@ -108,7 +109,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file =
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_dot_backward/kernels/moreh_dot_backward.cpp";
+        "ttnn/cpp/ttnn/operations/moreh/moreh_dot_op_backward/device/kernels/moreh_dot_backward.cpp";
     const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
         program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 
@@ -149,8 +150,8 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     const auto& output_grad_buffer = tensor_args.output_grad.buffer();
     const auto& input_buffer = tensor_args.input.buffer();
     const auto& other_buffer = tensor_args.other.buffer();
-    const auto& input_grad_buffer = tensor_return_value.at(0).buffer();
-    const auto& other_grad_buffer = tensor_return_value.at(1).buffer();
+    const auto input_grad_buffer = tensor_return_value.at(0);
+    const auto other_grad_buffer = tensor_return_value.at(1);
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});
@@ -161,8 +162,10 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
-        runtime_args[2] = input_grad_buffer->address();
-        runtime_args[3] = other_grad_buffer->address();
+        if (input_grad_buffer.has_value())
+            runtime_args[2] = input_grad_buffer.value().buffer()->address();
+        if (other_grad_buffer.has_value())
+            runtime_args[3] = other_grad_buffer.value().buffer()->address();
     }
 }
 

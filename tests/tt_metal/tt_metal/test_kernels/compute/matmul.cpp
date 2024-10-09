@@ -20,7 +20,7 @@ void MAIN {
 
     mm_init();
 
-    acquire_dst(tt::DstMode::Full);
+    acquire_dst();
     for(uint32_t b=0;b<block_cnt;++b)
     {
         cb_wait_front(tt::CB::c_in0, in0_block_tile_cnt);
@@ -54,6 +54,6 @@ void MAIN {
 
     cb_push_back(tt::CB::c_out0, out_block_tile_cnt);
 
-    release_dst(tt::DstMode::Full);
+    release_dst();
 }
 }

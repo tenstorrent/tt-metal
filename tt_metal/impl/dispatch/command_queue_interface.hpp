@@ -13,7 +13,7 @@
 #include "tt_metal/llrt/llrt.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 
 using namespace tt::tt_metal;
 
@@ -54,10 +54,14 @@ struct dispatch_constants {
     dispatch_constants(dispatch_constants &&other) noexcept = delete;
 
     static const dispatch_constants &get(const CoreType &core_type, const uint32_t num_hw_cqs = 0) {
-        static uint32_t hw_cqs = num_hw_cqs;
+        if (num_hw_cqs > 0 && (num_hw_cqs != hw_cqs || core_type != last_core_type || !inst)) {
+            hw_cqs = num_hw_cqs;
+            last_core_type = core_type;
+            inst = std::unique_ptr<dispatch_constants>(new dispatch_constants(core_type, hw_cqs));
+        }
+
         TT_FATAL(hw_cqs > 0, "Command Queue is not initialized.");
-        static dispatch_constants inst = dispatch_constants(core_type, hw_cqs);
-        return inst;
+        return *inst;
     }
 
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
@@ -131,14 +135,18 @@ struct dispatch_constants {
         uint32_t dispatch_buffer_block_size;
         uint32_t base_device_command_queue_addr;
         if (core_type == CoreType::WORKER) {
-            prefetch_q_entries_ = 1532 / num_hw_cqs;
+            if (tt::Cluster::instance().is_galaxy_cluster()) {
+                prefetch_q_entries_ = 1532 / num_hw_cqs;
+            } else {
+                prefetch_q_entries_ = 1534;
+            }
             max_prefetch_command_size_ = 128 * 1024;
             cmddat_q_size_ = 256 * 1024;
             scratch_db_size_ = 128 * 1024;
             dispatch_buffer_block_size = 512 * 1024;
             prefetch_d_buffer_size_ = 256 * 1024;
             dispatch_s_buffer_size_ = 32 * 1024; // dispatch_s only sends Go Signals -> CB can be small
-            base_device_command_queue_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+            base_device_command_queue_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         } else {
             prefetch_q_entries_ = 128;
             max_prefetch_command_size_ = 32 * 1024;
@@ -147,7 +155,7 @@ struct dispatch_constants {
             dispatch_buffer_block_size = 128 * 1024;
             prefetch_d_buffer_size_ = 128 * 1024;
             dispatch_s_buffer_size_ = 32 * 1024; // dispatch_s only sends Go Signals -> CB can be small
-            base_device_command_queue_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalMemAddrType::UNRESERVED);
+            base_device_command_queue_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         }
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
@@ -210,6 +218,9 @@ struct dispatch_constants {
     uint32_t prefetch_d_buffer_pages_;
     uint32_t dispatch_s_buffer_size_;
     std::vector<uint32_t> device_cq_addrs_;
+    static inline std::unique_ptr<dispatch_constants> inst;
+    static inline uint32_t hw_cqs;
+    static inline CoreType last_core_type = CoreType::WORKER;
 };
 
 /// @brief Get offset of the command queue relative to its channel
@@ -522,8 +533,8 @@ class SystemMemoryManager {
 
         for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
             this->config_buffer_mgr.init_add_core(
-                hal.get_dev_addr(hal.get_programmable_core_type(index), HalMemAddrType::KERNEL_CONFIG),
-                hal.get_dev_size(hal.get_programmable_core_type(index), HalMemAddrType::KERNEL_CONFIG));
+                hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG),
+                hal.get_dev_size(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG));
         }
     }
 

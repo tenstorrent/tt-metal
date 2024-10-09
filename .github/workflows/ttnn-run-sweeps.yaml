@@ -14,13 +14,18 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - eltwise.unary.relu.relu
+          - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
+          - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_pytorch2
+          - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
           - eltwise.unary.ceil.ceil
@@ -33,6 +38,7 @@ on:
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
+          - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -48,14 +54,17 @@ on:
           - eltwise.unary.bitwise.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_xor
           - eltwise.unary.log_sigmoid.log_sigmoid
-          - eltwise.unary.logical_not_.logical_not_
+          - eltwise.unary.logical_not.logical_not_
+          - eltwise.unary.logical_not.logical_not
+          - eltwise.unary.logical_not.logical_not_output
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
+          - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
-          - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
           - eltwise.unary.triu.triu
@@ -72,34 +81,62 @@ on:
           - eltwise.unary.sinh.sinh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw
+          - eltwise.unary_backward.div_bw.div_bw
+          - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary.lgamma
+          - eltwise.unary.logit
+          - eltwise.unary.mish
+          - eltwise.unary.multigammaln
+          - eltwise.unary.isfinite
+          - eltwise.unary.isinf
+          - eltwise.unary.isnan
+          - eltwise.unary.isneginf
+          - eltwise.unary.isposinf
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
-          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_output
+          - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
-          - eltwise.binary.logical_and_output.logical_and_output
-          - eltwise.binary.logical_or_output.logical_or_output
-          - eltwise.binary.logical_or_.logical_or_
-          - eltwise.binary.logical_xor_.logical_xor_
-          - eltwise.binary.logical_and_.logical_and_
+          - eltwise.binary.logical_and.logical_and_
+          - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
+          - eltwise.binary.squared_difference.squared_difference
+          - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.fmod.fmod
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
+          - eltwise.binary.xlogy.xlogy
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_pytorch2
           - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.pow.pow_pytorch2
+          - eltwise.composite.binary.pow.pow_scalar_pytorch2
+          - eltwise.composite.binary.pow.pow_tensor_pytorch2
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
+          - eltwise.ternary.lerp
           - eltwise.ternary.where.where
+          - eltwise.ternary.where.where_pytorch2
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

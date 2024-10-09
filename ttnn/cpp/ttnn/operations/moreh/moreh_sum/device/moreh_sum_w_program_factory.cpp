@@ -19,9 +19,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     auto output = output_tensor;
 
     auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
@@ -40,7 +38,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     const bool do_mask_w = (origin_W % tt::constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,

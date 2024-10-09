@@ -639,6 +639,8 @@ class resnet50:
             width=self.conv1_output_width,
             in_channels=self.conv1_input_channels,
             out_channels=self.conv1_output_channels,
+            kernel_size=[self.conv1_kernel_size[0], self.conv1_kernel_size[1]],
+            stride=[self.conv1_stride[0], self.conv1_stride[1]],
         )
 
     def __del__(self):
@@ -1024,7 +1026,9 @@ class resnet50:
 
         if is_wormhole_b0() and self.batch_size == 16:
             xshape = x.shape
-            x = ttnn.slice(x, [0, 0, 0, 0], [xshape[0], xshape[1], xshape[2], xshape[3]])
+            x = ttnn.slice(
+                x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1)
+            )
 
         layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
 

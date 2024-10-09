@@ -153,6 +153,8 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
 
     tt::ARCH arch() const;
     void enable_async(bool enable);
+    void enable_program_cache();
+    void disable_and_clear_program_cache();
 
     void close_devices();
     std::shared_ptr<const MeshDeviceView> get_view() const;

@@ -28,7 +28,7 @@ void MAIN {
         // Wait for num_single_transfer tiles to be available in in_cb
         cb_wait_front(in_cb_id, num_single_transfer);
         // Acquire DEST reg for MATH/PACK
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         // Reserve out_cb space for num_single_transfer tiles
         cb_reserve_back(out_cb_id, num_single_transfer);
 
@@ -38,7 +38,7 @@ void MAIN {
         matmul_pack_tile(START_DST_TILE_ID, out_cb_id, num_single_transfer);
 
         // Release DEST reg marking compute/pack complete
-        release_dst(tt::DstMode::Half);
+        release_dst();
         // Move rd ptr from in_cb by num_single_transfer places
         cb_pop_front(in_cb_id, num_single_transfer);
         // Move wr prt from out_cb by num_single_transfer places

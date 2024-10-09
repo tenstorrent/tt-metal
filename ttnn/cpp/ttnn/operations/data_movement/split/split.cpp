@@ -7,7 +7,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
