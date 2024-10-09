@@ -19,31 +19,35 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  erisc_l1_code :
+  .start :
   {
-    *(SORT(erisc_l1_code.*))
+    . = .;
+    *(SORT(.start))
   } > REGION_APP_CODE
   code_l1 :
   {
     *(code_l1)
+  } > REGION_APP_CODE
+  .text  :
+  {
+    /* Because TEXT_START might not be the start of a region, we
+       need to force this section to be emitted so that following sections
+       do not restart the region, if this one is empty.  */
+    . = .;
+    *(.start)
+    *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+    *(.text.exit .text.exit.*)
+    *(.text.startup .text.startup.*)
+    *(.text.hot .text.hot.*)
+    *(.text .stub .text.* .gnu.linkonce.t.*)
+    /* .gnu.warning sections are handled specially by elf32.em.  */
+    *(.gnu.warning)
   } > REGION_APP_CODE
   .init :
   {
     KEEP (*(SORT_NONE(.init)))
   } > REGION_APP_CODE
   PROVIDE (__ecode_l1 = .);
-  /* TODO: add back when using iram code loading
-  .text :
-
-  {
-    *(.text.unlikely .text.*_unlikely .text.unlikely.*)
-    *(.text.exit .text.exit.*)
-    *(.text.startup .text.startup.*)
-    *(.text.hot .text.hot.*)
-    *(.text .stub .text.* .gnu.linkonce.t.*)
-    /* .gnu.warning sections are handled specially by elf32.em.
-    *(.gnu.warning)
-  } > REGION_APP_IRAM_CODE AT > ERISC_OVERLAY*/
 
 
   PROVIDE (__etext = .);
@@ -51,57 +55,62 @@ SECTIONS
   PROVIDE (etext = .);
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE
-  .sdata2         :
+
+  .data :
   {
+     . = .; /* Force section emission.  */
+     __ldm_data_start = .;
+     *(.rodata .rodata.* .gnu.linkonce.r.*)
+     *(.rodata1)
+    PROVIDE_HIDDEN (__preinit_array_start = .);
+    KEEP (*(.preinit_array))
+    PROVIDE_HIDDEN (__preinit_array_end = .);
+    PROVIDE_HIDDEN (__init_array_start = .);
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
+    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
+    PROVIDE_HIDDEN (__init_array_end = .);
+    PROVIDE_HIDDEN (__fini_array_start = .);
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
+    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
+    PROVIDE_HIDDEN (__fini_array_end = .);
+    KEEP (*crtbegin.o(.ctors))
+    KEEP (*crtbegin?.o(.ctors))
+    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
+    KEEP (*(SORT(.ctors.*)))
+    KEEP (*(.ctors))
+    KEEP (*crtbegin.o(.dtors))
+    KEEP (*crtbegin?.o(.dtors))
+    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
+    KEEP (*(SORT(.dtors.*)))
+    KEEP (*(.dtors))
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+    *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
+    *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
-  /* Adjust the address for the data segment.  We want to adjust up to
-     the same address within the page on the next page up.  */
-  . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA
-  .dynamic        : { *(.dynamic) } > REGION_APP_DATA
-  . = DATA_SEGMENT_RELRO_END (0, .);
-  .data           :
-  {
     *(.data .data.* .gnu.linkonce.d.*)
     SORT(CONSTRUCTORS)
+    *(.data1)
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
+    __ldm_data_end = .;
   } > REGION_APP_DATA
-
-  . = ALIGN(4); /* startup code will use word writes to zero bss */
-  _edata = .; PROVIDE (edata = .);
-  . = .;
-  __l1_bss_start = .;
-  .sbss           :
+  .bss ALIGN(4):
   {
+    __ldm_bss_start = .;
+    *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
+    *(.dynbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(4);
+    __ldm_bss_end = .;
   } > REGION_APP_DATA
-  . = ALIGN(4);
-  __l1_bss_end = .;
 
-  .bss            :
-  {
-   __ldm_bss_start = .;
-   *(.dynbss)
-   *(.bss .bss.* .gnu.linkonce.b.*)
-   *(COMMON)
-
-   /* Align here to ensure that the .bss section occupies space up to
-      _end.  Align after .bss to ensure correct alignment even if the
-      .bss section disappears because there are no input sections.
-      FIXME: Why do we need it? When there is no .bss section, we don't
-      pad the .data section.  */
-   . = ALIGN(4);
-   __ldm_bss_end = .;
-  } > REGION_APP_DATA
-  . = ALIGN(32 / 8);
-  . = SEGMENT_START("ldata-segment", .);
   . = ALIGN(32 / 8);
   _end = .; PROVIDE (end = .);
-  . = DATA_SEGMENT_END (.);
-
 
   .stack :
   {
