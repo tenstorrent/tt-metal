@@ -9,14 +9,7 @@ from models.common.lightweightmodule import LightweightModule
 
 class TtLlamaMLP(LightweightModule):
     def __init__(
-        self,
-        mesh_device,
-        args,
-        state_dict,
-        weight_cache_path,
-        layer_num,
-        dtype,
-        model_config,
+        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
     ):
         super().__init__()
 
@@ -24,7 +17,7 @@ class TtLlamaMLP(LightweightModule):
         self.mesh_device = mesh_device
         self.args = args
         self.model_config = model_config
-        state_dict_prefix = args.get_state_dict_prefix(self.__class__.__name__, layer_num)
+        state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
 
         if args.dummy_weights:
@@ -70,7 +63,7 @@ class TtLlamaMLP(LightweightModule):
         else:  # Update the program configs based for prefill
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
-                x_in = ttnn.reshape(x_in, [1, seq_len // 1024, 1024, -1])
+                x_in = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
                 pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
