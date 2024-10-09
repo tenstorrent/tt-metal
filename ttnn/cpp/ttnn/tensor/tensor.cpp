@@ -655,45 +655,17 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 }
 
 Tensor create_device_tensor(
-    const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
+    const ttnn::SimpleShape& shape, const TensorLayout& layout, Device* device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", padded_shape, data_type, layout, device, memory_config);
 
-    if (memory_config.is_sharded()) {
-        TT_ASSERT(memory_config.shard_spec.has_value());
+    auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, layout);
+    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
+    output = tt::tt_metal::set_tensor_id(output);
 
-        auto& shard_spec = memory_config.shard_spec.value();
-        auto& shard_shape = shard_spec.shape;
+    GraphTracker::instance().track_function_end(output);
 
-        auto width = padded_shape[-1];
-        auto other_dims = 1;
-        for (int i = 0; i < padded_shape.rank() - 1; i++) {
-            other_dims *= padded_shape[i];
-        }
-
-        auto element_size = tensor_impl::element_size_bytes(data_type);
-        auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape, tile);
-        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
-        ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
-        size_t packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = tensor_impl::allocate_buffer_on_device(
-            packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, shard_spec_buffer, tile);
-
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    } else {
-        size_t packed_size_in_bytes =
-            tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = tensor_impl::allocate_buffer_on_device(
-            packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, std::nullopt, tile);
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
+    return output;
 }
 
 Tensor create_device_tensor(

@@ -296,11 +296,8 @@ struct Tensor {
 Tensor create_device_tensor(
     const ttnn::SimpleShape &logical_shape,
     const ttnn::SimpleShape &padded_shape,
-    DataType dtype,
-    Layout layout,
-    Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
+    const TensorLayout& layout,
+    Device *device);
 
 // TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
 Tensor create_device_tensor(

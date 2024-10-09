@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
+#include <optional>
 
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 
@@ -179,63 +180,13 @@ void validate_sharded_buffer_allocation(
     }
 }
 
-namespace detail {
+DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout) {
+    auto buffer_size_bytes = layout.get_packed_buffer_size(shape);
+    auto page_size_bytes = layout.get_page_size_bytes();
+    auto shard_spec_buffer = layout.get_shard_spec_buffer();
+    auto memory_config = layout.get_memory_config();
 
-DeviceBuffer allocate_interleaved_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
-}
-
-DeviceBuffer allocate_contiguous_buffer_on_device(
-    size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
-}
-
-DeviceBuffer allocate_sharded_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config, tile);
-    const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
-
-    return std::make_shared<Buffer>(
-        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
-}
-
-}  // namespace detail
-
-DeviceBuffer allocate_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile) {
-    if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        return detail::allocate_interleaved_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, memory_config, tile);
-    } else if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::SINGLE_BANK) {
-        return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
-    } else {
-        TT_ASSERT(memory_config.is_sharded(), "Incorrect Memory Layout");
-        return detail::allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, tile);
-    }
+    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
 }
 
 void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {

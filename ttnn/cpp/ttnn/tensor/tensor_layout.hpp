@@ -13,8 +13,13 @@ class Size {
 public:
     Size(size_t height, size_t width);
     Size(const std::pair<size_t, size_t>& size);
+    Size(const std::array<size_t, 2>& size);
 
     operator std::pair<size_t, size_t>() const;
+    operator std::array<size_t, 2>() const;
+
+    Size operator/(const Size& rhs) const;
+
 
     // comparison operator
     bool operator==(const Size& rhs) const;
@@ -41,11 +46,19 @@ public:
     const Size& get_tile_size() const { return mTileSize; }
     const MemoryConfig& get_memory_config() const { return mMemoryConfig; }
 
+    ShardSpecBuffer get_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
+    size_t get_packed_buffer_size(const ttnn::SimpleShape& shape) const;
+
+    Size get_page_size() const;
+    size_t get_page_size_bytes() const;
+
     Size get_physical_size(const ttnn::SimpleShape& shape) const;
 
     Size get_tile_alignment_padding(const ttnn::SimpleShape& shape) const;
 
 private:
+    Size get_sharded_page_size() const;
+
     Layout mLayout = Layout::ROW_MAJOR;
     DataType mDataType = DataType::BFLOAT16;
     Size mTileSize = {32, 32};
