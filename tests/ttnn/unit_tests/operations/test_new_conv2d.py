@@ -71,6 +71,7 @@ def run_conv(
     groups=1,
     has_bias=True,
     shard_layout=None,
+    use_max_cores=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -133,6 +134,8 @@ def run_conv(
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT if use_max_cores else output_layout,
+        use_max_cores=use_max_cores,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -2085,4 +2088,90 @@ def test_conv_for_vanilla_unet(
         groups=1,
         output_layout=output_layout,
         has_bias=False,
+    )
+
+
+@skip_for_grayskull()
+@skip_for_blackhole()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    (
+        # unique convs in rn50 (complete list)
+        # first conv post folding and input_channels padding to tile width
+        (16, 64, 64, 14, 14, 3, 3, 1, 1, 1, 1, True, None),
+        # rn50 layer1
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passing
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        # rn50 layer2
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
+        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("packer_l1_acc", [True], ids=["pack_l1"])
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+def test_non_height_multiple_tile_conv_wh(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    packer_l1_acc,
+    has_bias,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override=config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
+        packer_l1_acc=packer_l1_acc,
+        fp32_accum=False,
+        has_bias=has_bias,
+        use_max_cores=True,
     )

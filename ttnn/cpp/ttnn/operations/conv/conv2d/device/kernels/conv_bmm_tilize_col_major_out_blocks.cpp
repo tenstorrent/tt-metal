@@ -46,6 +46,44 @@ inline void tilize_in(
     tilize_uninit(in_cb_id);
 } // tilize_in()
 
+#ifdef USE_MAX_CORES
+template <uint32_t out_subblock_w, uint32_t out_block_w>
+inline void reblock_and_untilize_rows(
+    uint32_t num_out_subblocks_in_col,
+    uint32_t out_subblock_num_tiles,
+    uint32_t out_subblock_h,
+    uint32_t output_rows_h,
+    uint32_t interm_cb_id,
+    uint32_t out_cb_id) {
+    uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
+    cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
+
+    uint32_t within_block_index = 0;
+    for (uint32_t h = 0; h < out_subblock_h; h++) {
+        uint32_t block_offset = 0;
+        uint32_t test_out_block_w = output_rows_h <= 32 ? output_rows_h : 32;
+        cb_reserve_back(out_cb_id, test_out_block_w);
+        for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < out_subblock_w; w++) {
+                uint32_t tile_index = block_offset + within_block_index + w;
+                copy_tile(interm_cb_id, tile_index, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n, test_out_block_w);
+            tile_regs_release();
+            block_offset += out_subblock_num_tiles;
+        }
+        cb_push_back(out_cb_id, test_out_block_w);
+        output_rows_h -= test_out_block_w;
+        within_block_index += out_subblock_w;
+    }
+    cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
+}
+#endif
+
+
 template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
@@ -101,7 +139,7 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
-
+    constexpr uint32_t output_rows_h          = get_compile_time_arg_val(17);
 
     #ifdef WIDTH_SHARDED
     constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(17);
@@ -130,6 +168,7 @@ void MAIN {
     constexpr uint32_t mm_out_cb_id = matmul_partials_cb;
     #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
+
     #endif
 
     constexpr uint32_t mm_in0_cb_id = tilize_in0 ? tilized_in0_cb_id : in0_cb_id;
@@ -405,15 +444,29 @@ void MAIN {
                 #ifndef FUSE_BIAS
                 unpack_reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                 #endif
+
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
                 copy_tile_to_dst_init_short();
+                uint32_t output_rows_h_1 = output_rows_h;
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                    reblock_and_untilize<out_subblock_w,out_block_w> (
+                    #ifdef USE_MAX_CORES
+                    uint32_t output_rows_h_testing = output_rows_h_1 < 32*out_subblock_h ? output_rows_h_1 : 32*out_subblock_h;
+                        reblock_and_untilize_rows<out_subblock_w,out_block_w> (
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        output_rows_h_testing,
+                        matmul_partials_cb,
+                        out_cb_id);
+                    output_rows_h_1 -= output_rows_h_testing;
+                    #else
+                        reblock_and_untilize<out_subblock_w,out_block_w> (
                         in1_num_subblocks,
                         out_subblock_num_tiles,
                         out_subblock_h,
                         matmul_partials_cb,
                         out_cb_id);
+                    #endif
                 }
                 pack_untilize_uninit(matmul_partials_cb);
             }

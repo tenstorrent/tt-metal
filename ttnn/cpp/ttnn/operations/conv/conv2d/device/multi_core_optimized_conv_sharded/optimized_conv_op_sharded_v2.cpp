@@ -84,7 +84,8 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool with_bias,
     bool split_reader,
     bool fp32_dest_acc_en,
-    bool packer_l1_acc_en) {
+    bool packer_l1_acc_en,
+    bool use_max_cores) {
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -182,9 +183,12 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
         log_debug(LogOp, "Reblock CB: {}, npages: {}, pagesize: {}", untilize_mode_reblock_cb, num_reblock_cb_tiles, out_tile_size);
 
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
-                .set_page_size(out0_cb, out_tile_size);
+        auto shard_shape = output.shard_spec().value().shape;
+        uint32_t aligned_output_stick_nbytes = use_max_cores ? shard_shape[1] * output.element_size() : out_tile_size;
+        uint32_t aligned_output_num_pages = use_max_cores ? shard_shape[0] : num_writer_output_tiles;
+        CircularBufferConfig cb_output_config = CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{out0_cb, out_df}})
+            .set_page_size(out0_cb, aligned_output_stick_nbytes);
+
         if (output.is_sharded()) {
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
         }
@@ -353,7 +357,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding) {
+    bool enable_subblock_padding,
+    bool use_max_cores) {
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -841,6 +846,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
     uint32_t total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
+    if(use_max_cores){
+        uint32_t input_height_padded_per_core = shard_shape[0];
+        total_active_num_cores_per_weight_slice = act_matrix_height / parallelization_config.per_core_out_matrix_height;
+
+    }
     TT_FATAL(total_active_num_cores_per_weight_slice <= total_num_cores_per_weight_slice, "Error");
     uint32_t total_noop_cores = total_num_cores_per_weight_slice - total_active_num_cores_per_weight_slice;
     uint32_t total_active_num_cores = total_active_num_cores_per_weight_slice * num_weight_slices_width;
@@ -976,6 +986,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
     }
 
+    uint32_t output_rows_h = output.shard_spec().value().shape[0];
 
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles_padded * weight_block_w_ntiles;
@@ -1058,7 +1069,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             has_bias,
             split_reader,
             fp32_dest_acc_en,
-            packer_l1_acc_en);
+            packer_l1_acc_en,
+            use_max_cores);
     }
     CBHandle cb_sharded_act = std::get<0>(input_output_cbs);
     CBHandle cb_output = std::get<1>(input_output_cbs);
@@ -1231,6 +1243,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
+    if(use_max_cores){
+        compute_defines["USE_MAX_CORES"] = "1";
+        writer_defines["USE_MAX_CORES"] = "1";
+        writer_mcast_sender_defines["USE_MAX_CORES"] = "1";
+    }
+
     writer_compile_time_args = {
         (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
@@ -1269,6 +1287,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         out_dram_addr,
         weight_dram_addr,
         bias_dram_addr,
+        output_rows_h,
     };
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {
@@ -1309,7 +1328,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         tilize_in0,
         untilize_out,
 
-        bias_ntiles_per_core};
+        bias_ntiles_per_core,
+        output_rows_h};
 
     auto writer_mcast_noc = NOC::NOC_0;
     auto reader_noc = writer_mcast_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
@@ -1691,7 +1711,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     Tensor& output,
     bool enable_act_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding) {
+    bool enable_subblock_padding,
+    bool use_max_cores) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     ttnn::operations::sliding_window::ParallelConfig parallel_config;
@@ -1763,7 +1784,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         compute_kernel_config.value(),
         enable_act_double_buffer,
         enable_split_reader,
-        enable_subblock_padding);
+        enable_subblock_padding,
+        use_max_cores);
 }
 }  // namespace tt_metal
 
