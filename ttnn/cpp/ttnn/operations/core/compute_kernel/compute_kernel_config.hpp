@@ -44,4 +44,6 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);
 
+uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config);
+
 }  // namespace ttnn
