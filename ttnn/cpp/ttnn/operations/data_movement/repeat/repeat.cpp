@@ -72,25 +72,31 @@ ttnn::Tensor RepeatOperation::invoke(
             // ourselves.
             auto rm_output = ttnn::untilize(output_tensors[0]);
             auto sliced_output = ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
-            auto sliced_logical_shape_vec = sliced_output.get_logical_shape().as_vector();
 
-            auto padded_height = tt::round_up(sliced_logical_shape_vec[-2], tt::constants::TILE_HEIGHT);
-            auto padded_width = tt::round_up(sliced_logical_shape_vec[-1], tt::constants::TILE_WIDTH);
+            if (sliced_output.get_padded_shape().volume() % tt::constants::TILE_HW != 0) {
+                // slice preserved tile padding for us, so we can just tilize now.
+                return ttnn::tilize(sliced_output, input_tensor.memory_config());
+            }
+
+            auto sliced_logical_shape = sliced_output.get_logical_shape();
+            auto sliced_padded_shape = sliced_output.get_padded_shape();
+
+            auto padded_height = tt::round_up(sliced_padded_shape[-2], tt::constants::TILE_HEIGHT);
+            auto padded_width = tt::round_up(sliced_padded_shape[-1], tt::constants::TILE_WIDTH);
             TT_ASSERT(input_rank >= 2, "ttnn.repeat: rank of tiled input tensor must be >= 2");
             uint32_t num_non_hw_dims = input_rank - 2u;
             auto padding_vec = std::vector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
             padding_vec.reserve(input_rank);
-            padding_vec.emplace_back(0, padded_height - sliced_logical_shape_vec[-2]);
-            padding_vec.emplace_back(0, padded_width - sliced_logical_shape_vec[-1]);
+            padding_vec.emplace_back(0, padded_height - sliced_padded_shape[-2]);
+            padding_vec.emplace_back(0, padded_width - sliced_padded_shape[-1]);
 
             constexpr bool pad_use_multicore = true;
             auto padded_output = ttnn::pad(queue_id, sliced_output, padding_vec, 0.0f, pad_use_multicore, std::nullopt);
             auto tiled_output = ttnn::tilize(padded_output, input_tensor.memory_config());
 
-            auto padded_shape_vec = tiled_output.get_padded_shape().as_vector();
-
-            auto padded_shape = ttnn::Shape(sliced_logical_shape_vec, padded_shape_vec);
-            tiled_output.set_shape(padded_shape);
+            auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.as_vector(),
+                                                     tiled_output.get_padded_shape().as_vector());
+            tiled_output.set_shape(padded_to_tiled_shape);
             return tiled_output;
         } else {
             return ttnn::slice(output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
