@@ -154,7 +154,9 @@ def run_test_LlamaModel_end_to_end(
         if user_id == 0 or user_id == 25:
             profiler.start(f"processing_of_prefill_input_{user_id}")
 
-        tt_inp_emb, start_pos, rot_mat = tt_model.prepare_inputs(prefill_ids[user_id : user_id + 1], start_pos=0)
+        tt_inp_emb, start_pos, rot_mat, _, _ = tt_model.prepare_device_inputs(
+            prefill_ids[user_id : user_id + 1], start_pos=0, mode="prefill"
+        )
         if user_id == 0 or user_id == 25:
             profiler.end(f"processing_of_prefill_input_{user_id}")
             profiler.start(f"model_run_for_prefill_{user_id}")
@@ -202,7 +204,9 @@ def run_test_LlamaModel_end_to_end(
         if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
-        tt_inp_emb, start_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(decode_ids, start_pos)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(
+            decode_ids, start_pos, mode="decode"
+        )
 
         tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
