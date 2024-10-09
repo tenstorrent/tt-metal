@@ -12,8 +12,7 @@
 namespace ttnn {
 namespace operations::pool {
 
-template<typename T>
-Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, T* device) {
+Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation) {
 
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
@@ -43,7 +42,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_
                                             output_shape[1],
                                             output_shape[2],
                                             0,          // out_channels -- not used
-                                            device,
+                                            input_tensor.device(),
                                             ShardOrientation::ROW_MAJOR,
                                             false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
@@ -103,10 +102,6 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id, const Tensor& input_tensor, uint32_
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
         memory_config);
 }
-
-// device template specializations
-template Tensor MaxPool2DOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device);
-template Tensor MaxPool2DOp::invoke<MeshDevice>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size, std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, MeshDevice* device);
 
 }  // namespace operations::pool
 }  // namespace ttnn
