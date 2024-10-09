@@ -41,12 +41,12 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    const uint32_t batch = input.get_legacy_shape()[0];
-    const uint32_t n_heads = input.get_legacy_shape()[1];
-    const uint32_t seq_len_t = input.get_legacy_shape()[2] / TILE_HEIGHT;
-    const uint32_t head_dim_t = input.get_legacy_shape()[3] / TILE_WIDTH;
+    const uint32_t batch = input.get_padded_shape()[0];
+    const uint32_t n_heads = input.get_padded_shape()[1];
+    const uint32_t seq_len_t = input.get_padded_shape()[2] / TILE_HEIGHT;
+    const uint32_t head_dim_t = input.get_padded_shape()[3] / TILE_WIDTH;
 
-    const uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
+    const uint32_t Wbytes = input.get_padded_shape()[-1] * sizeof(bfloat16);
 
     tt_metal::Device *device = input.device();
 
