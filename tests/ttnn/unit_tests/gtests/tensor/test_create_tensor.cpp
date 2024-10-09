@@ -32,12 +32,11 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    ttnn::Shape shape(input_shape.as_vector());
-    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, shape, dtype, Layout::TILE, mem_cfg);
+    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
-    Tensor input_tensor = Tensor(input_storage, shape, dtype, Layout::TILE);
+    Tensor input_tensor = Tensor(input_storage, input_shape, dtype, Layout::TILE);
     tt::log_debug("input_data: \n {}", input_tensor.write_to_string());
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});

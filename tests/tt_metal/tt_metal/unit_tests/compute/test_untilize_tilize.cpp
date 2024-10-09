@@ -43,6 +43,7 @@ using GoldenFunc = std::variant<
 
 struct TestConfig {
     bool short_init = false;
+    bool dst_full_sync_en = false;
     uint32_t input_single_tile_size;
     uint32_t output_single_tile_size;
     uint32_t num_tiles_r;
@@ -169,7 +170,8 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         program,
         compute_kernel,
         core,
-        tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = defines}
+        tt_metal::ComputeConfig{.dst_full_sync_en = test_config.dst_full_sync_en,
+                                .compile_args = compute_kernel_args, .defines = defines}
     );
 
     std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_dram_buffer_size, false);
@@ -276,15 +278,18 @@ Following tests are for Unpack Tilize
 TEST_F(DeviceFixture, ComputeUnpackTilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-            .golden_function = unit_tests::compute::gold_standard_tilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                .golden_function = unit_tests::compute::gold_standard_tilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
@@ -293,30 +298,37 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeA_B) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-    unit_tests::compute::tilize::TestConfig test_config = {
-        .input_single_tile_size = 2 * 1024,
-        .output_single_tile_size = 2 * 1024,
-        .num_tiles_r = 2,
-        .num_tiles_c = 8,
-        .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
-        .golden_function = unit_tests::compute::gold_standard_tilize_w_elwadd
-    };
-    unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+
+    for (bool dst_full_sync_en : {true, false}) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .dst_full_sync_en = dst_full_sync_en,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = 2,
+            .num_tiles_c = 8,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A_B,
+            .golden_function = unit_tests::compute::gold_standard_tilize_w_elwadd
+        };
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
 }
 
 TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = true,
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
-            .golden_function = unit_tests::compute::gold_standard_tilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .short_init = true,
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                .golden_function = unit_tests::compute::gold_standard_tilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
@@ -327,31 +339,37 @@ Following tests are for Unpack Untilize
 TEST_F(DeviceFixture, ComputeUnpackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = true,
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .short_init = true,
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::UNPACK,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
@@ -361,47 +379,55 @@ Following tests are for pack untilize
 TEST_F(DeviceFixture, ComputePackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = true,
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .short_init = true,
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
-
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst) {
     vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * 1024,
-            .num_tiles_r = num_tile[0],
-            .num_tiles_c = num_tile[1],
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }
 
@@ -412,19 +438,22 @@ TEST_F(DeviceFixture, ComputePackUntilizeDstTinyTile) {
     vector<vector<uint32_t> > test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
     uint32_t face_c_dim = 16;
     for(auto test_config_value : test_config_values) {
-        uint32_t num_faces_per_tile = test_config_value[2];
-        uint32_t face_r_dim = test_config_value[3];
-        unit_tests::compute::tilize::TestConfig test_config = {
-            .short_init = true,
-            .input_single_tile_size = 2 * 1024,
-            .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,
-            .num_tiles_r = test_config_value[0],
-            .num_tiles_c = test_config_value[1],
-            .num_faces_per_tile = num_faces_per_tile,
-            .face_r_dim = face_r_dim,
-            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
-            .golden_function = unit_tests::compute::gold_standard_untilize
-        };
-        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        for (bool dst_full_sync_en : {true, false}) {
+            uint32_t num_faces_per_tile = test_config_value[2];
+            uint32_t face_r_dim = test_config_value[3];
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .short_init = true,
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * num_faces_per_tile * face_r_dim * face_c_dim,
+                .num_tiles_r = test_config_value[0],
+                .num_tiles_c = test_config_value[1],
+                .num_faces_per_tile = num_faces_per_tile,
+                .face_r_dim = face_r_dim,
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = unit_tests::compute::gold_standard_untilize
+            };
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
     }
 }

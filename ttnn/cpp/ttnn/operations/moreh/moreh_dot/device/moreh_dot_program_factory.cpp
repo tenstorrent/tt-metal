@@ -41,7 +41,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     tt::tt_metal::Device* device = input_a.device();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     const uint32_t in0_t = 2;   // a

@@ -21,8 +21,7 @@ def test_multi_device_events(t3k_mesh_device, shape):
 
     # Enable Program Cache and Async Mode
     t3k_mesh_device.enable_async(True)
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_program_cache()
+    t3k_mesh_device.enable_program_cache()
 
     # Preallocate activation tensors.
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)

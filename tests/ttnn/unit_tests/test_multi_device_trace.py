@@ -28,8 +28,7 @@ def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enabl
 
     # Trace requires program cache to be enabled
     t3k_mesh_device.enable_async(enable_async)
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_program_cache()
+    t3k_mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)
@@ -142,8 +141,7 @@ def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable
 
     # Trace requires program cache to be enabled
     t3k_mesh_device.enable_async(enable_async)
-    for device_id in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device_id).enable_program_cache()
+    t3k_mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, t3k_mesh_device)

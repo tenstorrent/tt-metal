@@ -15,13 +15,11 @@
 #include "noc_nonblocking_api.h"
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
-#include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 
 
-uint8_t noc_index = NOC_INDEX;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 

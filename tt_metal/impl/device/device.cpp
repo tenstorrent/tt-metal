@@ -218,7 +218,7 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .dram_bank_size = soc_desc.dram_bank_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE, // these should come from the HAL
-         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED),
+         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid_size = this->logical_grid_size(),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_type),
@@ -398,10 +398,10 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
         // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
-    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), phys_core), this->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
-    uint32_t go_addr = this->get_dev_addr(phys_core, HalMemAddrType::GO_MSG);
+    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), phys_core), this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
+    uint32_t go_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::GO_MSG);
     tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), phys_core), go_addr);
-    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(phys_core, HalMemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
     std::vector<uint32_t> zero = {0};
     tt::Cluster::instance().write_core(zero.data(), sizeof(uint32_t), tt_cxy_pair(this->id(), phys_core), launch_msg_buffer_read_ptr_addr);
 }
@@ -422,8 +422,8 @@ void Device::reset_cores() {
         CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
         std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
-        DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::LAUNCH);
-        DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::GO_MSG);
+        DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+        DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
 
         data = tt::llrt::read_hex_vec_from_core(
             this->id(), physical_core, launch_addr, sizeof(launch_msg_t));
@@ -454,8 +454,8 @@ void Device::reset_cores() {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
                 std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
                 std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
-                DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalMemAddrType::LAUNCH);
-                DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::GO_MSG);
+                DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
+                DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
                 data = tt::llrt::read_hex_vec_from_core(
                     id_and_cores.first, phys_core, launch_addr, sizeof(launch_msg_t));
                 go_signal_data = tt::llrt::read_hex_vec_from_core(
@@ -581,7 +581,7 @@ void Device::initialize_and_launch_firmware() {
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
                 tt::llrt::write_hex_vec_to_core(
-                    this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalMemAddrType::CORE_INFO));
+                    this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
                 this->initialize_firmware(worker_core, &launch_msg, &go_msg);
                 not_done_cores.insert(worker_core);
             }
@@ -601,14 +601,14 @@ void Device::initialize_and_launch_firmware() {
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
-            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalMemAddrType::CORE_INFO));
+            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(phys_eth_core, &launch_msg, &go_msg);
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
-            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalMemAddrType::CORE_INFO));
+            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(phys_eth_core, &launch_msg, &go_msg);
         not_done_cores.insert(phys_eth_core);
     }
@@ -688,7 +688,8 @@ void Device::configure_kernel_variant(
     NOC upstream_noc_index,
     NOC downstream_noc_index,
     bool is_active_eth_core,
-    bool send_to_brisc) {
+    bool send_to_brisc,
+    bool force_watcher_no_inline) {
 
     const auto& grid_size = this->grid_size();
 
@@ -711,6 +712,9 @@ void Device::configure_kernel_variant(
         {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
+    if (force_watcher_no_inline) {
+        defines.at("WATCHER_NOINLINE") = std::to_string(force_watcher_no_inline);
+    }
     if (llrt::OptionsG.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
@@ -1526,8 +1530,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 uint32_t sem = 0;
                 int dispatch_d_idx = 0;
                 uint32_t mux_sem = mux_d_settings.consumer_semaphore_id;
-                uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::GO_MSG);
-                uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::GO_MSG);
+                uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+                uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
                 for (auto&[core, dispatch_d_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
                     auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
                     auto dispatch_s_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_S][dispatch_d_idx]); // 1 to 1 mapping bw dispatch_s and dispatch_d
@@ -1577,8 +1581,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
             case DispatchWorkerType::DISPATCH_S:
             {
                 if (this->dispatch_s_enabled()) {
-                    uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::GO_MSG);
-                    uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::GO_MSG);
+                    uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+                    uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
                     for (auto&[core, dispatch_s_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_S]) {
                         int dispatch_s_idx = 0;
                         auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_s_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_s
@@ -1809,7 +1813,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
                     settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
                 } else if (num_prefetchers == 4 || num_prefetchers == 8) {
@@ -1832,7 +1836,7 @@ void Device::setup_tunnel_for_remote_devices() {
                     settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
                     settings.semaphores.clear();
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
@@ -1840,14 +1844,14 @@ void Device::setup_tunnel_for_remote_devices() {
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
                     settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
                     demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
                     settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                     settings.cb_size_bytes = 0x10000;
                     tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
 
@@ -1900,7 +1904,7 @@ void Device::setup_tunnel_for_remote_devices() {
             settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
             settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
             settings.producer_semaphore_id = 0;
-            settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+            settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
             settings.cb_size_bytes = 0x8000;
             if (tunnel.size() > 2) {
                 settings.semaphores.resize(1);
@@ -1912,7 +1916,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
                 settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
                 settings.producer_semaphore_id = 0;
-                settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::UNRESERVED);
+                settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
                 settings.cb_size_bytes = 0x8000;
                 tunnel_core_allocations[DEMUX_D].push_back(std::make_tuple(demux_d_location, settings));
             }
@@ -2185,14 +2189,18 @@ void Device::compile_command_queue_programs() {
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
-                my_noc_index
+                my_noc_index,
+                false,
+                false,
+                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
             );
 
             auto [tensix_num_worker_cores, tensix_worker_physical_grid] = get_physical_worker_grid_config(this->id(), num_hw_cqs, dispatch_core_type);
-            uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::GO_MSG);
+            uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
             uint32_t eth_worker_go_signal_addr = 0;
             if (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1) {
-                eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::GO_MSG);
+                eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
             }
             std::vector<uint32_t> dispatch_compile_args = {
                 dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(),
@@ -2337,7 +2345,11 @@ void Device::compile_command_queue_programs() {
                     std::map<string, string> {},
                     my_noc_index,
                     my_noc_index,
-                    my_noc_index
+                    my_noc_index,
+                    false,
+                    false,
+                    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                    tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
                 );
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
@@ -2514,7 +2526,11 @@ void Device::compile_command_queue_programs() {
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
-                my_noc_index
+                my_noc_index,
+                false,
+                false,
+                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
+                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
             );
             cq_id = (cq_id + 1) % num_hw_cqs;
         }
@@ -2763,7 +2779,7 @@ void Device::init_command_queue_device() {
             launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
             go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
             CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, &go_msg, this->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
+            tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, &go_msg, this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
         }
     }
 
@@ -2780,7 +2796,7 @@ void Device::init_command_queue_device() {
                     launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
                     go_msg_t go_msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
                     CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
-                    tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, &go_msg, mmio_device->get_dev_addr(phys_core, HalMemAddrType::LAUNCH));
+                    tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, &go_msg, mmio_device->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
                 }
             }
         }

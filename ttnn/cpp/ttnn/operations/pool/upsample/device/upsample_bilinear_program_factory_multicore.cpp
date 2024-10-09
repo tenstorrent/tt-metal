@@ -90,7 +90,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
     uint32_t in_w = input.get_legacy_shape()[2];
     uint32_t out_w =output.get_legacy_shape()[2];
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 
     auto shard_spec = input.shard_spec().value();

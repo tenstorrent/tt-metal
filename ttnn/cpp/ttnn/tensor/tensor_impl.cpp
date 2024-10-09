@@ -43,7 +43,7 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape, const std::optional<Tile>& tile) {
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
     uint32_t W = shape[-1];
     uint32_t page_size = 0;
     const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
@@ -104,7 +104,7 @@ std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, st
 }
 
 void validate_sharded_buffer_allocation(
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
@@ -115,7 +115,7 @@ void validate_sharded_buffer_allocation(
 
     uint32_t num_cores = shard_spec.num_cores();
 
-    uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+    uint32_t total_height = shape.volume() / shape[-1];
     uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_ASSERT(
@@ -184,7 +184,7 @@ namespace detail {
 DeviceBuffer allocate_interleaved_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -201,14 +201,14 @@ DeviceBuffer allocate_contiguous_buffer_on_device(
 DeviceBuffer allocate_sharded_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const ShardSpecBuffer& shard_params,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config, tile);
-    const auto& page_shape = shard_params.page_shape;
+    const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
 
     return std::make_shared<Buffer>(
@@ -220,7 +220,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -238,7 +238,7 @@ DeviceBuffer allocate_buffer_on_device(
     }
 }
 
-void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
@@ -799,7 +799,7 @@ template <typename T, template <typename> typename BufferType>
 DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -826,7 +826,7 @@ template <typename T>
 DeviceBuffer to_device_buffer(
     const Storage& storage,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
@@ -884,7 +884,7 @@ Tensor to_device(
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
 
-    auto shape = tensor.get_legacy_shape();
+    auto shape = tensor.get_padded_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto tile = tensor.get_tile();
@@ -905,7 +905,7 @@ Tensor to_device(
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
         tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, tile, queue);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, tile);
+    return Tensor(DeviceStorage{device_buffer}, tensor.get_shape(), data_type, layout, tile);
 }
 
 template Tensor to_device<bfloat16>(

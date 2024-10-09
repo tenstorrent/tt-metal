@@ -40,7 +40,7 @@ std::vector<int64_t> find_reduce_dim(
     // batch dims
     for (int i = 0; i < rank - 2; ++i) {
         int idx = rank - 1 - i;
-        TT_ASSERT(idx >= 0);
+        TT_FATAL(idx >= 0, "idx < 0");
         if (a_dim[idx] != b_dim[idx]) {
             dims.push_back(i);
             log_debug(tt::LogOp, "find_reduce_dim :{} push {} dim", __LINE__, i);
@@ -238,7 +238,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_h,
         other_mask_w);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,

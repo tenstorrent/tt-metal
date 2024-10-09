@@ -20,7 +20,6 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
-SEARCH_DIR("/opt/riscv32i/riscv32-unknown-elf/lib");
 SECTIONS
 {
   /* Read-only sections, merged into text segment: */
@@ -28,9 +27,9 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  .init __firmware_start :
+  .start __firmware_start :
   {
-    KEEP (*(SORT_NONE(.init)))
+    *(.start)
   } > REGION_APP_KERNEL_CODE
   code_l1 :
   {

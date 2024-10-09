@@ -21,6 +21,7 @@
 namespace tt {
 
 namespace tt_metal {
+inline namespace v0 {
 
 void DumpDeviceProfileResults(Device* device, const Program& program) {
 #if defined(TRACY_ENABLE)
@@ -45,6 +46,8 @@ void DumpDeviceProfileResults(Device* device, const Program& program) {
     detail::DumpDeviceProfileResults(device, cores_in_program);
 #endif
 }
+
+}  // namespace v0
 
 namespace detail {
 
@@ -72,12 +75,12 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
         if (std::find(ethCores.begin(), ethCores.end(), core.first) == ethCores.end())
         {
             //Tensix
-            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
+            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         }
         else
         {
             //ETH
-            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
+            profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
         }
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
@@ -134,7 +137,7 @@ void syncDeviceHost(Device *device, CoreCoord logical_core, std::shared_ptr<tt_m
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(core, HalMemAddrType::PROFILER);
+    profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(core, HalL1MemAddrType::PROFILER);
     uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
     for (int i = 0; i < sampleCount; i++)
     {
@@ -414,7 +417,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     for (const CoreCoord& core :
                          tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {
                         const auto curr_core = device->physical_core_from_logical_core(core, dispatch_core_type);
-                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalMemAddrType::PROFILER);
+                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalL1MemAddrType::PROFILER);
                         vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 curr_core,
@@ -434,7 +437,7 @@ void DumpDeviceProfileResults(Device *device, std::vector<CoreCoord> &worker_cor
                     for (const CoreCoord& core : tt::Cluster::instance().get_soc_desc(device_id).physical_ethernet_cores)
                     {
                         const auto curr_core = device->physical_core_from_logical_core(core, CoreType::ETH);
-                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalMemAddrType::PROFILER);
+                        profiler_msg_t *profiler_msg = device->get_dev_addr<profiler_msg_t *>(curr_core, HalL1MemAddrType::PROFILER);
                         vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                                 device_id,
                                 core,
