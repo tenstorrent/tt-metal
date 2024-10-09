@@ -213,8 +213,8 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
          .dram_bank_size = soc_desc.dram_bank_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DRAM_BARRIER) + \
-                                 hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
+                                 hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid_size = this->logical_grid_size(),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),

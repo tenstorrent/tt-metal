@@ -41,8 +41,12 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO = 7,
     GO_MSG = 8,
     LAUNCH_MSG_BUFFER_RD_PTR = 9,
-    DRAM_BARRIER = 10,
-    COUNT = 11
+    COUNT = 10
+};
+
+enum class HalDramMemAddrType : uint8_t {
+    DRAM_BARRIER = 0,
+    COUNT = 1
 };
 
 enum class HalMemType : uint8_t {
@@ -96,6 +100,8 @@ class Hal {
     bool initialized_;
     std::vector<HalCoreInfoType> core_info_;
     std::vector<uint32_t> mem_alignments_;
+    std::vector<DeviceAddr> dram_bases_;
+    std::vector<uint32_t> dram_sizes_;
 
     void initialize_gs();
     void initialize_wh();
@@ -118,6 +124,11 @@ class Hal {
     template <typename T = DeviceAddr>
     T get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
+
+    // Overloads for Dram
+    template <typename T = DeviceAddr>
+    T get_dev_addr(HalDramMemAddrType addr_type) const;
+    uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
 
@@ -153,6 +164,19 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
     uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     return this->core_info_[index].get_dev_size(addr_type);
+}
+
+template <typename T>
+inline T Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
+    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+    TT_ASSERT(index < this->dram_bases_.size());
+    return reinterpret_cast<T>(this->dram_bases_[index]);
+}
+
+inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
+    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+    TT_ASSERT(index < this->dram_sizes_.size());
+    return this->dram_sizes_[index];
 }
 
 inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
