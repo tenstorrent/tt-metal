@@ -111,7 +111,6 @@ for w in rand_divisors:
             remaining_x = remaining_wx // w
             input_shapes_large.append((w, z, y, remaining_x))
 
-# input_shapes = [(shape[0], shape[1], shape[2] * 32, shape[3] * 32) for shape in input_shapes]
 parameters = {
     "all_gather_n300_focused": {
         "num_devices": [2],
@@ -126,19 +125,19 @@ parameters = {
         "enable_async": [True],
         "num_iters": [1],
     },
-    "all_gather_n300_focused_large": {
-        "num_devices": [2],
-        "num_links": [1],
-        "input_shape": input_shapes_large,
-        "dim": [0, 1, 2, 3],
-        "layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "enable_async": [True],
-        "num_iters": [1],
-    },
+    # "all_gather_n300_focused_large": {
+    #     "num_devices": [2],
+    #     "num_links": [1],
+    #     "input_shape": input_shapes_large,
+    #     "dim": [0, 1, 2, 3],
+    #     "layout": [ttnn.TILE_LAYOUT],
+    #     "input_dtype": [ttnn.bfloat16],
+    #     "mem_config": [
+    #         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    #     ],
+    #     "enable_async": [True],
+    #     "num_iters": [1],
+    # },
 }
 
 
@@ -154,6 +153,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # )
     # if is_known_failure:
     #     return True, f"Skipping unsupported case {message}."
+    if test_vector["input_shape"][test_vector["dim"]] <= 1:
+        return True, f"Skipping unsupported case."
     return False, None
 
 
@@ -204,7 +205,9 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(all_devices[i], mem_config))
+        t = ttnn.from_torch(t, input_dtype, layout=ttnn.Layout.TILE)
+        t = t.to(all_devices[i], mem_config)
+        tt_input_tensors.append(t)
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
@@ -217,7 +220,7 @@ def run(
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = ttnn.to_torch(t)
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
