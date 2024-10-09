@@ -705,3 +705,16 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
         pytest.skip("Skipping RM odd inner dim test cases")
 
     transpose(shape, device, dim0=dims[0], dim1=dims[1], input_dtype=dtype)
+
+
+def test_transpose_4d(device):
+    if is_grayskull():
+        pytest.skip("transpose on WH where H is greater than 256 has bad pcc atm")
+    shape = [4, 3, 1280, 40]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(-1, -2)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, -1, -2)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)

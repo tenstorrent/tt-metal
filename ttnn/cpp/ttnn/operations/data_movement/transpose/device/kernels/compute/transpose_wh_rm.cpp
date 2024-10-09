@@ -18,6 +18,8 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
 
     for (uint32_t w = 0; w < Wt; ++w) {
         transpose_wh_init_short(cb_tilize);
+        unpack_reconfig_data_format_srca(cb_tilize);
+        pack_reconfig_data_format(cb_untilize);
         cb_reserve_back(cb_untilize, Ht);
         for (uint32_t h = 0; h < Ht; ++h) {
             tile_regs_acquire();
@@ -32,9 +34,11 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         cb_push_back(cb_untilize, Ht);
 
         // tilize
-        // need to add this hw config here, otherwise pcc is bad
-        UNPACK(( llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_untilize) ));
         untilize_init_short(cb_untilize);
+        // need to add this hw config here, otherwise pcc is bad
+        UNPACK(cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(false);)
+        unpack_reconfig_data_format_srca(cb_untilize);
+        pack_reconfig_data_format(cb_out);
         cb_wait_front(cb_untilize, Ht);
         cb_reserve_back(cb_out, Ht);
         untilize_block(cb_untilize, Ht, cb_out);
