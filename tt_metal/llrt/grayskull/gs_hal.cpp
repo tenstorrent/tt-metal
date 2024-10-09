@@ -18,6 +18,11 @@
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
 
+// Reserved DRAM addresses
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+
 namespace tt {
 
 namespace tt_metal {
@@ -56,6 +61,11 @@ void Hal::initialize_gs() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
     this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes, true});
+
+    this->dram_bases_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
+    this->dram_sizes_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
+    this->dram_bases_[utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_BASE;
+    this->dram_sizes_[utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_SIZE;
 
     this->mem_alignments_.resize(utils::underlying_type<HalMemType>(HalMemType::COUNT));
     this->mem_alignments_[utils::underlying_type<HalMemType>(HalMemType::L1)] = L1_ALIGNMENT;
