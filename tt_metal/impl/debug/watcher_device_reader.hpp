@@ -7,7 +7,7 @@
 namespace tt::watcher {
 
 #define GET_WATCHER_DEV_ADDR_FOR_CORE(dev, core, sub_type)              \
-    (dev->get_dev_addr(core, HalMemAddrType::WATCHER) + offsetof(watcher_msg_t, sub_type))
+    (dev->get_dev_addr(core, HalL1MemAddrType::WATCHER) + offsetof(watcher_msg_t, sub_type))
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;

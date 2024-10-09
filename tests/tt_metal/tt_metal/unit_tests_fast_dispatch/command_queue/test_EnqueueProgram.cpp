@@ -588,7 +588,7 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
             break;
         case tt::RISCV::ERISC: {
             HalProgrammableCoreType eth_core_type = idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
-            unique_args_addr = hal.get_dev_addr(eth_core_type, HalMemAddrType::UNRESERVED);
+            unique_args_addr = hal.get_dev_addr(eth_core_type, HalL1MemAddrType::UNRESERVED);
             common_args_addr = unique_args_addr + 1 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
