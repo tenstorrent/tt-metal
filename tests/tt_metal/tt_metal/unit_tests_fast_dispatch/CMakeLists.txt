@@ -2,6 +2,7 @@
 set(UNIT_TESTS_FD_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_CommandQueue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_EnqueueProgram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_mesh_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_EnqueueTrace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_events.cpp
