@@ -45,8 +45,7 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Inputs to eltwise binary must be tilized"
-    if (test_vector["input_a_dtype"] == ttnn.bfloat8_b or
-        test_vector["input_b_dtype"] == ttnn.bfloat8_b):
+    if test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["input_b_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is not supported for input tensors"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b
@@ -120,9 +119,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.xlogy_bw(
-        grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config
-    )
+    output_tensors = ttnn.xlogy_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensors = [ttnn.to_torch(output_tensor) for output_tensor in output_tensors]
     e2e_perf = stop_measuring_time(start_time)
 
