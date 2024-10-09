@@ -56,7 +56,6 @@ on:
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
           - eltwise.unary.glu.glu
-          - eltwise.unary.lgamma.lgamma
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
@@ -83,6 +82,15 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary.lgamma
+          - eltwise.unary.logit
+          - eltwise.unary.mish
+          - eltwise.unary.multigammaln
+          - eltwise.unary.isfinite
+          - eltwise.unary.isinf
+          - eltwise.unary.isnan
+          - eltwise.unary.isneginf
+          - eltwise.unary.isposinf
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.div.div
@@ -113,6 +121,7 @@ on:
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
+          - eltwise.ternary.lerp
           - eltwise.ternary.where.where
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
