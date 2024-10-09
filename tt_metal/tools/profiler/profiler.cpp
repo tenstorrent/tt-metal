@@ -38,13 +38,13 @@ void DeviceProfiler::readRiscProfilerResults(
     auto ethCores = soc_d.get_physical_ethernet_cores() ;
     if (std::find(ethCores.begin(), ethCores.end(), worker_core) == ethCores.end())
     {
-        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
+        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     }
     else
     {
-        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::PROFILER);
+        profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::ACTIVE_ETH;
         riscCount = 1;
     }
@@ -189,7 +189,7 @@ void DeviceProfiler::readRiscProfilerResults(
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
 
-    profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::PROFILER);
+    profiler_msg = hal.get_dev_addr<profiler_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     tt::llrt::write_hex_vec_to_core(
             device_id,
             worker_core,
@@ -287,7 +287,7 @@ DeviceProfiler::DeviceProfiler(const bool new_logs)
 {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
-    output_dir = std::filesystem::path(string(PROFILER_RUNTIME_ROOT_DIR) + string(PROFILER_LOGS_DIR_NAME));
+    output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::create_directories(output_dir);
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
 
