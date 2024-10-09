@@ -15,7 +15,7 @@
 #include "tt_metal/common/bfloat16.hpp"
 
 #include "third_party/umd/device/tt_xy_pair.h"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 
 #include "tt_metal/common/work_split.hpp"
 
