@@ -469,8 +469,8 @@ def test_remainder_ttnn(input_shapes, scalar, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        # (torch.Size([1, 1, 320, 384])),
-        # (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
