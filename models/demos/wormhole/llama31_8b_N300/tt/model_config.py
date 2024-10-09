@@ -468,6 +468,15 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 1024,
             )
 
+            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, 1024),
+                k=self.dim,
+                n=(self.head_dim * self.n_kv_heads) // self.num_devices,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
+
     def _set_llama_params_from_dict(self, params):
         # Text params
         self.dim = params["dim"]
