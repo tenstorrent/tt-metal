@@ -261,7 +261,7 @@ def run_decode(
     # capture trace
     if trace_mode:
         logger.info("Capturing trace")
-        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
+        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits, _ = model.capture_trace(
             tokens[:, prev_pos:min_prompt_len], prev_pos
         )
 
