@@ -11,7 +11,7 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_cross_attention import TtLlamaCrossAttention
+from models.demos.wormhole.llama31_8b_N300.tt.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
 from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
@@ -41,7 +41,9 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds):
+def test_llama_cross_attention_transformer_block_inference(
+    vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds
+):
     dtype = ttnn.bfloat16
     pcc = 0.99
 
@@ -49,7 +51,7 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "text_model.cross_attention_layers.0.attention."
+    first_layer_prefix = "text_model.cross_attention_layers.0."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
@@ -59,27 +61,21 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
     norm_eps = model_args.norm_eps
-    reference_model = llama_reference_mod.CrossAttention(
-        dim=dim, head_dim=head_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, norm_eps=norm_eps
-    )
+    reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
     reference_model.load_state_dict(partial_state_dict)
 
     batch = 1
 
     all_tests_pass = True
 
-    tt_model = TtLlamaCrossAttention(
+    tt_model = TtLlamaCrossAttentionTransformerBlock(
         mesh_device,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        dim=dim,
-        head_dim=head_dim,
-        n_heads=n_heads,
-        n_kv_heads=n_kv_heads,
-        norm_eps=norm_eps,
+        no_ffn=False,
     )
 
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
@@ -164,9 +160,18 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
             )
         )
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
-        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
-        tt_full_text_mask = ttnn.from_torch(
-            full_text_mask_expand,
+        full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        tt_full_text_mask_expand_1NSH = ttnn.from_torch(
+            full_text_mask_expand_1NSH,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
+        tt_full_text_mask_expand_11SD = ttnn.from_torch(
+            full_text_mask_expand_11SD,
             device=mesh_device,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
@@ -181,7 +186,8 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
         tt_out = tt_model(
             tt_x,
             xattn_mask=tt_xattn_mask,
-            full_text_row_masked_out_mask_1NSH=tt_full_text_mask,
+            full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
+            full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
             xattn_cache=tt_xattn_cache,
             mode=mode,
         )

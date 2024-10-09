@@ -191,7 +191,7 @@ class TtLlamaCrossAttention(LightweightModule):
         # xk, xv = [ttnn.transpose(tensor, 1, 2) for tensor in (xk, xv)] # HANG!
         return [xk, xv]
 
-    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask, xattn_cache):
+    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode):
         seq_len = x_11SH.shape[-2]
         # assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
@@ -254,7 +254,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         # WARNING: this broadcast is also broken, must broadcast on host
-        output = ttnn.mul(output, full_text_row_masked_out_mask)
+        output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
 
         output = ttnn.experimental.nlp_concat_heads(output)
         if seq_len > 1024:
