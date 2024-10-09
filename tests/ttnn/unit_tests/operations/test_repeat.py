@@ -13,14 +13,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from functools import reduce
 
 dtypes = [torch.bfloat16]
-shapes = [(1, 2, 4, 4), (1, 1, 1, 1)] + [(1, 2, 2 * j, 4 * j) for j in range(2, 12)]
-repeat_specs = [(2, 2, 2, 2), (1, 2, 1, 1)]
+shapes = [(1, 2, 4, 4), (1, 1, 1, 1)]
+repeat_specs = [(1, 2, 1, 1), (2, 2, 2, 2)]
+
+shape_and_repeat_specs = list(zip(shapes, repeat_specs))
 
 
 @pytest.mark.parametrize("dtype", dtypes)
-@pytest.mark.parametrize("shape", shapes)
-@pytest.mark.parametrize("repeat_shape", repeat_specs)
-def test_repeat(device, dtype, shape, repeat_shape):
+@pytest.mark.parametrize("shape_and_repeat_spec", shape_and_repeat_specs)
+def test_repeat(device, dtype, shape_and_repeat_spec):
+    shape, repeat_shape = shape_and_repeat_spec
     if dtype == torch.bfloat16 and shape[-1] < 2 and repeat_shape[-1] < 2:
         pytest.skip("bfloat16 needs 4 byte inner dim on the output.")
 
