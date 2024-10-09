@@ -33,11 +33,12 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        state_dict,
+        state_dict_prefix,
+        dtype,
         num_tiles: int,
         width: int,
-        gate,
-        embedding,  # [num_tiles, num_tiles, 1, width]
-        embedding_config,
+        gated=False,
     ):
         super().__init__()
 
@@ -46,28 +47,29 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
 
         self.num_tiles = num_tiles
         self.width = width
-        self.gated = gate is not None
-        self._embedding_config = embedding_config
-        self._gate_config = embedding_config
+        self.gated = gated
+
+        embedding = state_dict[f"{state_dict_prefix}embedding"]
 
         padded_embeddings, self.ar_mapping = self.generate_padded_embeddings(embedding, num_tiles, width)
         self.padded_embeddings = ttnn.as_tensor(
             padded_embeddings,
-            dtype=self._embedding_config["dtype"],
-            layout=self._embedding_config["layout"],
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=self._embedding_config["memory_config"],
-            mesh_mapper=self._embedding_config["mesh_mapper"](self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
         if self.gated:
+            gate = state_dict[f"{state_dict_prefix}gate"]
             self.gate = ttnn.as_tensor(
                 gate,
-                dtype=self._gate_config["dtype"],
-                layout=self._gate_config["layout"],
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=self._gate_config["memory_config"],
-                mesh_mapper=self._gate_config["mesh_mapper"](self.mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
     def generate_padded_embeddings(self, embedding: torch.Tensor, num_tiles, width):

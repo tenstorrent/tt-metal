@@ -30,42 +30,41 @@ class TtLlamaConv2dPatch(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        state_dict,
+        state_dict_prefix,
+        dtype,
         in_channels: int,
         out_channels: int,
         kernel_size: int,
         stride: int,
-        weight,
         bias,
-        input_config,
-        linear_config,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
         self.num_devices = len(self.mesh_device.get_devices())
 
-        self._input_config = input_config
-        self._linear_config = linear_config
-
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = (kernel_size,) * 2
         self.stride = stride
+
         self.bias = (
             ttnn.as_tensor(
-                torch.reshape(bias, (1, -1)),
-                dtype=self._input_config["dtype"],
-                layout=self._input_config["layout"],
+                torch.reshape(state_dict[f"{state_dict_prefix}_linear.bias"], (1, -1)),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=self._input_config["memory_config"],
-                mesh_mapper=self._input_config["mesh_mapper"](self.mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-            if bias is not None
+            if bias
             else None
         )
 
         self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
 
+        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
         padding = torch.zeros(self.out_channels, pad_len, dtype=weight.dtype)
         padded_weight = torch.cat([weight, padding], dim=-1)
@@ -73,15 +72,15 @@ class TtLlamaConv2dPatch(LightweightModule):
 
         self._linear_weight = ttnn.as_tensor(
             padded_weight,
-            dtype=self._linear_config["dtype"],
-            layout=self._linear_config["layout"],
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=self._linear_config["memory_config"],
-            mesh_mapper=self._linear_config["mesh_mapper"](self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=self._linear_config["math_fidelity"],
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -99,11 +98,11 @@ class TtLlamaConv2dPatch(LightweightModule):
 
         x = ttnn.as_tensor(
             x,
-            dtype=self._input_config["dtype"],
-            layout=self._input_config["layout"],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
-            memory_config=self._input_config["memory_config"],
-            mesh_mapper=self._input_config["mesh_mapper"](self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
         out = ttnn.linear(
