@@ -11,6 +11,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -224,6 +225,9 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
+
+    std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
