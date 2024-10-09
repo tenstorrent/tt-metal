@@ -65,6 +65,8 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value); }
 
+    SimpleShape get_physical_shape(Layout layout, const std::optional<Tile>& tile = std::nullopt) const;
+
 private:
     std::vector<uint32_t> value;
 };

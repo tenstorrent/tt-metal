@@ -302,20 +302,6 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id);
 
-tt::tt_metal::LegacyShape to_legacy_shape(ttnn::SimpleShape shape, Layout layout) {
-    auto padded_shape = shape;
-    if (layout == Layout::TILE) {
-        auto rank = shape.rank();
-        if (rank >= 1) {
-            padded_shape[rank - 1] = (padded_shape[rank - 1] + constants::TILE_WIDTH - 1) / constants::TILE_WIDTH * constants::TILE_WIDTH;
-            if (rank >= 2) {
-                padded_shape[rank - 2] = (padded_shape[rank - 2] + constants::TILE_HEIGHT - 1) / constants::TILE_HEIGHT * constants::TILE_HEIGHT;
-            }
-        }
-    }
-    return tt::tt_metal::LegacyShape(shape.as_vector(), padded_shape.as_vector());
-}
-
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
 Tensors run_with_autoformat(
     DeviceOperation<Tensors>&& operation,
@@ -376,7 +362,8 @@ Tensors run_with_autoformat(
         auto& shapes = std::get<std::vector<ttnn::SimpleShape>>(output_shapes);
         TT_ASSERT(output_tensors.size() == shapes.size());
         for (auto i = 0; i < output_tensors.size(); ++i) {
-            output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], to_legacy_shape(shapes[i], Layout::TILE), device, Layout::TILE);
+            auto legacy_shape = tt::tt_metal::LegacyShape(shapes[i].as_vector(), shapes[i].get_physical_shape(Layout::TILE).as_vector());
+            output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], legacy_shape, device, Layout::TILE);
         }
     }
 
@@ -447,8 +434,8 @@ Tensors run_with_autoformat(
         auto& shapes = std::get<std::vector<ttnn::SimpleShape>>(output_shapes);
         TT_ASSERT(output_tensors.size() == shapes.size());
         for (auto i = 0; i < output_tensors.size(); ++i) {
-            output_tensors[i] =
-                AutoFormat::format_output_tensor(output_tensors[i], to_legacy_shape(shapes[i], output_layouts[i]), device, output_layouts[i]);
+            auto legacy_shape = tt::tt_metal::LegacyShape(shapes[i].as_vector(), shapes[i].get_physical_shape(output_layouts[i]).as_vector());
+            output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], legacy_shape, device, output_layouts[i]);
         }
     }
 

@@ -5,6 +5,31 @@
 #include <cstdint>
 #include "ttnn/tensor/types.hpp"
 
+namespace ttnn {
+
+SimpleShape SimpleShape::get_physical_shape(Layout layout, const std::optional<Tile>& tile) const {
+    SimpleShape padded_shape = *this;
+    if (layout == Layout::TILE) {
+        auto tile_height = tt::constants::TILE_HEIGHT;
+        auto tile_width = tt::constants::TILE_WIDTH;
+        if (tile.has_value()) {
+            auto tile_shape = tile.value().get_tile_shape();
+            tile_height = tile_shape[0];
+            tile_width = tile_shape[1];
+        }
+        auto rank = padded_shape.rank();
+        if (rank >= 1) {
+            padded_shape[rank - 1] = (padded_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
+            if (rank >= 2) {
+                padded_shape[rank - 2] = (padded_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
+            }
+        }
+    }
+    return padded_shape;
+}
+
+}
+
 namespace tt {
 
 namespace tt_metal {
