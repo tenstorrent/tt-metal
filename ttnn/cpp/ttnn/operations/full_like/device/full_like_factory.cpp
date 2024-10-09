@@ -26,39 +26,27 @@ union datatype {
 FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    tensor_return_value_t &output) {
 
-    output_tensor.print();
+    output.print();
 
     auto input = tensor_args.input;
     auto fill_value = operation_attributes.fill_value;
-    uint32_t fill_value_u;
+    bool is_float = false;
     if (std::holds_alternative<int>(fill_value)) {
-        fill_value_u = static_cast<uint32_t>(std::get<int>(fill_value));
+        u.u32 = std::get<int>(fill_value);
+        is_float = false;
     } else if (std::holds_alternative<float>(fill_value)) {
-        fill_value_u = static_cast<uint32_t>(std::get<float>(fill_value));
+        u.f32 = std::get<float>(fill_value);
+        is_float = true;
     }
+    auto output_dtype = output.get_dtype();
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
     Device *device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
-    auto output = output_tensor;
-
     auto num_tiles = compute_volume(input.legacy_shape()) / TILE_HW;
-
-    // tt::DataFormat cb_data_format;
-    // if (dtype == DataType::UINT8) {
-    //     cb_data_format = tt::DataFormat::UInt8;
-    // } else if (dtype == DataType::UINT16) {
-    //     cb_data_format = tt::DataFormat::UInt16;
-    // } else if (dtype == DataType::UINT32) {
-    //     cb_data_format = tt::DataFormat::UInt32;
-    // } else if (dtype == DataType::FLOAT32) {
-    //     cb_data_format = tt::DataFormat::Float32;
-    // } else if (dtype == DataType::BFLOAT16) {
-    //     cb_data_format = tt::DataFormat::Float16_b;
-    // }
 
     Program program{};
 
@@ -80,12 +68,26 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t) src_is_dram,
+        (uint32_t) is_float
     };
     tt::tt_metal::CircularBufferConfig src_cb_config = tt::tt_metal::CircularBufferConfig(
         num_tiles * single_tile_size, {{tt::CB::c_intermed0, data_format}}
     ).set_page_size(tt::CB::c_intermed0, single_tile_size);
     auto cb_src = tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
+    std::map<string, string> reader_defines;
 
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1";
+            break;
+        case DataType::INT32:
+            reader_defines["OUTPUT_DTYPE_INT32"] = "1";
+            break;
+        case DataType::FLOAT32:
+            reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1";
+            break;
+        default: break;
+    }
 
     auto dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -103,7 +105,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
         program,
         "ttnn/cpp/ttnn/operations/full_like/device/kernels/reader_full_like.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
@@ -124,7 +126,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        SetRuntimeArgs(program, reader_id, core, {fill_value_u});
+        SetRuntimeArgs(program, reader_id, core, {u.u32});
         SetRuntimeArgs(
             program,
             writer_id,
@@ -133,7 +135,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
                 output.buffer()->address(),
                 num_tiles_per_core,
                 tiles_offset,
-                fill_value_u
+                u.u32
             });
 
         tiles_offset += num_tiles_per_core;
@@ -237,15 +239,14 @@ void FullLikeOperation::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const auto& input = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
 
     auto src_buffer = input.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto dst_buffer = output.buffer();
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, CoreCoord{0, 0});
