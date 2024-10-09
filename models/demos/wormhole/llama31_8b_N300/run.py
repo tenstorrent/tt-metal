@@ -1,3 +1,4 @@
+import sys
 import os
 
 os.environ["TERM"] = "xterm-256color"
@@ -126,44 +127,63 @@ def main(stdscr):
             screen_needs_update.set()
         elif c == curses.KEY_ENTER or c == 10 or c == 13:
             if not exiting:
-                # We are in input fields
-                current_field = current_line
-                if current_field == len(input_fields) - 1:
-                    # Submit command
-                    command_input = input_fields[0]["value"] or "demo"
-                    model_input = input_fields[1]["value"] or "1b,3b,8b"
-                    device_input = input_fields[2]["value"] or "n150,n300,t3k"
+                if current_line < len(input_fields):
+                    # We are in input fields
+                    current_field = current_line
 
-                    # Parse models and devices
-                    models = parse_list(model_input)
-                    devices = parse_list(device_input)
+                    # If the last field is selected, submit the command
+                    if current_field == len(input_fields) - 1:
+                        # Submit command
+                        command_input = input_fields[0]["value"] or "demo"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b"
+                        device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
-                    # Generate combinations (reordered)
-                    combinations = [(m, d) for m in models for d in devices]
+                        # Parse models and devices
+                        models = parse_list(model_input)
+                        devices = parse_list(device_input)
 
-                    # Create output entries
-                    for model, device in combinations:
-                        command_name = get_command_name(command_input)
-                        entry = {
-                            "command_name": command_name,
-                            "model": model,
-                            "device": device.upper(),
-                            "status": "Waiting",
-                            "output": "",
-                            "process": None,
-                            "log_file": None,
-                            "index": len(output_entries),
-                            "stop_event": threading.Event(),
-                            "lock": threading.Lock(),
-                            "command_input": command_input,  # Save the command input
-                        }
-                        output_entries.append(entry)
-                    # Update total_lines
-                    total_lines = len(input_fields) + len(output_entries)
+                        # Generate combinations (reordered)
+                        combinations = [(m, d) for m in models for d in devices]
 
-                # Move to next field
-                current_line = (current_line + 1) % total_lines
-                screen_needs_update.set()
+                        # Create output entries
+                        for model, device in combinations:
+                            command_name = get_command_name(command_input)
+                            entry = {
+                                "command_name": command_name,
+                                "model": model,
+                                "device": device.upper(),
+                                "status": "Waiting",
+                                "output": "",
+                                "process": None,
+                                "log_file": None,
+                                "index": len(output_entries),
+                                "stop_event": threading.Event(),
+                                "lock": threading.Lock(),
+                                "command_input": command_input,  # Save the command input
+                            }
+                            output_entries.append(entry)
+                        # Update total_lines
+                        total_lines = len(input_fields) + len(output_entries)
+                    else:
+                        # Otherwise if not the last field, move to next field
+                        current_line = (current_line + 1) % total_lines
+                        screen_needs_update.set()
+                else:
+                    # We are in the output entries
+                    entry_index = current_line - len(input_fields)
+                    if entry_index < len(output_entries):
+                        entry = output_entries[entry_index]
+                        if entry["log_file"]:
+                            # Save current terminal state
+                            curses.def_prog_mode()
+                            # Exit curses temporarily
+                            curses.endwin()
+                            # Run less command
+                            os.system(f"less -R {entry['log_file'].name}")
+                            # Resume curses
+                            curses.reset_prog_mode()
+                            stdscr.refresh()
+                            screen_needs_update.set()
             else:
                 # Ignore enter key when exiting
                 continue
@@ -193,7 +213,7 @@ def main(stdscr):
                         else:
                             # Set to cancelled if not running and not already cancelled
                             entry["status"] = "Cancelled"
-                    current_line = (current_line + 1) % total_lines
+                            current_line = (current_line + 1) % total_lines
                     screen_needs_update.set()
         elif c == 9:  # Tab key
             current_line = (current_line + 1) % total_lines
@@ -424,6 +444,10 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
             # Update status and output based on output
             status, output = parse_output_line(line, previous_line, entry["status"])
+            # Append input and output of parse_output_line to a log file
+            with open("parse_output_log.txt", "a") as parse_log:
+                parse_log.write(f"Input: {line.strip()}, Previous status: {entry['status']}\n")
+                parse_log.write(f"Output: Status: {status}, Output: {output}\n\n")
             previous_line = line.strip()
             with entry["lock"]:
                 if status != entry["status"] or output:
@@ -461,7 +485,7 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
                 entry["status"] = "Finished"
         entry["process"] = None
         log_file.close()
-        entry["log_file"] = None
+
         screen_needs_update.set()  # Ensure screen is updated after process termination
 
     # Start the next waiting entry
@@ -477,7 +501,6 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
 def parse_output_line(line, previous_line, current_status):
     line = line.strip()
-    output = None
     if "Initializing device" in line:
         return "Initializing device", None
     elif "Loading weights" in line:
@@ -496,18 +519,36 @@ def parse_output_line(line, previous_line, current_status):
     elif line == "output:":
         return "Waiting for output", None
     elif current_status == "Waiting for output" and previous_line == "output:":
-        output = line.replace("\n", " ").strip()
-        return "Running", output  # Return to 'Running' status
-    else:
-        return current_status, None
+        if "<|start_header_id|>assistant<|end_header_id|>" in line:
+            output = line.split("<|start_header_id|>assistant<|end_header_id|>", 1)[1].strip()
+            if output:
+                return "Running", output
+            else:
+                return "Assistant output", None  # wait for a non-blank line
+        else:
+            return "Running", line
+    elif current_status == "Assistant output" and line:  # skip blank lines
+        return "Running", line
+
+    return current_status, None
 
 
 def get_llama_dir(model):
-    return {
-        "1b": "/proj_sw/user_dev/llama32-data/Llama3.2-1B",
-        "3b": "/proj_sw/user_dev/llama32-data/Llama3.2-3B",
-        "8b": "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B",
+    llama_dir = {
+        "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
+        "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
+        "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
     }.get(model, "")
+
+    if not llama_dir or not os.path.exists(llama_dir):
+        print(f"Error: The directory for the {model} model does not exist: {llama_dir}")
+        print("You can set the following environment variables to specify the correct directory path:")
+        print("  - LLAMA_32_1B_DIR for 1b model")
+        print("  - LLAMA_32_3B_DIR for 3b model")
+        print("  - LLAMA_31_8B_DIR for 8b model")
+        sys.exit(1)
+
+    return llama_dir
 
 
 def get_command_name(command_input):
