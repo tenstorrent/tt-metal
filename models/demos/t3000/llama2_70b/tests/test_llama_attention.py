@@ -194,7 +194,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode)
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
             device=llama_attention_model.mesh_device,
         )
-        rot_mats = ttnn.to_device(rot_mats, llama_attention_model.mesh_device)
 
         rot_mats = ttnn.interleaved_to_sharded(rot_mats, llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
 
