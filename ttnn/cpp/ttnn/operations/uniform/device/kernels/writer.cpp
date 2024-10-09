@@ -4,8 +4,11 @@
 
 #include <cstdint>
 
+#include "common/constants.hpp"
 #include "dataflow_api.h"
 #include "debug/dprint.h"
+
+using namespace tt;
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -22,28 +25,39 @@ void kernel_main() {
     float random_range = f2u_to.f - f2u_from.f;
     DPRINT << f2u_from.f << " " << f2u_to.f << ENDL();
 
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_intermed0_id = CB::c_intermed0;
+    constexpr uint32_t cb_out0_id = CB::c_out0;
 
     const InterleavedAddrGenFast<true> output_addrg = {
         .bank_base_address = dst_addr,
-        .page_size = get_tile_size(cb_id_out0),
-        .data_format = get_dataformat(cb_id_out0)};
+        .page_size = get_tile_size(cb_out0_id),
+        .data_format = get_dataformat(cb_out0_id)};
 
     uint32_t max_uint = 2147483647;
 
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_wait_front(cb_id_out0, 1);
-        uint32_t l1_read_ptr = get_read_ptr(cb_id_out0);
-        auto l1_addr = reinterpret_cast<uint8_t *>(l1_read_ptr);
-        for (uint32_t k = 0; k < 32; k++) {
-            for (uint32_t j = 0; j < 32; j++) {
-                uint32_t cur = *(uint32_t *)l1_addr;
-                *(float *)l1_addr = static_cast<float>(cur) / max_uint * random_range + f2u_from.f;
-                l1_addr += 4;
+        cb_wait_front(cb_intermed0_id, 1);
+        cb_reserve_back(cb_out0_id, 1);
+
+        uint32_t cb_intermed0_read_ptr = get_read_ptr(cb_intermed0_id);
+        uint32_t cb_out0_write_ptr = get_write_ptr(cb_out0_id);
+
+        uint32_t *cb_intermed0_addr = reinterpret_cast<uint32_t *>(cb_intermed0_read_ptr);
+        uint8_t *cb_out0_addr = reinterpret_cast<uint8_t *>(cb_out0_write_ptr);
+
+        for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
+            for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
+                uint32_t cur = *cb_intermed0_addr;
+                *(float *)cb_out0_addr = static_cast<float>(cur) / max_uint * random_range + f2u_from.f;
+
+                cb_intermed0_addr += 1;
+                cb_out0_addr += 4;
             }
         }
-        noc_async_write_tile(i, output_addrg, l1_read_ptr);
+        noc_async_write_tile(i, output_addrg, cb_out0_write_ptr);
         noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, 1);
+
+        cb_pop_front(cb_intermed0_id, 1);
+        cb_push_back(cb_out0_id, 1);
     }
 }

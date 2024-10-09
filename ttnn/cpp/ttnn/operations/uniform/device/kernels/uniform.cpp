@@ -53,12 +53,12 @@ void MAIN {
 
     // DPRINT << "Start " << start_id << " " << end_id << ENDL();
 
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_intermed0_id = tt::CB::c_intermed0;
 
-    unary_op_init_common(cb_out0);
+    unary_op_init_common(cb_intermed0_id);
 
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(cb_out0, 1);
+        cb_reserve_back(cb_intermed0_id, 1);
         dropout_tile_init(0xDEADBEEF);
         // dropout_tile_init(i * 23);
 
@@ -69,10 +69,10 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out0);
+        pack_tile(0, cb_intermed0_id);
         tile_regs_release();
 
-        cb_push_back(cb_out0, 1);
+        cb_push_back(cb_intermed0_id, 1);
     }
 }
 }  // namespace NAMESPACE

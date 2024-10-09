@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common/constants.hpp"
 #include "common/core_coord.h"
+#include "common/tt_backend_api_types.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "uniform_device_operation.hpp"
 
@@ -27,20 +28,26 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     Program program = Program();
 
     tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
-    constexpr uint32_t single_tile_size = 4 * 1024;
+    const uint32_t dtype_tile_size = tile_size(data_format);
+    const uint32_t float_tile_size = tile_size(tt::DataFormat::Float32);
 
+    constexpr uint32_t num_tiles = 2;
     constexpr uint32_t src0_cb_index = CB::c_in0;
-    constexpr uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
-            .set_page_size(src0_cb_index, single_tile_size);
+        CircularBufferConfig(num_tiles * dtype_tile_size, {{src0_cb_index, tt::DataFormat::Int32}})
+            .set_page_size(src0_cb_index, dtype_tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    constexpr uint32_t intermed_cb_index = CB::c_intermed0;
+    CircularBufferConfig cb_intermed_config =
+        CircularBufferConfig(num_tiles * float_tile_size, {{intermed_cb_index, tt::DataFormat::Float32}})
+            .set_page_size(intermed_cb_index, float_tile_size);
+    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
+
     constexpr uint32_t output_cb_index = CB::c_out0;
-    constexpr uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float32}})
-            .set_page_size(output_cb_index, single_tile_size);
+        CircularBufferConfig(num_tiles * dtype_tile_size, {{output_cb_index, data_format}})
+            .set_page_size(output_cb_index, dtype_tile_size);
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";

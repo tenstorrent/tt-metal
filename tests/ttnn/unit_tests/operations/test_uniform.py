@@ -16,6 +16,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 
 
 def run_uniform(shape, rand_from, rand_to, device):
+    cpu_input = torch.ones(shape, dtype=torch.bfloat16)
+    npu_input = to_npu(cpu_input, device, npu_dtype=ttnn.bfloat16)
     cpu_input = torch.ones(shape, dtype=torch.float)
     npu_input = to_npu(cpu_input, device, npu_dtype=ttnn.float32)
 
@@ -36,7 +38,7 @@ def run_uniform(shape, rand_from, rand_to, device):
     print(list(hash_mp.values()))
 
 
-@pytest.mark.parametrize("shape", [[10, 15]])
+@pytest.mark.parametrize("shape", [[32, 32]])
 @pytest.mark.parametrize("rand_from", [3])
 @pytest.mark.parametrize("rand_to", [5])
 def test_uniform(shape, rand_from, rand_to, device):
