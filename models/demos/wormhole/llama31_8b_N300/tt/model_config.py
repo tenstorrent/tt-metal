@@ -247,7 +247,6 @@ class TtModelArgs:
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 8)
             )
-
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.hidden_dim, n=self.dim, grid_size=(8, 8)
             )
@@ -255,22 +254,16 @@ class TtModelArgs:
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
                 m=seq_len, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 4)
             )
-
-            if self.di_dt_workaround:
-                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
-                    m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
-                )
-            else:
-                self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
-                    m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
-                )
-
-            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = self.dram_matmul_config(
-                m=self.tile_padded_batch_rows, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(4, 8)
+            self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = lambda seq_len: self.matmul_config(
+                m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
             )
 
+            mlp_grid = (4, 8) if self.num_devices < 8 else (2, 4)
+            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=mlp_grid
+            )
             self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = self.dram_matmul_config(
-                m=self.tile_padded_batch_rows, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=(4, 8)
+                m=self.tile_padded_batch_rows, k=self.hidden_dim // self.num_devices, n=self.dim, grid_size=mlp_grid
             )
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
@@ -410,23 +403,24 @@ class TtModelArgs:
             )
 
             # Width sharded
-            mlp_grid = ttnn.CoreGrid(y=4, x=8)
+            mlp_core_grid = ttnn.CoreGrid(y=mlp_grid[0], x=mlp_grid[1])
             self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    self.dim // mlp_grid.num_cores,
+                    self.dim // mlp_core_grid.num_cores,
                 ),  # Shard shape: [32, 128] -> 1 shard per core
-                mlp_grid,
+                mlp_core_grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["SHARDED_SKIP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+            attn_input_grid = ttnn.CoreGrid(y=4, x=8)
+            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
-                    self.dim // mlp_grid.num_cores,
+                    self.dim // attn_input_grid.num_cores,
                 ),  # Shard shape: [32, 128] -> 1 shard per core
-                mlp_grid,
+                attn_input_grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

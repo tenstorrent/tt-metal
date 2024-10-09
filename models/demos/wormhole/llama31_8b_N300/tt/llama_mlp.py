@@ -102,7 +102,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         ttnn.deallocate(x)
-        ttnn.deallocate(x)
+        ttnn.deallocate(x_in)
 
         w2_in = ttnn.multiply(
             w1_out,

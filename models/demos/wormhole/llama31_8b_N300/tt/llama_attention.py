@@ -192,7 +192,7 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_SKIP_INPUT_MEMCFG"])
+        x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_ATTN_INPUT_MEMCFG"])
         xqkv_fused_sharded = ttnn.linear(
             x_sharded,
             self.wqkv,
