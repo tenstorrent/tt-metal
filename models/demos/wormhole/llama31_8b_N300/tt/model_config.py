@@ -467,7 +467,14 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-
+            self.model_config["VISION_XATTN_Q_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, 1024),
+                k=self.dim,
+                n=(self.head_dim * self.n_heads) // self.num_devices,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= 1024,
+            )
             self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.dim,
@@ -475,6 +482,30 @@ class TtModelArgs:
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
+            )
+            self.model_config["VISION_XATTN_SCORE_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
+                m=seq_len,
+                k=self.head_dim,
+                n=cache_seq_len,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=False,
+            )
+            self.model_config["VISION_XATTN_OUTPUT_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
+                m=seq_len,
+                k=cache_seq_len,
+                n=self.head_dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=False,
+            )
+            self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=seq_len,
+                k=self.dim // self.num_devices,
+                n=self.dim,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=False,
             )
 
     def _set_llama_params_from_dict(self, params):
