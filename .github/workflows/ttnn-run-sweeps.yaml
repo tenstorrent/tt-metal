@@ -14,13 +14,18 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - eltwise.unary.relu.relu
+          - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
+          - eltwise.unary.sin.sin_pytorch2
+          - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_pytorch2
+          - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
           - eltwise.unary.ceil.ceil
@@ -33,6 +38,7 @@ on:
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
+          - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -55,8 +61,10 @@ on:
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
+          - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
           - eltwise.unary.sigmoid.sigmoid
+          - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.tril.tril
           - eltwise.unary.triu.triu
@@ -117,12 +125,18 @@ on:
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_pytorch2
           - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_pytorch2
+          - eltwise.composite.binary.pow.pow_pytorch2
+          - eltwise.composite.binary.pow.pow_scalar_pytorch2
+          - eltwise.composite.binary.pow.pow_tensor_pytorch2
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
           - eltwise.ternary.lerp
           - eltwise.ternary.where.where
+          - eltwise.ternary.where.where_pytorch2
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
