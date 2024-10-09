@@ -43,7 +43,7 @@ inline void _llk_math_wait_for_dest_available_() {
 #endif
 }
 
-template <DstSync Dst = SyncFull, bool is_fp32_dest_acc_en = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_dest_section_done_() {
 #ifdef PERF_DUMP
     if constexpr(MATH_PACK_DECOUPLE) {
