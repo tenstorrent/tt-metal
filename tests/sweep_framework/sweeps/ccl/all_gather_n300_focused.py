@@ -111,7 +111,6 @@ for w in rand_divisors:
             remaining_x = remaining_wx // w
             input_shapes_large.append((w, z, y, remaining_x))
 
-# input_shapes = [(shape[0], shape[1], shape[2] * 32, shape[3] * 32) for shape in input_shapes]
 parameters = {
     "all_gather_n300_focused": {
         "num_devices": [2],
@@ -204,7 +203,9 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(all_devices[i], mem_config))
+        t = ttnn.from_torch(t, input_dtype, layout=ttnn.Layout.TILE)
+        t = t.to(all_devices[i], mem_config)
+        tt_input_tensors.append(t)
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
