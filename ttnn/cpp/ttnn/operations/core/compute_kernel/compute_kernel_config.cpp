@@ -5,6 +5,8 @@
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
+#define MAX_DEST_REG_COUNT 16
+
 namespace ttnn {
 
 DeviceComputeKernelConfig init_device_compute_kernel_config(
@@ -136,6 +138,29 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
         compute_kernel_config);
 
     return std::make_tuple(math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en);
+}
+
+uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config) {
+    uint32_t available_reg_count = MAX_DEST_REG_COUNT;
+    std::visit(
+        [&](auto&& compute_kernel_config) {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                available_reg_count /= 2; // fp32_dest_acc and dst_full_sync disabled for GS
+            }
+            else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                if (!compute_kernel_config.dst_full_sync_en) {
+                    available_reg_count /= 2;
+                }
+                if (compute_kernel_config.fp32_dest_acc_en) {
+                    available_reg_count /= 2;
+                }
+            } else {
+                TT_THROW("arch not supported");
+            }
+        },
+        compute_kernel_config);
+    return available_reg_count;
 }
 
 }  // namespace ttnn
