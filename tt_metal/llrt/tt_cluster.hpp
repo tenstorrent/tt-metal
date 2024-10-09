@@ -23,6 +23,8 @@
 #include "dev_msgs.h"
 // clang-format on
 
+#include "llrt/hal.hpp"
+
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
@@ -299,8 +301,6 @@ class Cluster {
 
     // Mapping of each devices' ethernet routing mode
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
-
-    tt_device_dram_address_params dram_address_params = {DRAM_BARRIER_BASE};
 
     tt_device_l1_address_params l1_address_params = {
         (uint32_t)MEM_NCRISC_FIRMWARE_BASE,

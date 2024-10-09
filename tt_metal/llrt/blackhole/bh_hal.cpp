@@ -8,6 +8,11 @@
 #include "llrt/blackhole/bh_hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
+// Reserved DRAM addresses
+// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
+constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
+constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+
 namespace tt {
 
 namespace tt_metal {
@@ -30,6 +35,11 @@ void Hal::initialize_bh() {
 
     HalCoreInfoType idle_eth_mem_map = create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
+
+    this->dram_bases_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
+    this->dram_sizes_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
+    this->dram_bases_[utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_BASE;
+    this->dram_sizes_[utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::DRAM_BARRIER)] = DRAM_BARRIER_SIZE;
 
     this->mem_alignments_.resize(utils::underlying_type<HalMemType>(HalMemType::COUNT));
     this->mem_alignments_[utils::underlying_type<HalMemType>(HalMemType::L1)] = L1_ALIGNMENT;
