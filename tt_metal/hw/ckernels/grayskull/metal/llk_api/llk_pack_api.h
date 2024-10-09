@@ -113,7 +113,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<out_of_order_output, DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
+    _llk_pack_<DST_SYNC_MODE, out_of_order_output, untilize, is_fp32_dest_acc_en>(
         tile_index,
         pack_dst_format[output_id],
         pack_tile_addr
@@ -282,7 +282,7 @@ inline void llk_matmul_pack(const std::uint32_t start_tile_index, const std::uin
 
         std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-        _llk_pack_<out_of_order_output, DST_SYNC_MODE, untilize, is_fp32_dest_acc_en>(
+        _llk_pack_<DST_SYNC_MODE, out_of_order_output, untilize, is_fp32_dest_acc_en>(
             tile_index,
             pack_dst_format[output_id],
             pack_tile_addr
