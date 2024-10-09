@@ -29,58 +29,13 @@ from models.utility_functions import (
 from models.demos.wormhole.llama31_8b_N300.tt.llama_tile_position_embedding import (
     TtLlamaTilePositionEmbedding,
 )
+from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
 
+import importlib
 
-##### Torch op #####
-class TilePositionEmbedding(nn.Module):
-    def __init__(
-        self,
-        num_tiles: int,
-        width: int,
-        gated: bool = False,
-    ):
-        super().__init__()
-        self.num_tiles = num_tiles
-        self.width = width
-        self.embedding = nn.Parameter(torch.randn(num_tiles, num_tiles, 1, width) / math.sqrt(width))
-        self.gated = gated
-        if gated:
-            self.gate = nn.Parameter(torch.randn(1))
-
-    """NOTE: The _dynamic_resize function is only ever used in the load hooks function call that loads the weights.
-    Currently, this function is NOT tested by the test suite
-    """
-
-    @staticmethod
-    def _dynamic_resize(embed: torch.Tensor, num_tiles: int):
-        nt_old, nt_old, _, w = embed.shape
-        embed = embed.permute(2, 3, 0, 1)
-
-        embed_new = F.interpolate(
-            embed,
-            size=(num_tiles, num_tiles),
-            mode="bilinear",
-            align_corners=True,
-        )
-        # reshape the weights to the correct shape
-        embed_new = embed_new.permute(2, 3, 0, 1)
-        return embed_new
-
-    def forward(self, x: torch.Tensor, ar: torch.Tensor, num_tiles: int = None):
-        embed = self.embedding
-        if num_tiles is None:
-            num_tiles = self.num_tiles
-        elif num_tiles > self.num_tiles:
-            embed = TilePositionEmbedding._dynamic_resize(self.embedding, num_tiles)
-        out_pos_embed = torch.zeros(x.shape[0], num_tiles, 1, self.width, device=x.device, dtype=x.dtype)
-        for idx, arx in enumerate(ar):
-            h, w = arx
-            out_pos_embed[idx, : w * h] = embed[:h, :w].reshape(w * h, 1, self.width)
-        if self.gated:
-            out_pos_embed = out_pos_embed * self.gate.tanh()
-
-        x = x + out_pos_embed
-        return x
+llama_reference_mod = importlib.import_module(
+    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
+)
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -97,7 +52,6 @@ class TilePositionEmbedding(nn.Module):
     "gated",
     [
         True,
-        False,
     ],
 )
 @pytest.mark.parametrize(
@@ -117,30 +71,30 @@ class TilePositionEmbedding(nn.Module):
         ttnn.TILE_LAYOUT,
     ],
 )
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        # ttnn.bfloat8_b,
-    ],
-)
 def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
     input_shape,
-    input_dtype,
     layout,
     # Tile Position Embedding params
     dim,
     gated,
     max_num_tiles,
 ):
+    dtype = ttnn.bfloat16
     pcc = 0.9999
 
-    devices = mesh_device.get_devices()
-    num_devices = len(devices)
+    model_args = TtModelArgs(mesh_device)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = "vision_model.vision_encoder.pre_tile_pos_embed."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    num_devices = model_args.num_devices
 
     bsz, num_concurrent_media, num_chunks, ntok = input_shape
 
@@ -153,7 +107,7 @@ def test_llama_conv2d_inference(
 
     tt_input_tensor = ttnn.as_tensor(
         input_tensor,
-        dtype=input_dtype,
+        dtype=dtype,
         layout=layout,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -175,28 +129,23 @@ def test_llama_conv2d_inference(
     tt_aspect_ratios = aspect_ratios.tolist()
 
     ##### Perform the torch ops #####
-    reference_model = TilePositionEmbedding(
+    reference_model = llama_reference_mod.TilePositionEmbedding(
         num_tiles=max_num_tiles,
         width=dim,
         gated=gated,
     )
+    reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor, aspect_ratios)
 
     ##### Perform the TT ops #####
-    _embedding_config = {
-        "dtype": input_dtype,
-        "layout": layout,
-        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-        "mesh_mapper": ttnn.ReplicateTensorToMesh,
-    }
-
     tt_model = TtLlamaTilePositionEmbedding(
         mesh_device,
+        state_dict=state_dict,
+        state_dict_prefix=first_layer_prefix,
+        dtype=dtype,
         num_tiles=max_num_tiles,
         width=dim,
-        gate=reference_model.gate if gated else None,
-        embedding=reference_model.embedding,
-        embedding_config=_embedding_config,
+        gated=gated,
     )
     tt_output = tt_model(tt_input_tensor, tt_aspect_ratios)
 
