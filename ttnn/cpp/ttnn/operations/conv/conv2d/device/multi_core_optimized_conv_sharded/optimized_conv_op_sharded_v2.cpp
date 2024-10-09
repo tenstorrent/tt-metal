@@ -177,19 +177,15 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
         // Supposed to be a small CB only responsible for reorganizing
         // the output blocks to fill the whole "per core output block width"
-        //std::cout << "num_reblock_cb_tiles: " << num_reblock_cb_tiles * 8 << std::endl;
         CircularBufferConfig cb_reblock_config =
             CircularBufferConfig(num_reblock_cb_tiles * out_tile_size, {{untilize_mode_reblock_cb, out_df}})
                 .set_page_size(untilize_mode_reblock_cb, out_tile_size);
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
         log_debug(LogOp, "Reblock CB: {}, npages: {}, pagesize: {}", untilize_mode_reblock_cb, num_reblock_cb_tiles, out_tile_size);
 
-        //std::cout << "num_writer_output_tiles: " << num_writer_output_tiles << std::endl;
         auto shard_shape = output.shard_spec().value().shape;
         uint32_t aligned_output_stick_nbytes = use_max_cores ? shard_shape[1] * output.element_size() : out_tile_size;
         uint32_t aligned_output_num_pages = use_max_cores ? shard_shape[0] : num_writer_output_tiles;
-        //uint32_t aligned_output_num_pages = shard_shape[0];
-        log_debug(LogOp , "output CB --> {} {}", aligned_output_num_pages, aligned_output_stick_nbytes);
         CircularBufferConfig cb_output_config = CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{out0_cb, out_df}})
             .set_page_size(out0_cb, aligned_output_stick_nbytes);
 
@@ -1050,7 +1046,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // TODO: Moving this function call to after kernel logic causes pcc fails
         // There are additional CBs and semaphores created in 2D conv in kernel logic,
         // so does order of create_cb calls matter?
-        //uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
         input_output_cbs = create_CBs_for_sharded_input_v2(
             program,
             a,

@@ -331,12 +331,10 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     } // out_num_blocks_w
     #ifdef SHARDED_OUT
-    //DPRINT << "1 SHARDED_OUT_NOT_SUPPORTED" << ENDL();
-    #ifndef USE_MAX_CORES
-    //DPRINT << out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h << ENDL();
-    cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
-    #else
-    cb_wait_front(cb_id_out0, output_rows_h);
-    #endif
+        #ifndef USE_MAX_CORES
+        cb_wait_front(cb_id_out0, out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
+        #else
+        cb_wait_front(cb_id_out0, output_rows_h);
+        #endif
     #endif
 }

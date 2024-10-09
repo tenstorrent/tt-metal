@@ -149,7 +149,6 @@ std::vector<tt::tt_metal::LegacyShape> OptimizedConvNew::compute_output_shapes(c
     auto shape_c = output_channels;
     auto padded_shape_w = this->use_max_cores ?  parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height : parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
-    //std::cout << "testing values " << " output chaneel " << shape_c << " padded_shape_c " << padded_shape_c << std::endl;
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
     auto output_tensor_shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, padded_shape_w, padded_shape_c}, output_padding));
@@ -170,10 +169,8 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             if(this->use_max_cores){
                 num_cores = this->parallelization_config.num_cores_nhw;
                 uint32_t total_height = tt::tt_metal::compute_volume(output_shape) / output_shape[-1];
-                //std::cout << "num_cores " << num_cores << " total_height " << total_height << " output_channel " << output_shape[-1] << std::endl;
                 shard_grid = tt::tt_metal::num_cores_to_corerange_set(num_cores, this->parallelization_config.grid_size, true);
                 shard_shape = {(uint32_t)(total_height / num_cores), output_shape[-1]};
-                log_debug(tt::LogOp, "REMOVE_THIS shard_shape {} {}", shard_shape[0], shard_shape[1]);
             }
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->memory_config;

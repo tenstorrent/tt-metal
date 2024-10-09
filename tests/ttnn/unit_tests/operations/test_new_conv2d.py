@@ -16,17 +16,15 @@ from models.utility_functions import (
     skip_for_blackhole,
     is_blackhole,
 )
-from tests.ttnn.utils_for_testing import (
-    assert_with_pcc,
-    check_with_pcc,
-    check_with_pcc_without_tensor_printout,
-    update_process_id,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import math
-import os
-import torch.nn as nn
 
+
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
+
+
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 # def plot_diff(vals, fid, nsticks, stick_len):
 #     import matplotlib.pyplot as plt
@@ -40,31 +38,6 @@ import torch.nn as nn
 #     plt.imshow(bool_vals, interpolation="none", vmin=0, vmax=1, cmap="Blues")
 #     plt.savefig(f"diff_core_{fid}.png", bbox_inches="tight", pad_inches=0.1)
 #     plt.close()
-
-
-def write_to_file_special(file_name, tensor):
-    tensor = tensor.cpu().detach().numpy()
-    with open(file_name, "w") as f:
-        for i in range(1):
-            for j in range(tensor.shape[1]):
-                for k in range(tensor.shape[2] // 16):
-                    # for l in range(tensor.shape[3]):
-                    # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
-                    f.write("{:.2f}".format(tensor[i][j][k][0]) + " ")
-                    if k % 14 == 13:
-                        f.write("\n")
-
-
-def write_to_file(file_name, tensor):
-    tensor = tensor.cpu().detach().numpy()
-    with open(file_name, "w") as f:
-        for i in range(1):
-            for j in range(tensor.shape[2]):
-                for k in range(tensor.shape[3]):
-                    for l in range(1):
-                        # f.write(str(round(tensor[i][j][k][l]), 2) + " ")
-                        f.write("{:.2f}".format(tensor[i][l][j][k]) + " ")
-                f.write("\n")
 
 
 def run_conv(
@@ -100,37 +73,20 @@ def run_conv(
     shard_layout=None,
     use_max_cores=False,
 ):
-    # has_bias = False
-    # update_process_id()
-    has_bias = True
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.zeros(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
     # torch_input_tensor_nchw = torch.tensor(range(input_height * input_width)).reshape([1,1,input_height,input_width]).float()
     # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    # for i in range(1):
-    #     for j in range(input_channels):
-    #         for k in range(input_height):
-    #             for l in range(input_width):
-    #                 torch_input_tensor[i][k][l][j] = 0.01 #if j < 1 else 0
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
     # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
-    # for i in range(output_channels):
-    #     for j in range(input_channels // groups):
-    #         for k in range(filter_height):
-    #             for l in range(filter_width):
-    #                 torch_weight_tensor[i][j][k][l] = 0.1
-    # torch_weight_tensor = 0.0
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
-    torch_bias_tensor = torch.zeros(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
         torch_weight_tensor,
@@ -159,9 +115,6 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-
-    # if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-    #     pytest.skip("Only testing for height and block sharding. need to remove this test")
 
     if shard_layout is None:
         shard_layout = (
@@ -215,22 +168,9 @@ def run_conv(
         debug=debug,
         groups=groups,
     )
-    # breakpoint()
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    # write_to_file_special("abc.pt", torch_output_tensor.float())
-    # print(tt_output_tensor_on_device)
-    print(ttnn.get_memory_config(tt_output_tensor_on_device))
-    # print(torch_output_tensor[0][0])
-    # write_to_file("ref_hw.pt", torch_output_tensor.float())
-
-    # if enable_auto_formatting:
-    #     torch_output_tensor = torch.split(torch_output_tensor, output_channels, 3)[0]
-    #     torch_output_tensor = torch.reshape(torch_output_tensor, output_shape_nhwc)
-    # else:
-    #     tt_output_tensor = conv.copy_output_from_device(tt_output_tensor_on_device)
-    #     assert tt_output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    #     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
@@ -246,12 +186,8 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
-
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
-    # write_to_file("ref_cpu.pt", torch_out_golden_tensor)
-    # write_to_file("ref_hw.pt", torch_output_tensor.float())
-
-    print(pcc_msg)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
 
 
@@ -364,8 +300,6 @@ def run_conv_with_split(
             conv_op_cache=reader_patterns_cache,
         )
         tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-        print(tt_conv_output_tensor)
-        print(ttnn.get_memory_config(tt_conv_output_tensor))
         torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
         print(f"Output shape : {batch_size} {out_height} {out_width} {output_channels}")
         torch_conv_output_tensor = torch_conv_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
@@ -674,6 +608,9 @@ def test_resnet50_conv_gs(
     use_1d_systolic_array,
     config_override,
 ):
+    if is_blackhole():
+        pytest.skip("This test is for Grayskull only")
+
     if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
         pytest.skip("Batch > 8 must be run fully bfp8")
     if batch_size == 20 and input_channels >= 128 and filter_width > 1:
@@ -724,22 +661,20 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        # (1, 64, 64, 8*7, 8*7, 3, 3, 1, 1, 1, 1, True, None),
-        # (16, 64, 64, 2 * 7, 2 * 7, 3, 3, 1, 1, 1, 1, True, None),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 256}),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passing
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        # # # rn50 layer2
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        # rn50 layer2
         (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
-        # (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
+        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
         (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        # # rn50 layer3
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        # rn50 layer3
         (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
         (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
         (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
@@ -986,7 +921,6 @@ def test_resnet50_conv_wh_fp32(
         # (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None), # slightly low pcc with 0.99698. bfloat16 weights doesnt fit
         # (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None), # doesnt fit at all.. for all data types
         # sd convs with HxW=64x64 with batch size = 1
-        # (1, 32 * 8, 32, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, True, None),
         (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
         (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),
@@ -1018,8 +952,8 @@ def test_resnet50_conv_wh_fp32(
         # (2, 640, 960, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}), IndexError: vector::_M_range_check: __n (which is 1) >= this->size() (which is 1)
         # (2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}), IndexError: vector::_M_range_check: __n (which is 1) >= this->size() (which is 1)
         # (2, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}), IndexError: vector::_M_range_check: __n (which is 1) >= this->size() (which is 1)
-        # # 1x1 conv
-        # (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, True, None),
+        # 1x1 conv
+        (2, 320, 960, 64, 64, 1, 1, 1, 1, 0, 0, True, None),
         # Small conv
         # (1, 32, 32, 16, 16, 3, 3, 2, 2, 1, 1, True, None),  ## batch = 1 is currently not supported
     ),
@@ -1103,7 +1037,6 @@ def test_sd_conv(
         )
 
 
-# @skip_for_wormhole_b0("Issue #7179: non-deterministically fails on N150 regression")
 @skip_for_grayskull()
 @skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -1341,6 +1274,9 @@ def test_unet_conv(
     use_shallow_conv_variant,
     output_layout,
 ):
+    if is_blackhole():
+        pytest.skip("This test is for Grayskull only")
+
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
@@ -2163,51 +2099,18 @@ def test_conv_for_vanilla_unet(
     (
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
-        # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        # (1, 64, 64, 8*7, 8*7, 3, 3, 1, 1, 1, 1, True, None),
-        (16, 64, 64, 2 * 7, 2 * 7, 3, 3, 1, 1, 1, 1, True, None),
-        # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, {"act_block_h": 32}),  Out of Memory!!
+        (16, 64, 64, 14, 14, 3, 3, 1, 1, 1, 1, True, None),
         # rn50 layer1
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passing
         (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
         (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        # # rn50 layer2
-        # (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        # rn50 layer2
+        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
         (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
         (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
-        # (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, {"act_block_h": 32}),
         (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
         (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
         (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        # # rn50 layer3
-        # (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        # (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        # (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, False, None),
-        # (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        # (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        # (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
-        # # rn50 layer4
-        # (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        # (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        # (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
-        # (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        # (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        # (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        # ## small test
-        # (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 2, "grid_size": (2, 2)}),
-        # (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, False, {"num_cores_nhw": 4, "grid_size": (2, 4)}),
-        # # (1, 160, 160, 7, 7, 3, 3, 1, 1, 1, 1, False, None), sliding_window_op_infra/sliding_window.cpp:341: indices_length_last_core <= indices_length_per_core
-        # (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, False, None),
-        # # r50 1x1s2 shapes
-        # # Fails with packer_l1_acc = True (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 first bottleneck downsample shape
-        # (20, 256, 64, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  # r50 first bottleneck downsample shape
-        # # Fails with packer_l1_acc = True (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, False, None),  # r50 second bottleneck downsample shape
-        # # (20, 512, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, False, None),  # r50 third bottleneck downsample shape
-        # # (20, 1024, 512, 28, 28, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
-        # # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
-        # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
     ),
 )
 @pytest.mark.parametrize(
@@ -2245,25 +2148,6 @@ def test_non_height_multiple_tile_conv_wh(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
-    # if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
-    #     pytest.skip("Batch > 8 must be run fully bfp8")
-
-    # if (
-    #     (
-    #         activations_dtype == ttnn.bfloat16
-    #         and batch_size == 20
-    #         and (
-    #             output_channels == 64
-    #             or (
-    #                 stride_h == 2
-    #                 and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-    #             )
-    #         )
-    #     )
-    #     # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
-    #     or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
-    # ):
-    #     pytest.skip("Skipping test because it won't fit in L1!")
 
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
