@@ -77,7 +77,7 @@ void MAIN {
 
     cb_wait_front(cb_scaler, 1);
     #ifndef RMSNORM
-    unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
+    reconfig_data_format_srcb(cb_in0, cb_scaler);
     // E[x],
     index_h_offset = 0;
     reduce_init_delta<false>();
@@ -96,7 +96,7 @@ void MAIN {
     }
     reduce_revert_delta();
     cb_push_back(cb_ex_partial2, block_h);
-    unpack_reconfig_data_format_srcb(cb_scaler, cb_in0);
+    reconfig_data_format_srcb(cb_scaler, cb_in0);
     #endif // not RMSNORM
 
     // X^2
@@ -124,8 +124,8 @@ void MAIN {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    unpack_reconfig_data_format_srca(cb_in0, cb_x2);
-    unpack_reconfig_data_format_srcb(cb_in0, cb_scaler);
+    reconfig_data_format_srca(cb_in0, cb_x2);
+    reconfig_data_format_srcb(cb_in0, cb_scaler);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
 
@@ -152,8 +152,8 @@ void MAIN {
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr(is_allgather_worker) {
         cb_wait_front(cb_scaler_global, 1);
-        unpack_reconfig_data_format_srca(cb_x2, cb_ex_external2);
-        unpack_reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
+        reconfig_data_format_srca(cb_x2, cb_ex_external2);
+        reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
         reduce_init_delta<false>();
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result*num_tiles_per_allgather_worker);
 

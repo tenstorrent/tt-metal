@@ -29,7 +29,7 @@ ALWI void REL() { release_dst(); }
 void calc_numeric_stable(uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
     // calculate max val per row
     ACQ();
-    unpack_reconfig_data_format(cb_in, cb_bcast_scaler);
+    reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_reserve_back(cb_max, 1);
     cb_wait_front(cb_bcast_scaler, 1);
     reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>();
@@ -45,7 +45,7 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
-    unpack_reconfig_data_format_srcb(cb_max);
+    reconfig_data_format_srcb(cb_max);
     cb_wait_front(cb_max, 1);
     sub_bcast_cols_init_short();
     for (uint32_t wt = 0; wt < Wt; wt += ndst) {

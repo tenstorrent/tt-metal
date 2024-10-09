@@ -49,7 +49,7 @@ void MAIN {
 
         pack_untilize_uninit(untilized_cache_cb);
 
-        unpack_reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
+        reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
         tilize_init_short(untilized_cache2_cb, Wt);

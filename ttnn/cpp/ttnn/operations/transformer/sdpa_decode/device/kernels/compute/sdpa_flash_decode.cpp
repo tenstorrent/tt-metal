@@ -476,7 +476,7 @@ void MAIN {
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
             if (k_chunk > k_chunk_start) {
-                unpack_reconfig_data_format(cb_cur_max, cb_prev_max);
+                reconfig_data_format(cb_cur_max, cb_prev_max);
                 max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
             }
             /* QK -= cb_cur_max */
@@ -598,7 +598,7 @@ void MAIN {
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
 
-            unpack_reconfig_data_format(cb_cur_sum, cb_cur_sum); // DEBUG
+            reconfig_data_format(cb_cur_sum, cb_cur_sum); // DEBUG
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
