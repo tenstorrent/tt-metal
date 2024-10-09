@@ -44,8 +44,12 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
 
     if (!memory_config.shard_spec.has_value()) {
         // Input is not sharded. Perform sharding.
+        applied_shard_scheme = applied_shard_scheme == TensorMemoryLayout::INTERLEAVED ? TensorMemoryLayout::HEIGHT_SHARDED : applied_shard_scheme; // default to height sharding
+        TT_FATAL((applied_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                 (applied_shard_scheme == TensorMemoryLayout::WIDTH_SHARDED),
+                 "Only height or width sharding strategies are supported.");
         parallel_config = conv::conv2d::determine_parallel_config(
-                                            sharding_strategy,
+                                            applied_shard_scheme,
                                             batch_size,
                                             0,          // in_channels -- not used
                                             output_shape[1],
@@ -55,6 +59,9 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                                             ShardOrientation::ROW_MAJOR,
                                             false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
+        TT_FATAL(applied_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
+                 (applied_shard_scheme == TensorMemoryLayout::WIDTH_SHARDED && (num_cores_nhw == 1)),
+                 "If heigh sharding is used num_cores_nhw may vary, but if width sharding is used num_cores_nhw must be 1.");
         auto sharded_mem_config = conv::conv2d::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt);
         memory_config = input_tensor_sharded.memory_config();
@@ -63,7 +70,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         const auto shard_grid = memory_config.shard_spec.value().grid;
         const auto shard_scheme = memory_config.memory_layout;
         const auto shard_orientation = memory_config.shard_spec.value().orientation;
-        TT_FATAL(shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+        TT_FATAL(applied_shard_scheme == TensorMemoryLayout::INTERLEAVED, "A sharding scheme should not be specified for a sharded input tensor.");
         TT_FATAL(shard_orientation == ShardOrientation::ROW_MAJOR, "Only row major orientation is supported.");
         parallel_config.grid = shard_grid;
         parallel_config.shard_scheme = shard_scheme;
@@ -112,5 +119,14 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         memory_config);
 }
 
+<<<<<<< HEAD
+=======
+// device template specializations
+template Tensor MaxPool2DOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size,
+                                            std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device, TensorMemoryLayout applied_shard_scheme);
+template Tensor MaxPool2DOp::invoke<MeshDevice>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size,
+                                                std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, MeshDevice* device, TensorMemoryLayout applied_shard_scheme);
+
+>>>>>>> #13077: changed default to make more sense with pre-sharded tensor, but this might be worse
 }  // namespace operations::pool
 }  // namespace ttnn
