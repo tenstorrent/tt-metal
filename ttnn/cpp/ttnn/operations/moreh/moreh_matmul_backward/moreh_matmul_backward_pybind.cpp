@@ -22,7 +22,7 @@ void bind_moreh_matmul_backward_operation(py::module& module) {
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
             py::arg("input_b_grad") = std::nullopt,
-            py::arg("output_mem_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward
