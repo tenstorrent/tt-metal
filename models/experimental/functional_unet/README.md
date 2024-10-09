@@ -10,7 +10,7 @@ When running this model on N300 or T3000, make sure to place dispatch on etherne
 To run UNet Shallow for multiple iterations on single-chip at the best performance:
 
 ```sh
-pytest --disable-warnings models/experimental/functional_unet/tests/test_unet_trace.py::test_unet_trace_2cq
+pytest --disable-warnings models/experimental/functional_unet/tests/test_unet_trace.py::test_unet_trace_2cq_same_io
 ```
 
 To run UNet Shallow for multiple iterations on N300 and T3000 at the best performance:
