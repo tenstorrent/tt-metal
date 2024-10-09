@@ -25,7 +25,8 @@ struct DestPrintTestConfig {
     size_t num_tiles = 0;
     tt::DataFormat data_format = tt::DataFormat::Invalid;
     CoreCoord core = {};
-
+    bool remap = false;
+    bool swizzle = false;
     std::string reader_kernel;
     std::string writer_kernel;
     std::string compute_kernel;
@@ -52,7 +53,7 @@ static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer&
 }
 
 // Creates a circular buffer (L1 cache) for the specified core and data format
-CBHandle create_circular_buffer(
+static CBHandle create_circular_buffer(
     tt_metal::Program& program,
     const tt_metal::CoreCoord& core_coord,
     uint32_t cb_index,
@@ -65,7 +66,7 @@ CBHandle create_circular_buffer(
 }
 
 // Creates a DRAM interleaved buffer configuration
-tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::Device* device, size_t byte_size) {
+static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::Device* device, size_t byte_size) {
     return {.device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 }
 
@@ -73,7 +74,9 @@ constexpr uint32_t DEFAULT_INPUT_CB_INDEX = 0;
 constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
-DramBuffer prepare_reader(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_reader(tt_metal::Device* device,
+                                 tt_metal::Program& program,
+                                 const DestPrintTestConfig& config) {
     // Create input DRAM buffer
     auto input_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_input_buffer_size()));
@@ -100,7 +103,7 @@ DramBuffer prepare_reader(tt_metal::Device* device, tt_metal::Program& program, 
 }
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
-DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
     // Create output DRAM buffer
     auto output_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
@@ -126,18 +129,21 @@ DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, 
 }
 
 // Prepares the compute kernel with the specified program and test configuration
-KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintTestConfig& config) {
+static KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintTestConfig& config) {
     return tt_metal::CreateKernel(
         program,
         config.compute_kernel,
         config.core,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = config.data_format == tt::DataFormat::Float32,
-            .compile_args = {static_cast<uint32_t>(config.num_tiles)}});
+            .compile_args = {
+                static_cast<uint32_t>(config.num_tiles),
+                static_cast<uint32_t>(config.remap),
+                static_cast<uint32_t>(config.swizzle)}});
 }
 
 // Generates input data based on the test configuration
-std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) {
+static std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) {
     if (config.data_format == tt::DataFormat::Float16_b)
         return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::df::bfloat16>(
             0.0f, config.get_num_elements(), 0.03125f, -1.1875f);
@@ -150,10 +156,8 @@ std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) {
     return {};
 }
 
-std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFormat data_format) {
+static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFormat data_format) {
     std::stringstream ss;
-    ss << "Tile ID = 0" << std::endl;
-    ss << std::fixed << std::setprecision(4) << std::setw(8);
 
     auto print_float = [&ss](uint32_t uvalue) {
         float value;
@@ -161,10 +165,16 @@ std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFormat da
         ss << std::setprecision(4) << std::setw(8) << value << " ";
     };
 
-    auto print_new_line = [&ss](uint32_t i) {
+    auto print_new_line = [&ss, data_format](uint32_t i) {
         const std::string_view front_space = "        ";
         if (i > 0) {
             ss << std::endl;
+        }
+        int num_uint32_per_tile = (data_format == tt::DataFormat::Float32) ? 1024 : 512;
+
+        if (i % num_uint32_per_tile == 0) {
+            ss << "Tile ID = " << i / num_uint32_per_tile << std::endl;
+            ss << std::fixed << std::setprecision(4) << std::setw(8);
         }
         ss << front_space;
     };
@@ -216,7 +226,7 @@ static bool reader_datacopy_writer(
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, output_data);
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
-    //  // Check the print log against golden output.
+    // Check the print log against golden output.
     EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 
     // Compare input and output data
@@ -226,7 +236,7 @@ static bool reader_datacopy_writer(
 TEST_F(DPrintFixture, TestDestPrintFloat16b) {
     // Setup test configuration
     DestPrintTestConfig test_config = {
-        .num_tiles = 1,
+        .num_tiles = 2,
         .data_format = tt::DataFormat::Float16_b,
         .core = CoreCoord(0, 0),
         .reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
@@ -242,9 +252,31 @@ TEST_F(DPrintFixture, TestDestPrintFloat16b) {
 TEST_F(DPrintFixture, TestDestPrintFloat32) {
     // Setup test configuration
     DestPrintTestConfig test_config = {
-        .num_tiles = 1,
+        .num_tiles = 2,
         .data_format = tt::DataFormat::Float32,
         .core = CoreCoord(0, 0),
+        .reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
+        .writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
+        .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_print_dest.cpp"};
+
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Float32 dest is not supported on grayskull.";
+    }
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, TestDestPrintFloat32RemapAndSwizzle) {
+    // Setup test configuration
+    DestPrintTestConfig test_config = {
+        .num_tiles = 3,
+        .data_format = tt::DataFormat::Float32,
+        .core = CoreCoord(0, 0),
+        .remap = true,
+        .swizzle = true,
         .reader_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary.cpp",
         .writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary.cpp",
         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_print_dest.cpp"};

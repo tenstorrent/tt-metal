@@ -28,28 +28,75 @@
 #define READ_THREAD_2_CFG_REG_FIELD(reg_field_name) \
     READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::THREAD_2_CFG, reg_field_name)
 
+constexpr int PRECISION = 4;
+constexpr int WIDTH = 8;
+
 // Helper function to print array
-template<int WIDTH>
-void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {
+inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {
     DPRINT << SETW(WIDTH) << " "
-           << TYPED_U32_ARRAY(
-                  TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
+           << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
            << ENDL();
 }
 
-inline uint16_t lo_word(uint32_t dword) { return dword & 0xFFFF;}
-inline uint16_t hi_word(uint32_t dword) { return lo_word(dword >> 16);}
+// if flag DEST_ACCESS_CFG_remap_addrs is enabled
+// destination register row identifiers are remmaped
+// bits 5:3 are rotated 543 -> 354
+inline uint16_t get_remapped_row_id(uint16_t row_id) {
+    // bits 5:3 are rotating -> 543 -> 354
+    return (row_id & 0xFFC7) |         // clear bits [5:3]
+           ((row_id & 0x0008) << 2) |  // shifting bit 3 to position 5
+           ((row_id & 0x0030) >> 1);   // shifting bits 5:4 to position 4:3
+}
+
+// if flag DEST_ACCESS_CFG_swizzle_32b is enabled dest address is has bits [3:2] shuffled
+inline uint16_t get_swizzled_row_id(uint16_t row_id) {
+    if (row_id & 0x10) {
+        switch ((row_id & 0xC) >> 2) {
+            case 0: return (row_id & 0xFFF3) | 0x8;
+            case 1: return (row_id & 0xFFF3);
+            case 2: return (row_id & 0xFFF3) | 0xC;
+            case 3:
+            default: return (row_id & 0xFFF3) | 0x4;
+        }
+    } else {
+        return (row_id & 0xFFF3) | ((row_id & 0x4) << 1) | ((row_id & 0x8) >> 1);
+    }
+}
+
+// calculates dest row address based on
+inline uint16_t get_dest_row_id(
+    uint16_t tile_id, uint16_t face_id, uint16_t row_id, bool is_float32, bool is_remap, bool is_swizzle) {
+    uint16_t row = 64 * tile_id + 16 * face_id + row_id;
+
+    if (is_remap) {
+        row = get_remapped_row_id(row);
+    }
+
+    if (is_float32) {
+        if (is_swizzle) {
+            row = get_swizzled_row_id(row);
+        }
+        // 0-7  dest rows for Float16
+        // 8-15 dest rows for Mantissa
+        // need to shift row index starting from bit 3
+        row = ((row & 0xFFF8) << 1) | (row & 0x7);
+    }
+
+    return row;
+}
+
+inline uint16_t lo_word(uint32_t dword) { return dword & 0xFFFF; }
+inline uint16_t hi_word(uint32_t dword) { return lo_word(dword >> 16); }
 
 // Float16 = [1-bit sign, 7-bit mantissa, 8-bit exponent]
 // Mantissa16 = [16-bit mantissa]
 // Float32 = [1-bit sign, 8-bit exponent, 23-bit mantissa(7-bit + 16-bit)]
 inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
-
     uint32_t sign = (float16 & 0x00008000) << 16;
     uint32_t exponent = (float16 & 0x000000FF) << 23;
-    uint32_t mantissa = ((float16 & 0x00007F00) << 8) + mantissa16;
+    uint32_t mantissa = ((float16 & 0x00007F00) << 8) | mantissa16;
 
-    return sign + exponent + mantissa;
+    return sign | exponent | mantissa;
 }
 
 // Helper function that prints one row from dest when dest is configured for storing float32 values.
@@ -57,41 +104,34 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
 // Float32 in dest = [Float16, Mantissa16]
 // dest_row -> [[Float16_1,Float16_0],...[Float16_15, Float16_14]]
 // dest_row + 8 -> [[Mantissa16_1,Mantissa16_0],...[Mantissa16_15, Mantissa16_14]]
-template<int WIDTH>
-void dprint_tensix_dest_reg_row_float32(int tile_id, int face_id, int row_id) {
+inline void dprint_tensix_dest_reg_row_float32(uint16_t row) {
     constexpr int ARRAY_LEN = 16;
     uint32_t rd_data_temp[ARRAY_LEN];
-    uint32_t rd_data[ARRAY_LEN + 1]; // data + array type
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
 
-    int logical_row_index = tile_id * 64 + face_id * 16 + row_id;
-    int physical_row_index = ((logical_row_index >> 3) << 4) + (logical_row_index & 0x7);
-
-    // read dest row that has first half of 16 floats
-    dbg_read_dest_acc_row(physical_row_index, rd_data_temp);
-    // read dest row that has second half of 16 floats
-    dbg_read_dest_acc_row(physical_row_index + 8, rd_data_temp + 8);
+    // read two rows [[Float16], [Mantissa]]
+    dbg_read_dest_acc_row(row, rd_data_temp);
+    dbg_read_dest_acc_row(row + 8, rd_data_temp + 8);
 
     for (int i = 0; i < 8; ++i) {
         rd_data[2 * i] = reconstruct_float32(lo_word(rd_data_temp[i]), lo_word(rd_data_temp[i + 8]));
         rd_data[2 * i + 1] = reconstruct_float32(hi_word(rd_data_temp[i]), hi_word(rd_data_temp[i + 8]));
     }
 
-    dprint_array_with_data_type<WIDTH>((uint32_t)DataFormat::Float32, rd_data, ARRAY_LEN);
+    dprint_array_with_data_type((uint32_t)DataFormat::Float32, rd_data, ARRAY_LEN);
 }
 
 // Helper function that prints one row from dest when dest is configured for storing float16 values.
 // This function should be used only from dprint_tensix_dest_reg.
-template<int WIDTH>
-void dprint_tensix_dest_reg_row_float16(uint32_t data_format, int tile_id, int face_id, int row_id) {
-    int row = tile_id * 64 + face_id * 16 + row_id;
+inline void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t row) {
     constexpr int ARRAY_LEN = 8;
-    uint32_t rd_data[ARRAY_LEN + 1]; // data + array type
+    uint32_t rd_data[ARRAY_LEN + 1];  // data + array type
     dbg_read_dest_acc_row(row, rd_data);
-    dprint_array_with_data_type<WIDTH>(data_format, rd_data, 8);
+    dprint_array_with_data_type(data_format, rd_data, 8);
 }
 
 // Print the contents of tile with index tile_id within the destination register
-template <bool print_by_face = false, int PRECISION = 4, int WIDTH = 8>
+template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
     dbg_halt();
     MATH({
@@ -106,17 +146,25 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         }
 #endif
 
+        bool is_float32 = data_format_reg_field_value == (uint32_t)DataFormat::Float32;
+        bool is_swizzled = false;
+        bool is_remapped = false;
+
+#ifdef ARCH_BLACKHOLE
+        is_remapped = READ_HW_CFG_0_REG_FIELD(DEST_ACCESS_CFG_remap_addrs) == 1;
+        is_swizzled = READ_HW_CFG_0_REG_FIELD(DEST_ACCESS_CFG_swizzle_32b) == 1;
+#endif
         // Print the contents
         DPRINT << FIXED() << SETPRECISION(PRECISION);
         DPRINT << "Tile ID = " << tile_id << ENDL();
 
-        // print faces 0
         for (int face_id = 0; face_id < 4; ++face_id) {
             for (int row_id = 0; row_id < 16; ++row_id) {
-                if (data_format_reg_field_value == (uint32_t)DataFormat::Float32) {
-                    dprint_tensix_dest_reg_row_float32<WIDTH>(tile_id, face_id, row_id);
+                uint16_t row = get_dest_row_id(tile_id, face_id, row_id, is_float32, is_remapped, is_swizzled);
+                if (is_float32) {
+                    dprint_tensix_dest_reg_row_float32(row);
                 } else {
-                    dprint_tensix_dest_reg_row_float16<WIDTH>(data_format_reg_field_value, tile_id, face_id, row_id);
+                    dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                 }
             }
             if constexpr (print_by_face) {
