@@ -31,7 +31,7 @@ from models.utility_functions import skip_for_grayskull, divup
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 16),),
+    ((2, 1, 32),),
 )
 def test_unet_trace(
     batch: int,
@@ -117,7 +117,7 @@ def test_unet_trace(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 16),),
+    ((2, 1, 32),),
 )
 def test_unet_trace_2cq(
     batch: int,
@@ -235,7 +235,7 @@ def buffer_address(tensor):
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 16),),
+    ((2, 1, 32),),
 )
 def test_unet_trace_2cq_multi_device(
     batch: int, groups: int, iterations: int, mesh_device, use_program_cache, reset_seeds, enable_async_mode
@@ -358,7 +358,7 @@ def test_unet_trace_2cq_multi_device(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((2, 1, 4),),
+    ((2, 1, 32),),
 )
 def test_unet_trace_2cq_alt(
     batch: int,
