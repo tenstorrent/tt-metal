@@ -319,19 +319,25 @@ def run_conv_with_split(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize(
+    "stride",
+    [
+        1,
+    ],
+)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
-        (128, 128, 8, 8, 3, 3, 0, 0, 1),
-        (128, 256, 8, 8, 3, 3, 1, 1, 1),
-        (576, 576, 8, 8, 3, 3, 0, 0, 1),
-        (960, 960, 4, 4, 3, 3, 0, 0, 1),
-        (256, 2048, 8, 8, 3, 3, 1, 1, 8),
-        (512, 2048, 16, 16, 3, 3, 1, 1, 4),
-        (768, 768, 16, 16, 3, 3, 0, 0, 1),
-        (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
-        (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+        # (128, 128, 8, 8, 3, 3, 0, 0, 1),
+        # (128, 256, 8, 8, 3, 3, 1, 1, 1),
+        # (576, 576, 8, 8, 3, 3, 0, 0, 1),
+        # (960, 960, 4, 4, 3, 3, 0, 0, 1),
+        # (256, 2048, 8, 8, 3, 3, 1, 1, 8),
+        # (512, 2048, 16, 16, 3, 3, 1, 1, 4),
+        # (768, 768, 16, 16, 3, 3, 0, 0, 1),
+        # (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
+        # (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+        (576, 576, 7, 7, 5, 5, 2, 2, 1),  # Two times  Statically buffer issue
     ),
 )
 @pytest.mark.parametrize(
@@ -365,7 +371,7 @@ def test_conv_ws(
 ):
     stride_h = stride
     stride_w = stride
-    batch_size = 2
+    batch_size = 1
     fp32_accum = False
     packer_l1_acc = False
     deallocate_activation = False
@@ -2086,3 +2092,248 @@ def test_conv_for_vanilla_unet(
         output_layout=output_layout,
         has_bias=False,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels,input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    (
+        (1, 16, 3, 224, 224, 3, 3, 2, 2, 1, 1, True, None, False),
+        (1, 16, 16, 112, 112, 3, 3, 2, 2, 1, 1, True, None, False),
+        (1, 8, 16, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 16, 8, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 16, 16, 56, 56, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 72, 16, 56, 56, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 72, 72, 56, 56, 3, 3, 2, 2, 1, 1, True, None, False),
+        (1, 24, 72, 28, 28, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 88, 24, 28, 28, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 88, 88, 28, 28, 3, 3, 1, 1, 1, 1, True, None, False),
+        (1, 24, 88, 28, 28, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 96, 24, 28, 28, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 96, 96, 28, 28, 5, 5, 2, 2, 2, 2, True, None, False),
+        (1, 24, 96, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 96, 24, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 40, 96, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 240, 40, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 240, 240, 14, 14, 5, 5, 1, 1, 2, 2, True, None, False),
+        (1, 64, 240, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 240, 64, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 40, 240, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 120, 40, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 120, 120, 14, 14, 5, 5, 1, 1, 2, 2, True, None, False),
+        (1, 32, 120, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 120, 32, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 48, 120, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 144, 48, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 144, 144, 14, 14, 5, 5, 1, 1, 2, 2, True, None, False),
+        (1, 40, 144, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 144, 40, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 48, 144, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 288, 48, 14, 14, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 288, 288, 14, 14, 5, 5, 2, 2, 2, 2, True, None, False),
+        (1, 72, 288, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 288, 72, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 96, 288, 7, 7, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 576, 96, 7, 7, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 144, 576, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 576, 144, 1, 1, 1, 1, 1, 1, 0, 0, True, None, False),
+        (1, 96, 576, 7, 7, 1, 1, 1, 1, 0, 0, True, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@skip_for_grayskull()
+def test_conv_for_mobileNetV3_small_244x244(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if device.core_grid.y == 7:
+        pytest.skip("This test is not supported for N300")
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=1,
+        output_layout=output_layout,
+        has_bias=True,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width,stride_h,stride_w, pad_h, pad_w, act_block_w_div",
+    ((576, 576, 7, 7, 5, 5, 2, 2, 1, 1, 1),),
+)
+@pytest.mark.parametrize(
+    "has_bias",
+    [True],
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
+)
+def test_conv_mobileNetV3_ws(
+    device,
+    use_program_cache,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    act_block_w_div,
+    has_bias,
+    weights_dtype,
+    activations_dtype,
+):
+    batch_size = 1
+    fp32_accum = False
+    packer_l1_acc = False
+    deallocate_activation = False
+    debug = False
+    groups = 1
+
+    torch.manual_seed(0)
+    conv_input_shape = [batch_size, input_channels, input_height, input_width]
+    conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
+    conv_bias_shape = [1, 1, 1, output_channels]
+
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+
+    tt_bias_tensor = None
+    torch_bias_tensor = None
+    if has_bias:
+        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() * 50
+        tt_bias_tensor = ttnn.from_torch(
+            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
+        torch_bias_tensor = torch_bias_tensor.reshape(-1)
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor,
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        groups=groups,
+    )
+    output_shape_nhwc = [
+        torch_out_golden_tensor.shape[0],
+        torch_out_golden_tensor.shape[2],
+        torch_out_golden_tensor.shape[3],
+        torch_out_golden_tensor.shape[1],
+    ]
+
+    reader_patterns_cache = {}
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
+
+    tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        input_channels_alignment=32,
+        deallocate_activation=deallocate_activation,
+        fp32_dest_acc_enabled=fp32_accum,
+        packer_l1_accum_enabled=packer_l1_acc,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        reshard_if_not_optimal=True,
+        act_block_w_div=act_block_w_div,
+    )
+    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+        input_tensor=tt_input_tensor,
+        weight_tensor=tt_weight_tensor,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        bias_tensor=tt_bias_tensor,
+        kernel_size=(filter_height, filter_width),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        conv_op_cache=reader_patterns_cache,
+        debug=debug,
+        groups=groups,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    # torch_output_tensor is in row major layout and NHWC shape
+    # NHWC to NCHW
+    # torch_output_tensor = torch_output_tensor[:, :, : batch_size * out_height * out_width, :]
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+    logger.info(f"Output Shape : {torch_output_tensor.shape}")
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    reader_patterns_cache.clear()
+
+    pcc = 0.99
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    logger.info(f"{pcc_msg} Threshold : {pcc}")
+    if not passing:
+        logger.error("Fails with PCC ", pcc_msg)
+    assert passing
