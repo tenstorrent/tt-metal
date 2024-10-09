@@ -162,6 +162,7 @@ on:
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
+          - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
