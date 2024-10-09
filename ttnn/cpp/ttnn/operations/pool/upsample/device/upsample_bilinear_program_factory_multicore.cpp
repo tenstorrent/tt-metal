@@ -36,17 +36,17 @@ Tensor HaloTensorCreation(const Tensor &input){
     int num_cores_c = 1;
 
     ttnn::Tensor input_tensor = input;  // tensor to return
-    SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
-            batch_size,
-            {input_height, input_width},
-            {2, 2}, //kernel size
-            {1, 1}, // stride
-            {1, 0}, //padding
-            {1, 1}, //dilation
-            num_cores_nhw,
-            num_cores_c,
-            input_tensor.memory_config().shard_spec.value().grid,
-            false, true);
+    SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+            .batch_size = batch_size,
+            .input_hw = {input_height, input_width},
+            .window_hw = {2, 2}, //kernel size
+            .stride_hw = {1, 1}, // stride
+            .pad_hw = {1, 0}, //padding
+            .dilation_hw = {1, 1}, //dilation
+            .num_cores_nhw = num_cores_nhw,
+            .core_range_set = input_tensor.memory_config().shard_spec.value().grid,
+            .snap_to_tile = false,
+            .is_bilinear =  true};
 
     input_tensor = ttnn::reshape(
         input_tensor,
