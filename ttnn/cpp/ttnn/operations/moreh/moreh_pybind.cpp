@@ -10,6 +10,7 @@
 #include "ttnn/operations/moreh/moreh_bmm/moreh_bmm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_pybind.hpp"
@@ -19,6 +20,7 @@
 #include "ttnn/operations/moreh/moreh_linear/moreh_linear_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_matmul_backward/moreh_matmul_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_pybind.hpp"
@@ -39,6 +41,8 @@ void bind_moreh_operations(py::module &module) {
     moreh_arange::bind_moreh_arange_operation(module);
     moreh_bmm_backward::bind_moreh_bmm_backward_operation(module);
     moreh_bmm::bind_moreh_bmm_operation(module);
+    moreh_cumsum::bind_moreh_cumsum_backward_operation(module);
+    moreh_cumsum::bind_moreh_cumsum_operation(module);
     moreh_dot_backward::bind_moreh_dot_backward_operation(module);
     moreh_dot::bind_moreh_dot_operation(module);
     moreh_getitem::bind_moreh_getitem_operation(module);
@@ -49,6 +53,7 @@ void bind_moreh_operations(py::module &module) {
     moreh_linear_backward::bind_moreh_linear_backward_operation(module);
     moreh_linear::bind_moreh_linear_operation(module);
     moreh_matmul::bind_moreh_matmul_operation(module);
+    moreh_matmul_backward::bind_moreh_matmul_backward_operation(module);
     moreh_mean_backward::bind_moreh_mean_backward_operation(module);
     moreh_mean::bind_moreh_mean_operation(module);
     moreh_nll_loss_backward::bind_moreh_nll_loss_backward_operation(module);

@@ -27,13 +27,13 @@ namespace tt {
 namespace watcher {
 
 #define GET_WATCHER_TENSIX_DEV_ADDR()                                   \
-    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
 
 #define GET_WATCHER_ERISC_DEV_ADDR()                                    \
-    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
 
 #define GET_WATCHER_IERISC_DEV_ADDR()                                   \
-    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;

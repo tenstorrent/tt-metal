@@ -639,6 +639,8 @@ class resnet50:
             width=self.conv1_output_width,
             in_channels=self.conv1_input_channels,
             out_channels=self.conv1_output_channels,
+            kernel_size=[self.conv1_kernel_size[0], self.conv1_kernel_size[1]],
+            stride=[self.conv1_stride[0], self.conv1_stride[1]],
         )
 
     def __del__(self):
