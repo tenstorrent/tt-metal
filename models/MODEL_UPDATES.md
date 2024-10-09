@@ -9,7 +9,7 @@
 ### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
 - Added support for continuous batching
 - Added paged caching support for PagedAttention
-- Added a demo which runs with TT-NN tracing
+- Added a demo which runs with TT-NN tracing (23 t/s/u decode on main)
 
 ## September 23, 2024
 
