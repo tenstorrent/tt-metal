@@ -160,7 +160,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(ttnn::Shape(output_shape.as_vector()), this->dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else if(this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t total_height_tiles = (output_shape.volume() / output_shape[-1] + TILE_HEIGHT - 1) / TILE_HEIGHT;
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
@@ -168,7 +168,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return{create_device_tensor(ttnn::Shape(output_shape.as_vector()), this->dtype, output_layout, input_tensor.device(), mem_config)};
+            return{create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
 
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             auto [act_matrix_shape, act_matrix_shape_unpadded] = optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(this->input_tensor_shape, sliding_window_config, this->parallelization_config.per_core_out_matrix_height_ntiles);
@@ -189,7 +189,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(ttnn::Shape(output_shape.as_vector()), this->dtype, output_layout, input_tensor.device(), mem_config)};
+            return {create_device_tensor(output_shape, this->dtype, output_layout, input_tensor.device(), mem_config)};
         } else {
             TT_THROW("Unsupported shard scheme");
         }

@@ -697,6 +697,28 @@ Tensor create_device_tensor(
 }
 
 Tensor create_device_tensor(
+    const ttnn::SimpleShape& logical_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
+    auto padded_shape = logical_shape;
+    if (layout == Layout::TILE) {
+        auto tile_height = TILE_HEIGHT;
+        auto tile_width = TILE_WIDTH;
+        if (tile.has_value()) {
+            auto tile_shape = tile.value().get_tile_shape();
+            tile_height = tile_shape[0];
+            tile_width = tile_shape[1];
+        }
+        auto rank = padded_shape.rank();
+        if (rank >= 1) {
+            padded_shape[rank - 1] = (padded_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
+            if (rank >= 2) {
+                padded_shape[rank - 2] = (padded_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
+            }
+        }
+    }
+    return create_device_tensor(logical_shape, padded_shape, data_type, layout, device, memory_config, tile);
+}
+
+Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
     return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
 }

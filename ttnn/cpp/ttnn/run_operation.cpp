@@ -302,6 +302,20 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id);
 
+tt::tt_metal::LegacyShape to_legacy_shape(ttnn::SimpleShape shape, Layout layout) {
+    auto padded_shape = shape;
+    if (layout == Layout::TILE) {
+        auto rank = shape.rank();
+        if (rank >= 1) {
+            padded_shape[rank - 1] = (padded_shape[rank - 1] + constants::TILE_WIDTH - 1) / constants::TILE_WIDTH * constants::TILE_WIDTH;
+            if (rank >= 2) {
+                padded_shape[rank - 2] = (padded_shape[rank - 2] + constants::TILE_HEIGHT - 1) / constants::TILE_HEIGHT * constants::TILE_HEIGHT;
+            }
+        }
+    }
+    return tt::tt_metal::LegacyShape(shape.as_vector(), padded_shape.as_vector());
+}
+
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
 Tensors run_with_autoformat(
     DeviceOperation<Tensors>&& operation,
@@ -349,14 +363,23 @@ Tensors run_with_autoformat(
 
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
-    TT_ASSERT(output_tensors.size() == output_shapes.size());
-
     formatted_input_tensors.clear();
     formatted_optional_input_tensors.clear();
 
-    for (auto i = 0; i < output_tensors.size(); ++i) {
-        output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, Layout::TILE);
+    if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(output_shapes)) {
+        auto& shapes = std::get<std::vector<tt::tt_metal::LegacyShape>>(output_shapes);
+        TT_ASSERT(output_tensors.size() == shapes.size());
+        for (auto i = 0; i < output_tensors.size(); ++i) {
+            output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], shapes[i], device, Layout::TILE);
+        }
+    } else {
+        auto& shapes = std::get<std::vector<ttnn::SimpleShape>>(output_shapes);
+        TT_ASSERT(output_tensors.size() == shapes.size());
+        for (auto i = 0; i < output_tensors.size(); ++i) {
+            output_tensors[i] = AutoFormat::format_output_tensor(output_tensors[i], to_legacy_shape(shapes[i], Layout::TILE), device, Layout::TILE);
+        }
     }
+
     return output_tensors;
 }
 
@@ -408,15 +431,25 @@ Tensors run_with_autoformat(
 
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
-    TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());
 
     formatted_input_tensors.clear();
     formatted_optional_input_tensors.clear();
 
-    for (auto i = 0; i < output_tensors.size(); ++i) {
-        output_tensors[i] =
-            AutoFormat::format_output_tensor(output_tensors[i], output_shapes[i], device, output_layouts[i]);
+    if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(output_shapes)) {
+        auto& shapes = std::get<std::vector<tt::tt_metal::LegacyShape>>(output_shapes);
+        TT_ASSERT(output_tensors.size() == shapes.size());
+        for (auto i = 0; i < output_tensors.size(); ++i) {
+            output_tensors[i] =
+                AutoFormat::format_output_tensor(output_tensors[i], shapes[i], device, output_layouts[i]);
+        }
+    } else {
+        auto& shapes = std::get<std::vector<ttnn::SimpleShape>>(output_shapes);
+        TT_ASSERT(output_tensors.size() == shapes.size());
+        for (auto i = 0; i < output_tensors.size(); ++i) {
+            output_tensors[i] =
+                AutoFormat::format_output_tensor(output_tensors[i], to_legacy_shape(shapes[i], output_layouts[i]), device, output_layouts[i]);
+        }
     }
 
     return output_tensors;

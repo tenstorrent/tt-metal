@@ -1363,7 +1363,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
-                        ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+                        this->compute_output_shapes(input_tensors).at(0),
                         this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
@@ -1387,7 +1387,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
-                        ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+                        this->compute_output_shapes(input_tensors).at(0),
                         this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
@@ -1419,7 +1419,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
-                        ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+                        this->compute_output_shapes(input_tensors).at(0),
                         this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),
@@ -1453,7 +1453,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
                     auto mem_config = this->output_mem_config;
                     mem_config.shard_spec = shard_spec;
                     return {create_device_tensor(
-                        ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+                        this->compute_output_shapes(input_tensors).at(0),
                         this->output_dtype.value(),
                         output_layout,
                         input_tensor_a.device(),

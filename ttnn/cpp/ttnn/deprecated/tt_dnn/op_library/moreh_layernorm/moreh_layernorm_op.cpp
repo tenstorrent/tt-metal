@@ -444,7 +444,7 @@ std::vector<Tensor> MorehLayerNorm::create_output_tensors(
         result.push_back(output_tensors.at(0).value());
     } else {
         TT_THROW("Create output tensor is not supported yet. Fix this after the #9552 issue is addressed.");
-        //result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->memory_config));
+        result.push_back(create_device_tensor(output_shapes.at(0), dtype, layout, device, this->memory_config));
     }
 
     if (output_tensors.at(1).has_value()) {

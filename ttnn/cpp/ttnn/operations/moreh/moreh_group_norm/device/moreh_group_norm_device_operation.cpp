@@ -111,16 +111,16 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     if (tensor_args.output.has_value()) {
         result.push_back(tensor_args.output.value());
     } else {
-        //result.push_back(
-        //    create_device_tensor(output_shapes[0].value(), dtype, layout, device, operation_attributes.memory_config));
+        result.push_back(
+            create_device_tensor(output_shapes[0].value(), dtype, layout, device, operation_attributes.memory_config));
     }
 
     // mean
     if (tensor_args.mean.has_value()) {
         result.push_back(tensor_args.mean.value());
     } else if (operation_attributes.are_required_outputs[1]) {
-        //result.push_back(create_device_tensor(
-        //    output_shapes[1].value(), dtype, layout, device, operation_attributes.mean_memory_config));
+        result.push_back(create_device_tensor(
+            output_shapes[1].value(), dtype, layout, device, operation_attributes.mean_memory_config));
     } else {
         result.push_back(std::nullopt);
     }
@@ -129,8 +129,8 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     if (tensor_args.rstd.has_value()) {
         result.push_back(tensor_args.rstd.value());
     } else if (operation_attributes.are_required_outputs[2]) {
-        //result.push_back(create_device_tensor(
-        //    output_shapes[2].value(), dtype, layout, device, operation_attributes.rstd_memory_config));
+        result.push_back(create_device_tensor(
+            output_shapes[2].value(), dtype, layout, device, operation_attributes.rstd_memory_config));
     } else {
         result.push_back(std::nullopt);
     }

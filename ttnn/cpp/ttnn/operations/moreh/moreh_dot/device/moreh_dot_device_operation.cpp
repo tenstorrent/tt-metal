@@ -66,7 +66,7 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
     const auto& input_tensor = tensor_args.input_a;
     return create_device_tensor(
-        ttnn::Shape(output_shape.as_vector()),
+        output_shape,
         input_tensor.tensor_attributes->dtype,
         input_tensor.tensor_attributes->layout,
         input_tensor.device(),

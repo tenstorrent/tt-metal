@@ -175,7 +175,7 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &
     const auto& input_tensor = input_tensors[0];
     if(this->output_mem_config.is_sharded()) {
         return {create_device_tensor(
-            ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+            this->compute_output_shapes(input_tensors).at(0),
             input_tensor.get_dtype(),
             input_tensor.get_layout(),
             input_tensor.device(),

@@ -76,7 +76,7 @@ std::vector<Tensor> ConcatDeviceOperation::create_output_tensors(const std::vect
 
     if (this->output_mem_config.is_sharded()) {
         return {create_device_tensor(
-            ttnn::Shape(this->compute_output_shapes(input_tensors).at(0).as_vector()),
+            this->compute_output_shapes(input_tensors).at(0),
             ref_in_tensor.get_dtype(),
             ref_in_tensor.get_layout(),
             ref_in_tensor.device(),
