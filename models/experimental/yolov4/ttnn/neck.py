@@ -191,7 +191,6 @@ class TtNeck:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            device=device,
         )
         pool_2 = ttnn.max_pool2d(
             input_tensor=output_tensor,
@@ -203,7 +202,6 @@ class TtNeck:
             stride=[1, 1],
             padding=[4, 4],
             dilation=[1, 1],
-            device=device,
         )
         pool_3 = ttnn.max_pool2d(
             input_tensor=output_tensor,
@@ -215,7 +213,6 @@ class TtNeck:
             stride=[1, 1],
             padding=[6, 6],
             dilation=[1, 1],
-            device=device,
         )
 
         pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)

@@ -232,7 +232,6 @@ class UNetMaxPool2D:
             stride=[self.pool.stride, self.pool.stride],
             padding=[self.pool.padding, self.pool.padding],
             dilation=[self.pool.dilation, self.pool.dilation],
-            device=self.device,
         )
         return x
 

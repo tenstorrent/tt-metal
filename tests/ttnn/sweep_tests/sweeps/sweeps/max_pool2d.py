@@ -95,7 +95,6 @@ def run(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
-        device=device,
     )
     out_padded = out_d.cpu()
     out_pytorch_padded = ttnn.to_torch(out_padded)

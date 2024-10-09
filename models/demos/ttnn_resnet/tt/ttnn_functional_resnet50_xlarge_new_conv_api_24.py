@@ -559,7 +559,6 @@ class resnet50:
             stride=[2, 2],
             padding=[1, 1],
             dilation=[1, 1],
-            device=device,
         )
 
         x_height = 224
@@ -891,7 +890,6 @@ class resnet50:
             stride=[2, 2],
             padding=[1, 1],
             dilation=[1, 1],
-            device=device,
         )
 
         x_height = 224

@@ -78,7 +78,6 @@ def ttnn_vgg16(
                 stride=[2, 2],
                 padding=[0, 0],
                 dilation=[1, 1],
-                device=device,
             )
             ttnn.deallocate(ttact_d)
             tt_x = ttnn.from_device(tt_x)
@@ -206,7 +205,6 @@ def ttnn_vgg11(
                 stride=[2, 2],
                 padding=[0, 0],
                 dilation=[1, 1],
-                device=device,
             )
             tt_x = ttnn.from_device(tt_x)
             ttnn.deallocate(ttact_d)

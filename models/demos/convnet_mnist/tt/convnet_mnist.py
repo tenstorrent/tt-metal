@@ -74,7 +74,6 @@ def convnet_mnist(
             stride=[1, 1],
             padding=[0, 0],
             dilation=[1, 1],
-            device=device,
         )
 
     [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
@@ -118,7 +117,6 @@ def convnet_mnist(
             stride=[1, 1],
             padding=[0, 0],
             dilation=[1, 1],
-            device=device,
         )
     x = ttnn.from_device(x)
     x = ttnn.reshape(x, (x.shape[0], -1))
