@@ -20,7 +20,7 @@ void static_assert_sfpi_type_dependent() {
 inline void eltwise_unary_sfpi_configure_addrmod();
 inline void eltwise_unary_sfpi_configure_mop();
 
-template <SfpiTestType sfpu_op, DstSync Dst = DstSync::SyncFull>
+template <SfpiTestType sfpu_op, DstSync Dst>
 inline void llk_math_eltwise_unary_sfpi(
     uint dst_index,
     uint param0 = 0,
@@ -50,72 +50,72 @@ inline void llk_math_eltwise_unary_sfpi_init(
 
 // New LLK SFPU APIs
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test1(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test1, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test2(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test2, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test3(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test3, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test4(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test4, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test5(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test5, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test6(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test6, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test7(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test7, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test8(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test8, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test9(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test9, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test10(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test10, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test11(uint dst_index) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test11, dst_sync>(dst_index);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test12(uint dst_index, uint param0) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test12, dst_sync>(dst_index, param0);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test13(uint dst_index, uint param0) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test13, dst_sync>(dst_index, param0);
 }
 
-template <DstSync dst_sync = DstSync::SyncFull>
+template <DstSync dst_sync>
 inline void llk_math_eltwise_unary_sfpi_test14(uint dst_index, uint param0) {
     llk_math_eltwise_unary_sfpi<SfpiTestType::test14, dst_sync>(dst_index, param0);
 }

@@ -14,7 +14,7 @@
 
 using namespace ckernel;
 
-template <DstSync Dst = DstSync::SyncFull>
+template <DstSync Dst>
 inline void _llk_math_eltwise_unary_sfpu_start_(const uint dst_index) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);

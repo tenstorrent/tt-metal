@@ -17,7 +17,7 @@ using namespace ckernel;
 // local function declarations
 inline void eltwise_unary_configure_addrmod();
 
-template <DataCopyType type, BroadcastType src_b_bcast_type = BroadcastType::NONE, DstSync Dst = DstSync::SyncFull, bool is_fp32_dest_acc_en = false /* unused */>
+template <DataCopyType type, DstSync Dst, BroadcastType src_b_bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false /* unused */>
 inline void _llk_math_eltwise_unary_datacopy_(uint dst_index) {
     if constexpr ((Dst == DstSync::SyncTile16) || (Dst == DstSync::SyncTile2)) {
         math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(math_sync_tile_dst_index);

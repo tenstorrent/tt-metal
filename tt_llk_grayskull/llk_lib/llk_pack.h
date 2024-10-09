@@ -109,7 +109,7 @@ inline void _llk_pack_init_() {
     _llk_pack_mop_config_<untilize, zero_output, FaceLayout, write_tile_header>();
 }
 
-template <bool out_of_order_output = false, DstSync Dst = SyncFull, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
+template <DstSync Dst, bool out_of_order_output = false, bool untilize = false, bool is_fp32_dest_acc_en = false /* unused*/>
 inline void _llk_pack_(std::uint32_t tile_index, std::uint32_t pack_dst_format, std::uint16_t pack_tile_addr) {
 
     if constexpr (Dst == DstSync::SyncTile16) {
