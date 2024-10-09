@@ -258,7 +258,7 @@ class TtLlamaModel_optimized:
             rot_mats = ttnn.as_tensor(
                 rot_mat,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
