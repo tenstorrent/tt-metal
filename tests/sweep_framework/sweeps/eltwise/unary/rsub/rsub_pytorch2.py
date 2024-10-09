@@ -108,7 +108,8 @@ def run(
 
     factor = 1.0
 
-    torch_output_tensor = torch.sub(factor, torch_input_tensor_a)
+    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    torch_output_tensor = golden_function(torch_input_tensor_a, factor)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

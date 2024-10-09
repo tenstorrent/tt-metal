@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "where": {
         "input_shape": [
             {"shape1": [1, 1, 1, 46], "shape2": [1, 12, 1, 46], "shape3": []},
             {"shape1": [1, 1, 1, 6], "shape2": [1, 16, 1, 6], "shape3": []},
@@ -87,7 +87,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
     )(input_shape["shape3"])
 
-    torch_output_tensor = torch.where(torch_input_tensor_a > 0, torch_input_tensor_b, torch_input_tensor_c)
+    golden_function = ttnn.get_golden_function(ttnn.where)
+    torch_output_tensor = golden_function(torch_input_tensor_a > 0, torch_input_tensor_b, torch_input_tensor_c)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

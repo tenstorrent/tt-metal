@@ -63,7 +63,8 @@ def run(
     )(input_shape["shape"])
 
     value = input_shape["value"]
-    torch_output_tensor = torch.pow(torch_input_tensor_a, value)
+    golden_function = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_function(torch_input_tensor_a, value)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
