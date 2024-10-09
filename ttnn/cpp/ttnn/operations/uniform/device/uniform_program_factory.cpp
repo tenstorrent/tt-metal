@@ -5,6 +5,7 @@
 #include "common/core_coord.h"
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -27,7 +28,8 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     CommandQueue& cq = device->command_queue();
     Program program = Program();
 
-    tt::DataFormat data_format = datatype_to_dataformat_converter(output.dtype());
+    DataType output_dtype = output.dtype();
+    tt::DataFormat data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(data_format);
     const uint32_t float_tile_size = tile_size(tt::DataFormat::Float32);
 
@@ -56,8 +58,15 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     const std::vector<uint32_t> compute_compile_time_args{};
     const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
 
+    std::map<string, string> writer_defines;
+    switch (output_dtype) {
+        case DataType::BFLOAT16: writer_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
+        case DataType::FLOAT32: writer_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
+        default: break;
+    }
+
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     KernelHandle compute_kernel_id = CreateKernel(

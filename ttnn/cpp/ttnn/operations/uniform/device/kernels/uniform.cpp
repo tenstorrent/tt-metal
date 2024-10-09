@@ -59,8 +59,8 @@ void MAIN {
 
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_reserve_back(cb_intermed0_id, 1);
-        dropout_tile_init(0xDEADBEEF);
-        // dropout_tile_init(i * 23);
+        // dropout_tile_init(0xDEADBEEF);
+        dropout_tile_init((i + 1) * 23);
 
         tile_regs_acquire();
 

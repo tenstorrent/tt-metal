@@ -22,22 +22,19 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(4);
     uint32_t end_id = start_id + num_tiles;
 
-    float random_range = f2u_to.f - f2u_from.f;
-    DPRINT << f2u_from.f << " " << f2u_to.f << ENDL();
-
     constexpr uint32_t cb_intermed0_id = CB::c_intermed0;
     constexpr uint32_t cb_out0_id = CB::c_out0;
-
     const InterleavedAddrGenFast<true> output_addrg = {
         .bank_base_address = dst_addr,
         .page_size = get_tile_size(cb_out0_id),
         .data_format = get_dataformat(cb_out0_id)};
 
     uint32_t max_uint = 2147483647;
+    float random_range = f2u_to.f - f2u_from.f;
 
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_intermed0_id, 1);
-        cb_reserve_back(cb_out0_id, 1);
+        // cb_reserve_back(cb_out0_id, 1);
 
         uint32_t cb_intermed0_read_ptr = get_read_ptr(cb_intermed0_id);
         uint32_t cb_out0_write_ptr = get_write_ptr(cb_out0_id);
@@ -48,16 +45,24 @@ void kernel_main() {
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 uint32_t cur = *cb_intermed0_addr;
-                *(float *)cb_out0_addr = static_cast<float>(cur) / max_uint * random_range + f2u_from.f;
+                float elem = static_cast<float>(cur) / max_uint * random_range + f2u_from.f;
 
-                cb_intermed0_addr += 1;
+#ifdef OUTPUT_DTYPE_FLOAT32
+                *(float *)cb_out0_addr = elem;
                 cb_out0_addr += 4;
+#endif
+#ifdef OUTPUT_DTYPE_BFLOAT16
+                uint16_t *uint16_ptr = reinterpret_cast<uint16_t *>(&elem) + 1;
+                *(uint16_t *)cb_out0_addr = *uint16_ptr;
+                cb_out0_addr += 2;
+#endif
+                cb_intermed0_addr += 1;
             }
         }
         noc_async_write_tile(i, output_addrg, cb_out0_write_ptr);
         noc_async_write_barrier();
 
         cb_pop_front(cb_intermed0_id, 1);
-        cb_push_back(cb_out0_id, 1);
+        // cb_push_back(cb_out0_id, 1);
     }
 }
