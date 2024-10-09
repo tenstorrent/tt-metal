@@ -685,7 +685,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -760,7 +760,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                 }  // PROF_END("CBS")
 
                 if (cbs_on_core.size()) {
-                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }

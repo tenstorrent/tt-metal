@@ -321,7 +321,7 @@ class Device {
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord phys_core) const;
     template <typename T = DeviceAddr>
-    T get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const;
+    T get_dev_addr(CoreCoord phys_core, HalL1MemAddrType addr_type) const;
     // Returns address where allocator starts allocating buffer
     template <typename T = DeviceAddr>
     T get_base_allocator_addr(const HalMemType &mem_type) const;
@@ -354,7 +354,7 @@ inline HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord phys
 }
 
 template <typename T>
-inline T Device::get_dev_addr(CoreCoord phys_core, HalMemAddrType addr_type) const {
+inline T Device::get_dev_addr(CoreCoord phys_core, HalL1MemAddrType addr_type) const {
     return hal.get_dev_addr<T>(this->get_programmable_core_type(phys_core), addr_type);
 }
 

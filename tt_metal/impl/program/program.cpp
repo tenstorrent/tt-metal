@@ -167,7 +167,7 @@ KernelGroup::KernelGroup(
     // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         this->launch_msg.kernel_config.kernel_config_base[index] =
-            hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+            hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
     for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
@@ -536,7 +536,7 @@ size_t Program::num_semaphores() const { return semaphores_.size(); }
 void Program::init_semaphores(const Device &device, const CoreCoord &logical_core, uint32_t programmable_core_type_index) const {
     auto semaphores_on_core = this->semaphores_on_core(logical_core);
 
-    uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalMemAddrType::KERNEL_CONFIG);
+    uint64_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     uint64_t addr = kernel_config_base + this->program_configs_[programmable_core_type_index].sem_offset;
     CoreType core_type = hal.get_core_type(programmable_core_type_index);
     for (auto semaphore : semaphores_on_core) {
@@ -1146,7 +1146,7 @@ uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, Core
 
     uint32_t base_addr = device->using_fast_dispatch ?
         device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalMemAddrType::KERNEL_CONFIG);
+        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].sem_offset;
 }
@@ -1159,7 +1159,7 @@ uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreT
 
     uint32_t base_addr = device->using_fast_dispatch ?
         device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalMemAddrType::KERNEL_CONFIG);
+        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].cb_offset;
 }

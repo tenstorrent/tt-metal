@@ -286,7 +286,7 @@ void Cluster::open_driver(
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
-    std::uint32_t DRAM_BARRIER_BASE = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalMemAddrType::DRAM_BARRIER);
+    std::uint32_t DRAM_BARRIER_BASE = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::DRAM_BARRIER);
     device_driver->set_device_dram_address_params(tt_device_dram_address_params{DRAM_BARRIER_BASE});
     device_driver->set_device_l1_address_params(l1_address_params);
 
