@@ -77,38 +77,6 @@ void py_bind_copy(py::module& module) {
             py::arg("queue_id") = 0});
 }
 
-void py_bind_clone(py::module& module) {
-    auto doc = R"doc(clone(tensor: ttnn.Tensor, memory_config: MemoryConfig, dtype: DataType) -> ttnn.Tensor
-
-    Clones the tensor by copying it with the given `memory config`. Also, converts the dataype to `dtype`.
-    Note: clone does not change the layout of the tensor.
-    Organizes the `ttnn.Tensor` :attr:`tensor` into either ROW_MAJOR_LAYOUT or TILE_LAYOUT.  When requesting ROW_MAJOR_LAYOUT
-    the tensor will be returned unpadded in the last two dimensions.   When requesting TILE_LAYOUT the tensor will be automatically
-    padded where the width and height become multiples of 32.
-    In the case where the layout is the same, the operation simply pad or unpad the last two dimensions depending on layout requested.
-
-    Args:
-        * :attr:`tensor`: the ttnn.Tensor
-        * :attr:`memory_config`: the `ttnn` memory config, DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
-        * :attr:`dtype`: the `ttnn` data type.)doc";
-
-    bind_registered_operation(
-        module,
-        ttnn::clone,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::clone)& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<const ttnn::DataType> dtype,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, dtype); },
-            py::arg("input_tensor").noconvert(),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("queue_id") = 0});
-}
-
 void py_bind_assign(py::module& module) {
     auto doc = get_unary_doc_string(
         "assign", "input", R"doc(  Returns a new tensor which is a new copy of input tensor ``{0}``.
@@ -135,20 +103,18 @@ void py_bind_assign(py::module& module) {
         ttnn::assign,
         doc,
         ttnn::pybind_overload_t{
-            [] (const decltype(ttnn::assign)& self,
-                const ttnn::Tensor& input,
-                const ttnn::MemoryConfig memory_config,
-                const std::optional<const ttnn::DataType> dtype,
-                std::optional<ttnn::Tensor> &optional_output_tensor,
-                uint8_t queue_id) {
-                    return self(queue_id, input, memory_config, dtype, optional_output_tensor);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::kw_only(),
-                py::arg("memory_config"),
-                py::arg("dtype") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0},
+            [](const decltype(ttnn::assign)& self,
+               const ttnn::Tensor& input,
+               const ttnn::MemoryConfig memory_config,
+               const std::optional<const ttnn::DataType> dtype,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
+               uint8_t queue_id) { return self(queue_id, input, memory_config, dtype, optional_output_tensor); },
+            py::arg("input_tensor").noconvert(),
+            py::kw_only(),
+            py::arg("memory_config"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::assign)& self,
                const ttnn::Tensor& input_a,

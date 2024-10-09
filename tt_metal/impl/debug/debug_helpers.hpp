@@ -56,7 +56,7 @@ static CoreDescriptorSet GetDispatchCores(Device* device) {
 
 inline uint64_t GetDprintBufAddr(Device *device, const CoreCoord &phys_core, int risc_id) {
 
-    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, HalMemAddrType::DPRINT);
+    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, HalL1MemAddrType::DPRINT);
     return reinterpret_cast<uint64_t>(buf->data[risc_id]);
 }
 

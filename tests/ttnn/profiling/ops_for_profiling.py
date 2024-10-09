@@ -339,6 +339,10 @@ def primary_moreh_mean_backward(x, y):
     ttnn.operations.moreh.mean_backward(x, dim=[0], keepdim=True, input_grad=y)
 
 
+def primary_moreh_sum(x):
+    ttnn.operations.moreh.sum(x, dim=[0])
+
+
 def celu_bw(x, y):
     ttnn.celu_bw(x, y, alpha=1)
 

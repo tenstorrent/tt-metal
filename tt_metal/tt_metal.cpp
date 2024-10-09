@@ -157,14 +157,14 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
     return semaphore_id;
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args) {
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRange &core_range,
@@ -179,7 +179,7 @@ inline void SetRuntimeArgs(
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRangeSet &core_range_set,
@@ -196,7 +196,7 @@ inline void SetRuntimeArgs(
     }
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
     const std::shared_ptr<Kernel> kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
@@ -227,7 +227,7 @@ inline void SetRuntimeArgs(
         core_spec);
 }
 
-inline void SetRuntimeArgs(
+inline void SetRuntimeArgsImpl(
     CommandQueue &cq,
     const std::shared_ptr<Kernel> kernel,
     const std::vector<CoreCoord> &core_spec,
@@ -377,10 +377,16 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
 }
 
 bool InWorkerThread() {
-    bool in_worker_thread = false;
-    if (tt::DevicePool::is_instantiated()) {
+    // These are values are cached per thread. in_worker_thread is a 1:1 function of the thread_id.
+    // Therefore it does not need to be recomputed or looked up using the worker_thread_ids each time.
+    // This is a performance optimization, since looking up the thread id inside worker_thread_ids for
+    // each function call significantly degrades runtime perf.
+    thread_local static bool in_worker_thread = false;
+    thread_local static bool is_thread_status_checked = false;
+    if (not is_thread_status_checked) {
         auto worker_thread_ids = tt::DevicePool::instance().get_worker_thread_ids();
         in_worker_thread = worker_thread_ids.find(std::this_thread::get_id()) != worker_thread_ids.end();
+        is_thread_status_checked = true;
     }
     return in_worker_thread;
 }
@@ -698,7 +704,7 @@ void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done,
 
                 auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
                 not_done_cores.insert(physical_core);
-                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalMemAddrType::LAUNCH));
+                tt::llrt::write_launch_msg_to_core(device->id(), physical_core, msg, go_msg, device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -773,7 +779,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
                 }  // PROF_END("CBS")
 
                 if (cbs_on_core.size()) {
-                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalMemAddrType::KERNEL_CONFIG);
+                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.get_program_config(index).cb_offset;
                     llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
                 }
@@ -870,6 +876,8 @@ void DeallocateBuffer(Buffer *buffer) {
 }
 
 }  // namespace detail
+
+inline namespace v0 {
 
 size_t GetNumAvailableDevices() {
     return tt::Cluster::instance().number_of_user_devices();
@@ -1113,7 +1121,7 @@ void SetRuntimeArgs(
         not CommandQueue::async_mode_set(),
         "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast "
         "Dispatch.");
-    std::visit([&](auto &&core_spec) { SetRuntimeArgs(program, kernel_id, core_spec, runtime_args); }, core_spec);
+    std::visit([&](auto &&core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
 void SetRuntimeArgs(
@@ -1141,7 +1149,7 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
 void SetRuntimeArgs(
@@ -1155,7 +1163,7 @@ void SetRuntimeArgs(
         core_spec.size(),
         runtime_args.size());
     detail::DispatchStateCheck(not device->using_slow_dispatch());
-    SetRuntimeArgs(device->command_queue(), kernel, core_spec, runtime_args, false);
+    SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
 void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
@@ -1216,6 +1224,7 @@ void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
     }
 }
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

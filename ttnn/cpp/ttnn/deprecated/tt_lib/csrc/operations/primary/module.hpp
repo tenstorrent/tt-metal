@@ -10,13 +10,10 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_cumsum/moreh_cumsum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax_backward/moreh_softmax_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 
@@ -26,23 +23,6 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-void py_module_types(py::module& m_primary) {
-    py::enum_<MorehSoftmaxOpParallelizationStrategy>(m_primary, "MorehSoftmaxOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxOpParallelizationStrategy::LARGE_C);
-
-    py::enum_<MorehSoftmaxBackwardOpParallelizationStrategy>(m_primary, "MorehSoftmaxBackwardOpParallelizationStrategy")
-        .value("NONE", MorehSoftmaxBackwardOpParallelizationStrategy::NONE)
-        .value("SMALL_W", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W)
-        .value("SMALL_H", MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H)
-        .value("LARGE_W", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W)
-        .value("LARGE_H", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H)
-        .value("LARGE_C", MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C);
-}
 
 void py_module(py::module& m_primary) {
     // moreh_clip_grad_norm
@@ -152,71 +132,6 @@ void py_module(py::module& m_primary) {
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs a moreh_layernorm_backward operation.");
 
-    m_primary.def(
-        "moreh_softmax",
-        &moreh_softmax,
-        py::arg("input_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a softmax operation. Returns an output tensor.");
-    m_primary.def(
-        "moreh_softmax_backward",
-        &moreh_softmax_backward,
-        py::arg("output_tensor").noconvert(),
-        py::arg("output_grad_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("input_grad_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a softmax backward operation. Returns an input grad tensor.");
-    m_primary.def(
-        "moreh_softmin",
-        &moreh_softmin,
-        py::arg("input_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a softmin operation. Returns an output tensor.");
-    m_primary.def(
-        "moreh_softmin_backward",
-        &moreh_softmin_backward,
-        py::arg("output_tensor").noconvert(),
-        py::arg("output_grad_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("input_grad_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a softmin backward operation. Returns an input grad tensor.");
-
-    m_primary.def(
-        "moreh_logsoftmax",
-        &moreh_logsoftmax,
-        py::arg("input_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("output_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a logsoftmax operation. Returns an output tensor.");
-
-    m_primary.def(
-        "moreh_logsoftmax_backward",
-        &moreh_logsoftmax_backward,
-        py::arg("output_tensor").noconvert(),
-        py::arg("output_grad_tensor").noconvert(),
-        py::arg("dim").noconvert(),
-        py::arg("input_grad_tensor").noconvert() = std::nullopt,
-        py::arg("strategy").noconvert() = MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a logsoftmax backward operation. Returns an input grad tensor.");
 
     m_primary.def(
         "moreh_sum",
@@ -243,23 +158,6 @@ void py_module(py::module& m_primary) {
         py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         py::arg("compute_kernel_config").noconvert() = std::nullopt,
         "Performs sum backward operation. Returns an input_grad tensor.");
-
-    m_primary.def(
-        "moreh_cumsum",
-        &moreh_cumsum,
-        py::arg("input").noconvert(),
-        py::arg("output").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert(),
-        "Performs cumsum operation. Returns an output tensor.");
-    m_primary.def(
-        "moreh_cumsum_backward",
-        &moreh_cumsum_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input_grad").noconvert(),
-        py::kw_only(),
-        py::arg("dim").noconvert(),
-        "Performs cumsum backward operation. Returns an input_grad tensor.");
 }
 
 }  // namespace

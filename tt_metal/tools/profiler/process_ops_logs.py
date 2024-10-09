@@ -20,14 +20,15 @@ from loguru import logger
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import (
-    PROFILER_LOGS_DIR,
-    PROFILER_OPS_LOGS_DIR,
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
+    PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
     TRACY_OPS_DATA_FILE_NAME,
+    generate_logs_folder,
+    generate_reports_folder,
 )
 
 yaml.SafeDumper.ignore_aliases = lambda *args: True
@@ -77,15 +78,15 @@ def csv_header_format(header):
     return header.replace("_", " ").upper()
 
 
-def import_tracy_op_logs():
+def import_tracy_op_logs(logFolder):
     logger.info(f"Importing ops logs")
     ops = {}
     signposts = {}
     signpostsCount = 0
     cached_ops = {}
 
-    tracyOpTimesLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_TIMES_FILE_NAME)
-    tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
+    tracyOpTimesLog = os.path.join(logFolder, TRACY_OPS_TIMES_FILE_NAME)
+    tracyOpDataLog = os.path.join(logFolder, TRACY_OPS_DATA_FILE_NAME)
 
     if not os.path.isfile(tracyOpTimesLog) or not os.path.isfile(tracyOpDataLog):
         return ops, signposts
@@ -190,10 +191,10 @@ def device_log_ops_compare(op):
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, deviceLogFolder):
+def append_device_data(ops, logFolder):
     deviceOps = get_device_op_data(ops)
     logger.info(f"Appending device data")
-    deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
+    deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
         setup.deviceInputLog = deviceTimesLog
@@ -231,7 +232,7 @@ def append_device_data(ops, deviceLogFolder):
                         if "run_host_id" in timeID.keys():
                             assert (
                                 timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reproted by device is not matching assigned op id {deviceOp['global_call_count']}"
+                            ), f"op id {timeID['run_host_id']} reproted by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
@@ -245,9 +246,9 @@ def append_device_data(ops, deviceLogFolder):
 
 
 def get_device_data_generate_report(
-    deviceLogFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
 ):
-    deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
+    deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
     deviceOps = {}
     i = 0
@@ -273,8 +274,8 @@ def get_device_data_generate_report(
         allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
         logger.info(f"Copying runtime artifacts")
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-        if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-            os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+        if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
+            os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -346,7 +347,7 @@ def get_device_data_generate_report(
     return rowDicts
 
 
-def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
+def generate_reports(ops, deviceOps, signposts, logFolder, outputFolder, date, nameAppend):
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
@@ -367,10 +368,10 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
 
     logger.info(f"Copying runtime artifacts")
     os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / TRACY_FILE_NAME}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / TRACY_FILE_NAME} {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if os.path.isfile(f"{logFolder / TRACY_FILE_NAME}"):
+        os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
+    if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
+        os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     # logger.info(f"Generating OPs yaml")
     # allOpsYAMLPath = os.path.join(outFolder, f"{name}_all_ops.yaml")
@@ -566,14 +567,19 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
 
 
 def process_ops(output_folder, name_append, date):
-    ops, signposts = import_tracy_op_logs()
+    if not output_folder:
+        output_folder = PROFILER_ARTIFACTS_DIR
+    logFolder = generate_logs_folder(output_folder)
+    reportFolder = generate_reports_folder(output_folder)
+
+    ops, signposts = import_tracy_op_logs(logFolder)
 
     if ops:
-        deviceOps = append_device_data(ops, PROFILER_LOGS_DIR)
-        generate_reports(ops, deviceOps, signposts, output_folder, date, name_append)
+        deviceOps = append_device_data(ops, logFolder)
+        generate_reports(ops, deviceOps, signposts, logFolder, reportFolder, date, name_append)
 
     else:
-        deviceOps = get_device_data_generate_report(PROFILER_LOGS_DIR, output_folder, date, name_append)
+        deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
 
 
 @click.command()
@@ -581,6 +587,8 @@ def process_ops(output_folder, name_append, date):
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
 def main(output_folder, name_append, date):
+    if output_folder:
+        output_folder = Path(output_folder)
     process_ops(output_folder, name_append, date)
 
 
