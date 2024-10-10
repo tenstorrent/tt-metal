@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "tt_metal/host_api.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
 namespace ttnn::events {

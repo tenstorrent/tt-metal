@@ -4,6 +4,9 @@
 
 #include "unary_op_utils.hpp"
 
+#include "tt_metal/common/assert.hpp"
+#include "ttnn/cpp/ttnn/tensor/types.hpp"
+
 namespace ttnn::operations::unary::utils {
 
 namespace {

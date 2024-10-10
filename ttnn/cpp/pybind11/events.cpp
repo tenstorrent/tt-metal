@@ -5,6 +5,8 @@
 #include "events.hpp"
 
 #include "tt_metal/impl/event/event.hpp"
+#include "pybind11/operators.h"
+
 namespace ttnn::events {
 
 void py_module_types(py::module& module) {

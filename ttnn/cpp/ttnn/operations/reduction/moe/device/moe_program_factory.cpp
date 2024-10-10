@@ -7,6 +7,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
 #include "tt_metal/common/math.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::reduction::detail {
 
