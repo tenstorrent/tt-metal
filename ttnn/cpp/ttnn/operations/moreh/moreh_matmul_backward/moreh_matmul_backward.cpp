@@ -4,7 +4,7 @@
 
 #include "moreh_matmul_backward.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"

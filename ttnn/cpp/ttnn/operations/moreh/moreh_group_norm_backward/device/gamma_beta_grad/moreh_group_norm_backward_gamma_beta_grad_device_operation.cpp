@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

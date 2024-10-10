@@ -4,7 +4,7 @@
 
 #include "moreh_mean_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
