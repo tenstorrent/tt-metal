@@ -212,19 +212,14 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     using namespace tt::constants;
-    // Cast Float Scalar to a device tensor
-    auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
-    host_buffer[0] = scalar;
-    Tensor scalar_tensor_host = Tensor(
-        OwnedStorage{host_buffer},
-        ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
-        DataType::BFLOAT16,
-        Layout::TILE);
-    Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
-    // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-    return BinaryOperation::invoke(
+
+    Tensor input_tensor_b = ttnn::fill(input_tensor_a, scalar);
+
+    return ttnn::prim::binary(
+        queue_id,
         input_tensor_a,
-        scalar_tensor_device,
+        input_tensor_b,
+        binary_op_type,
         dtype,
         memory_config,
         optional_output_tensor,
