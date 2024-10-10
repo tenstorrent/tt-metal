@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-
+#include "pybind11/stl.h"
 
 namespace ttnn::distributed {
 
