@@ -22,4 +22,4 @@ struct MorehMatmul {
 namespace ttnn {
 constexpr auto moreh_matmul = ttnn::
     register_operation_with_auto_launch_op<"ttnn::moreh_matmul", ttnn::operations::moreh::moreh_matmul::MorehMatmul>();
-}
+} // namespace ttnn

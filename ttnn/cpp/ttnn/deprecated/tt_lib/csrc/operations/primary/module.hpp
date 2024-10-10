@@ -10,8 +10,6 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul_backward/moreh_matmul_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 
@@ -36,37 +34,6 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_clip_grad_norm operation.
-    )doc");
-
-    // moreh_matmul
-    m_primary.def(
-        "moreh_matmul",
-        &moreh_matmul,
-        py::arg("input").noconvert(),
-        py::arg("other").noconvert(),
-        py::kw_only(),
-        py::arg("transpose_input") = false,
-        py::arg("transpose_other") = false,
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("bias").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a moreh_matmul operation.");
-
-    // moreh_matmul_backward
-    m_primary.def(
-        "moreh_matmul_backward",
-        &moreh_matmul_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input_a").noconvert(),
-        py::arg("input_b").noconvert(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true},
-        py::arg("input_a_grad").noconvert() = std::nullopt,
-        py::arg("input_b_grad").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_matmul_backward operation.
     )doc");
 
     m_primary.def(

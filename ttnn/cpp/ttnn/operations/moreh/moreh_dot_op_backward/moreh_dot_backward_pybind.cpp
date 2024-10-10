@@ -16,7 +16,7 @@ void bind_moreh_dot_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_dot_backward,
-        "Moreh moreh_matmul Operation",
+        "Moreh Dot Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::arg("input"),
