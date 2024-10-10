@@ -16,7 +16,6 @@ struct address_map {
   // Base addresses
   static constexpr std::int32_t FIRMWARE_BASE = 0;
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = 16;
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = 0;
 
   static constexpr std::int32_t COMMAND_Q_BASE = 0;
   static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = 0;
