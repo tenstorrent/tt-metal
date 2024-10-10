@@ -76,8 +76,8 @@ def run_max_pool(
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
-    pre_shard = True
-    # pre_shard = False
+    # pre_shard = True
+    pre_shard = False
 
     ttact_device = ttnn.to_device(ttact, device)
     if pre_shard:
@@ -108,6 +108,7 @@ def run_max_pool(
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
         device=device,
+        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
 
     # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
