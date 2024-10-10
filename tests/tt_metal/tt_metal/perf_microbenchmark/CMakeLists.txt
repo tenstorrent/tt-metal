@@ -3,6 +3,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
     dispatch/test_bw_and_latency.cpp
     dispatch/test_dispatcher.cpp
+    dispatch/test_dispatcher_kernel_size_and_runtime.cpp
     dispatch/test_prefetcher.cpp
     ethernet/test_ethernet_read_and_send_data.cpp
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
