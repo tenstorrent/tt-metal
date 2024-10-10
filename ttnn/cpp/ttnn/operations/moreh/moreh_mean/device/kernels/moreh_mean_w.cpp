@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
@@ -47,13 +48,15 @@ void MAIN {
             if (!is_w_single_tile) {
                 tile_regs_acquire();
 
-                reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     cb_wait_front(cb_input, onetile);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+#if defined FP32_DEST_ACC_EN
+                    unpack_reconfig_data_format(cb_input, cb_scaler);
+#endif
+                    mm_init_short(cb_input, cb_scaler, false);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
                     cb_pop_front(cb_input, onetile);
                 }
-                reduce_revert_delta(cb_accum_dst);
                 tile_regs_commit();
 
                 cb_reserve_back(cb_accum_dst, onetile);
@@ -96,9 +99,11 @@ void MAIN {
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
-            reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_revert_delta(cb_out);
+#if defined FP32_DEST_ACC_EN
+            unpack_reconfig_data_format(cb_input, cb_scaler);
+#endif
+            mm_init_short(cb_input, cb_scaler, false);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);
