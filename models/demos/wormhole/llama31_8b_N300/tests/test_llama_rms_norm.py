@@ -34,9 +34,12 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
 
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-
+    state_dict_prefix = model_args.get_state_dict_prefix("", 0)
+    first_layer_prefix = state_dict_prefix + "attention_norm."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {k[24:]: v for k, v in state_dict.items() if (k.startswith("layers.0.attention_norm."))}
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
     reference_model = RefRMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -44,7 +47,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
-        layer_num=0,
+        state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
         weight_dtype=dtype,
     )
