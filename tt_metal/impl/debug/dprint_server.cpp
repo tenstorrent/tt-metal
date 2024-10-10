@@ -181,57 +181,91 @@ private:
 };
 
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
-    // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
-    // tries to do this print a relevant message.
-    if ((1 << hart_id) == tt::llrt::RISCV_TR1) {
-        stream << "Warning: MATH core does not support TileSlice printing, omitting print..."
-            << endl << std::flush;
-        return;
-    }
-
-    TileSliceHostDev<0>ts_copy; // Make a copy since ptr might not be properly aligned
+    TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
-    TT_ASSERT(offsetof(TileSliceHostDev<0>, samples_) % sizeof(uint16_t) == 0, "TileSliceHostDev<0> samples_ field is not properly aligned");
-    uint16_t *samples_ = reinterpret_cast<uint16_t *>(ptr) + offsetof(TileSliceHostDev<0>, samples_) / sizeof(uint16_t);
+    TT_ASSERT(
+        offsetof(TileSliceHostDev<0>, data) % sizeof(uint32_t) == 0,
+        "TileSliceHostDev<0> data field is not properly aligned");
+    uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
-    enum CB cb = static_cast<enum CB>(ts->cb_id_);
-    if (ts->w0_ == 0xFFFF) {
-        uint32_t ptr = ts->ptr_;
-        uint8_t count = ts->count_;
-        stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count) << std::flush;
-    } else if (ts->w1_ == 0xFFFF) {
-        tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format_);
-        stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
-    } else {
-        uint32_t i = 0;
-        bool count_exceeded = false;
-        for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
-            for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
-                // If the number of data specified by the SliceRange exceeds the number that was
-                // saved in the print buffer (set by the MAX_COUNT template parameter in the
-                // TileSlice), then break early.
-                if (i >= ts->count_) {
-                    count_exceeded = true;
-                    break;
-                }
-                stream << bfloat16_to_float(samples_[i]);
-                if (w + ts->ws_ < ts->w1_)
-                    stream << " ";
-                i++;
+    // Read any error codes and handle accordingly
+    enum CB cb = static_cast<enum CB>(ts->cb_id);
+    switch (ts->return_code) {
+        case DPrintOK:
+            break; // Continue to print the tile slice
+        case DPrintErrorBadTileIdx:
+            {
+            uint32_t page_size = ts->cb_ptr;
+            stream << fmt::format("Tried printing {}: unexpected tile size ({})\n", cb, page_size);
+            return;
             }
+        case DPrintErrorBadPointer:
+            {
+            uint32_t ptr = ts->cb_ptr;
+            uint8_t count = ts->data_count;
+            stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count)
+                   << std::flush;
+            return;
+            }
+        case DPrintErrorUnsupportedFormat:
+            {
+            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
+            return;
+            }
+        case DPrintErrorMath:
+            stream << "Warning: MATH core does not support TileSlice printing, omitting print..." << endl << std::flush;
+            return;
+        case DPrintErrorEthernet:
+            stream << "Warning: Ethernet core does not support TileSlice printing, omitting print..." << endl << std::flush;
+            return;
+        default:
+            stream << fmt::format(
+                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
+            return;
+    }
 
-            // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
-            // know that the slice has been truncated.
-            if (count_exceeded) {
-                stream << "<TileSlice data truncated due to exceeding max count ("
-                    << to_string(ts->count_) << ")>" << endl;
+    // No error codes, print the TileSlice
+    uint32_t i = 0;
+    bool count_exceeded = false;
+    for (int h = ts->slice_range.h0; h < ts->slice_range.h1; h += ts->slice_range.hs) {
+        for (int w = ts->slice_range.w0; w < ts->slice_range.w1; w += ts->slice_range.ws) {
+            // If the number of data specified by the SliceRange exceeds the number that was
+            // saved in the print buffer (set by the MAX_COUNT template parameter in the
+            // TileSlice), then break early.
+            if (i >= ts->data_count) {
+                count_exceeded = true;
                 break;
             }
-
-            if (ts->endl_rows_)
-                stream << endl;
+            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            switch (data_format) {
+                case tt::DataFormat::Float16_b: {
+                    uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
+                    stream << bfloat16_to_float(float16_b_ptr[i]);
+                    break;
+                }
+                case tt::DataFormat::Float32: {
+                    float *float32_ptr = reinterpret_cast<float *>(data);
+                    stream << float32_ptr[i];
+                    break;
+                }
+                default: break;
+            }
+            if (w + ts->slice_range.ws < ts->slice_range.w1)
+                stream << " ";
+            i++;
         }
+
+        // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
+        // know that the slice has been truncated.
+        if (count_exceeded) {
+            stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>" << endl;
+            break;
+        }
+
+        if (ts->endl_rows)
+            stream << endl;
     }
 } // PrintTileSlice
 

@@ -54,6 +54,12 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     ).set_page_size(src0_cb_index, buffer_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
+    CircularBufferConfig cb_src2_config = CircularBufferConfig(
+        buffer_size * 2,
+        {{CB::c_in2, tt::DataFormat::Float32}}
+    ).set_page_size(CB::c_in2, buffer_size * 2);
+    CBHandle cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+
     // This kernel is enough to fill up the print buffer, even though the device is not being
     // printed from, we still need to drain the print buffer to prevent hanging the core.
     KernelHandle brisc_print_kernel_id = CreateKernel(
