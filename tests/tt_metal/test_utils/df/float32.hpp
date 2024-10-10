@@ -20,7 +20,7 @@ class float32 {
     uint32_t uint32_data = 0;
 
    public:
-    static const size_t SIZEOF = 4;
+    static constexpr size_t SIZEOF = 4;
 
     // create from float: no rounding, just truncate
     float32(float float_num) {
