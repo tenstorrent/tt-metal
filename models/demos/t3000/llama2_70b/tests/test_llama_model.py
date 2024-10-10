@@ -285,8 +285,8 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (16, 1), (1, 1), (1, 128), (1, 2048), (1, 8192), (1, 128 * 1024)),
-    ids=("decode", "decodeb16", "decodeb1", "prefill_128", "prefill_2k", "prefill_8k", "prefill_128k"),
+    ((32, 1), (16, 1), (1, 1), (1, 128), (1, 2048), (1, 8192), (1, 128 * 1024), (1, 3 * 1024)),
+    ids=("decode", "decodeb16", "decodeb1", "prefill_128", "prefill_2k", "prefill_8k", "prefill_128k", "prefill_3k"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",
