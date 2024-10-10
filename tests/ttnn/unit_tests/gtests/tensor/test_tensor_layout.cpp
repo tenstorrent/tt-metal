@@ -8,7 +8,6 @@
 #include "tt_metal/common/logger.hpp"
 
 namespace {
-const tt::tt_metal::Size DefaultTileSize(32, 32);
 const tt::tt_metal::MemoryConfig DefaultMemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
 }
 
@@ -34,7 +33,7 @@ TEST_P(TensorLayoutTests, Tensor_PhysicalSize) {
     using namespace tt::tt_metal;
 
     const auto& params = GetParam();
-    TensorLayout layout(params.inputs.data_type, params.inputs.layout, DefaultTileSize, DefaultMemoryConfig);
+    TensorLayout layout(params.inputs.data_type, params.inputs.layout, DefaultMemoryConfig);
     Size physical_size = layout.get_physical_size(params.inputs.shape);
     Size tile_alignment_padding = layout.get_tile_alignment_padding(params.inputs.shape);
 

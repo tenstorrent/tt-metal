@@ -164,13 +164,13 @@ int main(int argc, char **argv) {
             vector<uint32_t> shapeC = {1, B, Mt*32, Nt*32};
             auto u16_src0_vec = u16_from_u32_vector(src0_vec);
             auto u16_src1_vec = u16_from_u32_vector(src1_vec);
-            vector<uint16_t> src0_linear = convert_layout<uint16_t>(u16_src0_vec, shapeA, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
-            vector<uint16_t> src1_linear = convert_layout<uint16_t>(u16_src1_vec, shapeB, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
+            vector<uint16_t> src0_linear = convert_layout<uint16_t>(u16_src0_vec, shapeA, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+            vector<uint16_t> src1_linear = convert_layout<uint16_t>(u16_src1_vec, shapeB, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
             vector<uint16_t> ref_bmm = gold_bmm(shapeA, src0_linear, shapeB, src1_linear);
 
             // Tilize gold from row major and convert to pairs (uint32_t)
             auto gold_4f_u32 = u32_from_u16_vector( convert_layout<uint16_t>(
-                ref_bmm, shapeC, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES));
+                ref_bmm, shapeC, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES));
 
             pass &= packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
             if (!pass)

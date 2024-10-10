@@ -24,7 +24,7 @@ Size Size::operator/(const Size& rhs) const {
     return Size(mHeight / rhs.mHeight, mWidth / rhs.mWidth);
 }
 
-Size Size::operator*(const size_t& scalar) const {
+Size Size::operator*(size_t scalar) const {
     return Size(mHeight * scalar, mWidth * scalar);
 }
 
@@ -34,6 +34,10 @@ Size::operator std::pair<size_t, size_t>() const {
 
 Size::operator std::array<size_t, 2>() const {
     return {mHeight, mWidth};
+}
+
+Size::operator std::array<uint32_t, 2>() const {
+    return {static_cast<uint32_t>(mHeight), static_cast<uint32_t>(mWidth)};
 }
 
 size_t Size::height() const { return mHeight; }
@@ -56,12 +60,25 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)
     return os;
 }
 
-
-TensorLayout::TensorLayout(DataType dataType, Layout layout, const Size& tileSize, const MemoryConfig& memoryConfig)
-    : mLayout(layout),
-      mDataType(dataType),
+TensorLayout::TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig)
+    : mDataType(dataType),
       mTileSize(tileSize),
       mMemoryConfig(memoryConfig) {
+
+    mLayout = mTileSize.height() == 1 ? Layout::ROW_MAJOR : Layout::TILE;
+}
+
+TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig)
+    : mLayout(layout),
+      mDataType(dataType),
+      mMemoryConfig(memoryConfig) {
+
+    if (mLayout == Layout::TILE) {
+        mTileSize = Size(32, 32);
+    }
+    else {
+        mTileSize = Size(1, 1); // width 1 makes no sense? need juggestions
+    }
 }
 
 Size TensorLayout::get_physical_size(const ttnn::SimpleShape& shape) const {
@@ -98,28 +115,27 @@ Size TensorLayout::get_sharded_page_size() const {
     }
 }
 
-std::optinal<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
+std::optional<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
     if (!mMemoryConfig.is_sharded())
         return std::nullopt;
 
-    ShardSpecBuffer shard_spec_buffer;
     TT_FATAL(mMemoryConfig.shard_spec.has_value(), "MemoryConfig should have Shard Spec specified for sharded memory layout");
 
     auto& shard_spec = mMemoryConfig.shard_spec.value();
     Size physical_size = get_physical_size(shape);
-    Size page_shape = get_sharded_page_shape();
+    Size page_shape = get_sharded_page_size();
     Size tensor2d_size = physical_size / page_shape;
-    shard_spec_buffer = ShardSpecBuffer(shard_spec, page_shape, tensor2d_size);
+    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), std::array<uint32_t, 2>(tensor2d_size));
 
     return shard_spec_buffer;
 }
 
 size_t TensorLayout::get_packed_buffer_size(const ttnn::SimpleShape& shape) const {
     Size physical_size = get_physical_size(shape);
-    return physical_size.height() * physical_size.width() * element_size_bytes(mDataType);
+    return physical_size.height() * physical_size.width() * element_size_bytes();
 }
 
-uint32_t TensorLayout::get_page_elements_count(const ttnn::SimpleShape& shape) {
+uint32_t TensorLayout::get_page_elements_count(const ttnn::SimpleShape& shape) const {
     if(mMemoryConfig.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
         auto physical_size = get_physical_size(shape);
         return physical_size.height() * physical_size.width();
@@ -127,13 +143,13 @@ uint32_t TensorLayout::get_page_elements_count(const ttnn::SimpleShape& shape) {
 
     uint32_t elements_in_page = shape[-1];
     if(mTileSize.height() > 1) { // not row major
-        elements_in_page = mTileSize.height() * mTile.width();
+        elements_in_page = mTileSize.height() * mTileSize.width();
     }
 
     return elements_in_page;
 }
 
-uint32_t TensorLayout::get_header_size_bytes() {
+uint32_t TensorLayout::get_header_size_bytes() const {
     switch (mDataType) {
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
@@ -143,7 +159,7 @@ uint32_t TensorLayout::get_header_size_bytes() {
     }
 }
 
-uint32_t TensorLayout::element_size_bytes() {
+uint32_t TensorLayout::element_size_bytes() const {
     switch (mDataType) {
         case DataType::BFLOAT16: return sizeof(bfloat16);
         case DataType::FLOAT32: return sizeof(float);
@@ -161,8 +177,8 @@ uint32_t TensorLayout::element_size_bytes() {
 }
 
 size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
-    uint32_t page_size_bytes = get_header_size_bytes(mDataType);
-    uint32_t elements_in_page = get_page_elements_count(mDataType, shape, mTileSize);
+    uint32_t page_size_bytes = get_header_size_bytes();
+    uint32_t elements_in_page = get_page_elements_count(shape);
 
     switch (mDataType) {
         case DataType::BFLOAT16:
@@ -171,7 +187,7 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
         case DataType::INT32:
         case DataType::UINT16:
         case DataType::UINT8:
-            page_size_bytes += elements_in_page * element_size_bytes(dtype);
+            page_size_bytes += elements_in_page * element_size_bytes();
             break;
 
         case DataType::BFLOAT8_B:
@@ -188,7 +204,7 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
     }
 
     //TT_FATAL(total_size_bytes % page_size_bytes == 0);
-    TT_FATAL(page_size_bytes != 0);
+    TT_FATAL(page_size_bytes != 0, "Page size should not be zero");
 
     return page_size_bytes;
 }
@@ -201,6 +217,20 @@ Size TensorLayout::get_tile_alignment_padding(const ttnn::SimpleShape& shape) co
         width = mTileSize.width() - shape[-1] % mTileSize.width();
     }
     return Size(height, width);
+}
+
+ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
+{
+    if (mLayout == Layout::TILE) {
+        auto padding = get_tile_alignment_padding(shape);
+        auto values = shape.as_vector();
+        values[shape.rank() - 1] += padding.width();
+        values[shape.rank() - 1] += padding.height();
+        ttnn::SimpleShape padded_shape(std::move(values));
+        return padded_shape;
+    }
+
+    return shape;
 }
 
 } // namespace tt::tt_metal

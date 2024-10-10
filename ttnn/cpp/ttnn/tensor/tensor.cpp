@@ -21,6 +21,7 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_layout.hpp"
 
 using namespace tt::constants;
 
@@ -657,10 +658,10 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 Tensor create_device_tensor(
     const ttnn::SimpleShape& shape, const TensorLayout& layout, Device* device) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", padded_shape, data_type, layout, device, memory_config);
+    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, layout.get_data_type(), layout.get_layout(), device, layout.get_memory_config());
 
     auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, layout);
-    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
+    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.as_vector(), layout.get_padded_shape(shape).as_vector()), layout.get_data_type(), layout.get_layout());
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -668,14 +669,15 @@ Tensor create_device_tensor(
     return output;
 }
 
-Tensor create_device_tensor(
-    const ttnn::SimpleShape& logical_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(logical_shape, get_physical_shape(logical_shape, layout, tile), data_type, layout, device, memory_config, tile);
+Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
+    TT_FATAL(!tile.has_value(), "Current implementation does not support tile for create_device_tensor");
+
+    return create_device_tensor(shape, TensorLayout(data_type, layout, memory_config), device);
 }
 
 Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+    return create_device_tensor(shape.logical_shape(), data_type, layout, device, memory_config, tile);
 }
 
 namespace detail {
