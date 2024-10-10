@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_dnn/op_library/sharding_utilities.hpp"
+#include "ttnn/operations/moreh/sharding_utilities.hpp"
 
 namespace ttnn::operations::data_movement {
 
