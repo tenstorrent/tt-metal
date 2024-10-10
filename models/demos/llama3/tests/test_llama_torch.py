@@ -4,8 +4,8 @@
 import torch
 
 # import ttnn
-from models.demos.wormhole.llama31_8b.tt.llama_common import HostEmbedding
-from models.demos.wormhole.llama31_8b.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_common import HostEmbedding
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 

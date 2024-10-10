@@ -10,9 +10,9 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.wormhole.llama31_8b_N300.tt.llama_layernorm import TtLayerNorm
-from models.demos.wormhole.llama31_8b_N300.tt.llama_image_attention import TtLlamaImageAttention
-from models.demos.wormhole.llama31_8b_N300.tt.llama_image_mlp import TtLlamaImageFeedForward
+from models.demos.llama3.tt.llama_layernorm import TtLayerNorm
+from models.demos.llama3.tt.llama_image_attention import TtLlamaImageAttention
+from models.demos.llama3.tt.llama_image_mlp import TtLlamaImageFeedForward
 import os
 
 

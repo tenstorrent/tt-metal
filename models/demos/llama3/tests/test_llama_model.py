@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     get_single_rot_mat,
     prepare_inputs_ttnn,
@@ -14,8 +14,8 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     encode_prompt_llama_instruct,
     HostEmbedding,
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_model import TtTransformer
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_model import TtTransformer
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (

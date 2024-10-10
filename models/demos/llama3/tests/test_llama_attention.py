@@ -6,9 +6,9 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+from models.demos.llama3.tt.llama_attention import TtLlamaAttention
+from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     prepare_inputs_ttnn,
     get_single_rot_mat,

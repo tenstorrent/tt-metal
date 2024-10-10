@@ -7,7 +7,7 @@ import math
 import ttnn
 import torch
 import torch.nn as nn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_decoder import TtTransformerBlock
+from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from typing import Optional

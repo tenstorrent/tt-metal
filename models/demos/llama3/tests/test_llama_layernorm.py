@@ -12,8 +12,8 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,

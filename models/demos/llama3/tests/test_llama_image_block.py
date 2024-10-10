@@ -11,9 +11,9 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_image_block import TtLlamaImageTransformerBlock
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+from models.demos.llama3.tt.llama_image_block import TtLlamaImageTransformerBlock
+from models.demos.llama3.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
 )
 from models.utility_functions import (

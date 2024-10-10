@@ -6,13 +6,13 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     prepare_inputs_ttnn,
     get_single_rot_mat,
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_decoder import TtTransformerBlock
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,

@@ -26,10 +26,10 @@ from models.utility_functions import (
 from models.utility_functions import (
     nearest_32,
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_tile_position_embedding import (
+from models.demos.llama3.tt.llama_tile_position_embedding import (
     TtLlamaTilePositionEmbedding,
 )
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs
 
 import importlib
 
