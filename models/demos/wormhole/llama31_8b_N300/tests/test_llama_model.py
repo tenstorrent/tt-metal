@@ -52,6 +52,8 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
 
     dtype = ttnn.bfloat8_b
 
+    mesh_device.enable_async(True)
+
     # This sets the minimum PCC for each iteration
     # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
     pcc = 0.94

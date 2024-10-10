@@ -102,6 +102,8 @@ def test_llama_conv2d_inference(
     pcc = 0.9999
     dtype = ttnn.bfloat16
 
+    mesh_device.enable_async(True)
+
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 

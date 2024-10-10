@@ -41,6 +41,8 @@ def test_llama_model_perf(
 ):
     dtype = ttnn.bfloat8_b
 
+    mesh_device.enable_async(True)
+
     model_args = TtModelArgs(mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 

@@ -42,6 +42,9 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
+
+    mesh_device.enable_async(True)
+
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 

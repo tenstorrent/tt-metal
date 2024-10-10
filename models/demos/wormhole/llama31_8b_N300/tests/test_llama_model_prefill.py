@@ -54,6 +54,8 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
     dtype = ttnn.bfloat8_b
     pcc = 0.93
 
+    mesh_device.enable_async(True)
+
     # Use instruct weights instead of general weights
     instruct = False
 
