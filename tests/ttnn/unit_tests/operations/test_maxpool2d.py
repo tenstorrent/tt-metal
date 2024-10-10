@@ -109,8 +109,6 @@ def run_max_pool(
         dilation=[dilation_h, dilation_w],
     )
 
-    # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
-    # output = ttnn.to_memory_config(output, interleaved_mem_config)
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
@@ -128,9 +126,6 @@ def run_max_pool(
     ## test for equivalance
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
-
-    # torch.save(output_pytorch, "output_pytorch.pt")
-    # torch.save(golden_pytorch, "golden_pytorch.pt")
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
