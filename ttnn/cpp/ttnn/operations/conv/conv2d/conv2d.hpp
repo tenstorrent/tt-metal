@@ -191,7 +191,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    std::optional<const Conv2dConfig> conv_config_ = std::nullopt);
+    std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
+    const std::optional<const MemoryConfig> memory_config = std::nullopt);
 
 
 struct Conv2dOperation{
@@ -211,8 +212,9 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_);
+        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig> memory_config = std::nullopt){
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
     }
 
     static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
@@ -231,8 +233,9 @@ struct Conv2dOperation{
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_);
+        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
+        const std::optional<const MemoryConfig> memory_config = std::nullopt){
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
     }
 };
 
