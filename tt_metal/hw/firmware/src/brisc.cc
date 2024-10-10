@@ -433,7 +433,10 @@ int main() {
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, launch_msg_address->kernel_config.max_cb_index, true, true, false);
-                kernel_init();
+                // This will become a ring-buffer address. volatile to
+                // avoid it turning into a JAL
+		auto *volatile entry = reinterpret_cast<void (*)()>(ncrisc_kernel_start_offset16 * 16);
+		entry ();
                 RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init
