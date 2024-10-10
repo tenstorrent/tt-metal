@@ -13,6 +13,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -640,41 +641,6 @@ bool test_increment_runtime_args_sanity(Device* device, const DummyProgramConfig
     return pass;
 }
 
-// Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
-// Optionally force the max size for one of the vectors.
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool force_max_size = false, uint32_t unique_base = 0, uint32_t common_base = 100){
-
-    constexpr uint32_t MAX_RUNTIME_ARGS = 256;
-
-    // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via padding
-    uint32_t num_rt_args_unique = rand() % (MAX_RUNTIME_ARGS + 1);
-    uint32_t num_rt_args_common = num_rt_args_unique < MAX_RUNTIME_ARGS ? rand() % (MAX_RUNTIME_ARGS - num_rt_args_unique + 1) : 0;
-
-    if (force_max_size) {
-        if (rand() % 2) {
-            num_rt_args_unique = MAX_RUNTIME_ARGS;
-            num_rt_args_common = 0;
-        } else {
-            num_rt_args_common = MAX_RUNTIME_ARGS;
-            num_rt_args_unique = 0;
-        }
-    }
-
-    vector<uint32_t> rt_args_common;
-    for (uint32_t i = 0; i < num_rt_args_common; i++) {
-        rt_args_common.push_back(common_base + i);
-    }
-
-    vector<uint32_t> rt_args_unique;
-    for (uint32_t i = 0; i < num_rt_args_unique; i++) {
-        rt_args_unique.push_back(unique_base + i);
-    }
-
-    log_trace(tt::LogTest, "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}", __FUNCTION__, num_rt_args_unique, num_rt_args_common, force_max_size);
-    return std::make_pair(rt_args_unique, rt_args_common);
-}
-
-
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -1290,7 +1256,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             CreateSemaphore(program, cr_set, j + 1);
         }
 
-        auto [brisc_unique_rtargs, brisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
         uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
         vector<uint32_t> brisc_compile_args = {BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_brisc_unique_rtargs, num_brisc_common_rtargs, page_size};
@@ -1307,7 +1273,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
         uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
         vector<uint32_t> ncrisc_compile_args = {NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_ncrisc_unique_rtargs, num_ncrisc_common_rtargs, page_size};
@@ -1324,7 +1290,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
             TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
         }
 
-        auto [trisc_unique_rtargs, trisc_common_rtargs] = local_test_functions::create_runtime_args(USE_MAX_RT_ARGS);
+        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
         uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
         uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
         vector<uint32_t> trisc_compile_args = {TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP, NUM_CBS, NUM_SEMS, num_trisc_unique_rtargs, num_trisc_common_rtargs, page_size};
