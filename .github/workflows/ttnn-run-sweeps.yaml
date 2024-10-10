@@ -183,6 +183,13 @@ on:
           - data_movement.fill.fill_pytorch2
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
+          - conv2d.full.conv2d_block_sharded
+          - conv2d.full.conv2d_height_sharded
+          - conv2d.full.conv2d_width_sharded
+          - conv2d.full.conv2d_sliding_window
+          - conv2d.full.conv2d_misc
+          - conv2d.short.conv2d_short_sweep
+          - max_pool2d.short.max_pool2d_short_sweep
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
