@@ -91,7 +91,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     }
 
     const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), operation_attributes.compute_kernel_config);
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
@@ -288,6 +288,8 @@ void MorehNormBackwardOperation::ProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
             runtime_args[0] = tensor_args.input.buffer()->address();
+            runtime_args[1] = tensor_args.output.buffer()->address();
+            runtime_args[2] = tensor_args.output_grad.buffer()->address();
         }
 
         // writer

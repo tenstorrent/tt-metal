@@ -1,12 +1,16 @@
 # Temporary workaround for Issue #8767
 set(HW_OUTPUT_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/toolchain)
-set(CORES
+set(PROCS
     brisc
     ncrisc
     trisc0
     trisc1
     trisc2
     ierisc
+)
+set(TYPES
+    firmware
+    kernel
 )
 
 if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
@@ -17,22 +21,25 @@ else()
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}")
 endif()
 
-foreach(CORE IN LISTS CORES)
-    set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${CORE}.ld")
-    string(TOUPPER ${CORE} CORE_DEFINE)
+foreach(PROC IN LISTS PROCS)
+    foreach(TYPE IN LISTS TYPES)
+        set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
+        string(TOUPPER ${PROC} PROC_DEFINE)
+        string(TOUPPER ${TYPE} TYPE_DEFINE)
 
-    # custom command to preprocess/generate the output file
-    add_custom_command(
-        OUTPUT ${HW_OUTPUT_FILE}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
-        COMMAND ${CMAKE_CXX_COMPILER} -DLD_TARGET=${CORE_DEFINE} -DLD_TYPE=FIRMWARE -DCOMPILE_FOR_${CORE_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld ${DEV_MEM_MAP}
-        COMMENT "Preprocessing toolchain/${CORE}.ld"
-        VERBATIM
-    )
+        # custom command to preprocess/generate the output file
+        add_custom_command(
+          OUTPUT ${HW_OUTPUT_FILE}
+          COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
+          COMMAND ${CMAKE_CXX_COMPILER} -DLD_TARGET=${PROC_DEFINE} -DLD_TYPE=${TYPE_DEFINE} -DTARGET_${PROC_DEFINE} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
+          DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld ${DEV_MEM_MAP}
+          COMMENT "Preprocessing toolchain/${PROC}.ld"
+          VERBATIM
+          )
 
-    # add output file to the custom target
-    list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
+        # add output file to the custom target
+        list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
+    endforeach()
 endforeach()
 
 # Build hw lib objects
@@ -47,7 +54,7 @@ elseif("$ENV{ARCH_NAME}" STREQUAL "blackhole")
     set(ALIAS_ARCH_NAME "blackhole")
 endif()
 
-set(GPP_FLAGS ${GPP_FLAGS} -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function)
+set(GPP_FLAGS ${GPP_FLAGS} -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -Os -fno-tree-loop-distribute-patterns)
 
 set(HW_LIB_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib)
 set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
@@ -82,7 +89,7 @@ add_custom_command(
 add_custom_command(
     OUTPUT tdma_xmov
     COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -Os -fno-tree-loop-distribute-patterns -c -o ${HW_LIB_DIR}/tdma_xmov.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c
+    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/tdma_xmov.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c
     COMMENT "Building hw lib tdma_xmov.o"
     VERBATIM
 )
@@ -90,7 +97,7 @@ add_custom_command(
 add_custom_command(
     OUTPUT noc
     COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -Os -fno-tree-loop-distribute-patterns -c -o ${HW_LIB_DIR}/noc.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ALIAS_ARCH_NAME}/noc.c
+    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/noc.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ALIAS_ARCH_NAME}/noc.c
     COMMENT "Building hw lib noc.o"
     VERBATIM
 )

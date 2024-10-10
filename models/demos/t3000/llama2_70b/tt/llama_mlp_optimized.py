@@ -7,6 +7,8 @@ from typing import List
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
+from models.utility_functions import nearest_32
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
 
 
 class TtLlamaMLP_optimized:
@@ -48,9 +50,9 @@ class TtLlamaMLP_optimized:
         w2_str = f"{self.layer_name}.feed_forward.w2.weight"
         w3_str = f"{self.layer_name}.feed_forward.w3.weight"
 
-        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard.weight"
-        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce.weight"
-        w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard.weight"
+        w1_dram_shard_str = f"{self.layer_name}.feed_forward.w1_dram_shard_unpad.weight"
+        w2_dram_shard_str = f"{self.layer_name}.feed_forward.w2_dram_shard_reduce_unpad.weight"
+        w3_dram_shard_str = f"{self.layer_name}.feed_forward.w3_dram_shard_unpad.weight"
 
         w1_dtype = ttnn.bfloat4_b
         w2_dtype = ttnn.bfloat8_b
@@ -59,30 +61,25 @@ class TtLlamaMLP_optimized:
         padded_w1 = None
         padded_w2 = None
         padded_w3 = None
+        # Do padding
+        H = 8 * 1024
+        H4 = 28 * 1024
         if not self.read_cache:
-            # Do padding
-            H = 8 * 1024
-            PADDED_H4 = 32 * 1024
-            H4 = 28 * 1024
-            padded_w1 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w2 = torch.zeros(1, 1, PADDED_H4, H)
-            padded_w3 = torch.zeros(1, 1, H, PADDED_H4)
-            padded_w1[:, :, :, :H4] = self.state_dict[w1_str].transpose(-2, -1)
-            padded_w2[:, :, :H4, :] = self.state_dict[w2_str].transpose(-2, -1)
-            padded_w3[:, :, :, :H4] = self.state_dict[w3_str].transpose(-2, -1)
+            padded_w1 = self.state_dict[w1_str].transpose(-2, -1).view(1, 1, H, H4)
+            padded_w2 = self.state_dict[w2_str].transpose(-2, -1).view(1, 1, H4, H)
+            padded_w3 = self.state_dict[w3_str].transpose(-2, -1).view(1, 1, H, H4)
 
         # w1: 8k x 4k. width-sharded on 12 banks, 4224 over 12 banks.
-        device = self.mesh_device.get_device(0)
         weight_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                    ttnn.CoreCoord(self.mesh_device.dram_grid_size().x - 1, self.mesh_device.dram_grid_size().y - 1),
                 )
             }
         )
 
-        w3_shard_shape = (8192, 4224 // 12)  # padded cols to divide by 12
+        w3_shard_shape = (H, nearest_32(H4 // self.model_config["NUM_DEVICES"] // 12))  # padded cols to divide by 12
         w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
 
@@ -96,7 +93,10 @@ class TtLlamaMLP_optimized:
             cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
-        w2_shard_shape = (4096, 8448 // 12)  # expand dim is 32k / 8 chips padded
+        w2_shard_shape = (
+            H4 // self.model_config["NUM_DEVICES"],
+            nearest_32(H // 12),
+        )  # expand dim is 32k / 8 chips padded
         w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
         self.w2 = ttnn.as_tensor(
@@ -145,9 +145,38 @@ class TtLlamaMLP_optimized:
             pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG_128"]
         else:
             # ttnn.linear does not allow None program_config if weights are sharded
-            pc1 = self.model_config["PREFILL_PADDED_FF1_MM_PROGCFG"]
-            pc2 = self.model_config["PREFILL_PADDED_FF2_MM_PROGCFG"]
-            pc3 = self.model_config["PREFILL_PADDED_FF3_MM_PROGCFG"]
+
+            pc1 = matmul_2d_config(
+                m=x.shape[2],
+                k=x.shape[3],
+                n=self.w1.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+                act=ttnn.UnaryOpType.SILU,
+            )
+            pc2 = matmul_2d_config(
+                m=x.shape[2],
+                k=self.w2.shape[2],
+                n=self.w2.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
+            pc3 = matmul_2d_config(
+                m=x.shape[2],
+                k=x.shape[3],
+                n=self.w1.shape[3],
+                overwrite_per_core_k=4,
+                grid=ttnn.CoreGrid(y=min(8, x.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         w1_out = ttnn.linear(
             x,
@@ -201,8 +230,6 @@ class TtLlamaMLP_optimized:
         return hidden_states_reduced
 
     def decode_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
-        hidden_states = []
-
         w1_out = ttnn.matmul(
             x,
             self.w1,
@@ -244,7 +271,7 @@ class TtLlamaMLP_optimized:
             scatter_dim=3,
             math_op=ttnn.ReduceType.Sum,
             num_links=1,
-            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],
         )
         hidden_states.deallocate(True)
         return hidden_states_reduced

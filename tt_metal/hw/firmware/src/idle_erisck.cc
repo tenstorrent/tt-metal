@@ -21,16 +21,13 @@
 
 #include <kernel_includes.hpp>
 
-uint8_t noc_index = NOC_INDEX;
-//inline void RISC_POST_STATUS(uint32_t status) {
-//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-//  ptr[0] = status;
-//}
+extern uint32_t __kernel_init_local_l1_base[];
+
 void kernel_launch() {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
-    firmware_kernel_common_init((void tt_l1_ptr *)MEM_IERISC_INIT_LOCAL_L1_BASE);
+    firmware_kernel_common_init((void tt_l1_ptr *)__kernel_init_local_l1_base);
 
-    noc_local_state_init(noc_index);
+    noc_local_state_init(NOC_INDEX);
 
     kernel_main();
 }

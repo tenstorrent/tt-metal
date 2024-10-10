@@ -23,18 +23,18 @@ inline void llk_math_hw_configure_disaggregated() { /*Unused for GS*/ }
 
 inline void llk_math_wait_for_dest_available() {
     WAYPOINT("MWDW");
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    _llk_math_wait_for_dest_available_<DST_SYNC_MODE>();
     WAYPOINT("MWDD");
 }
 
 template <bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool is_fp32_dest_acc_en = false /*not used*/>
 inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
 template <bool mail2math = true, bool mail2pack = true>
@@ -80,4 +80,27 @@ inline void llk_math_reconfig_data_format_srca(
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     _llk_math_reconfig_data_format_srcb_();
+}
+
+inline std::uint32_t llk_math_get_compute_special_value_flags() {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline std::uint32_t llk_math_get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline std::uint32_t llk_math_get_compute_special_value_flags_sfpu(std::uint32_t special_value_flags_reg) {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline void llk_math_clear_compute_special_value_flags() {
+    // API not supported in Grayskull
+}
+
+inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
+    // API not supported in Grayskull
 }

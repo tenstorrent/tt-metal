@@ -205,8 +205,8 @@ def run_test_sdpa_decode_multi_pos(
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -232,15 +232,15 @@ def run_test_sdpa_decode_multi_pos(
         logger.info(f"Using padded layer length: {padded_layer_len}")
         logger.info(f"Using padded num heads: {padded_num_heads}")
 
-        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+        attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
         for i in range(b):
             start_idx = start_indices[i]
-            attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
         Q = fa_rand(1, b, padded_num_heads, d)
 
         tt_Q = ttnn.as_tensor(
-            Q,
+            Q[:, :, :nh],
             device=device,
             dtype=q_dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -276,9 +276,15 @@ def run_test_sdpa_decode_multi_pos(
         tt_back = tt_back[:, :, :nh, :]
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+        K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        K_slice = torch.cat(
+            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        V_slice = torch.cat(
+            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
             Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
@@ -338,8 +344,8 @@ def run_test_sdpa_decode_single_iter(
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -363,15 +369,15 @@ def run_test_sdpa_decode_single_iter(
     logger.debug(f"Using padded layer length: {padded_layer_len}")
     logger.debug(f"Using padded num heads: {padded_num_heads}")
 
-    attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+    attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
         start_idx = start_indices[i]
-        attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+        attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
     Q = fa_rand(1, b, padded_num_heads, d)
 
     tt_Q = ttnn.as_tensor(
-        Q,
+        Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
         layout=ttnn.TILE_LAYOUT,
@@ -405,9 +411,15 @@ def run_test_sdpa_decode_single_iter(
     tt_back = tt_back[:, :, :nh, :]
 
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-    K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-    V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-    attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+    K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    K_slice = torch.cat(
+        [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+    V_slice = torch.cat(
+        [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+    )  # b, nh, d, S
+    attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
     expect = torch.nn.functional.scaled_dot_product_attention(
         Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
     )  # b, nh, 1, d
@@ -421,7 +433,6 @@ def run_test_sdpa_decode_single_iter(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -440,16 +451,24 @@ def run_test_sdpa_decode_single_iter(
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, single_iter, cur_pos_tensor",
     (
-        [32, 8, 1, 32768, 128, (8, 6), True, True],  # Llama2-70B
-        [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
+        # [32, 8, 1, 32768, 128, (8, 6), True, True],  # Llama2-70B
+        # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        [4, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
+        # [4, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
+        [32, 8, 1, 8192, 128, (8, 8), True, True],  # Mixtral8x7b
+        # [32, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
+        # [4, 32, 8, 32768, 128, (8, 8), True, False],  # llama 3.1 8b
+        [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
+        [32, 32, 8, 8192, 128, (8, 8), True, False],  # llama 3.1 8b
+        # [4, 16, 4, 32768, 128, (8, 8), False, False],  # llama 3.1 8b
     ),
 )
 def test_sdpa_decode(
     device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, single_iter, cur_pos_tensor, use_program_cache
 ):
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
+
     ttnn.device.DisablePersistentKernelCache()
     if single_iter:
         run_test_sdpa_decode_single_iter(
@@ -462,7 +481,6 @@ def test_sdpa_decode(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -526,13 +544,12 @@ def run_test_sdpa_decode_paged_attention(
     max_num_blocks = b * s // block_size
     assert max_num_blocks * block_size == b * s
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     def to_paged_cache(cache, batch, num_kv, max_num_blocks_per_seq, block_size, head_dim, max_seq_len):
         return (
-            cache.reshape(batch, num_kv, max_seq_len, head_dim)
-            .reshape(batch, num_kv, max_num_blocks_per_seq, block_size, head_dim)
+            cache.reshape(batch, num_kv, max_num_blocks_per_seq, block_size, head_dim)
             .transpose(1, 2)
             .reshape(batch * max_num_blocks_per_seq, num_kv, block_size, head_dim)
         )
@@ -542,7 +559,6 @@ def run_test_sdpa_decode_paged_attention(
             paged_cache.reshape(batch, max_num_blocks_per_seq, num_kv, block_size, head_dim)
             .transpose(1, 2)
             .reshape(batch, num_kv, max_seq_len, head_dim)
-            .reshape(num_kv, batch, max_seq_len, head_dim)
         )
 
     # Create paged K and V based on block size\
@@ -625,15 +641,15 @@ def run_test_sdpa_decode_paged_attention(
         logger.info(f"Using padded layer length: {padded_layer_len}")
         logger.info(f"Using padded num heads: {padded_num_heads}")
 
-        attn_mask = torch.zeros((1, b, padded_num_heads, padded_layer_len))
+        attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
         for i in range(b):
             start_idx = start_indices[i]
-            attn_mask[:, i, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
         Q = fa_rand(1, b, padded_num_heads, d)
 
         tt_Q = ttnn.as_tensor(
-            Q,
+            Q[:, :, :nh],
             device=device,
             dtype=q_dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -659,9 +675,15 @@ def run_test_sdpa_decode_paged_attention(
         tt_back = tt_back[:, :, :nh, :]
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
+        K_slice = K[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        K_slice = torch.cat(
+            [K_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        V_slice = V[:, :, :padded_layer_len, :]  # b, nkv, S, d
+        V_slice = torch.cat(
+            [V_slice[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1
+        )  # b, nh, d, S
+        attn_mask_slice = attn_mask[:, :nh, :, :]  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
             Q_slice, K_slice, V_slice, attn_mask_slice, scale=scale, is_causal=False
@@ -680,7 +702,6 @@ def run_test_sdpa_decode_paged_attention(
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-# @pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
     [
@@ -700,6 +721,10 @@ def run_test_sdpa_decode_paged_attention(
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
     (
         [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
+        [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
+        # [4, 16, 4, 32768, 128, (8, 8), True],
+        # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
+        [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -725,12 +750,13 @@ def test_sdpa_decode_paged_attention(
         cur_pos_tensor,
         block_size=block_size,
         sharded_in=True,
-        sharded_out=True,
+        sharded_out=False,
     )
+
+    assert device.num_program_cache_entries() == 3
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -814,7 +840,6 @@ def test_sdpa_decode_perf(device, use_program_cache):
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b, ttnn.bfloat16],
@@ -873,6 +898,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=False,
             sharded_out=False,
             start_indices=start_indices,
+            cur_pos_tensor=True,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -887,6 +913,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=True,
             sharded_out=False,
             start_indices=start_indices,
+            cur_pos_tensor=False,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -901,6 +928,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=True,
             sharded_out=True,
             start_indices=start_indices,
+            cur_pos_tensor=False,
         )
         run_test_sdpa_decode_single_iter(
             device,
@@ -915,6 +943,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             sharded_in=False,
             sharded_out=True,
             start_indices=start_indices,
+            cur_pos_tensor=True,
         )
 
     assert device.num_program_cache_entries() == 4
@@ -936,8 +965,8 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     )
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    K = fa_rand(nkv, b, s, d)
-    V = fa_rand(nkv, b, s, d)
+    K = fa_rand(b, nkv, s, d)
+    V = fa_rand(b, nkv, s, d)
 
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
@@ -972,8 +1001,8 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         attn_mask[:, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
 
         Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
-        K_slice = K[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
-        V_slice = V[:, :, :padded_layer_len, :].permute(1, 0, 2, 3)  # nh, b, S, d
+        K_slice = K[:, :, :padded_layer_len, :]
+        V_slice = V[:, :, :padded_layer_len, :]
         attn_mask_slice = attn_mask[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, S
 
         expect = torch.nn.functional.scaled_dot_product_attention(
@@ -983,9 +1012,9 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 
         all_out_pass = True
 
-        for i in range(200):
+        for i in range(500):
             tt_Q = ttnn.as_tensor(
-                Q,
+                Q[:, :, :nh],
                 device=device,
                 dtype=q_dtype,
                 layout=ttnn.TILE_LAYOUT,
@@ -1023,9 +1052,9 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
         if not all_out_pass:
             failed_start_pos.append(start_idx)
 
-        start_idx += 20  # if start_idx < 4096 else 3001
+        start_idx += 200  # if start_idx < 4096 else 3001
 
-    logger.info(f"ND Start Pos: {failed_start_pos}")
+    logger.info(f"PCC failed Start Pos: {failed_start_pos}")
 
 
 @pytest.mark.timeout(600)
@@ -1034,13 +1063,13 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
-        # [ttnn.bfloat16, ttnn.bfloat16],
-        # [ttnn.bfloat8_b, ttnn.bfloat8_b],
+        [ttnn.bfloat16, ttnn.bfloat16],
+        [ttnn.bfloat8_b, ttnn.bfloat8_b],
         [ttnn.bfloat4_b, ttnn.bfloat4_b],
     ],
     ids=[
-        # "bfp16_bfp16",
-        # "bfp8_bfp8",
+        "bfp16_bfp16",
+        "bfp8_bfp8",
         "bfp4_bfp4",
     ],
 )

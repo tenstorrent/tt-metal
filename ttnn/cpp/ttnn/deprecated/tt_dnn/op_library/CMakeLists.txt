@@ -3,28 +3,10 @@
 set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/sharding_utilities.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_helper_functions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_adamw/moreh_adamw_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/moreh_clip_grad_norm_step3.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step1/moreh_nll_loss_step1.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss/moreh_nll_loss_step2/moreh_nll_loss_step2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_nll_loss_unreduced/moreh_nll_loss_unreduced_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/moreh_softmax_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_small/softmax_w_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_small/softmax_h_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_large/softmax_w_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_large/softmax_h_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_c_large/softmax_c_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/moreh_softmax_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_w_small/softmax_backward_w_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_h_small/softmax_backward_h_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_sum_h_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_int_sum_h_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_w_impl/moreh_sum_w_impl.cpp
@@ -37,10 +19,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm/moreh_bmm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_bmm_backward/moreh_bmm_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear/moreh_linear_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/moreh_linear_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_h/moreh_bias_backward_multi_core_h.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_linear_backward/bias_backward_hw/moreh_bias_backward_single_core_hw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/multi_core/moreh_matmul_op_multi_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul/moreh_matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_matmul_backward/moreh_matmul_backward_op.cpp
@@ -52,15 +30,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm/moreh_groupnorm_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm/moreh_groupnorm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/moreh_groupnorm_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/input_grad/moreh_groupnorm_backward_input_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_groupnorm_backward/gamma_beta_grad/moreh_groupnorm_backward_gamma_beta_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_nc/moreh_cumsum_nc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sgd/moreh_sgd.cpp
 
     CACHE INTERNAL "tt_dnn sources to reuse in ttnn build"
 )

@@ -14,8 +14,10 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/tile/tile.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
@@ -99,6 +101,15 @@ class CircularBufferConfig {
         return *this;
     }
 
+    CircularBufferConfig set_tile_dims(uint8_t buffer_index, const Tile& tile) {
+        this->tiles_[buffer_index] = tile;
+        return *this;
+    }
+
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> &tiles() const {
+        return this->tiles_;
+    }
+
     uint32_t total_size() const { return this->total_size_; }
 
     std::optional<uint32_t> globally_allocated_address() const { return this->globally_allocated_address_; }
@@ -134,10 +145,12 @@ class CircularBufferConfig {
     std::optional<uint32_t> globally_allocated_address_ = std::nullopt;
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
     std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
+    std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
     std::unordered_set<uint8_t> buffer_indices_;
     bool dynamic_cb_ = false;
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
     std::optional<uint32_t> max_size_ = std::nullopt;
 };
 
+}  // namespace v0
 }  // namespace tt::tt_metal

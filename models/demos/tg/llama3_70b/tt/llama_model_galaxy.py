@@ -7,9 +7,7 @@ from typing import List
 from tqdm import tqdm
 import torch
 import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
-
-from models.utility_functions import nearest_32, profiler
+from ttnn import ReplicateTensorToMesh
 from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.demos.tg.llama3_70b.tt.llama_embedding_galaxy import TtLlamaEmbedding_galaxy
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -20,16 +18,19 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     num_to_corerange,
     gather_cos_sin,
     ShardTensor2dMesh,
-    ConcatMesh2DToTensor,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
     tt_all_gather,
+    tt_sharded_distributed_rmsnorm,
+    tt_distributed_rmsnorm,
 )
-from models.demos.t3000.falcon40b.tt.model_utils import (
-    matmul_2d_config_from_tensor_shapes,
-    matmul_1d_config_from_tensor_shapes,
-)
+
+
+def is_power_of_two(n):
+    if n <= 0:
+        return False
+    return (n & (n - 1)) == 0
 
 
 class TtLlamaModel_galaxy:
@@ -114,42 +115,6 @@ class TtLlamaModel_galaxy:
         for layer in self.layers:
             layer.set_model_config(model_config)
 
-    def get_model_config(self, mode):
-        self.LN_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
-        self.COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-        self.LM_HEAD_ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(32, 2048 // 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        if mode == "prefill":
-            # seq_len is 32 if we slice LM head input
-            hidden_size_per_chip = self.hidden_size // self.cluster_shape[0]
-            self.LM_HEAD_PROGCFG = matmul_1d_config_from_tensor_shapes(
-                (1, 1, 32, hidden_size_per_chip),  # get only last 32 tokens # (1, 1, 32, 2048)
-                (
-                    1,
-                    1,
-                    hidden_size_per_chip,
-                    self.padded_vocab_size // self.cluster_shape[1],
-                ),  # (1, 1, 2048, 16 * 1024)
-                grid=ttnn.CoreGrid(x=8, y=2),
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-            )
-
     def load_weights(self):
         norm_str = "norm.weight"
         lm_head_str = "output.weight"
@@ -227,7 +192,14 @@ class TtLlamaModel_galaxy:
 
             xs = ttnn.to_memory_config(xs, memory_config=ACT_MEMCFG)
 
-            rot_mat = get_rotation_mat(self.rot_emb, start_pos, seq_len, batch // self.cluster_shape[0])
+            if isinstance(start_pos, int):
+                cache_idxs = torch.tensor([start_pos for _ in range(batch // self.cluster_shape[0])], dtype=torch.int64)
+            else:
+                raise ValueError("start_pos must be an int, different start_pos for each user not supported yet")
+                cache_idxs = start_pos
+
+            # TODO : Create different rot_mat for each user_groups in the cluster
+            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch // self.cluster_shape[0])
             assert rot_mat.size() == (1, batch // self.cluster_shape[0], self.head_dim, self.head_dim)
 
             shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(batch // 4)})
@@ -256,9 +228,10 @@ class TtLlamaModel_galaxy:
             )
 
             attn_masks = None
-        elif mode == "prefill":
-            assert seq_len % 128 == 0 and seq_len > 0, "Prefill mode only supports seq_len > 0 and seq_len % 128"
 
+        elif mode == "prefill":
+            # check if seq_len is power of 2
+            assert is_power_of_two(seq_len), "Prefill mode only supports seq_len as power of 2"
             assert xs.shape == (batch, 1, seq_len, self.hidden_size // self.cluster_shape[0])
 
             cos_gathered, sin_gathered = gather_cos_sin(
@@ -317,39 +290,13 @@ class TtLlamaModel_galaxy:
         user_id: int = 0,
         mode="decode",
     ) -> ttnn.Tensor:
-        self.get_model_config(mode)
+        self.core_model_config = self.model_config["core_model"][mode]
         if mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, attn_masks)
         elif mode == "prefill":
             return self.prefill_forward(xs, rot_mats, start_pos, attn_masks, user_id)
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
-
-    def tt_distributed_rmsnorm(self, inp, epsilon, gamma):
-        # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG, dtype=ttnn.bfloat16
-        )
-
-        padded_shape = (1, 1, inp.shape[-2], 32)
-        tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape, padded_shape))  # TODO: Figure out why we need this
-        tt_stats = tt_all_gather(
-            tt_stats,
-            mesh_device=self.mesh_device,
-            dim=3,
-            cluster_axis=1,
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Run distributed rmsnorm part 2
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp, tt_stats, epsilon=epsilon, weight=gamma, compute_kernel_config=self.LN_COMPUTE_KERNEL_CONFIG
-        )
-
-        tt_stats.deallocate(True)
-
-        return tt_out
 
     def decode_forward(
         self,
@@ -362,15 +309,17 @@ class TtLlamaModel_galaxy:
         for layer in self.layers:
             xs = layer(xs, rot_mats, start_pos, attn_masks, mode="decode")  # xs is fractured
 
-        xs_interleaved = ttnn.to_memory_config(xs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        norm_out = self.tt_distributed_rmsnorm(
-            xs_interleaved,
+        norm_out = tt_sharded_distributed_rmsnorm(
+            xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
+            mesh_device=self.mesh_device,
+            ln_sharded_input_memcfg=self.core_model_config["LN_SHARDED_INPUT_MEMCFG"],
+            ln_sharded_progcfg=self.core_model_config["LN_SHARDED_PROGCFG"],
+            ln_sharded_stats_memcfg=self.core_model_config["LN_SHARDED_STATS_MEMCFG"],
         )
 
-        norm_out = ttnn.to_memory_config(norm_out, memory_config=self.LM_HEAD_ACT_MEMCFG)
+        norm_out = ttnn.to_memory_config(norm_out, memory_config=self.core_model_config["LM_HEAD_ACT_MEMCFG"])
 
         ### Each device does an LM head fracture
         lm_head_out = ttnn.matmul(
@@ -378,7 +327,7 @@ class TtLlamaModel_galaxy:
             self.lm_head,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
+            compute_kernel_config=self.core_model_config["COMPUTE_KERNEL_CONFIG"],
         )
         norm_out.deallocate(True)
 
@@ -405,19 +354,20 @@ class TtLlamaModel_galaxy:
         for id, layer in enumerate(self.layers):
             xs = layer(xs, rot_mats, start_pos, attn_masks, user_id, mode="prefill")
 
-        norm_out = self.tt_distributed_rmsnorm(
+        norm_out = tt_distributed_rmsnorm(
             xs,
             epsilon=self.norm_eps,
             gamma=self.norm_sharded,
+            mesh_device=self.mesh_device,
+            compute_kernel_config=self.core_model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
-
-        # Slice out last 32 tokens in LM head to produce next token
+        # Slice out last padding_length(32) tokens in LM head to produce next token
         # TODO: Does not work for perplexity, or if we padded input to current sequence length
         seq_len = norm_out.shape[2]
         dmodel = norm_out.shape[3]
         norm_out = ttnn.slice(
             norm_out,
-            [0, 0, seq_len - 32, 0],
+            [0, 0, seq_len - self.model_config["PADDING_LENGTH"], 0],
             [1, 1, seq_len, dmodel],
         )
 
@@ -427,8 +377,8 @@ class TtLlamaModel_galaxy:
             self.lm_head,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            compute_kernel_config=self.COMPUTE_KERNEL_CONFIG,
-            program_config=self.LM_HEAD_PROGCFG,
+            compute_kernel_config=self.core_model_config["COMPUTE_KERNEL_CONFIG"],
+            program_config=self.core_model_config["LM_HEAD_PROGCFG"],
         )
 
         lm_head_out = tt_all_reduce(

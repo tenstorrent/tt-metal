@@ -46,11 +46,17 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
+    bool in1_is_sharded,
+    bool bias_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
@@ -66,11 +72,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -83,8 +89,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t in0_shard_width_in_tiles = 0;
     uint32_t in0_shard_height_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
         in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     }
     uint32_t in2_CB_tiles = in2_block_tiles;
@@ -95,6 +101,11 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     if (B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
+    if (in1_is_sharded) {
+        uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        in1_CB_tiles = per_core_N * in1_shard_height_in_tiles;
+    }
+
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -350,6 +361,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
+    if (in1_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+    }
+
+    if (bias_is_sharded) {
+        mm_kernel_in1_sender_writer_defines["BIAS_SHARDED"] = "1";
+    }
+
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
     }
@@ -490,7 +509,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
     log_debug(
         LogOp,
@@ -503,7 +523,13 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
+
+    if (in1_is_sharded) {
+        src1_cb_config = src1_cb_config.set_globally_allocated_address(*in1_buffer);
+    }
+
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
@@ -519,7 +545,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
                 .set_page_size(src2_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*in0_buffer);
+                .set_globally_allocated_address(*in0_buffer)
+                .set_tile_dims(src2_cb_index, in0_tile);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
         log_debug(
             LogOp,
@@ -549,13 +576,15 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -571,7 +600,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
 
     if (output_is_sharded) {
@@ -586,12 +617,19 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         out_CB_size / output_single_tile_size,
         out_CB_size);
 
+    tt_metal::CBHandle cb_src3 = 0;
     if (bias_buffer != nullptr) {
         uint32_t src3_cb_index = 3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size);
-        auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
+                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_tile_dims(src3_cb_index, bias_tile);
+
+        if (bias_is_sharded) {
+            cb_src3_config = cb_src3_config.set_globally_allocated_address(*bias_buffer);
+        }
+
+        cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
@@ -766,7 +804,9 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
          mm_kernel_in1_sender_writer_id,
+         cb_src1,
          cb_src2,
+         cb_src3,
          cb_output,
          start_core,
          cores,
@@ -791,6 +831,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             auto dst_buffer = output_tensors.at(0).buffer();
 
             bool src0_sharded = input_tensors[0].is_sharded();
+            bool src1_sharded = input_tensors[1].is_sharded();
             bool out_sharded = output_tensors[0].is_sharded();
 
             // Manually unroll sender core
@@ -801,6 +842,14 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 auto& reader_sender_runtime_args =
                     GetRuntimeArgs(program, mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, start_core);
                 reader_sender_runtime_args[0] = src_buffer_a->address();
+            }
+
+            if (src1_sharded) {
+                UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+            }
+
+            if (bias_tensor.has_value() && bias_tensor.value().is_sharded()) {
+                UpdateDynamicCircularBufferAddress(program, cb_src3, *bias_buffer.value());
             }
 
             auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
@@ -848,6 +897,10 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* bias_buffer,
     tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
@@ -871,11 +924,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -890,8 +943,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in0_shard_height_in_tiles = 0;
     uint32_t in0_shard_width_in_tiles = 0;
     if (in0_is_sharded) {
-        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / TILE_HEIGHT;
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / TILE_WIDTH;
+        in0_shard_height_in_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0];
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
         // NOTE: Criteria for extract_shard_sub_blocks is different from mcast in0
         // In the reader kernel, always need to copy to cb0 even for height=1 shards since we may not always do mcast
         // In mcast in0 sharded reader kernel, this is handled by mcast with loopback src
@@ -1200,7 +1253,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded and not extract_shard_sub_blocks) {
         src0_cb_config = src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -1219,7 +1273,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         tt_metal::CircularBufferConfig src2_cb_config =
             tt_metal::CircularBufferConfig(in0_CB_size, {{src2_cb_index, in0_data_format}})
                 .set_page_size(src2_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*in0_buffer);
+                .set_globally_allocated_address(*in0_buffer)
+                .set_tile_dims(src2_cb_index, in0_tile);
         cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
         log_debug(
             LogOp,
@@ -1233,7 +1288,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     log_debug(
         LogOp,
@@ -1256,13 +1312,15 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
         log_debug(
@@ -1278,7 +1336,9 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
 
     if (output_is_sharded) {
@@ -1297,7 +1357,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
         uint32_t src3_cb_index = 3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size);
+                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_tile_dims(src3_cb_index, bias_tile);
         auto cb_src3 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
@@ -1537,6 +1598,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    auto in0_tile = a.get_tile();
+    auto in1_tile = b.get_tile();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
+    auto in0_tile_shape = a.get_tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tile().get_tile_shape();
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());          // in0
@@ -1558,8 +1625,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
 
     tt_metal::Device* device = a.device();
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
@@ -1568,10 +1635,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     TT_FATAL(
         ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % TILE_HEIGHT == 0, "Error");
-    TT_FATAL(ashape[-1] % TILE_WIDTH == 0, "Error");
-    TT_FATAL(bshape[-2] % TILE_HEIGHT == 0, "Error");
-    TT_FATAL(bshape[-1] % TILE_WIDTH == 0, "Error");
+    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
+    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
+    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
+    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
 
     MathFidelity math_fidelity;
     bool math_approx_mode;
@@ -1611,9 +1678,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
     if (fuse_batch) {
         Mt = B * Mt;
@@ -1672,11 +1739,17 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in1_buffer,
             bias_buffer,
             out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tile() : output_tile,
+            output_tile,
             in0_data_format,
             in1_data_format,
             bias_data_format,
             output_data_format,
             a.memory_config().is_sharded(),
+            b.memory_config().is_sharded(),
+            bias.has_value() ? bias->memory_config().is_sharded() : false,
             output.memory_config().is_sharded(),
             untilize_out,
             fused_op_signaler);
@@ -1703,6 +1776,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             in1_buffer,
             bias_buffer,
             out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tile() : output_tile,
+            output_tile,
             in0_data_format,
             in1_data_format,
             bias_data_format,

@@ -27,13 +27,13 @@ namespace tt {
 namespace watcher {
 
 #define GET_WATCHER_TENSIX_DEV_ADDR()                                   \
-    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
 
 #define GET_WATCHER_ERISC_DEV_ADDR()                                    \
-    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
 
 #define GET_WATCHER_IERISC_DEV_ADDR()                                   \
-    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalMemAddrType::WATCHER)
+    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
@@ -222,9 +222,11 @@ void watcher_init(Device *device) {
         data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
         data->sanitize_noc[i].len = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;
-        data->sanitize_noc[i].which = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data->sanitize_noc[i].multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
-        data->sanitize_noc[i].invalid = DebugSanitizeNocInvalidOK;
+        data->sanitize_noc[i].which_risc = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_16;
+        data->sanitize_noc[i].return_code = DebugSanitizeNocOK;
+        data->sanitize_noc[i].is_multicast = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data->sanitize_noc[i].is_write = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
+        data->sanitize_noc[i].is_target = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
     }
 
     // Initialize debug asserts to not tripped.

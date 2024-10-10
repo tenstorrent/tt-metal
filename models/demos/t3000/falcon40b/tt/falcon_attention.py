@@ -99,7 +99,7 @@ class TtFalconRotaryEmbedding:
             )
 
     def __call__(self, layer: ttnn.Tensor, token_idx: Optional[int] = None) -> ttnn.Tensor:
-        seq_len = layer.get_legacy_shape()[2]
+        seq_len = layer.shape.with_tile_padding()[2]
         assert seq_len <= self.max_seq_len_cached, "seq_len exceeds max_seq_len_cached in RotaryEmbedding!"
         # TODO: Make rotary embedding in place
         output = ttnn.experimental.rotary_embedding(
@@ -305,8 +305,8 @@ class TtFalconAttention:
         """
 
         assert not output_attentions
-        batch = hidden_states.get_legacy_shape()[0]
-        q_len = hidden_states.get_legacy_shape()[2]
+        batch = hidden_states.shape.with_tile_padding()[0]
+        q_len = hidden_states.shape.with_tile_padding()[2]
         assert layer_past is not None
 
         # Fused query, key and value projection
@@ -409,8 +409,8 @@ class TtFalconAttention:
         """
 
         assert not output_attentions
-        batch = hidden_states.get_legacy_shape()[2]
-        q_len = hidden_states.get_legacy_shape()[0]
+        batch = hidden_states.shape.with_tile_padding()[2]
+        q_len = hidden_states.shape.with_tile_padding()[0]
         padded_layer_past_len = nearest_32(layer_past_len + 1)
         # We always store max_position_embeddings for kv_cache,
         # so we need separate variable to store the actual len of the kv_cache
@@ -474,7 +474,7 @@ class TtFalconAttention:
         kv_cache_memcfg = self.model_config["KV_CACHE_SLICE_OUTPUT_MEMCFG"]
         if kv_cache_memcfg.is_sharded():
             kv_cache_shard_shape = kv_cache_memcfg.shard_spec.shape
-            kv_cache_shard_shape[0] = layer_past[0].get_legacy_shape()[1] * padded_layer_past_len
+            kv_cache_shard_shape[0] = layer_past[0].shape.with_tile_padding()[1] * padded_layer_past_len
             kv_cache_memcfg.shard_spec.shape = kv_cache_shard_shape
         # Update kv_cache in place
         ttnn.update_cache(

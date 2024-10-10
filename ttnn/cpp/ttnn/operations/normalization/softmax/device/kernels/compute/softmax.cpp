@@ -13,10 +13,11 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
-// #include "debug/dprint.h"
+#include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -24,6 +25,46 @@ ALWI void REL() { release_dst(tt::DstMode::Half); }
 // Note that the attention mask will not fit in L1 for the entire tensor
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
+
+void calc_numeric_stable(uint32_t Wt, uint32_t ndst, uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
+    // calculate max val per row
+    ACQ();
+    unpack_reconfig_data_format(cb_in, cb_bcast_scaler);
+    cb_reserve_back(cb_max, 1);
+    cb_wait_front(cb_bcast_scaler, 1);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>();
+    for (uint32_t wt = 0; wt < Wt; wt++) {
+        cb_wait_front(cb_in, wt+1);
+        constexpr uint32_t bcast_scaler0 = 0;
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
+    }
+    reduce_revert_delta<ReduceDim::REDUCE_ROW>();
+    pack_tile(0, cb_max);
+    cb_push_back(cb_max, 1);
+    REL();
+
+    // calculate x-max(x)
+    exp_tile_init<EXP_APPROX>();
+    unpack_reconfig_data_format_srcb(cb_max);
+    cb_wait_front(cb_max, 1);
+    sub_bcast_cols_init_short();
+    for (uint32_t wt = 0; wt < Wt; wt += ndst) {
+        ACQ();
+        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            sub_tiles_bcast_cols(cb_in, cb_max, wt+wt8, 0, wt8);
+        }
+        cb_reserve_back(cb_out, ndst);
+        for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+            exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+            pack_tile(wt8, cb_out); // reuse the exps buffer again, this time in a circular manner
+        }
+        cb_push_back(cb_out, ndst);
+        REL();
+    }
+    cb_pop_front(cb_in, Wt);
+    cb_pop_front(cb_max, 1);
+    cb_wait_front(cb_out, Wt);
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -50,7 +91,12 @@ void MAIN {
     constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_out0 = tt::CB::c_out0;
-
+    #ifdef NUMERIC_STABLE
+        constexpr auto cb_max = tt::CB::c_intermed2;
+        constexpr auto cb_x = tt::CB::c_intermed4;
+    #else
+        constexpr auto cb_x = cb_exps;
+    #endif
 
     cb_wait_front(cb_bcast_scaler, 1); // comes from the reader
 
@@ -81,38 +127,50 @@ void MAIN {
             }
             unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
-            exp_tile_init<EXP_APPROX>();
+            #ifndef NUMERIC_STABLE
+                exp_tile_init<EXP_APPROX>();
+            #endif
+
             #ifdef CAUSAL_MASK
-            add_tiles_init();
+                add_tiles_init();
             #else
-            add_bcast_rows_init_short();
+                add_bcast_rows_init_short();
             #endif
             for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
                 ACQ();
                 cb_wait_front(cb_scale_mask, ndst);
                 #ifdef CAUSAL_MASK
-                cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles
-                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
-                }
+                    cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles
+                    for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                        add_tiles(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
+                    }
                 #else
-                if (wait_mask) {
-                    cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles, only at first ht
-                }
+                    if (wait_mask) {
+                        cb_wait_front(cb_fused_attn, wt+ndst); // cumulative wait for up to Wt tiles, only at first ht
+                    }
 
-                for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
-                }
+                    for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
+                        add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt+wt8, wt8); // tile *= 1/(sum(exp(x)))
+                    }
                 #endif
                 cb_pop_front(cb_scale_mask, ndst);
-                cb_reserve_back(cb_exps, ndst);
+                cb_reserve_back(cb_x, ndst);
                 for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
-                    exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
-                    pack_tile(wt8, cb_exps); // reuse the exps buffer again, this time in a circular manner
+                    #ifndef NUMERIC_STABLE
+                        exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+                    #endif
+                    pack_tile(wt8, cb_x); // reuse the exps buffer again, this time in a circular manner
                 }
-                cb_push_back(cb_exps, ndst);
+                cb_push_back(cb_x, ndst);
                 REL();
             }
+
+            // add numeric_stable
+            // fuse exp with sub tiles
+            #ifdef NUMERIC_STABLE
+                calc_numeric_stable(Wt, ndst, cb_x, cb_bcast_scaler, cb_max, cb_exps);
+            #endif
+
             #ifdef CAUSAL_MASK
                 cb_pop_front(cb_fused_attn, Wt);
             #else
@@ -132,7 +190,9 @@ void MAIN {
             unpack_reconfig_data_format(cb_in0, cb_in0);
             pack_reconfig_data_format(cb_exps);
             copy_tile_to_dst_init_short(); // need to copy from CB to DST to be able to run sfpu math
-            exp_tile_init<EXP_APPROX>();
+            #ifndef NUMERIC_STABLE
+                exp_tile_init<EXP_APPROX>();
+            #endif
             if (mask_padded_data) {
                 for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
                     ACQ();
@@ -149,32 +209,46 @@ void MAIN {
                     }
                     cb_pop_front(cb_in0, ndst);
 
-                    cb_reserve_back(cb_exps, ndst);
+                    cb_reserve_back(cb_x, ndst);
                     for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                        exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
-                        pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                        #ifndef NUMERIC_STABLE
+                            exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+                        #endif
+                        pack_tile(wt8, cb_x); // DST[0]->cb_id[wt]
                     }
-                    cb_push_back(cb_exps, ndst);
+                    cb_push_back(cb_x, ndst);
                     REL();
                 }
+
+                // add numeric_stable
+                // fuse exp with sub tiles
+                #ifdef NUMERIC_STABLE
+                    calc_numeric_stable(Wt, ndst, cb_x, cb_bcast_scaler, cb_max, cb_exps);
+                #endif
 
             } else {
-                for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
-                    ACQ();
-                    cb_wait_front(cb_in0, ndst);
-                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                        copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
-                    }
-                    cb_pop_front(cb_in0, ndst);
+                // add numeric_stable
+                // fuse exp with sub tiles
+                #ifdef NUMERIC_STABLE
+                    calc_numeric_stable(Wt, ndst, cb_in0, cb_bcast_scaler, cb_max, cb_exps);
+                #else
+                    for (uint32_t wt = 0; wt < Wt; wt+=ndst) {
+                        ACQ();
+                        cb_wait_front(cb_in0, ndst);
+                        for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                            copy_tile(cb_in0, wt8, wt8); // copy from c_in[0] to DST[0]
+                        }
+                        cb_pop_front(cb_in0, ndst);
 
-                    cb_reserve_back(cb_exps, ndst);
-                    for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
-                        exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
-                        pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                        cb_reserve_back(cb_exps, ndst);
+                        for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
+                            exp_tile<EXP_APPROX>(wt8); // exp on DST[0]
+                            pack_tile(wt8, cb_exps); // DST[0]->cb_id[wt]
+                        }
+                        cb_push_back(cb_exps, ndst);
+                        REL();
                     }
-                    cb_push_back(cb_exps, ndst);
-                    REL();
-                }
+                #endif
             }
 
             unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);

@@ -222,7 +222,6 @@ def run_test_sdpa_decode_single_iter(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [
@@ -287,7 +286,6 @@ def test_sdpa_decode(
 
 
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-@pytest.mark.skip("Skipping due to potential nd pcc issue #9370")
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -328,4 +326,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, transpose_q,
             share_cache=share_cache,
         )
 
-    assert device.num_program_cache_entries() == 5
+    if transpose_q:
+        assert device.num_program_cache_entries() == 4
+    else:
+        assert device.num_program_cache_entries() == 1

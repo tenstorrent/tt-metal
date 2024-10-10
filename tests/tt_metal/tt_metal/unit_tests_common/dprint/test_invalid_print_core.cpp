@@ -22,7 +22,8 @@ TEST(DPrintErrorChecking, TestPrintInvalidCore) {
 
     const int device_id = 0;
     Device* device = nullptr;
-    device = tt::tt_metal::CreateDevice(device_id);
+    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
+    device = tt::tt_metal::CreateDevice(device_id, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
 
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.

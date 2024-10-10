@@ -20,15 +20,14 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 60000}], indirect=True)
+@pytest.mark.parametrize("enable_multi_cq", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 60000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_multi_cq):
     if mesh_device.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
     # Trace requires program cache to be enabled
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(enable_async)
-        mesh_device.get_device(device_id).enable_program_cache()
+    mesh_device.enable_async(True)
+    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
@@ -111,8 +110,7 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
     # Release trace buffer once workload is complete
     ttnn.release_trace(mesh_device, tid)
 
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(False)
+    mesh_device.enable_async(False)
 
 
 @pytest.mark.parametrize(
@@ -121,17 +119,16 @@ def test_multi_device_single_trace(mesh_device, shape, enable_async, enable_mult
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("enable_multi_cq", [False])  # To be toggled when Galaxy supports Multi-CQ
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+@pytest.mark.parametrize("enable_multi_cq", [True, False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000, "num_command_queues": 2}], indirect=True)
 def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi_cq):
     torch.manual_seed(0)
     if mesh_device.get_num_devices() < 32:
         pytest.skip("Test is only valid on Galaxy")
 
     # Trace requires program cache to be enabled
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(enable_async)
-        mesh_device.get_device(device_id).enable_program_cache()
+    mesh_device.enable_async(True)
+    mesh_device.enable_program_cache()
 
     # Preallocate activation tensors. These will be used when capturing and executing the trace
     input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
@@ -282,5 +279,4 @@ def test_multi_device_multi_trace(mesh_device, shape, enable_async, enable_multi
     ttnn.release_trace(mesh_device, tid_1)
     ttnn.release_trace(mesh_device, tid_2)
 
-    for device_id in mesh_device.get_device_ids():
-        mesh_device.get_device(device_id).enable_async(False)
+    mesh_device.enable_async(False)

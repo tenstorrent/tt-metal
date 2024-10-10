@@ -54,15 +54,15 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::SimpleShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather shape
-    tt::tt_metal::LegacyShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
-    tt::tt_metal::LegacyShape datacopy_output_shape = all_gather_output_shape;
+    ttnn::SimpleShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
+    ttnn::SimpleShape datacopy_output_shape = all_gather_output_shape;
 
 
     // Matmul shape
-    tt::tt_metal::LegacyShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
+    ttnn::SimpleShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }
@@ -155,7 +155,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, all_gather_op::Topology::Ring);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ttnn::ccl::Topology::Ring);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

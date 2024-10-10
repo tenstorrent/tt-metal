@@ -74,7 +74,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     const auto num_dram_banks = device->num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, L1_ALIGNMENT);
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;

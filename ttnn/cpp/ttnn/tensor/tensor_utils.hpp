@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "types.hpp"
 
 namespace tt {
 
@@ -37,20 +38,20 @@ const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int 
 
 const tt::tt_metal::LegacyShape infer_dims_for_reshape_RM(int N, int C, int H, int W, uint32_t old_volume);
 
-template <typename T>
-static std::size_t compute_volume(const T& shape) {
+// TODO: Remove this once we switch to SimpleShape .volume()
+static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
     size_t volume = 1;
-    for (auto index = 0; index < shape.size(); index++) {
+    for (auto index = 0; index < shape.rank(); index++) {
         volume *= shape[index];
     }
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(const tt::tt_metal::LegacyShape& shape) {
+static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     if (shape.rank() == 0)
         return {};
 
-    auto num_elements = compute_volume(shape);
+    auto num_elements = shape.volume();
     std::vector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         if (shape[index] == 0) {
@@ -73,9 +74,8 @@ static int compute_flat_indices(const vector<int>& indices, const vector<std::ui
     return flat_index;
 };
 
-template <typename T>
-static std::size_t compute_buffer_size(const T& shape, DataType data_type) {
-    const size_t volume = compute_volume(shape);
+static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type) {
+    const size_t volume = shape.volume();
     if (data_type == DataType::BFLOAT8_B) {
         TT_ASSERT(volume % constants::TILE_HW == 0);
         const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;

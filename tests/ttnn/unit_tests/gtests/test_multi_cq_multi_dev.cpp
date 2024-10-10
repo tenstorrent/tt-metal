@@ -44,7 +44,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
+    ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -73,7 +73,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(0), workload_event);
 
-                ttnn::read_buffer(1, output_tensor, {readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data});
+                ttnn::read_buffer(0, output_tensor, {readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data, readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
@@ -94,7 +94,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
+    ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
@@ -145,7 +145,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::Shape shape = ttnn::Shape(tt::tt_metal::LegacyShape({1, 3, 2048, 2048}));
+    ttnn::SimpleShape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);

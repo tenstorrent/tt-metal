@@ -7,13 +7,29 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
+#include "dev_msgs.h"
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
-const uint32_t NCRISC_WR_CMD_BUF = 0;      // for large writes
-const uint32_t NCRISC_RD_CMD_BUF = 1;      // for all reads
-const uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-const uint32_t NCRISC_AT_CMD_BUF = 3;      // for atomics
+constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_CMD_BUF = 2; // all writes share cmd buf
+constexpr uint32_t DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF = 2;
+constexpr uint32_t DYNAMIC_NOC_NCRISC_AT_CMD_BUF = 2;
+constexpr uint32_t DYNAMIC_NOC_NCRISC_RD_CMD_BUF = 3;
+
+constexpr uint32_t DYNAMIC_NOC_BRISC_WR_CMD_BUF = 0; // all writes share cmd buf
+constexpr uint32_t DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF = 0;
+constexpr uint32_t DYNAMIC_NOC_BRISC_AT_CMD_BUF = 0;
+constexpr uint32_t DYNAMIC_NOC_BRISC_RD_CMD_BUF = 1;
+
+constexpr uint32_t NCRISC_WR_CMD_BUF = 0;  // for large writes
+constexpr uint32_t NCRISC_RD_CMD_BUF = 1;  // for all reads
+constexpr uint32_t NCRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+constexpr uint32_t NCRISC_AT_CMD_BUF = 3; // for atomics
+
+constexpr uint32_t BRISC_WR_CMD_BUF = 0;  // for large writes
+constexpr uint32_t BRISC_RD_CMD_BUF = 1;  // for all reads
+constexpr uint32_t BRISC_WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
+constexpr uint32_t BRISC_AT_CMD_BUF = 3; // for atomics
 
 // BH has 64 bit address space but pipegen was not updated to support this so WH scheme of encoding addresses is used (36 bits of address followed by coordinates)
 // This means that lo and mid registers need to have the address portion while the coordinates go into hi register
@@ -28,7 +44,6 @@ extern uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
 extern uint32_t noc_nonposted_writes_acked[NUM_NOCS];
 extern uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 extern uint32_t noc_posted_writes_num_issued[NUM_NOCS];
-extern uint32_t atomic_ret_val;
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
@@ -56,9 +71,7 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
 }
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
-    // Command buffer FIFO supports 16 commands, once it is full the overflow register for the cmd_buf will be set
-    // CMD_BUF_AVAIL holds available buffer space in [28:24], [20:16], [12:8], [4:0] for buffers 3, 2, 1, 0 respectively
-    return bool((NOC_CMD_BUF_READ_REG(noc, cmd_buf, CMD_BUF_AVAIL) >> (cmd_buf << 3)) & 0x1F);
+    return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
@@ -168,13 +181,9 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
-inline __attribute__((always_inline)) void noc_init() {
+inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        // Enable command buffer FIFO that has capacity of 16 per buffer
-        uint32_t niu_cfg0_reg_val = NOC_CFG_READ_REG(noc, NIU_CFG_0);
-        NOC_CMD_BUF_WRITE_REG(noc, 0, NOC_CFG(NIU_CFG_0), niu_cfg0_reg_val | (1 << NIU_CFG_0_CMD_BUFFER_FIFO_EN));
-
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -185,7 +194,7 @@ inline __attribute__((always_inline)) void noc_init() {
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 
-        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, (uint32_t)(&atomic_ret_val));
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_MID, 0x0);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_AT_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
@@ -196,6 +205,32 @@ inline __attribute__((always_inline)) void noc_init() {
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0); // get rid of this?
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }
+}
+
+inline __attribute__((always_inline)) void dynamic_noc_init() {
+#pragma GCC unroll 0
+  for (int noc = 0; noc < NUM_NOCS; noc++) {
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+    uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
+
+    uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+
+    // program brisc cmd_buf 0
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program brisc cmd_buf 1
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_BRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program ncrisc cmd_buf 2
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_RD_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+
+    // program ncrisc cmd_buf 3
+    NOC_CMD_BUF_WRITE_REG(noc, DYNAMIC_NOC_NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_COORDINATE, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+  }
 }
 
 // set noc local memory state for a single kernel from the global state
@@ -343,6 +378,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     }
 }
 
+template<uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -351,8 +387,17 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     uint32_t incr,
     uint32_t wrap,
     bool linked,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t atomic_ret_val = 0) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
+        uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
+        uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+        uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(atomic_ret_addr >> NOC_ADDR_COORD_SHIFT));
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & 0x1000000F);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);

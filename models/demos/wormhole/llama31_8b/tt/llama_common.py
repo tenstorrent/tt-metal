@@ -162,12 +162,18 @@ def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
+def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
+    if isinstance(start_pos, int):
+        start_pos = torch.ones(seqlen, batch, dtype=torch.long) * start_pos
+    position_ids = start_pos.view(seqlen, batch)
+    rot_emb = gather_rotary_emb(rot_mat, position_ids)
+    return rot_emb
+
+
+def prepare_inputs_ttnn(x, hidden_size, device):
     """
-    Prepare inputs for decode mode. Assume that current token is at
-    start_pos, and KV cache has valid data up to start_pos.
+    Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
-    start_pos: int
     """
 
     if len(x.shape) == 3:
@@ -198,23 +204,11 @@ def prepare_inputs_ttnn(x, current_pos, hidden_size, sliding_window, device):
     elif len(x.shape) == 4:
         pass  # already in [seq_len, 1, batch, hidden_dim]
 
-    current = current_pos % sliding_window
-
-    # expected shapes:
-    # x: (seq_len, 1, batch, hidden_dim)
-    # start_pos: int
-    # attn_mask: [seq_len, n_heads, batch, padded_layer_past_len]
-    # rot_mat: [1, 1, head_dim, head_dim]
-    # assert x.size() == (seq_len, 1, batch, hidden_size)
-
     if torch.is_tensor(x):
         x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     else:  # Convert the row major layout from embedding back to tile layout
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-    return (
-        x,
-        current,
-    )
+    return x
 
 
 # Sample logits from a distribution
@@ -239,38 +233,6 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
         next_token = torch.argmax(logits, dim=-1)
 
     return next_token
-
-
-from models.demos.wormhole.llama31_8b.tt.llama_attention import TtLlamaAttention
-
-
-def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
-    attention_input = ttnn.from_torch(
-        torch.randn(1, 1, 32, 4096),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    tt_model = TtLlamaAttention(
-        [device],
-        state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
-        dtype=dtype,
-        configuration=model_args,
-        rot_mat=None,
-        start_pos=0,
-    )
-    for iter in range(iterations):
-        pos = iter
-        tt_out = tt_model([attention_input], pos, rot_mats=rot_emb_matrix_list)
-
-    ttnn.deallocate(tt_model.wqkv_list[0])
-    ttnn.deallocate(tt_model.wo_list[0])
-    ttnn.deallocate(tt_model.layer_past_list[0][0])
-    ttnn.deallocate(tt_model.layer_past_list[0][1])
-    ttnn.deallocate(attention_input)
 
 
 def gather_cos_sin(position_ids, cos, sin):
@@ -328,19 +290,6 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
 
     x_1BSH = x_bsh.unsqueeze(0)
 
-    # Attention mask
-    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len).expand(8, 1, seq_len, seq_len)
-
-    attn_mask = ttnn.from_torch(
-        attn_mask,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # input goes to L1
     xs_1BSH = ttnn.from_torch(
         x_1BSH,
@@ -349,7 +298,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return xs_1BSH, attn_mask, attn_mask_torch
+    return xs_1BSH
 
 
 def get_single_rot_mat(dhead, device, start_pos=0, theta: float = 500000.0, use_scaled=True):

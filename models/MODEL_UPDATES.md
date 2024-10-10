@@ -4,6 +4,20 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## October 7, 2024
+
+### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
+- Added support for continuous batching
+- Added paged caching support for PagedAttention
+- Added a demo which runs with TT-NN tracing (23 t/s/u decode on main)
+
+## September 23, 2024
+
+### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
+- Added support for 128K context length using PagedAttention
+- Added a continuous batching demo for running multiple batches of users consecutively
+- Added the option to enable TT-NN tracing
+
 ## September 9, 2024
 
 ### [Mixtral7Bx8](demos/t3000/mixtral8x7b)

@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_padded_shape()};
 
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / TILE_WIDTH};
@@ -39,12 +39,12 @@ operation::ProgramWithCallbacks moreh_sum_int_w_impl(const Tensor &input, const 
 
 
     // check mask for w-dim
-    const auto input_shape_without_padding {shape.without_padding()};
+    const auto input_shape_without_padding {input.get_logical_shape()};
     const auto origin_W {input_shape_without_padding[-1]};
     const bool do_mask_w {(origin_W % TILE_WIDTH) != 0};
     const auto mask_w {do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH};
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",

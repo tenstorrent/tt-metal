@@ -18,9 +18,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     auto output = output_tensor;
 
     auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig& compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
@@ -29,7 +27,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_padded_shape()};
 
     const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
@@ -38,12 +36,12 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     auto num_rows{other_dims_product * Ht};
 
     // check mask for w-dim
-    const auto input_shape_without_padding{shape.without_padding()};
+    const auto input_shape_without_padding{input.get_logical_shape()};
     const auto origin_W{input_shape_without_padding[-1]};
     const bool do_mask_w{(origin_W % tt::constants::TILE_WIDTH) != 0};
     const auto mask_w{do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH};
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,

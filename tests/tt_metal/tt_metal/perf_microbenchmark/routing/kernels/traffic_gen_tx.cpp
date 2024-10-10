@@ -121,7 +121,6 @@ void kernel_main() {
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
     test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
-    noc_init();
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words * PACKET_WORD_SIZE_BYTES), queue_size_words);
 

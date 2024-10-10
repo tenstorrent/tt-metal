@@ -24,32 +24,35 @@ namespace unary {
 namespace detail {
 
 template <typename unary_operation_t>
-void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
-
+        .. math::
             {2}
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
+        Note:
+            {3}
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        math,
         info_doc);
 
     bind_registered_operation(
@@ -75,27 +78,28 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
 template <typename unary_operation_t>
 void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor or ComplexTensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        {2}
 
-            {2}
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -133,27 +137,28 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
 template <typename unary_operation_t>
 void bind_unary_operation_overload_complex_return_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor or ComplexTensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        {2}
 
-            {2}
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -191,28 +196,30 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
 template <typename unary_operation_t>
 void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, fast_and_approximate_mode: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            fast_and_approximate_mode (bool): Use the fast and approximate mode.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
             {2}
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
-
-            Args:
-                * :attr:`input_tensor`
-
-            Keyword Args:
-                * :attr:`fast_and_approximate_mode` (bool): "Use fast and approximate mode".
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
-
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, fast_and_approximate_mode=true)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, fast_and_approximate_mode=true)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -245,36 +252,42 @@ void bind_unary_operation_with_float_parameter(
     const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
-    const std::string& info_doc) {
+    const std::string& info_doc,
+    const std::string& note=" ") {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, {2}: float, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        {4}
 
-            {4}
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            {2} (float): {3}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`{2}` (float): {3}.
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
+        Note:
+            {5}
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, {2})
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc,
-        info_doc);
+        info_doc,
+        note);
 
     bind_registered_operation(
         module,
@@ -306,28 +319,29 @@ void bind_unary_operation_with_integer_parameter(
     const std::string& info_doc) {
 
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, {2}: int32_t, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        {4}
 
-            {4}
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            {2} (int): {3}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`{2}` (int32_t): {3}.
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, {2})
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -366,28 +380,25 @@ void bind_unary_operation_with_dim_parameter(
     const std::string& info_doc) {
 
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, {2}: int32_t = -1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            {4}
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Keyword Args:
+            {2} (int): {3}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Args:
-                * :attr:`input_tensor`
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Keyword Args:
-                * :attr:`{2}` (int32_t): {3}.
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
-
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, {2})
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -413,24 +424,28 @@ void bind_unary_operation_with_dim_parameter(
 }
 
 template <typename unary_operation_t>
-void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description) {
+void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description, const std::string& note = " ") {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, {4}: string, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {7}
 
         Args:
-            * :attr:`input_tensor`
-            * :attr:`{2}` (float): {3}
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2} (int): {3}.
 
-        Keyword args:
-            * :attr:`{4}` (string): {5} , Default value = {6}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`queue_id` (Optional[uint8]): command queue id
+        Keyword Args:
+            {4} (string): {5}. Defaults to `{6}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            {8}
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2}, {4} = {6})
         )doc",
@@ -441,7 +456,8 @@ void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, con
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        note);
 
     bind_registered_operation(
         module,
@@ -469,27 +485,28 @@ void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, con
 template <typename unary_operation_t>
 void bind_softplus(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, beta: float = 1.0, threshold: float = 20.0, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            beta (float): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`.
+            threshold (float): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`beta` (float): Scales the input before applying the Softplus function. By modifying beta, you can adjust the steepness of the function. A higher beta value makes the function steeper, approaching a hard threshold like the ReLU function for large values of beta
-                * :attr:`threshold` (float): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, beta=1.0, threshold=20.0)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, beta=1.0, threshold=20.0)
         )doc",
         ttnn::softplus.base_name(),
         ttnn::softplus.python_fully_qualified_name());
@@ -520,25 +537,26 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
 template <typename unary_operation_t>
 void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         ttnn::sigmoid_accurate.base_name(),
         ttnn::sigmoid_accurate.python_fully_qualified_name());
@@ -565,26 +583,28 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 template <typename unary_operation_t>
 void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, ops_chain: std::vector<UnaryWithParam>, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            ops_chain (list[ttnn.UnaryWithParam]): List of unary ops to be chained.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`ops_chain` (vector): Vector of unary ops chain
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
+        Example:
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, ops_chain)
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, ops_chain)
         )doc",
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
@@ -613,26 +633,27 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Returns a copy of same tensor :attr:`input_tensor`; useful for profiling the SFPU.
+        This shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
 
-            Returns a copy of same tensor ``input``; useful for profiling the SFPU.
-            this shouldn't normally be used; users should normally use clone operation instead for same functionality as this would be lower performance.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         ttnn::identity.base_name(),
         ttnn::identity.python_fully_qualified_name());
@@ -659,26 +680,27 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 template <typename unary_operation_t>
 void bind_power(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, exponent:  Union[float, int], memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Args:
-                * :attr:`input_tensor`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+            exponent (float,int, optional): exponent is an integer. Defaults to `>0`.
 
-            Keyword Args:
-                * :attr:`exponent` ( Union[float, int]): exponent is an integer >= 0
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor, exponent)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, exponent)
         )doc",
         ttnn::pow.base_name(),
         ttnn::pow.python_fully_qualified_name());
@@ -726,20 +748,21 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
 template <typename unary_operation_t>
 void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "") {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
         {2}
 
-            Args:
-                * :attr:`input_tensor` {3}
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor. {3}
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Example:
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -765,19 +788,20 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
 template <typename unary_operation_t>
 void bind_unary_composite_int_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, int32_t parameter_a_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
-            * :attr:`input_tensor`
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (float): {3} , Default value = {4}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float): {3}. Defaults to `{4}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2} = {4})
         )doc",
@@ -809,20 +833,21 @@ void bind_unary_composite_int_with_default(py::module& module, const unary_opera
 template <typename unary_operation_t>
 void bind_unary_composite_floats_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, {5}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {8}
 
         Args:
-            * :attr:`input_tensor`
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (float): {3} , Default value = {4}
-            * :attr:`{5}` (float): {6} , Default value = {7}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float): {3}. Defaults to `{4}`.
+            {5} (float): {6}. Defaults to `{7}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2} = {4}, {5} = {7})
         )doc",
@@ -858,19 +883,20 @@ void bind_unary_composite_floats_with_default(py::module& module, const unary_op
 template <typename unary_operation_t>
 void bind_unary_composite_int(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: int, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {4}
 
         Args:
-            * :attr:`input_tensor`
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (int): {3}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (int): {3}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2})
         )doc",
@@ -901,20 +927,21 @@ void bind_unary_composite_int(py::module& module, const unary_operation_t& opera
 template <typename unary_operation_t>
 void bind_unary_composite_floats(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc,  const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, {4}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {6}
 
         Args:
-            * :attr:`input_tensor`
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (float): {3}
-            * :attr:`{4}` (float): {5}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float): {3}.
+            {4} (float): {5}.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2}, {4})
         )doc",
@@ -948,27 +975,26 @@ void bind_unary_composite_floats(py::module& module, const unary_operation_t& op
 template <typename unary_operation_t>
 void bind_unary_composite_operation(py::module& module, const unary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise .
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            {2}
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Args:
-                * :attr:`input_tensor`
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
-
-            Example:
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -998,16 +1024,18 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
 template <typename unary_operation_t>
 void bind_unary_composite_float_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {5}
 
         Args:
-            * :attr:`input_tensor`
+            input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            * :attr:`{2}` (float): {3} , Default value = {4}
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            {2} (float): {3}. Defaults to `{4}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Supported dtypes and layouts:
 
@@ -1018,7 +1046,6 @@ void bind_unary_composite_float_with_default(py::module& module, const unary_ope
         +----------------------------+---------------------------------+-------------------+
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2} = {4})
         )doc",
@@ -1049,19 +1076,20 @@ void bind_unary_composite_float_with_default(py::module& module, const unary_ope
 template <typename unary_operation_t>
 void bind_unary_composite_float(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, {2}: float, *, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         {4}
 
         Args:
-            * :attr:`input_tensor`
-            * :attr:`{2}`
+            input_tensor (ttnn.Tensor): the input tensor.
+            {2}
 
         Keyword args:
-            * :attr:`memory_config` [ttnn.MemoryConfig]: memory config for the output tensor
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
-
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, {2})
         )doc",
@@ -1090,27 +1118,29 @@ void bind_unary_composite_float(py::module& module, const unary_operation_t& ope
 template <typename unary_operation_t>
 void bind_unary_operation_with_scale_and_shift(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, scale, shift, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            scale (float)
+            shift (float)
 
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`scale`
-                * :attr:`shift`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example::
+        Example::
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -1141,27 +1171,29 @@ void bind_unary_operation_with_scale_and_shift(py::module& module, const unary_o
 template <typename unary_operation_t>
 void bind_unary_operation_with_low_and_high(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, low, high, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            low (float)
+            high (float)
 
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`low`
-                * :attr:`high`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Returns:
+            ttnn.Tensor: the output tensor.
 
-            Example::
+        Example::
 
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -1192,26 +1224,25 @@ void bind_unary_operation_with_low_and_high(py::module& module, const unary_oper
 template <typename unary_operation_t>
 void bind_unary_operation_with_diag(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, diag, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
 
-            Applies {0} to :attr:`input_tensor` element-wise.
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
-            .. math::
-                {0}(\\mathrm{{input\\_tensor}}_i)
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            diag (int)
 
-            Args:
-                * :attr:`input_tensor`
-                * :attr:`diag`
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
 
-            Keyword Args:
-                * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+        Example::
 
-            Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-                >>> output = {1}(tensor)
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name());
@@ -1295,77 +1326,128 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
 
 void py_module(py::module& module) {
     detail::bind_unary_operation_overload_complex(module, ttnn::abs);
-    detail::bind_unary_operation(module, ttnn::acos);
-    detail::bind_unary_operation(module, ttnn::asin);
-    detail::bind_unary_operation(module, ttnn::atan);
-    detail::bind_unary_operation(module, ttnn::cos);
-    detail::bind_unary_operation(module, ttnn::erfinv);
-    detail::bind_unary_operation(module, ttnn::exp2,
-    R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_unary_operation(module, ttnn::acos, R"doc(\mathrm{{output\_tensor}}_i = acos(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::asin, R"doc(\mathrm{{output\_tensor}}_i = asin(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::cos, R"doc(\mathrm{{output\_tensor}}_i = cos(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::erfinv, R"doc(\mathrm{{output\_tensor}}_i = erfinv(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-    detail::bind_unary_operation(module, ttnn::expm1,
-    R"doc(Supported dtypes, layouts, and ranks:
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-    detail::bind_unary_operation(module, ttnn::eqz);
-    detail::bind_unary_operation(module, ttnn::floor, "Available for Wormhole_B0 only");
-    detail::bind_unary_operation(module, ttnn::ceil, "Available for Wormhole_B0 only");
-    detail::bind_unary_operation(module, ttnn::gez);
-    detail::bind_unary_operation(module, ttnn::gtz);
-    detail::bind_unary_operation(module, ttnn::i0);
-    detail::bind_unary_operation(module, ttnn::isfinite);
-    detail::bind_unary_operation(module, ttnn::isinf);
-    detail::bind_unary_operation(module, ttnn::isnan);
-    detail::bind_unary_operation(module, ttnn::isneginf);
-    detail::bind_unary_operation(module, ttnn::isposinf);
-    detail::bind_unary_operation(module, ttnn::lez);
-    detail::bind_unary_operation(module, ttnn::log);
-    detail::bind_unary_operation(module, ttnn::log10);
-    detail::bind_unary_operation(module, ttnn::log2);
-    detail::bind_unary_operation(module, ttnn::logical_not, R"doc(Supports bfloat16 dtype and both TILE and ROW_MAJOR layout)doc");
-    detail::bind_unary_operation(module, ttnn::ltz);
-    detail::bind_unary_operation(module, ttnn::neg);
-    detail::bind_unary_operation(module, ttnn::nez);
+
+    detail::bind_unary_operation(module, ttnn::exp2, R"doc(\mathrm{{output\_tensor}}_i = exp2(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+    detail::bind_unary_operation(module, ttnn::expm1, R"doc(\mathrm{{output\_tensor}}_i = expm1(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+    detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = floor(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
+    detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = ceil(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
+    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::i0, R"doc(\mathrm{{output\_tensor}}_i = i0(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::isfinite, R"doc(\mathrm{{output\_tensor}}_i = isfinite(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::isinf, R"doc(\mathrm{{output\_tensor}}_i = isinf(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::isnan, R"doc(\mathrm{{output\_tensor}}_i = isnan(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::isneginf, R"doc(\mathrm{{output\_tensor}}_i = isneginf(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::isposinf, R"doc(\mathrm{{output\_tensor}}_i = isposinf(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = log(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = log10(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc", R"doc(Supports bfloat16 dtype and both TILE and ROW_MAJOR layout)doc");
+    detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc");
     detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
-    detail::bind_unary_operation(module, ttnn::relu);
-    detail::bind_unary_operation(module, ttnn::relu6);
-    detail::bind_unary_operation(module, ttnn::sigmoid);
-    detail::bind_unary_operation(module, ttnn::sign);
-    detail::bind_unary_operation(module, ttnn::signbit);
-    detail::bind_unary_operation(module, ttnn::silu);
-    detail::bind_unary_operation(module, ttnn::sin);
-    detail::bind_unary_operation(module, ttnn::sqrt);
-    detail::bind_unary_operation(module, ttnn::square);
-    detail::bind_unary_operation(module, ttnn::tan);
-    detail::bind_unary_operation(module, ttnn::tanh);
-    detail::bind_unary_operation(module, ttnn::log_sigmoid);
+    detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = relu(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = relu6(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::sigmoid, R"doc(\mathrm{{output\_tensor}}_i = sigmoid(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::sign, R"doc(\mathrm{{output\_tensor}}_i = sign(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::signbit, R"doc(\mathrm{{output\_tensor}}_i = signbit(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::silu, R"doc(\mathrm{{output\_tensor}}_i = silu(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::sin, R"doc(\mathrm{{output\_tensor}}_i = sin(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::sqrt, R"doc(\mathrm{{output\_tensor}}_i = sqrt(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::square, R"doc(\mathrm{{output\_tensor}}_i = square(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::tan, R"doc(\mathrm{{output\_tensor}}_i = tan(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::tanh, R"doc(\mathrm{{output\_tensor}}_i = tanh(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::log_sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
-    R"doc(Supported dtypes, layouts, and ranks:
+        R"doc(Supported dtypes, layouts, and ranks:
 
-        +----------------------------+---------------------------------+-------------------+
-        |     Dtypes                 |         Layouts                 |     Ranks         |
-        +----------------------------+---------------------------------+-------------------+
-        |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-        +----------------------------+---------------------------------+-------------------+)doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf);
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc);
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf,
+        R"doc(Supported dtypes, layouts, and ranks:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+        )doc");
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc,
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu);
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt);
 
     // Unaries with float parameter
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function", "");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.");
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::elu, "alpha", "The alpha parameter for the ELU function","",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
+
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "slope", "The slope parameter for the Leaky ReLU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0");
@@ -1520,7 +1602,19 @@ void py_module(py::module& module) {
 
         Input tensor must have BFLOAT16 data type.
 
-        Output tensor will have BFLOAT16 data type.)doc");
+        Output tensor will have BFLOAT16 data type.)doc",
+
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
 
 }
 

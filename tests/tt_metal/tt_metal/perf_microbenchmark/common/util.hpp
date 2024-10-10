@@ -10,6 +10,7 @@
 
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/hostdevcommon/dprint_common.h"
 #include "debug/dprint_buffer.h"
 #include "llrt/hal.hpp"
 
@@ -24,7 +25,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::Device *device, con
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
     dprint_buf_msg_t *dprint_msg =
-        hal.get_dev_addr<dprint_buf_msg_t *>(HalProgrammableCoreType::TENSIX, HalMemAddrType::DPRINT);
+        hal.get_dev_addr<dprint_buf_msg_t *>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DPRINT);
 
     // This works for tensix only, will need to be updated for eth
     vector<uint64_t> print_buffer_addrs = {

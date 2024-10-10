@@ -7,9 +7,6 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_helpers.hpp"
 
-packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
-packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
-
 constexpr uint32_t rx_queue_start_addr_words = get_compile_time_arg_val(1);
 constexpr uint32_t rx_queue_size_words = get_compile_time_arg_val(2);
 constexpr uint32_t rx_queue_size_bytes = rx_queue_size_words*PACKET_WORD_SIZE_BYTES;
@@ -207,6 +204,8 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
     };
 
 void kernel_main() {
+    packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+    packet_output_queue_state_t output_queues[MAX_SWITCH_FAN_OUT];
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);

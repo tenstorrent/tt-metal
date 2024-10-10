@@ -14,11 +14,12 @@ using queue_id = uint8_t;
 DeviceBuffer allocate_interleaved_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
-    const MemoryConfig& memory_config) {
-    uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape.value);
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile) {
+    uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
@@ -30,18 +31,19 @@ DeviceBuffer allocate_contiguous_buffer_on_device(
 DeviceBuffer allocate_sharded_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config) {
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile) {
     tt::tt_metal::tensor_impl::validate_sharded_buffer_allocation(
-        shape.value, layout, data_type, shard_params, memory_config);
+        shape, layout, data_type, shard_params, memory_config, tile);
     const auto& page_shape = shard_params.page_shape;
     uint32_t size_of_element = tt::tt_metal::tensor_impl::element_size_bytes(data_type);
     uint32_t page_size = page_shape[0] * page_shape[1] * size_of_element;
     if (layout == Layout::TILE) {
-        page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape.value);
+        page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
     }
 
     return std::make_shared<Buffer>(
@@ -51,19 +53,20 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,
     types::Device* device,
-    const Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec) {
+    const std::optional<ShardSpecBuffer>& shard_spec,
+    const std::optional<Tile>& tile) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return allocate_interleaved_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, memory_config, tile);
     } else if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::SINGLE_BANK) {
         return allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
     } else {
         return allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, tile);
     }
 }
 

@@ -21,7 +21,9 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
-    const bool partial_face = get_operand_partial_face(in0_id);
+    // TODO: this flags is only for computing 8x32 tile shape, although current impl assumes the in0 tile is still 16x32.
+    // We should remove this flag in the furture and add impl for 8x32 input tile shape
+    const bool partial_face = 0;
 
     const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
     const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);

@@ -143,7 +143,7 @@ class TtFalconMLP:
     def fwd_prefill(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = []
         should_deallocate_ln_tensors = determine_tensor_deallocation(
-            self.model_config["layernorm_params"]["slice_size"], x.get_legacy_shape()[2]
+            self.model_config["layernorm_params"]["slice_size"], x.shape.with_tile_padding()[2]
         )
 
         mlp_num_slices = self.model_config["MLP_NUM_SLICES"]

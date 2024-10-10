@@ -128,6 +128,7 @@ from ttnn.types import (
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -175,28 +176,8 @@ from ttnn.device import (
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
 
-from ttnn.multi_device import (
-    MeshDevice,
-    DispatchCoreType,
-    open_mesh_device,
-    close_mesh_device,
-    get_num_pcie_devices,
-    get_num_devices,
-    get_pcie_device_ids,
-    get_device_ids,
-    create_mesh_device,
-    synchronize_devices,
-    TensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
-    ReplicateTensorToMesh,
-    MeshToTensor,
-    ConcatMeshToTensor,
-    ListMeshToTensor,
-    visualize_mesh_device,
-    ConcatMesh2dToTensor,
-    distribute,
-)
+# TODO: remove this after the distributed module is fully integrated
+from ttnn.distributed import *
 
 from ttnn.core import (
     set_printoptions,
@@ -308,6 +289,10 @@ from ttnn.operations.losses import (
 
 from ttnn.operations.reduction import (
     ReduceType,
+)
+
+from ttnn.operations.ccl import (
+    Topology,
 )
 
 from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config

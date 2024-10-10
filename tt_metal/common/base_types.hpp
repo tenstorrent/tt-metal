@@ -38,3 +38,16 @@ struct std::hash<MathFidelity>
         return static_cast<std::size_t>(obj);
     }
 };
+
+/**
+ * Specifies mode of operation for unpacking directly to Dest regsiter.
+ * Default mode enables all dataformats (except Float32) to be unpacked into Dest. Buffers
+ * with Default mode can be used to unpack to SRCA/B or Dest.
+ * UnpackToDestFp32 enables unpacking Float32 data to Dest with full precision, but makes
+ * the buffer incompatible with unpacking to SRCA/B.
+*/
+enum class UnpackToDestMode : uint8_t
+{
+    UnpackToDestFp32,
+    Default
+};

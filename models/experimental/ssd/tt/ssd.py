@@ -105,7 +105,7 @@ class TtSSD(nn.Module):
         temporary_image = ttnn.ones([1, 3, size[1], size[0]], device=self.device)
         backbone.eval()
         features = backbone(temporary_image)
-        out_channels = [tensor.get_legacy_shape()[1] for i, tensor in features.items()]
+        out_channels = [tensor.shape.with_tile_padding()[1] for i, tensor in features.items()]
         return out_channels
 
     def postprocess_detections(
@@ -117,7 +117,7 @@ class TtSSD(nn.Module):
         bbox_regression = head_outputs["bbox_regression"]
         pred_scores = fallback_ops.softmax(head_outputs["cls_logits"], dim=-1)
 
-        num_classes = pred_scores.get_legacy_shape()[-1]
+        num_classes = pred_scores.shape.with_tile_padding()[-1]
 
         detections: List[Dict[str, ttnn.Tensor]] = []
 
@@ -172,7 +172,7 @@ class TtSSD(nn.Module):
     ) -> List[Dict[str, ttnn.Tensor]]:
         original_image_sizes: List[tuple[int, int]] = []
 
-        val = image.get_legacy_shape()[-2:]
+        val = image.shape.with_tile_padding()[-2:]
         original_image_sizes.append((val[0], val[1]))
 
         image = tt_to_torch_tensor(image)

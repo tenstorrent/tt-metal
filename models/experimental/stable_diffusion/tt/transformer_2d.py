@@ -468,7 +468,7 @@ class TtTransformer2DModel(nn.Module):
         """
         # 1. Input
         if self.is_input_continuous:
-            batch, _, height, width = hidden_states.get_legacy_shape()
+            batch, _, height, width = hidden_states.shape.with_tile_padding()
             residual = hidden_states
 
             hidden_states = self.norm(hidden_states)
@@ -476,12 +476,12 @@ class TtTransformer2DModel(nn.Module):
             if not self.use_linear_projection:
                 hidden_states = self.proj_in(hidden_states)
 
-                inner_dim = hidden_states.get_legacy_shape()[1]
+                inner_dim = hidden_states.shape.with_tile_padding()[1]
 
                 hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
             else:
-                inner_dim = hidden_states.get_legacy_shape()[1]
+                inner_dim = hidden_states.shape.with_tile_padding()[1]
                 hidden_states = ttnn.permute(hidden_states, (0, 2, 3, 1))
                 hidden_states = fallback_ops.reshape(hidden_states, 1, batch, height * width, inner_dim)
 

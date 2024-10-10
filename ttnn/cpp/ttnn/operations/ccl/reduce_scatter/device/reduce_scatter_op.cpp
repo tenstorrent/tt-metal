@@ -3,13 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-
-#include "ttnn/operations/reduction/generic/device/common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "tt_metal/host_api.hpp"
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-
+#include <cstdint>
 
 namespace ttnn {
 
@@ -21,16 +17,18 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
+
+        TT_FATAL(this->topology != ccl::Topology::Linear || !t.is_sharded(), "Sharded tensors are not supported for reduce scatter on a linear topology");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_legacy_shape();
-    TT_ASSERT(
+std::vector<ttnn::SimpleShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    auto shape = input_tensors[0].get_logical_shape();
+    TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size");
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
@@ -75,10 +73,10 @@ Tensor reduce_scatter(
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
 
     auto devices = input_tensor.get_workers();
@@ -88,8 +86,8 @@ Tensor reduce_scatter(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-
-            bool is_ring = topology ==ttnn::ccl::Topology::Ring;
+            TT_FATAL(input_tensors.size() >= 1, "Reduce scatter op expects an input tensor but it received none");
+            bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
             const auto& input_tensor = input_tensors.at(0);
             uint32_t num_devices = devices.size();
@@ -98,11 +96,16 @@ Tensor reduce_scatter(
             std::optional<chip_id_t> sender_device_id = std::nullopt; // Initialize sender device ID
             for (uint32_t i = 0; i < num_devices; ++i) {
                 if (devices.at(i) == input_tensor.device()) {
-                    bool is_last_chip_in_clockwise_direction = is_ring ? false : i == (input_tensors.size() - 1);
-                    bool is_last_chip_in_counter_clockwise_direction = is_ring ? false : i == 0;
+
+                    bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
+                    bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
                     device_index = i;
-                    receiver_device_id = devices.at((i + 1) % num_devices)->id(); // Next device in the ring
-                    sender_device_id = devices.at((i + num_devices - 1) % num_devices)->id(); // Previous device in the ring
+                    receiver_device_id = is_last_chip_in_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
                     break;
                 }
             }

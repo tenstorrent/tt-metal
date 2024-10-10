@@ -20,6 +20,7 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
+    UNET_FULL_MODEL_PCC,
 )
 
 from models.utility_functions import skip_for_grayskull, divup
@@ -75,7 +76,7 @@ def test_unet_trace(
     logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -182,7 +183,7 @@ def test_unet_trace_2cq(
     ttnn.DumpDeviceProfiler(device)
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97)
+    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
 
     ttnn.release_trace(device, tid)
 
@@ -313,6 +314,6 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Average model performance={iterations * total_batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], 0.97, mesh_composer=output_mesh_composer)
+    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC, mesh_composer=output_mesh_composer)
 
     ttnn.release_trace(mesh_device, tid)

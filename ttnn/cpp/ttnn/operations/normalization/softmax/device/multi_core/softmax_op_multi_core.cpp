@@ -33,7 +33,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     const std::optional<const Tensor> mask,
     std::optional<float> scale,
     bool causal_mask,
-    DeviceComputeKernelConfig compute_kernel_config
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool numeric_stable
 ) {
 
     const auto shape = input_tensor.get_legacy_shape();
@@ -116,13 +117,15 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t  = block_size*2;
+    uint32_t in0_t  = numeric_stable ? tt::div_up(Wt, block_size)*block_size : block_size*2;
     uint32_t out0_t = block_size*2;
     uint32_t im1_t  = 1; // 1/sum(exp(x))
     uint32_t in2_t  = 1; // scaler for reduce coming from reader
     uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
     uint32_t in4_t  = tt::div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
     uint32_t in5_t = 1;
+    // numeric_stable cb max
+    uint32_t im2_t = 1;
 
     // cb_exps - keeps exps in tt::CB in L1 to avoid recomputing
     uint32_t im0_t  = block_size*tt::div_up(Wt, block_size);
@@ -188,6 +191,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     // if wtpc < Ht then since we pass tpc to the kernel as Ht, the broadcasts should be correct
     // if wtpc >= Ht then tpc should be a multiple of Ht
 
+    if (numeric_stable) {
+        softmax_defines["NUMERIC_STABLE"] = "1";
+    }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program, "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax.cpp", all_device_cores,
@@ -224,6 +230,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     }
     CircularBufferConfig c_in5_config = CircularBufferConfig(in5_t * mask_tile_size, {{tt::CB::c_in5, mask_cb_data_format}}).set_page_size(tt::CB::c_in5, mask_tile_size);
     cb_in5_id = CreateCircularBuffer( program, all_device_cores, c_in5_config);
+    std::optional<CBHandle> cb_intermed2_id;
+    std::optional<CBHandle> cb_intermed4_id;
+    if (numeric_stable) {
+        // cb_max
+        auto c_intermed2_config = CircularBufferConfig(im2_t * in0_tile_size, {{tt::CB::c_intermed2, in0_cb_data_format}}).set_page_size(tt::CB::c_intermed2, in0_tile_size);
+        cb_intermed2_id = CreateCircularBuffer( program, all_device_cores, c_intermed2_config );
+        // cb_x
+        auto c_x_config = CircularBufferConfig(in0_t * in0_tile_size, {{tt::CB::c_intermed4, in0_cb_data_format}}).set_page_size(tt::CB::c_intermed4, in0_tile_size);
+        cb_intermed4_id = CreateCircularBuffer( program, all_device_cores, c_x_config);
+    }
 
     uint32_t src_addr = src0_buffer->address();
     uint32_t mask_addr = mask.has_value() ? mask.value().buffer()->address() : 0;
@@ -289,7 +305,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             cb_intermed3_id,
             cb_in3_id,
             cb_in4_id,
-            causal_mask
+            causal_mask,
+            numeric_stable,
+            cb_intermed2_id,
+            cb_intermed4_id
         ]
     (
         const void* operation,
@@ -325,12 +344,13 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         uint32_t block_size = find_max_divisor(Wt, 8);
 
         // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-        uint32_t in0_t  = block_size*2;
+        uint32_t in0_t  = numeric_stable ? tt::div_up(Wt, block_size)*block_size : block_size*2;
         uint32_t out0_t = block_size*2;
         uint32_t im1_t  = 1; // 1/sum(exp(x))
         uint32_t in2_t  = 1; // scaler for reduce coming from reader
         uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
         uint32_t in4_t  = tt::div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
+        uint32_t im2_t = 1;
 
         // cb_exps - keeps exps in tt::CB in L1 to avoid recomputing
         uint32_t im0_t  = block_size*tt::div_up(Wt, block_size);
@@ -363,6 +383,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             UpdateCircularBufferTotalSize(program, cb_intermed3_id.value(), im3_t * im_tile_size);
             UpdateCircularBufferTotalSize(program, cb_in3_id.value(), in3_t * scalar_tile_size);
             UpdateCircularBufferTotalSize(program, cb_in4_id.value(), in4_t * mask_tile_size);
+        }
+        if (numeric_stable) {
+            UpdateCircularBufferTotalSize(program, cb_intermed2_id.value(), im2_t * in0_tile_size);
+            UpdateCircularBufferTotalSize(program, cb_intermed4_id.value(), in0_t * in0_tile_size);
         }
 
         uint32_t curr_row = 0;
@@ -452,7 +476,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config
+    DeviceComputeKernelConfig compute_kernel_config,
+    bool numeric_stable
 ) {
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -568,6 +593,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     uint32_t im2_CB_size = block_wt * im_tile_size;
     // output buffer size
     uint32_t out_CB_size = block_wt * block_ht * out0_tile_size;
+    // numeric_stable cb max
+    uint32_t max_CB_size = 1 * in0_tile_size;
+    uint32_t x_CB_size = block_wt * in0_tile_size;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -649,6 +677,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
         subblock_wt,
         num_subblocks_w,
     };
+    if (numeric_stable) {
+        softmax_defines["NUMERIC_STABLE"] = "1";
+    }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     auto softmax_kernels_id = CreateKernel(
         program, "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax_sharded.cpp", all_device_cores,
@@ -704,6 +735,16 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     auto c_intermed1_config = CircularBufferConfig(im1_CB_size, {{tt::CB::c_intermed1, im_cb_data_format}})
         .set_page_size(tt::CB::c_intermed1, im_tile_size);
     auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
+    if (numeric_stable) {
+        // cb_max
+        auto c_intermed3_config = CircularBufferConfig(max_CB_size, {{tt::CB::c_intermed3, in0_cb_data_format}})
+            .set_page_size(tt::CB::c_intermed3, in0_tile_size);
+        auto cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
+        // cb_x
+        auto c_intermed4_config = CircularBufferConfig(x_CB_size, {{tt::CB::c_intermed4, in0_cb_data_format}})
+            .set_page_size(tt::CB::c_intermed4, in0_tile_size);
+        auto cb_intermed4_id = CreateCircularBuffer( program, all_device_cores, c_intermed4_config );
+    }
 
     // Runtime Args
     uint32_t mask_addr = mask.has_value() ? mask->buffer()->address() : 0;

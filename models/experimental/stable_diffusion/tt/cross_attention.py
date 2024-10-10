@@ -152,7 +152,7 @@ class TtCrossAttention(nn.Module):
 
     def batch_to_head_dim(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
         head_size = self.heads
-        _, batch_size, seq_len, dim = tensor.get_legacy_shape()
+        _, batch_size, seq_len, dim = tensor.shape.with_tile_padding()
         tensor = fallback_ops.reshape(tensor, batch_size // head_size, head_size, seq_len, dim)
         tensor = ttnn.permute(tensor, (0, 2, 1, 3))
         tensor = fallback_ops.reshape(tensor, 1, batch_size // head_size, seq_len, dim * head_size)
@@ -160,7 +160,7 @@ class TtCrossAttention(nn.Module):
 
     def head_to_batch_dim(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
         head_size = self.heads
-        _, batch_size, seq_len, dim = tensor.get_legacy_shape()
+        _, batch_size, seq_len, dim = tensor.shape.with_tile_padding()
         tensor = fallback_ops.reshape(tensor, batch_size, seq_len, head_size, dim // head_size)
         tensor = ttnn.permute(tensor, (0, 2, 1, 3))
         tensor = fallback_ops.reshape(tensor, 1, batch_size * head_size, seq_len, dim // head_size)
@@ -171,17 +171,17 @@ class TtCrossAttention(nn.Module):
 
         temp = ttnn.matmul(query, t_key)
         # Aaron: TODO: intentionally keeping this here!
-        # scale_tensor = ttnn.fill_rm(temp.get_legacy_shape()[0],
-        #                                 temp.get_legacy_shape()[1],
-        #                                 temp.get_legacy_shape()[2],
-        #                                 temp.get_legacy_shape()[3],
+        # scale_tensor = ttnn.fill_rm(temp.shape.with_tile_padding()[0],
+        #                                 temp.shape.with_tile_padding()[1],
+        #                                 temp.shape.with_tile_padding()[2],
+        #                                 temp.shape.with_tile_padding()[3],
         #                                 0,
         #                                 0,
         #                                 temp,
         #                                 self.scale,
         #                                 self.scale)
 
-        scale_tensor = ttnn.full(temp.get_legacy_shape(), self.scale)
+        scale_tensor = ttnn.full(temp.shape.with_tile_padding(), self.scale)
         attention_scores = ttnn.mul(scale_tensor, temp)
 
         if attention_mask is not None:
@@ -207,7 +207,7 @@ def CrossAttnProcessor(
 ) -> ttnn.Tensor:
     out_mem_config_l1 = ttnn.L1_MEMORY_CONFIG
 
-    _, batch_size, sequence_length, _ = hidden_states.get_legacy_shape()
+    _, batch_size, sequence_length, _ = hidden_states.shape.with_tile_padding()
     attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length)
     query = attn.to_q(hidden_states)
     query = attn.head_to_batch_dim(query)

@@ -20,6 +20,7 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 using namespace tt::constants;
 
@@ -45,7 +46,7 @@ Tensor HaloTensorCreation(const Tensor &input){
             input_tensor.memory_config().shard_spec.value().grid,
             false, true);
 
-    input_tensor = ttnn::operations::core::reshape(
+    input_tensor = ttnn::reshape(
         input_tensor,
         Shape(std::array<uint32_t, 4>{
             1,
@@ -89,7 +90,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
     uint32_t in_w = input.get_legacy_shape()[2];
     uint32_t out_w =output.get_legacy_shape()[2];
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 
     auto shard_spec = input.shard_spec().value();

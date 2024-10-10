@@ -6,8 +6,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <string>
+
 #include <cstring>
+#include <string>
 
 #include "impl/debug/dprint_server.hpp"
 #include "tools/profiler/profiler_state.hpp"
@@ -26,12 +27,10 @@ const char *RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "DISABLE_L1_DATA_CACHE",
 };
 
-const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
-    "N/A",
-    "worker",
-    "dispatch",
-    "all"
-};
+const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
+
+static const char *TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+static const char *TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 
 // Note: global initialization order is non-deterministic
 // This is ok so long as this gets initialized before decisions are based on
@@ -39,8 +38,16 @@ const char *RunTimeDebugClassNames[RunTimeDebugClassCount] = {
 RunTimeOptions OptionsG;
 
 RunTimeOptions::RunTimeOptions() {
-    if (const char *root_dir_ptr = std::getenv("TT_METAL_HOME")) {
-        root_dir = std::string(root_dir_ptr) + "/";
+    const char *root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
+    if (root_dir_str != nullptr) {
+        this->is_root_dir_env_var_set = true;
+        this->root_dir = std::string(root_dir_str) + "/";
+    }
+
+    const char *kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
+    if (kernel_dir_str != nullptr) {
+        this->is_kernel_dir_env_var_set = true;
+        this->kernel_dir = std::string(kernel_dir_str) + "/";
     }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
@@ -96,7 +103,7 @@ RunTimeOptions::RunTimeOptions() {
     if (num_cqs != nullptr) {
         try {
             set_num_hw_cqs(std::stoi(num_cqs));
-        } catch (const std::invalid_argument& ia) {
+        } catch (const std::invalid_argument &ia) {
             TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
         }
     }
@@ -116,11 +123,19 @@ RunTimeOptions::RunTimeOptions() {
 }
 
 const std::string &RunTimeOptions::get_root_dir() {
-    if (root_dir == "") {
-        TT_THROW("Env var TT_METAL_HOME is not set.");
+    if (!this->is_root_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
     }
 
     return root_dir;
+}
+
+const std::string &RunTimeOptions::get_kernel_dir() const {
+    if (!this->is_kernel_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_KERNEL_PATH_ENV_VAR);
+    }
+
+    return this->kernel_dir;
 }
 
 void RunTimeOptions::ParseWatcherEnv() {
@@ -155,7 +170,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_assert_str,
         watcher_pause_str,
         watcher_ring_buffer_str,
-        watcher_stack_usage_str};
+        watcher_stack_usage_str,
+        watcher_dispatch_str};
     for (std::string feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
@@ -185,6 +201,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
     ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     ParseFeatureRiscvMask(feature, feature_env_prefix + "_RISCVS");
     ParseFeatureFileName(feature, feature_env_prefix + "_FILE");
+    ParseFeatureOneFilePerRisc(feature, feature_env_prefix + "_ONE_FILE_PER_RISC");
 
     // Set feature enabled if the user asked for any feature cores
     feature_targets[feature].enabled = false;
@@ -195,9 +212,9 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
         if (core_type_and_cores.second.size() > 0)
             feature_targets[feature].enabled = true;
 
-    const char *print_noc_xfers = std::getenv("TT_METAL_DPRINT_NOC_TRANSFER_DATA");
+    const char *print_noc_xfers = std::getenv("TT_METAL_RECORD_NOC_TRANSFER_DATA");
     if (print_noc_xfers != nullptr)
-        dprint_noc_transfer_data = true;
+        record_noc_transfer_data = true;
 };
 
 void RunTimeOptions::ParseFeatureCoreRange(
@@ -322,6 +339,11 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
 void RunTimeOptions::ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var) {
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].file_name = (env_var_str != nullptr) ? std::string(env_var_str) : "";
+}
+
+void RunTimeOptions::ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var) {
+    char *env_var_str = std::getenv(env_var.c_str());
+    feature_targets[feature].one_file_per_risc = (env_var_str != nullptr);
 }
 
 }  // namespace llrt

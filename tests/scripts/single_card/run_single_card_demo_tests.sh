@@ -12,6 +12,9 @@ run_common_func_tests() {
   # Mistral7B
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo.py --timeout 420; fail+=$?
 
+  #VGG11/VGG16
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600; fail+=$?
+
   # Bert
   pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7; fail+=$?
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8; fail+=$?
@@ -21,6 +24,9 @@ run_common_func_tests() {
 
   # Distilbert
   pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600; fail+=$?
+
+  # ConvNet Mnist
+  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
 
   return $fail
 }
@@ -71,6 +77,9 @@ run_n300_perf_tests(){
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py; fail+=$?
+
+  # llama3.1-8B trace mode
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/demo/demo_trace.py --timeout 600; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1

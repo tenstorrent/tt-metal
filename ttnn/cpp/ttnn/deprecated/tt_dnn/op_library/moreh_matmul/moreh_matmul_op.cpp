@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_matmul/moreh_matmul_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_dot/moreh_dot_op.hpp"
+#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 using namespace tt::constants;
 
@@ -31,15 +32,16 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
     return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
-tt::tt_metal::LegacyShape compute_output_shape(
-    const tt::tt_metal::LegacyShape& input_shape, const tt::tt_metal::LegacyShape& other_shape, bool transpose_input, bool transpose_other) {
-    const auto& input_shape_wo_padding = input_shape.without_padding();
-    const auto& other_shape_wo_padding = other_shape.without_padding();
+ttnn::SimpleShape compute_output_shape(
+    const tt::tt_metal::LegacyShape& input_shape,
+    const tt::tt_metal::LegacyShape& other_shape,
+    bool transpose_input,
+    bool transpose_other) {
+    const auto& logical_input_shape = input_shape.logical_shape();
+    const auto& logical_other_shape = other_shape.logical_shape();
 
-    auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
-    auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);
-    auto h_wo_padding = (transpose_input) ? (input_shape_wo_padding[-1]) : (input_shape_wo_padding[-2]);
-    auto w_wo_padding = (transpose_other) ? (other_shape_wo_padding[-2]) : (other_shape_wo_padding[-1]);
+    auto h = (transpose_input) ? (logical_input_shape[-1]) : (logical_input_shape[-2]);
+    auto w = (transpose_other) ? (logical_other_shape[-2]) : (logical_other_shape[-1]);
 
     std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -68,12 +70,7 @@ tt::tt_metal::LegacyShape compute_output_shape(
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
-    auto padding = output_shape.padding();
-    // padding for t logmatrix dims
-    padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
-    padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {ttnn::SimpleShape(std::move(output_dim))};
 }
 
 }  // namespace
@@ -97,7 +94,8 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
     }
 }
 
-std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
+std::vector<int64_t> find_reduce_dim(
+    const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -154,7 +152,8 @@ operation::ProgramWithCallbacks MorehMatmul::create_program(
 }
 
 // Must be provided in the case where an optional output tensor was not provided
-std::vector<tt::tt_metal::LegacyShape> MorehMatmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::SimpleShape> MorehMatmul::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     return {compute_output_shape(
         input_tensors.at(0).get_legacy_shape(),
         input_tensors.at(1).get_legacy_shape(),
@@ -208,7 +207,12 @@ void MorehMatmul::validate_with_output_tensors(
     get_tensor_dim(other_dim, other_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (input_dim[i] != other_dim[i]) {
-            TT_FATAL(input_dim[i] == 1 || other_dim[i] ==1, "one of dim must be one. {}th dim input_dim {}, other_dim {}", i, input_dim[i], other_dim[i]);
+            TT_FATAL(
+                input_dim[i] == 1 || other_dim[i] == 1,
+                "one of dim must be one. {}th dim input_dim {}, other_dim {}",
+                i,
+                input_dim[i],
+                other_dim[i]);
         }
     }
 
@@ -225,7 +229,12 @@ void MorehMatmul::validate_with_output_tensors(
         get_tensor_dim(output_dim, output_shape);
 
         for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-            TT_FATAL(std::max(input_dim[i], other_dim[i]) == output_dim[i], "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}", i, std::max(input_dim[i], other_dim[i]), output_dim[i]);
+            TT_FATAL(
+                std::max(input_dim[i], other_dim[i]) == output_dim[i],
+                "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}",
+                i,
+                std::max(input_dim[i], other_dim[i]),
+                output_dim[i]);
         }
     }
 
@@ -235,7 +244,11 @@ void MorehMatmul::validate_with_output_tensors(
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);
-        TT_FATAL(bias_w == 1 || bias_w == other_n, "bias_w must be one or the same as other_n. bias_w {}, other_n {}", bias_w, other_n);
+        TT_FATAL(
+            bias_w == 1 || bias_w == other_n,
+            "bias_w must be one or the same as other_n. bias_w {}, other_n {}",
+            bias_w,
+            other_n);
     }
 }
 
@@ -251,7 +264,8 @@ Tensor moreh_matmul_(
     log_debug(LogOp, "{}:{} run matmul {} {}", __func__, __LINE__, transpose_input, transpose_other);
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Error");
-    auto kernel_config_val = init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
+    auto kernel_config_val =
+        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input, other}, {bias}))};
 
@@ -287,13 +301,13 @@ Tensor moreh_matmul(
     const std::optional<const Tensor> bias,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-
     // TODO(seunghwan100): Add the argument "output_tensor" to moreh_dot.
     if (is_dot_forward(input, other, transpose_input, transpose_other)) {
         TT_ASSERT(!bias.has_value());
         return moreh_dot(input, other, output_mem_config);
     }
-    return moreh_matmul_(input, other, transpose_input, transpose_other, output, bias, output_mem_config, compute_kernel_config);
+    return moreh_matmul_(
+        input, other, transpose_input, transpose_other, output, bias, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace primary

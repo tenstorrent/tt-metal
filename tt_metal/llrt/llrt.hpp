@@ -53,7 +53,8 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string path);
+enum class PackSpans { PACK, NO_PACK };
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0, PackSpans pack_spans = PackSpans::NO_PACK);
 uint16_t get_binary_code_size16(const ll_api::memory &mem, int riscv_id);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
@@ -72,7 +73,7 @@ std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoor
 
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
 
-void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, uint64_t addr, bool send_go = true);
+void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, go_msg_t * go_msg, uint64_t addr, bool send_go = true);
 
 void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
 
@@ -107,7 +108,7 @@ void wait_until_cores_done(
 
 }  // namespace internal_
 
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr) {
+inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
     uint64_t relo_addr;
     if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
         // Move addresses in the local memory range to l1 (copied by kernel)

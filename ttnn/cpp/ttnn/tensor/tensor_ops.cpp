@@ -56,7 +56,7 @@ Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const Memory
         } else {
             tensor_impl::validate_on_device_dtype_and_layout(
                 target_device,
-                async_safe_tensor.get_legacy_shape(),
+                async_safe_tensor.get_padded_shape(),
                 async_safe_tensor.get_dtype(),
                 async_safe_tensor.get_layout());
             auto local_tensor =
@@ -97,6 +97,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
                 device_tensor.set_shape(input_tensor.get_shape());
                 device_tensor.set_dtype(input_tensor.get_dtype());
                 device_tensor.set_layout(input_tensor.get_layout());
+                device_tensor.set_tile(input_tensor.get_tile());
                 device_tensor.tensor_attributes->metadata_populated = true;
             }
         });
@@ -138,6 +139,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
                 host_tensor.set_shape(input_tensor.get_shape());
                 host_tensor.set_dtype(input_tensor.get_dtype());
                 host_tensor.set_layout(input_tensor.get_layout());
+                host_tensor.set_tile(input_tensor.get_tile());
                 host_tensor.tensor_attributes->metadata_populated = true;
             }
         });
@@ -226,6 +228,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* m
                     tensor_modified_layout.set_shape(input_tensor.get_shape());
                     tensor_modified_layout.set_dtype(input_tensor.get_dtype());
                     tensor_modified_layout.set_layout(target_layout);
+                    tensor_modified_layout.set_tile(input_tensor.get_tile());
                     tensor_modified_layout.tensor_attributes->metadata_populated = true;
                 };
             });

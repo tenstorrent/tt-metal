@@ -36,8 +36,8 @@ MARGIN = 0.05
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, sequence_length, iterations, expected_compile_time, expected_inference_time",
     (
-        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 12.50, 0.110),
-        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 23.50, 0.520),
+        ("state-spaces/mamba-2.8b", ModelMode.DECODE, 32, 1, 8, 18.0, 0.110),
+        ("state-spaces/mamba-2.8b", ModelMode.PREFILL, 1, 128, 8, 30.0, 0.520),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -129,7 +129,7 @@ def test_mamba_perf_e2e(
     upper_margin = MARGIN
     if not is_nearby(inference_time, expected_inference_time, lower_margin=lower_margin, upper_margin=upper_margin):
         logger.warning(
-            "Inference time does not match (within some margin) the expected value (was {inference_time:2f} but expected {expected_inference_time:2f})"
+            f"Inference time does not match (within some margin) the expected value (was {inference_time:2f} but expected {expected_inference_time:2f})"
         )
 
     if not is_nearby(compile_time, expected_compile_time, lower_margin=lower_margin, upper_margin=upper_margin):
@@ -142,33 +142,30 @@ def test_mamba_perf_e2e(
 @pytest.mark.timeout(600)
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch, warmup, expected_device_fw_duration_ms",
-    ((32, True, 1.66),),
+    "batch, expected_layer_duration_ms",
+    ((32, 1.689),),
 )
-def test_mamba_perf_device(batch, warmup, expected_device_fw_duration_ms, reset_seeds):
+def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
-    margin = 0.03
-    if warmup:
-        inference_iterations = 2
-    else:
-        inference_iterations = 1
-    command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[{inference_iterations}]"
+    margin = 0.01
+    command = f"pytest models/demos/wormhole/mamba/tests/test_mamba_model.py::test_device_perf[1]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     # Convert expected perf (ms) to samples/s
-    expected_device_fw_duration_ns = expected_device_fw_duration_ms * 1e6  # ms to ns
-    expected_total_device_fw_samples = get_samples_per_s(expected_device_fw_duration_ns * inference_iterations, batch)
-
-    inference_time_key = "AVG DEVICE FW SAMPLES/S"
-    expected_perf_cols = {inference_time_key: expected_total_device_fw_samples}
+    expected_layer_duration_ns = expected_layer_duration_ms * 1e6  # ms to ns
+    expected_total_layer_samples_per_s = get_samples_per_s(expected_layer_duration_ns, batch)
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_total_layer_samples_per_s}
 
     post_processed_results = run_device_perf(command, subdir, 1, cols, batch)
+    logger.info(
+        f"Checking device performance... Expecting {expected_total_layer_samples_per_s} samples/sec (equivalent to {expected_layer_duration_ms} ms per layer)"
+    )
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
-    comment = ""
     prep_device_perf_report(
         model_name=f"mamba-2.8b_batch_{batch}",
         batch_size=batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
-        comments=comment,
+        comments="",
     )

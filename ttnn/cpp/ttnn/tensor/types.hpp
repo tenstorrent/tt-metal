@@ -9,6 +9,7 @@
 #include <optional>
 #include <variant>
 #include <vector>
+#include <algorithm>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/common/core_coord.h"
@@ -17,14 +18,78 @@
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+
+namespace ttnn {
+    /**
+SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
+Context:
+    Both Shape and LegacyShape can carry padding information.
+    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
+    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
+Plan:
+    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
+    We will clearly see where full shape is used vs logical or physical shape is used.
+    Need to split .hpp and .cpp
+**/
+class SimpleShape {
+public:
+    template <typename T>
+    explicit SimpleShape(const std::vector<uint32_t>& shape) : value(shape) {}
+    explicit SimpleShape(std::vector<uint32_t>&& shape) : value(std::move(shape)) {}
+    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
+    template<std::size_t N>
+    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
+
+    template<std::size_t N>
+    bool operator==(const std::array<uint32_t, N> &other) const {
+        bool sameSize = value.size() == N;
+        return sameSize && std::equal(value.begin(), value.end(), other.begin());
+    }
+
+    bool operator==(const SimpleShape &other) const;
+    bool operator==(const std::vector<uint32_t> &other) const;
+
+    uint32_t operator[](int32_t index) const;
+    uint32_t &operator[](int32_t index);
+
+    size_t rank() const { return this->value.size(); }
+    uint64_t volume() const;
+
+    auto cbegin() const { return this->value.cbegin(); }
+    auto cend() const { return this->value.cend(); }
+
+    const std::vector<uint32_t>& as_vector() const { return this->value; }
+
+    // Needed for reflect / fmt
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    auto attribute_values() const { return std::forward_as_tuple(this->value); }
+
+private:
+    std::vector<uint32_t> value;
+};
+
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+
+} // namespace ttnn
+
+inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
+    os << "SimpleShape([";
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << shape[i];
+    }
+    os << "])";
+    return os;
+}
 
 namespace tt {
 
 namespace tt_metal {
 
 static constexpr std::uint8_t VERSION_ID = 3;
-
-enum class Layout { ROW_MAJOR = 0, TILE = 1, INVALID = 2 };
 
 enum class DataType {
     BFLOAT16 = 0,
@@ -121,6 +186,8 @@ struct Padding {
     const PadDimension operator[](const std::int64_t index) const;
 
     PadValue pad_value() const;
+
+    size_t rank() const { return rank_; }
 
     static constexpr auto attribute_names = std::forward_as_tuple("rank", "pad_dimensions", "pad_value");
     const auto attribute_values() const {
@@ -227,6 +294,8 @@ class LegacyShape {
     const Padding &padding() const;
     const LegacyShape without_padding() const;
 
+    ttnn::SimpleShape logical_shape() const;
+
     const uint32_t get_normalized_index(std::int64_t index) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("rank", "dimensions", "padding");
@@ -236,6 +305,7 @@ class LegacyShape {
     friend std::ostream &operator<<(std::ostream &os, const LegacyShape &shape);
 
     Array4D to_array_4D() const {
+        TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
         Array4D ret_array;
         for (int i = 0; i < rank(); i++) {
             ret_array[i] = this->operator[](i);
@@ -663,15 +733,18 @@ static tt::tt_metal::LegacyShape compute_ttl_shape(
 
 }  // namespace detail
 
+
 struct Shape {
     // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
     // It is used to flip the default value of operator[] to return the shape without padding
     tt::tt_metal::LegacyShape value;
 
-    explicit Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
+    Shape(const std::initializer_list<uint32_t> dimensions) : value{dimensions} {}
+
+    Shape(const tt::tt_metal::LegacyShape &shape) : value{shape} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
+    Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
 
     template <std::size_t Rank>
     explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
@@ -682,17 +755,46 @@ struct Shape {
         const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
         value{detail::compute_ttl_shape(shape, tile_padding)} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
+    Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
 
     explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
         value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
+    explicit Shape(const std::vector<uint32_t> &shape, const Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape, padding}} {}
+
+    explicit Shape(const Shape &shape, const Padding &padding) :
+        value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
+
     const auto rank() const { return this->value.rank(); }
 
-    const auto size() const { return this->rank(); }
+    const size_t size() const { return this->rank(); }
+
+    // Returns the padded shape, padding information is stripped
+    [[deprecated("Replaced by padded_shape()")]]
+    const tt::tt_metal::Padding &padding() const { return this->value.padding(); }
+
+    const uint32_t get_normalized_index(std::int64_t index) const { return this->value.get_normalized_index(index); }
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
+    }
+
+    SimpleShape padded_shape() const {
+        std::vector<uint32_t> values(rank());
+        for (size_t i = 0; i < values.size(); i++) {
+            values[i] = this->value[i]; // value stored LegacyShape, its operator[] returns padded value
+        }
+        return SimpleShape(std::move(values));
+    }
+
+    // Returns the shape without padding, padding information is stripped
+    SimpleShape logical_shape() const {
+        std::vector<uint32_t> values(this->rank());
+        for (size_t i = 0; i < values.size(); i++) {
+            values[i] = this->operator[](i); // operator[] returns the shape without padding
+        }
+        return SimpleShape(std::move(values));
     }
 
     bool has_tile_padding() const {
@@ -723,16 +825,8 @@ struct Shape {
 
     bool operator!=(const Shape &other) const { return not(*this == other); }
 
-    const auto operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
-
-    const auto volume() const {
-        auto rank = this->rank();
-        auto volume = 1;
-        for (auto index = 0; index < rank; index++) {
-            volume *= this->operator[](index);
-        }
-        return volume;
-    }
+    // Returns value without padding
+    uint32_t operator[](std::int64_t index) const;
 
     template <std::size_t NewRank>
     const Shape to_rank() const {

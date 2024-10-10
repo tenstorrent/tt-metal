@@ -21,14 +21,14 @@ void MAIN {
     const bool transpose = false;
     mm_init();
     cb_reserve_back(out_cb, num_out_tiles);
-    acquire_dst(tt::DstMode::Half);
+    acquire_dst();
     cb_wait_front(in0_cb, num_in0_tiles);
     cb_wait_front(in1_cb, num_in1_tiles);
     matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
     pack_tile(0, out_cb);
     cb_pop_front(in0_cb, num_in0_tiles);
     cb_pop_front(in1_cb, num_in1_tiles);
-    release_dst(tt::DstMode::Half);
+    release_dst();
     cb_push_back(out_cb, num_out_tiles);
 }
 }  // namespace NAMESPACE

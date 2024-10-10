@@ -144,21 +144,6 @@ Example::
 
 """
 
-# Unsupported cases, which require a fallback: (found in bert, t5, bloom)
-# Shape([1, 128, 512])  <-> (1, 128, 8, 64)
-# Shape([1, 128, 384])  <-> (1, 128, 6, 64)
-# Shape([1, 384, 1024]) <-> (1, 384, 16, 64)
-# Shape([1, 11, 4096])  <-> (1, 11, 32, 128)
-# Shape([1, 128, 28, 28]) <-> (-1, 128)
-# Shape([1, 11, 32, 128]) <-> (1, 1, 11, -1) in ttnn_functional_attention.py test_mistral_attention_inference
-ttnn.register_python_operation(
-    name="ttnn.reshape",
-    golden_function=_golden_function,
-    preprocess_golden_function_inputs=_preprocess_golden_function_inputs,
-    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-    doc=doc,
-)(ttnn._ttnn.operations.core.reshape)
-
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
@@ -172,29 +157,34 @@ def from_torch(
     tensor: "torch.Tensor",
     dtype: Optional[ttnn.DataType] = None,
     *,
+    tile: Optional[ttnn.Tile] = None,
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
 ) -> ttnn.Tensor:
     """
-    from_torch(tensor: torch.Tensor, dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
-    Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
-        * :attr:`tensor`: the torch.Tensor
-        * :attr:`dtype`: the optional `ttnn` data type.
-        * :attr:`layout`: the optional `ttnn` layout.
-        * :attr:`device`: the optional `ttnn` device.
-        * :attr:`memory_config`: the optional `ttnn` memory configuration.
+        tensor (torch.Tensor): the input tensor.
+        dtype (ttnn.DataType, optional): the desired `ttnn` data type. Defaults to `None`.
 
-    Example::
+    Keyword Args:
+        tile (ttnn.Tile, optional): the desired tiling configuration for the tensor. Defaults to `None`.
+        layout (ttnn.Layout, optional): the desired `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
+        memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
+        mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
 
+    Returns:
+        ttnn.Tensor: The resulting `ttnn` tensor.
+
+    Example:
         >>> tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
-        Tensor([ [1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
+        Tensor([[1.375, -1.30469, -0.714844],
+            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     shape_with_padding = None
@@ -217,7 +207,10 @@ def from_torch(
         shards = mesh_mapper.map(tensor)
         tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
-        tensor = ttnn.Tensor(tensor, dtype)
+        if tile is not None:
+            tensor = ttnn.Tensor(tensor, dtype, {}, tile)
+        else:
+            tensor = ttnn.Tensor(tensor, dtype)
 
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)
@@ -264,15 +257,22 @@ def to_torch(
     cq_id: Optional[int] = 0,
 ) -> "torch.Tensor":
     """
-    to_torch(tensor: ttnn.Tensor, torch_rank: Optional[int] = None) -> torch.Tensor
-
-    Converts the `ttnn.Tensor` :attr:`tensor` into a `torch.Tensor`.
+    Converts the `ttnn.Tensor` tensor into a `torch.Tensor`.
 
     Args:
-        * :attr:`tensor`: ttnn.Tensor to be converted to torch.Tensor
-        * :attr:`torch_rank`: desired rank of the torch.Tensor. Will use torch.squeeze operation to remove dimensions until the desired rank is reached. If not possible, the operation will error out.
+        tensor (ttnn.Tensor): the input tensor.
 
-    Example::
+    Keyword Args:
+        torch_rank (int, optional): Desired rank of the `torch.Tensor`. Defaults to `None`.
+            Will use `torch.squeeze` operation to remove dimensions until the desired rank is reached. If not possible, the operation will raise an error.
+        mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
+        device (ttnn.Device, optional): The `ttnn` device of the input tensor. Defaults to `None`.
+        cq_id (int, optional): The command queue ID to use. Defaults to `0`.
+
+    Returns:
+        torch.Tensor: The converted `torch` tensor.
+
+    Example:
         >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> torch_tensor = ttnn.to_torch(ttnn_tensor)
         >>> print(torch_tensor)
@@ -310,9 +310,8 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 doc = """
-to_device(tensor: ttnn.Tensor, device: ttnn.Device, memory_config: MemoryConfig = DRAM_MEMORY_CONFIG) -> ttnn.Tensor
-
 Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
+
 The tensor may be placed in DRAM or L1 memory.
 
 Currently memory_config must be of an Interleaved tensor (not sharded)
@@ -344,8 +343,6 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 doc = """
-from_device(tensor: ttnn.Tensor) -> ttnn.Tensor
-
 Copies the `ttnn.Tensor` :attr:`tensor` to the host.
 
 Args:
@@ -376,15 +373,13 @@ ttnn.register_python_operation(
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor)
 
 doc = """
-deallocate(tensor: ttnn.Tensor, force: bool = True) -> None
-
 Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
 Args:
-    * :attr:`tensor`: the ttnn.Tensor
-    * :attr:`force`: the optional boolean to force deallocation even if buffer may have multiple references. Defaults to True.
+    tensor (ttnn.Tensor): The tensor whose resources will be released.
+    force (bool, optional): Whether to force deallocation, even if the buffer may have multiple references. Defaults to True.
 
-Example::
+Example:
     >>> device_id = 0
     >>> device = ttnn.open_device(device_id=device_id)
     >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
@@ -436,6 +431,22 @@ ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_f
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
 def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = None) -> ttnn.Tensor:
+    """
+    Load tensor from a file.
+
+    Args:
+        file_name (str | pathlib.Path): the file name.
+
+    Keyword Args:
+        device (ttnn.Device, optional): the device. Defaults to `None`.
+
+    Returns:
+        ttnn.Tensor: the loaded tensor.
+
+    Example:
+        >>> device = ttnn.open_device(0)
+        >>> tensor = ttnn.load_tensor(file_name=str(tensor.bin), device=device)
+    """
     file_name = pathlib.Path(file_name)
     if not file_name.exists():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
@@ -446,6 +457,21 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.Device = No
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
 def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor, distribute: Dict[str, str] = None) -> None:
+    """
+    Dump tensor to a file.
+
+    Args:
+        file_name (str | pathlib.Path): The file name.
+        tensor (ttnn.Tensor): the tensor to be dumped.
+        distribute (Dict[str, str], optional): The distributed strategy. Only applicable to multi-device tensors. Defaults to `None`.
+
+    Returns:
+        `None`: tensor saved to a specified file.
+
+    Example:
+        >>> tensor = ttnn.ones([2, 3], bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+        >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
+    """
     if distribute is None:
         distribute = dict()
     file_name = pathlib.Path(file_name)
@@ -466,27 +492,32 @@ def as_tensor(
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """
-    as_tensor(tensor: Union[torch.Tensor], dtype: Optional[ttnn.DataType] = None, layout: Optional[ttnn.Layout] = ROW_MAJOR_LAYOUT, device: Optional[ttnn.Device] = None, memory_config: Optional[ttnn.MemoryConfig] = None, cache_file_name: Optional[str | pathlib.Path] = None) -> ttnn.Tensor
-
-    Converts the `torch.Tensor` :attr:`tensor` into a `ttnn.Tensor`.
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
-        * :attr:`tensor`: the torch.Tensor
-        * :attr:`dtype`: the optional `ttnn` data type.
-        * :attr:`layout`: the optional `ttnn` layout.
-        * :attr:`device`: the optional `ttnn` device.
-        * :attr:`memory_config`: the optional `ttnn` memory configuration.
-        * :attr:`cache_file_name`: the optional cache file name.
-        * :attr:`preprocess`: the optional function to preprocess the tensor before serializing/converting to ttnn.
-        * :attr:`mesh_mapper`: the optional TensorToMesh to define the mapping from torch to multi-device.
-        * :attr:`use_device_tilizer`: the optional flag to use device tilizer instead of host-tilizer. This toggles whether to use host vs. device tilizer:
+        tensor (torch.Tensor): the input tensor.
+        dtype (ttnn.DataType, optional): The `ttnn` data type.
+
+    Keyword args:
+        layout (ttnn.Layout, optional): The `ttnn` layout. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+        device (ttnn.Device, optional): The `ttnn` device. Defaults to `None`.
+        memory_config (ttnn.MemoryConfig, optional): The `ttnn` memory configuration. Defaults to `None`.
+        cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
+        preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
+        mesh_mapper (ttnn.TensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
+        use_device_tilizer (bool, optional): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
+
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
             - For Wormhole, the on-device tilizer will raise a runtime error (RTE) for bfp8 but will truncate for bfp4/2 formats.
 
+    Returns:
+        ttnn.Tensor: The resulting `ttnn` tensor.
+
+    Examples:
         >>> tensor = ttnn.as_tensor(torch.randn((2,3)), dtype=ttnn.bfloat16)
         >>> print(tensor)
-        Tensor([ [1.375, -1.30469, -0.714844],
-            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16 )
+        Tensor([[1.375, -1.30469, -0.714844],
+            [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
     dtype_name = dtype.name if dtype is not None else "None"

@@ -53,7 +53,7 @@ class TtSwinEmbeddings(nn.Module):
     ) -> Tuple[ttnn.Tensor]:
         embeddings, output_dimensions = self.patch_embeddings(pixel_values)
         embeddings = self.norm(embeddings)
-        _, batch_size, seq_len, _ = embeddings.get_legacy_shape()
+        _, batch_size, seq_len, _ = embeddings.shape.with_tile_padding()
 
         if bool_masked_pos is not None:
             mask_tokens = self.mask_token.expand(batch_size, seq_len, -1)
@@ -66,7 +66,7 @@ class TtSwinEmbeddings(nn.Module):
 
             mask_tokens = ttnn.mul(mask_tokens, mask)
 
-            unit_tensor = self.const_tensor(mask.get_legacy_shape(), 1)
+            unit_tensor = self.const_tensor(mask.shape.with_tile_padding(), 1)
             mask = ttnn.sub(unit_tensor, mask)
 
             embeddings = ttnn.mul(embeddings, mask)

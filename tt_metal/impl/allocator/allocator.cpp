@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/allocator.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/hostdevcommon/common_runtime_address_map.h"
@@ -37,7 +37,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType &buffer_type) {
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 94, 124, 130, 140};
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 70, 80, 94, 124, 130, 140};
     bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
     bool doesnt_support_interleaved = buffer_type == BufferType::L1_SMALL;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
@@ -196,17 +196,26 @@ void BankManager::dump_blocks(std::ofstream &out) const {
         this->allocator_->dump_blocks(out);
 }
 
+DeviceAddr get_unreserved_base_address(const Allocator &allocator, const HalMemType &mem_type) {
+    switch (mem_type) {
+        case HalMemType::DRAM: return allocator.config.dram_unreserved_base;
+        case HalMemType::L1: return allocator.config.l1_unreserved_base;
+        default: {
+            TT_THROW("Allocator does not support allocating in {}", magic_enum::enum_name(mem_type));
+        }
+    }
+    return 0;
+}
+
 void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &alloc_config) {
-    // Space up to DRAM_UNRESERVED_BASE is reserved for DRAM write barrier
-    DeviceAddr offset_bytes = static_cast<DeviceAddr>(DRAM_UNRESERVED_BASE);
     // DRAM bank is between unreserved start and trace_region start: UNRESERVED | DRAM BANK | TRACE REGION
-    DeviceAddr dram_bank_size = alloc_config.dram_bank_size - DRAM_UNRESERVED_BASE - alloc_config.trace_region_size;
+    DeviceAddr dram_bank_size = alloc_config.dram_bank_size - alloc_config.dram_unreserved_base - alloc_config.trace_region_size;
     std::vector<int64_t> bank_offsets(alloc_config.num_dram_channels);
     for (uint32_t channel_id = 0; channel_id < alloc_config.num_dram_channels; channel_id++) {
         bank_offsets.at(channel_id) = static_cast<int32_t>(alloc_config.dram_bank_offsets.at(channel_id));
     }
     allocator.dram_manager =
-        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, ALLOCATOR_ALIGNMENT, offset_bytes);
+        BankManager(BufferType::DRAM, bank_offsets, dram_bank_size, alloc_config.alignment, alloc_config.dram_unreserved_base);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -219,8 +228,8 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
         BufferType::TRACE,
         bank_offsets,
         alloc_config.trace_region_size,
-        ALLOCATOR_ALIGNMENT,
-        dram_bank_size + DRAM_UNRESERVED_BASE);
+        alloc_config.alignment,
+        dram_bank_size + alloc_config.dram_unreserved_base);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
         CoreCoord logical_core = CoreCoord{bank_id, 0};
         allocator.bank_id_to_dram_channel.insert({bank_id, bank_id});
@@ -232,11 +241,10 @@ void init_one_bank_per_channel(Allocator &allocator, const AllocatorConfig &allo
 void init_one_bank_per_l1(Allocator &allocator, const AllocatorConfig &alloc_config) {
     TT_ASSERT(alloc_config.l1_small_size == 0);
     uint32_t num_l1_banks = alloc_config.worker_grid_size.y * alloc_config.worker_grid_size.x;
-    // Space up to L1_UNRESERVED_BASE is reserved for risc binaries, kernel args, debug and perf monitoring tools
-    DeviceAddr offset_bytes = static_cast<DeviceAddr>(L1_UNRESERVED_BASE);
-    DeviceAddr l1_bank_size = alloc_config.worker_l1_size - L1_UNRESERVED_BASE;
+    // Space up to L1 unreserved base is reserved for risc binaries, kernel args, debug and perf monitoring tools
+    DeviceAddr l1_bank_size = alloc_config.worker_l1_size - alloc_config.l1_unreserved_base;
     std::vector<int64_t> bank_offsets(num_l1_banks, 0);
-    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, ALLOCATOR_ALIGNMENT, offset_bytes);
+    allocator.l1_manager = BankManager(BufferType::L1, bank_offsets, l1_bank_size, alloc_config.alignment, alloc_config.l1_unreserved_base);
 
     uint32_t bank_id = 0;
     for (uint32_t y = 0; y < alloc_config.worker_grid_size.y; y++) {

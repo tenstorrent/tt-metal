@@ -8,9 +8,8 @@
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
+inline namespace v0 {
 
 class CircularBuffer {
    public:
@@ -35,6 +34,8 @@ class CircularBuffer {
     uint32_t num_pages(uint32_t buffer_index) const;
 
     DataFormat data_format(uint32_t buffer_index) const;
+
+    const std::optional<Tile>& tile(uint32_t buffer_index) const;
 
     uint32_t address() const;
 
@@ -64,6 +65,5 @@ class CircularBuffer {
     // add a callback to invalidate circular buffer allocation
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace v0
+}  // namespace tt::tt_metal

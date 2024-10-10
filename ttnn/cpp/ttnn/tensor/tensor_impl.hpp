@@ -24,7 +24,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape);
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
@@ -212,30 +212,36 @@ static std::vector<uint32_t> to_vector(const tt::tt_metal::LegacyShape& shape) {
 }  // namespace detail
 
 template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::LegacyShape& shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     TT_FATAL(
-        (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
-        "Unsupported shape for tensor conversion");
+        (shape[-2] % tile.get_tile_shape()[0] == 0 && shape[-1] % tile.get_tile_shape()[1] == 0),
+        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must be a multiple of tile height ({}) and width ({}), but the provided shape is {}", tile.get_tile_shape()[0], tile.get_tile_shape()[1], shape);
+
+    auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
+    auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED32_4FACES);
+        data_to_convert, detail::to_vector(shape), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
 }
 
 template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const BufferType<T>& data_to_convert) {
+inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
+    auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), TensorLayout::TILED32_4FACES, TensorLayout::LIN_ROW_MAJOR);
+        data_to_convert, detail::to_vector(shape), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
 }
 
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config);
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile = std::nullopt);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -246,16 +252,17 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape);
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile = std::nullopt);
 
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt);
+    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt,
+    const std::optional<Tile>& tile = std::nullopt);
 
 template <typename T>
 inline void read_data_from_device_buffer(

@@ -28,8 +28,8 @@ Tensor to_weight_special_padding_tile_layout(
         assert(in1_block_h_datums >= w_shape[1] * w_shape[3]);
         uint32_t block_height_padding = in1_block_h_datums - (w_shape[1] * w_shape[3]);
         auto weight_matrix_rows = ((w_shape[1] * w_shape[3]) + block_height_padding) * w_shape[2];
-        tt::tt_metal::LegacyShape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        ttnn::SimpleShape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
+        auto output_buffer = owned_buffer::create<T>(output_shape.volume());
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
                 for (auto c = 0; c < w_shape[1]; c++) {
@@ -112,8 +112,8 @@ Tensor to_weight_tile_layout(
             weight_matrix_rows =
                 (uint32_t)std::ceil((double)weight_matrix_rows / (double)in1_block_h_datums) * in1_block_h_datums;
         }
-        tt::tt_metal::LegacyShape output_shape = {1, 1, weight_matrix_rows, weight_matrix_cols};
-        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        ttnn::SimpleShape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
+        auto output_buffer = owned_buffer::create<T>(output_shape.volume());
         for (auto r = 0; r < w_shape[2]; r++) {
             for (auto s = 0; s < w_shape[3]; s++) {
                 for (auto c = 0; c < w_shape[1]; c++) {
@@ -243,11 +243,11 @@ Helper function to aid in converting grouped weight tensor to ungrouped weight t
 template <typename T>
 static Tensor conv_group_weight_zero_pad_helper(
     Tensor& conv_weight_tensor,
-    tt::tt_metal::LegacyShape& original_weight_shape,
-    tt::tt_metal::LegacyShape& output_weight_shape,
+    const ttnn::SimpleShape& original_weight_shape,
+    const ttnn::SimpleShape& output_weight_shape,
     uint32_t num_groups,
     DataType output_dtype) {
-    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
+    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(output_weight_shape.volume());
     auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
 
     for (int curr_batch_idx = 0; curr_batch_idx < original_weight_shape[0]; curr_batch_idx++) {
@@ -289,10 +289,10 @@ Helper function to aid in converting depthwise weight tensor to broadcasted weig
 template <typename T>
 static Tensor conv_depthwise_weight_bcast_helper(
     Tensor& conv_weight_tensor,
-    tt::tt_metal::LegacyShape& original_weight_shape,
-    tt::tt_metal::LegacyShape& output_weight_shape,
+    const ttnn::SimpleShape& original_weight_shape,
+    const ttnn::SimpleShape& output_weight_shape,
     DataType output_dtype) {
-    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(compute_volume(output_weight_shape));
+    owned_buffer::Buffer<T> output_buffer = owned_buffer::create<T>(output_weight_shape.volume());
     auto conv_weight_tensor_buffer = borrowed_buffer::get_as<T>(conv_weight_tensor);
     // Copy the original weight tensor to the output tensor
     for (int i = 0; i < output_weight_shape[0]; i++) {
@@ -330,12 +330,12 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
-    tt::tt_metal::LegacyShape original_conv_weight_tensor_shape = {
+    ttnn::SimpleShape original_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape_test[0],
         original_conv_weight_tensor_shape_test[1],
         original_conv_weight_tensor_shape_test[2],
         original_conv_weight_tensor_shape_test[3]};
-    tt::tt_metal::LegacyShape output_conv_weight_tensor_shape = {
+    ttnn::SimpleShape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         original_conv_weight_tensor_shape[1] * num_groups,
         original_conv_weight_tensor_shape[2],
@@ -402,12 +402,12 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
         "Convolution weights should be in row major layout for repeating the required dimensions");
     auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
     uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
-    tt::tt_metal::LegacyShape original_conv_weight_tensor_shape = {
+    ttnn::SimpleShape original_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape_test[0],
         original_conv_weight_tensor_shape_test[1],
         original_conv_weight_tensor_shape_test[2],
         original_conv_weight_tensor_shape_test[3]};
-    tt::tt_metal::LegacyShape output_conv_weight_tensor_shape = {
+    ttnn::SimpleShape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         num_input_channels_to_repeat,
         original_conv_weight_tensor_shape[2],
@@ -743,7 +743,7 @@ Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor) 
                 using BorrowedStorageType = std::vector<std::decay_t<decltype(*(buffer.begin()))>>;
                 auto owned_buf = owned_buffer::create(BorrowedStorageType(buffer.begin(), buffer.end()));
                 owned_tensor =
-                    Tensor(OwnedStorage{owned_buf}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout());
+                    Tensor(OwnedStorage{owned_buf}, tensor.get_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
             },
             borrowed_buffer);
         return owned_tensor;

@@ -8,11 +8,7 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-docker-artifact:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-artifact
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
   ttnn-unit-tests:
@@ -29,4 +25,4 @@ jobs:
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
+      runner-label: ${{ matrix.test-group.runner-label }}

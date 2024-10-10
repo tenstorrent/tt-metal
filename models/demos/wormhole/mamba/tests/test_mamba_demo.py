@@ -28,7 +28,7 @@ from difflib import SequenceMatcher
             [
                 "The city of Sarnia is located on the eastern shore of Lake Huron at its extreme southern point where it flows into the St. Clair River . Most of the surrounding area is flat , and the elevation ranges from 169 metres ( 554 ft ) and 281 metres ( 922 ft ) above sea level . The soil mostly comprises clay . Despite this high percentage of clay , the soil is remarkably rich for cultivation . Prior to the Ice Age , glaciers covered most of the area , as can be seen not only by the existence of the Great Lakes themselves but also of alluvial sand deposits, terminal moraines, and rich oil reserves."
             ],
-            ["The area was settled by Europeans in the late"],
+            ["The Great Lakes are the largest freshwater system in"],
             "state-spaces/mamba-2.8b-slimpj",
             10,
             128,
@@ -44,6 +44,7 @@ def test_demo(
     get_tt_cache_path,
     max_gen_len,
     prefill_chunk_size,
+    reset_seeds,
 ):
     assert len(user_input) == len(expected_output)
 
@@ -55,6 +56,7 @@ def test_demo(
         display=True,
         cache_dir=get_tt_cache_path(model_version),
         prefill_chunk_size=prefill_chunk_size,
+        assert_on_performance_measurements=False,  # Don't check performance for functional tests
     )
 
     expected = user_input[0] + expected_output[0]

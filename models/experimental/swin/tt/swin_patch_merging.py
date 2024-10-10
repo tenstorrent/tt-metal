@@ -52,7 +52,7 @@ class TtSwinPatchMerging(nn.Module):
 
     def forward(self, input_feature: ttnn.Tensor, input_dimensions: Tuple[int, int]) -> ttnn.Tensor:
         height, width = input_dimensions
-        _, batch_size, dim, num_channels = input_feature.get_legacy_shape()
+        _, batch_size, dim, num_channels = input_feature.shape.with_tile_padding()
 
         input_feature = fallback_ops.reshape(input_feature, batch_size, height, width, num_channels)
 

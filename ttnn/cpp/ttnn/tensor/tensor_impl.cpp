@@ -43,9 +43,12 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const tt::tt_metal::LegacyShape& shape) {
+uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
     uint32_t W = shape[-1];
     uint32_t page_size = 0;
+    const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
+    const auto bfloat8b_tile_HW = tile.has_value() ? tile_HW + 64 : constants::BFLOAT8_B_TILE_HW;
+    const auto bfloat4b_tile_HW = tile.has_value() ? tile_HW / 2 + 64 : constants::BFLOAT4_B_TILE_HW;
     switch (layout) {
         case Layout::ROW_MAJOR: {
             uint32_t size_of_element = element_size_bytes(dtype);
@@ -57,24 +60,24 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 case DataType::BFLOAT16: {
                     // Float is converted to bfloat16 before being written to device
                     uint32_t size_of_element = element_size_bytes(DataType::BFLOAT16);
-                    page_size = constants::TILE_HW * size_of_element;
+                    page_size = tile_HW * size_of_element;
                 } break;
                 case DataType::FLOAT32: {
                     uint32_t size_of_element = element_size_bytes(DataType::FLOAT32);
-                    page_size = constants::TILE_HW * size_of_element;
+                    page_size = tile_HW * size_of_element;
                 } break;
                 case DataType::UINT32:
                 case DataType::INT32:
                 case DataType::UINT16:
                 case DataType::UINT8:{
                     uint32_t size_of_element = element_size_bytes(dtype);
-                    page_size = constants::TILE_HW * size_of_element;
+                    page_size = tile_HW * size_of_element;
                 } break;
                 case DataType::BFLOAT4_B: {
-                    page_size = constants::BFLOAT4_B_TILE_HW;
+                    page_size = bfloat4b_tile_HW;
                 } break;
                 case DataType::BFLOAT8_B: {
-                    page_size = constants::BFLOAT8_B_TILE_HW;
+                    page_size = bfloat8b_tile_HW;
                 } break;
                 default: TT_ASSERT(false && "Unsupported data type!");
             }
@@ -86,29 +89,33 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
     return page_size;
 }
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape) {
+std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile) {
     // Physical limitation in FD for now
     switch (layout) {
         case Layout::ROW_MAJOR:
             // TODO: Explore valid page shapes other than 1,W
             return {1, shard_shape[1]};
-        case Layout::TILE: return {constants::TILE_HEIGHT, constants::TILE_WIDTH};
+        case Layout::TILE: {
+            auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
+            return {tile_shape[0], tile_shape[1]};
+        }
         default: TT_THROW("Unsupported layout to write to device");
     }
 }
 
 void validate_sharded_buffer_allocation(
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     Layout layout,
     DataType data_type,
     const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config) {
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile) {
     const auto& shard_spec = memory_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
 
     uint32_t num_cores = shard_spec.num_cores();
 
-    uint32_t total_height = tt_metal::compute_volume(shape) / shape[-1];
+    uint32_t total_height = shape.volume() / shape[-1];
     uint32_t total_width = shape[-1];
     if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_ASSERT(
@@ -163,8 +170,9 @@ void validate_sharded_buffer_allocation(
         TT_THROW("Unsupported sharding scheme");
     }
     if (layout == Layout::TILE) {
+        auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
         TT_FATAL(
-            (shard_shape[0] % constants::TILE_HEIGHT == 0 && shard_shape[1] % constants::TILE_WIDTH == 0),
+            (shard_shape[0] % tile_shape[0] == 0 && shard_shape[1] % tile_shape[1] == 0),
             "Shard shape must be tile sized");
     } else if (layout == Layout::ROW_MAJOR) {
         TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0, "Error");
@@ -176,11 +184,12 @@ namespace detail {
 DeviceBuffer allocate_interleaved_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
-    const MemoryConfig& memory_config) {
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape);
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile) {
+    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
@@ -192,14 +201,15 @@ DeviceBuffer allocate_contiguous_buffer_on_device(
 DeviceBuffer allocate_sharded_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config) {
-    validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config);
-    const auto& page_shape = shard_params.page_shape;
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape);
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& tile) {
+    validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config, tile);
+    const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
+    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
 
     return std::make_shared<Buffer>(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
@@ -210,24 +220,25 @@ DeviceBuffer allocate_sharded_buffer_on_device(
 DeviceBuffer allocate_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec) {
+    const std::optional<ShardSpecBuffer>& shard_spec,
+    const std::optional<Tile>& tile) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return detail::allocate_interleaved_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, memory_config, tile);
     } else if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::SINGLE_BANK) {
         return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
     } else {
         TT_ASSERT(memory_config.is_sharded(), "Incorrect Memory Layout");
         return detail::allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config);
+            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, tile);
     }
 }
 
-void validate_on_device_dtype_and_layout(Device* device, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
@@ -284,7 +295,7 @@ Tensor pad_bfloat8_b(
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
     auto float_tensor =
-        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout())
+        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tensor.get_tile())
             .pad(output_tensor_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
@@ -296,7 +307,8 @@ Tensor pad_bfloat8_b(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
         float_tensor.get_legacy_shape(),
         DataType::BFLOAT8_B,
-        tensor.get_layout());
+        tensor.get_layout(),
+        tensor.get_tile());
 }
 
 Tensor unpad_bfloat8_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
@@ -308,7 +320,7 @@ Tensor unpad_bfloat8_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& ou
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
     auto float_tensor =
-        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout())
+        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tensor.get_tile())
             .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
@@ -320,7 +332,8 @@ Tensor unpad_bfloat8_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& ou
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
         float_tensor.get_legacy_shape(),
         DataType::BFLOAT8_B,
-        tensor.get_layout());
+        tensor.get_layout(),
+        tensor.get_tile());
 }
 
 Tensor pad_bfloat4_b(
@@ -333,7 +346,7 @@ Tensor pad_bfloat4_b(
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
     auto float_tensor =
-        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout())
+        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tensor.get_tile())
             .pad(output_tensor_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
@@ -345,7 +358,8 @@ Tensor pad_bfloat4_b(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
         float_tensor.get_legacy_shape(),
         DataType::BFLOAT4_B,
-        tensor.get_layout());
+        tensor.get_layout(),
+        tensor.get_tile());
 }
 
 Tensor unpad_bfloat4_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
@@ -357,7 +371,7 @@ Tensor unpad_bfloat4_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& ou
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
     auto float_tensor =
-        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout())
+        Tensor(OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tensor.get_tile())
             .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
@@ -369,7 +383,8 @@ Tensor unpad_bfloat4_b(const Tensor& tensor, const tt::tt_metal::LegacyShape& ou
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
         float_tensor.get_legacy_shape(),
         DataType::BFLOAT4_B,
-        tensor.get_layout());
+        tensor.get_layout(),
+        tensor.get_tile());
 }
 
 // ======================================================================================
@@ -574,7 +589,8 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
                         OwnedStorage{input_float_buffer},
                         tensor.get_legacy_shape(),
                         DataType::FLOAT32,
-                        tensor.get_layout());
+                        tensor.get_layout(),
+                        tensor.get_tile());
                     return to_string<float>(float_tensor, tensor.get_dtype());
                 }
 
@@ -588,7 +604,8 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
                         OwnedStorage{input_float_buffer},
                         tensor.get_legacy_shape(),
                         DataType::FLOAT32,
-                        tensor.get_layout());
+                        tensor.get_layout(),
+                        tensor.get_tile());
                     return to_string<float>(float_tensor, tensor.get_dtype());
                 }
                 const auto buffer = owned_buffer::get_as<T>(storage.buffer);
@@ -656,7 +673,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
         read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
 }
 
 template <typename T>
@@ -673,6 +690,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
             host_tensor.set_shape(tensor.get_shape());
             host_tensor.set_dtype(tensor.get_dtype());
             host_tensor.set_layout(tensor.get_layout());
+            host_tensor.set_tile(tensor.get_tile());
             insert_buffer_and_shape_for_device(device, shard, host_tensor, device_index);
         }
         return host_tensor;
@@ -717,7 +735,7 @@ Tensor to_host_sharded(const Tensor& tensor) {
     ::detail::ReadFromBuffer(*device_buffer, device_data, true);
     auto data_vec = unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(data_vec));
-    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout());
+    return Tensor(OwnedStorage{output_buffer}, tensor.get_legacy_shape(), tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
 }
 
 template Tensor to_host_sharded<bfloat16>(const Tensor& tensor);
@@ -781,18 +799,19 @@ template <typename T, template <typename> typename BufferType>
 DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
     const std::optional<ShardSpecBuffer>& shard_spec,
+    const std::optional<Tile>& tile,
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
     auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
 
     auto device_buffer =
-        allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec);
+        allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec, tile);
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         write_data_to_device_buffer<T>(
@@ -807,14 +826,15 @@ template <typename T>
 DeviceBuffer to_device_buffer(
     const Storage& storage,
     Device* device,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const MemoryConfig& memory_config,
     const std::optional<ShardSpecBuffer>& shard_spec,
+    const std::optional<Tile>& tile,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
     return std::visit(
-        [&device, &shape, &data_type, &layout, memory_config, shard_spec](auto&& storage) -> DeviceBuffer {
+        [&device, &shape, &data_type, &layout, &tile, memory_config, shard_spec](auto&& storage) -> DeviceBuffer {
             using StorageType = std::decay_t<decltype(storage)>;
             if (memory_config.is_sharded()) {
                 TT_ASSERT(shard_spec.has_value(), "If sharded must provide shard_spec");
@@ -827,12 +847,13 @@ DeviceBuffer to_device_buffer(
                         compute_buffer_size(shape, data_type),
                         data_to_write.size());
                 if (layout == Layout::TILE) {
+                    auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
                     TT_ASSERT(
-                        (shape[-2] % tt::constants::TILE_HEIGHT == 0 && shape[-1] % tt::constants::TILE_WIDTH == 0),
+                        (shape[-2] % tile_shape[0] == 0 && shape[-1] % tile_shape[1] == 0),
                         "Tensor shape incompatible for specified layout");
                 }
                 return initialize_data_on_device<T>(
-                    data_to_write, device, shape, data_type, layout, memory_config, shard_spec);
+                    data_to_write, device, shape, data_type, layout, memory_config, shard_spec, tile);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
@@ -863,13 +884,14 @@ Tensor to_device(
     TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
     TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
 
-    auto shape = tensor.get_legacy_shape();
+    auto shape = tensor.get_padded_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
+    auto tile = tensor.get_tile();
 
     std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
     if (memory_config.is_sharded()) {
-        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape);
+        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape, tile);
 
         auto width = shape[-1];
         auto other_dims = 1;
@@ -882,8 +904,8 @@ Tensor to_device(
     }
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(
-        tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, queue);
-    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout);
+        tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, tile, queue);
+    return Tensor(DeviceStorage{device_buffer}, tensor.get_shape(), data_type, layout, tile);
 }
 
 template Tensor to_device<bfloat16>(
@@ -947,18 +969,19 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
 
     auto shape = tensor.get_legacy_shape();
     auto source_layout = tensor.get_layout();
-    auto convert = [&shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
+    auto tile = tensor.tile();
+    auto convert = [tile, &shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
         switch (source_layout) {
             case Layout::ROW_MAJOR:
                 if (target_layout == Layout::TILE) {
-                    return convert_layout_row_major_to_tile(shape, input_data);
+                    return convert_layout_row_major_to_tile(shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }
                 break;
             case Layout::TILE:
                 if (target_layout == Layout::ROW_MAJOR) {
-                    return convert_layout_tile_to_row_major(shape, input_data);
+                    return convert_layout_tile_to_row_major(shape, tile, input_data);
                 } else {
                     TT_THROW("Unsupported layout conversion");
                 }
@@ -1002,9 +1025,9 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         [&tensor, &target_layout](auto&& storage) -> Tensor {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
+                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout, tensor.get_tile());
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout);
+                return Tensor(storage, tensor.get_legacy_shape(), tensor.get_dtype(), target_layout, tensor.get_tile());
             } else {
                 raise_unsupported_storage<StorageType>();
             }
@@ -1077,7 +1100,8 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
                                             OwnedStorage{input_float_buffer},
                                             tensor.get_legacy_shape(),
                                             DataType::FLOAT32,
-                                            tensor.get_layout())
+                                            tensor.get_layout(),
+                                            tensor.get_tile())
                                             .to(target_layout);
 
                     // Convert back to BFLOAT8_B
@@ -1091,7 +1115,8 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
                     std::move(MultiDeviceHostStorage{storage.strategy, output_buffers, storage.shapes}),
                     tensor.get_legacy_shape(),
                     bfloat_enum<T>::value,
-                    target_layout);
+                    target_layout,
+                    tensor.get_tile());
 
             } else {
                 // Convert to FLOAT32 tensor and change layout
@@ -1103,7 +1128,8 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
                                         OwnedStorage{input_float_buffer},
                                         tensor.get_legacy_shape(),
                                         DataType::FLOAT32,
-                                        tensor.get_layout())
+                                        tensor.get_layout(),
+                                        tensor.get_tile())
                                         .to(target_layout);
 
                 // Convert back to BFLOAT
@@ -1115,7 +1141,8 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout) {
                     std::move(OwnedStorage{std::move(output_uint32_buffer)}),
                     tensor.get_legacy_shape(),
                     bfloat_enum<T>::value,
-                    target_layout);
+                    target_layout,
+                    tensor.get_tile());
             }
         },
         tensor.get_storage());
@@ -1222,7 +1249,7 @@ Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, 
             }
         },
         tensor.get_storage());
-    return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout());
+    return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
 }
 
 template Tensor pad<bfloat16>(
@@ -1310,7 +1337,7 @@ Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tenso
             }
         },
         tensor.get_storage());
-    return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout());
+    return Tensor(OwnedStorage{output_buffer}, output_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
 }
 
 template Tensor unpad<bfloat16>(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
@@ -1345,7 +1372,7 @@ Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
 
     auto unpacked_data = tensor_impl::unpack_uint32_vec<T>(device_data);
     auto output_buffer = owned_buffer::create<T>(std::move(unpacked_data));
-    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout());
+    return Tensor(OwnedStorage{output_buffer}, shard_shape, tensor.get_dtype(), tensor.get_layout(), tensor.get_tile());
 }
 
 template Tensor extract_shard<bfloat16>(const Tensor& tensor, const uint32_t& core_id);

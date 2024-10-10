@@ -87,6 +87,84 @@ static void test_sems_across_core_types(CommonFixture *fixture,
     }
 }
 
+TEST_F(CommonFixture, TestEthBlank) {
+
+    Device *device = devices_[0];
+    Program program = CreateProgram();
+
+    // TODO: tweak when FD supports idle eth
+    const auto &eth_cores = this->slow_dispatch_ ?
+        device->get_inactive_ethernet_cores() :
+        device->get_active_ethernet_cores();
+
+    if (eth_cores.size() > 0) {
+        CoreCoord eth_core = *eth_cores.begin();
+        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CreateKernel(
+            program, "tt_metal/kernels/dataflow/blank.cpp", eth_core,
+            tt::tt_metal::EthernetConfig {
+                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
+            }
+        );
+
+        this->RunProgram(device, program);
+    }
+}
+
+TEST_F(CommonFixture, TestTensixInitLocalMemory) {
+
+    // This test will hang/assert if there is a failure
+
+    Device *device = devices_[0];
+    CoreCoord core = {0, 0};
+    Program program;
+
+    CreateKernel(
+        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    CreateKernel(
+        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    CreateKernel(
+        program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core,
+        ComputeConfig{});
+
+    this->RunProgram(device, program);
+}
+
+TEST_F(CommonFixture, TestEthInitLocalMemory) {
+
+    // This test will hang/assert if there is a failure
+
+    if (not this->slow_dispatch_) {
+        tt::log_warning("Skipping fast dispatch test until active eth memory map is fixed");
+        return;
+    }
+
+    Device *device = devices_[0];
+    Program program = CreateProgram();
+
+    // TODO: tweak when FD supports idle eth
+    const auto &eth_cores = this->slow_dispatch_ ?
+        device->get_inactive_ethernet_cores() :
+        device->get_active_ethernet_cores();
+
+    if (eth_cores.size() > 0) {
+        CoreCoord eth_core = *eth_cores.begin();
+        CoreCoord phys_eth_core = device->physical_core_from_logical_core(eth_core, CoreType::ETH);
+        CreateKernel(
+            program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", eth_core,
+            tt::tt_metal::EthernetConfig {
+                .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER
+            }
+        );
+
+        this->RunProgram(device, program);
+    }
+}
+
 TEST_F(CommonFixture, TestSemaphoresTensixActiveEth) {
     test_sems_across_core_types(this, this->devices_, true);
 }
@@ -162,7 +240,7 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
         // ETH core doesn't have CB
         EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
-        uint32_t cb_addr = L1_UNRESERVED_BASE;
+        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);

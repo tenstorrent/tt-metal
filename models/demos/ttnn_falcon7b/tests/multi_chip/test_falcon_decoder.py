@@ -81,8 +81,7 @@ def test_falcon_decoder(
     torch_model,
     enable_async,
 ):
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
 
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -185,5 +184,4 @@ def test_falcon_decoder(
         pytorch_layer_present[1].squeeze(1), tt_layer_present[1].to(pytorch_layer_present[1].dtype), expected_pcc
     )
 
-    for device in mesh_device.get_device_ids():
-        mesh_device.get_device(device).enable_async(False)
+    mesh_device.enable_async(False)

@@ -34,7 +34,7 @@ New Device Operation
 
     struct <NewOperation> {
         void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
@@ -48,7 +48,7 @@ New Device Operation with a member
         int some_member
 
         void validate(const std::vector<Tensor> &input_tensors) const;
-        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
     };
@@ -61,7 +61,7 @@ New Device Operation with Optional Input Tensors
     struct <NewOperation> {
         void validate(const std::vector<Tensor> &input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
         operation::ProgramWithCallbacks create_program(
             const std::vector<Tensor>& input_tensors,
@@ -80,7 +80,7 @@ and create_output_tensors with the additional parameter for the output_tensors.
 
     struct <NewOperation> {
         void validate_with_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
-        std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
+        std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
         std::vector<std::optional<Tensor>> create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
         operation::ProgramWithOptionalOutputTensors create_program(const std::vector<Tensor>& input_tensors, std::vector<std::optional<Tensor>> &output_tensors) const;
 
@@ -209,21 +209,25 @@ TT-LIB API through ``tt_lib``
 Primary Operations
 ==================
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmax
+.. autofunction:: ttnn.operations.moreh.softmax
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmax_backward
+.. autofunction:: ttnn.operations.moreh.softmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmin
+.. autofunction:: ttnn.operations.moreh.softmin
 
-.. autofunction:: tt_lib.operations.primary.moreh_softmin_backward
+.. autofunction:: ttnn.operations.moreh.softmin_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_logsoftmax
+.. autofunction:: ttnn.operations.moreh.logsoftmax
 
-.. autofunction:: tt_lib.operations.primary.moreh_logsoftmax_backward
+.. autofunction:: ttnn.operations.moreh.logsoftmax_backward
 
-.. autofunction:: tt_lib.operations.primary.moreh_groupnorm
+.. autofunction:: ttnn.operations.moreh.mean
 
-.. autofunction:: tt_lib.operations.primary.moreh_groupnorm_backward
+.. autofunction:: ttnn.operations.moreh.mean_backward
+
+.. autofunction:: ttnn.operations.moreh.group_norm
+
+.. autofunction:: ttnn.operations.moreh.group_norm_backward
 
 .. autofunction:: ttnn.operations.moreh.norm
 

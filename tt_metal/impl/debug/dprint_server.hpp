@@ -10,12 +10,11 @@
 
 namespace tt {
 
-constexpr int DPRINT_NRISCVS = 5;
-constexpr int DPRINT_NRISCVS_ETH = 1;
-
 namespace tt_metal {
+inline namespace v0 {
     class Device;
-}
+}  // namespace v0
+}  // namespace tt_metal
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the
@@ -89,5 +88,10 @@ void DPrintServerClearLogFile();
 @brief Clears any RAISE signals in the print server, so they can be used again in a later run.
 */
 void DPrintServerClearSignals();
+
+/**
+@brief Returns true if the DPRINT server reads any dispatch cores on a given device.
+*/
+bool DPrintServerReadsDispatchCores(tt::tt_metal::Device* device);
 
 } // namespace tt

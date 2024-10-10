@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import pytest
 
 import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
 @pytest.mark.parametrize("height", [32, 30])
@@ -91,3 +92,36 @@ def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout)
 
     assert_with_pcc(torch_input_tensor, output_tensor)
     assert torch.allclose(torch_input_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("use_multicore", [False, True])
+@pytest.mark.parametrize("use_pack_untilize", [False, True])
+def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore, use_pack_untilize):
+    tile_height = 32
+    core_count = 56
+    tiles_per_core = 4
+    H = tile_height * core_count * tiles_per_core
+    W = 16
+
+    torch_input_shape = [1, 1, H, W]
+
+    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [tile_height * tiles_per_core, 2 * W],
+        core_grid=ttnn.CoreGrid(y=7, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
+    ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+
+    output_tt = ttnn.untilize_with_unpadding(
+        ttnn_input, [0, 0, H - 1, W - 1], use_multicore=use_multicore, use_pack_untilize=use_pack_untilize
+    )
+    output_torch = ttnn.to_torch(output_tt)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
+    logger.info(pcc_msg)
+    assert passing

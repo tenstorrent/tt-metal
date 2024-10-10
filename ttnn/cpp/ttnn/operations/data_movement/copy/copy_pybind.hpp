@@ -9,7 +9,6 @@
 namespace ttnn::operations::data_movement::detail {
 
 void py_bind_copy(pybind11::module& m);
-void py_bind_clone(pybind11::module& m);
 void py_bind_assign(pybind11::module& m);
 
 }  // namespace ttnn::operations::data_movement::detail

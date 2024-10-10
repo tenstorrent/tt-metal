@@ -17,14 +17,15 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
     (
-        # 4096,
-        # 1024, TODO: OOM L1; chunk?
+        # 4096, TODO: OOM L1
+        # 1024,
         512,
-        128,
+        # 128,
         32,
     ),
 )
@@ -57,14 +58,29 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
     torch_input = torch.randn(1, 1, seq_len, 4096)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
-        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"]
+        if seq_len <= 32
+        else ttnn.L1_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
     )
-
     logger.info("Compilation pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
+    mode = "decode" if seq_len <= 32 else "prefill"
+    tt_output = tt_model(tt_input, mode)
 
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"]
+        if seq_len <= 32
+        else ttnn.L1_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
     logger.info("Performance pass for Llama_MLP")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, mode)
     tt_output_torch = ttnn.to_torch(tt_output)
 
     pcc_required = 0.99

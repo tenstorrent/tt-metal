@@ -10,8 +10,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, uint32_t in1_idx) {
     // Multiply input by cos
@@ -81,7 +81,6 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    binary_op_init_common(in_cb, cos_cb);
 
     cb_wait_front(scalar_cb, onetile);
 

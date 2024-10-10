@@ -41,8 +41,8 @@ def run_test_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -151,8 +151,8 @@ def test_update_cache_decode(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -234,8 +234,8 @@ def test_update_cache_decode_program_cache(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -276,8 +276,8 @@ def run_test_tensor_index_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -414,8 +414,8 @@ def run_test_paged_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-            xt.get_legacy_shape()[-1],
+            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
@@ -543,8 +543,8 @@ def test_paged_update_cache_decode_program_caching(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                xt.get_legacy_shape()[-1],
+                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                xt.shape.with_tile_padding()[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
@@ -639,7 +639,7 @@ def run_test_paged_fill_cache(
 @pytest.mark.parametrize("user_seq_len", [128, 160, 1984, 2048])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
-@pytest.mark.parametrize("num_heads", [1])
+@pytest.mark.parametrize("num_heads", [1, 8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_fill_cache(
     block_size,
@@ -665,7 +665,7 @@ def test_paged_fill_cache(
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [32])
 @pytest.mark.parametrize("num_heads", [1])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_paged_fill_cache_program_cache(
     block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, device, use_program_cache
 ):

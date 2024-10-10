@@ -77,3 +77,69 @@ def test_run_resnet50_trace_inference(
         math_fidelity,
         model_location_generator,
     )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    ((8, 4),),
+    indirect=True,
+)
+def test_run_resnet50_2cqs_inference(
+    mesh_device,
+    use_program_cache,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async_mode,
+    model_location_generator,
+):
+    run_resnet50_2cqs_inference(
+        mesh_device,
+        device_batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        model_location_generator,
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "device_batch_size, act_dtype, weight_dtype, math_fidelity",
+    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+)
+@pytest.mark.parametrize("enable_async_mode", [True], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    ((8, 4),),
+    indirect=True,
+)
+def test_run_resnet50_trace_2cqs_inference(
+    mesh_device,
+    use_program_cache,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    enable_async_mode,
+    model_location_generator,
+):
+    run_resnet50_trace_2cqs_inference(
+        mesh_device,
+        device_batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        model_location_generator,
+    )

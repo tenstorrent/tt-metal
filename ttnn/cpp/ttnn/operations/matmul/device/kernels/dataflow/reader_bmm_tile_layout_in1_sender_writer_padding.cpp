@@ -87,13 +87,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in3 = 3;
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
     constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
+    constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
+#ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
 
-    const InterleavedAddrGenFast<in3_is_dram> s3 = {
+    const InterleavedAddrGenFast<in3_is_dram, in3_tile_hw> s3 = {
         .bank_base_address = in3_tensor_addr,
         .page_size = bias_single_tile_size_bytes,
         .data_format = bias_data_format};
+#endif
 #else
     rt_args_idx += 2; // Skip over placeholders
 #endif
@@ -125,26 +128,28 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
 
 //  READER
 #ifdef IN1_SHARDED
-    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-    cb_push_back(cb_id_in1, in1_block_num_tiles);
+    cb_reserve_back(cb_id_in1, in1_block_num_tiles*num_blocks);
+    cb_push_back(cb_id_in1, in1_block_num_tiles*num_blocks);
 #else
     uint32_t l1_write_addr_in1;
 
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<in1_is_dram> s1 = {
+    const InterleavedAddrGenFast<in1_is_dram, in1_tile_hw> s1 = {
         .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
 #endif
 
     //  WRITER
     constexpr uint32_t cb_id_out0 = 16;
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
+    constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
     constexpr DataFormat output_data_format = get_dataformat(cb_id_out0);
-    const InterleavedAddrGenFast<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = output_single_tile_size_bytes,
         .data_format = output_data_format};
@@ -291,6 +296,7 @@ void kernel_main() {
         // Only read bias on first batch
         if (b == 0) {
             // Operand 1
+#ifndef BIAS_SHARDED
             cb_reserve_back(cb_id_in3, in1_block_w);
             l1_write_addr_in3 = get_write_ptr(cb_id_in3);
 
@@ -361,11 +367,15 @@ void kernel_main() {
                 in1_mcast_receiver_semaphore_addr,
                 in1_mcast_receiver_semaphore_noc_addr,
                 in1_mcast_num_cores);
-#endif
+#endif // SKIP_MCAST
 
             cb_push_back(cb_id_in3, in1_block_w);
+#else
+            cb_reserve_back(cb_id_in3, in1_block_w);
+            cb_push_back(cb_id_in3, in1_block_w);
+#endif // BIAS_SHARDED
         }
-#endif
+#endif // FUSE_BIAS
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }
