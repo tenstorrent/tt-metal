@@ -76,6 +76,8 @@ jobs:
           echo $attempt_number
           echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
+
+          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
