@@ -7,7 +7,7 @@
 #include <math.h>
 
 #include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/moreh/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"

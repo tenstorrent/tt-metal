@@ -6,7 +6,7 @@
 
 #include "ttnn/run_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/moreh/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"

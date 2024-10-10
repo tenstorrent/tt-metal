@@ -8,7 +8,7 @@
 #include "ttnn/types.hpp"
 
 #include "fold_device_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/moreh/math.hpp"
 
 namespace ttnn::operations::data_movement {
 

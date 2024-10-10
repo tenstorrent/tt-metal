@@ -4,7 +4,7 @@
 
 #include "clone_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/moreh/math.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory::create(

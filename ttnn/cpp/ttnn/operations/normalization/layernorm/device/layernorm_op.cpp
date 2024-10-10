@@ -5,7 +5,7 @@
 #include "layernorm_op.hpp"
 #include "layernorm_types.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/moreh/math.hpp"
 
 #include "tt_metal/common/constants.hpp"
 
