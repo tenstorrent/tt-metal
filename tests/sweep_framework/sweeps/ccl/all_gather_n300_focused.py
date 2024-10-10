@@ -153,8 +153,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # )
     # if is_known_failure:
     #     return True, f"Skipping unsupported case {message}."
-    if test_vector["input_shape"][test_vector["dim"]] <= 1:
-        return True, f"Skipping unsupported case."
     return False, None
 
 
@@ -199,6 +197,10 @@ def run(
 
     # for device in devices:
     #    device.disable_and_clear_program_cache()
+
+    input_shape_list = list(input_shape)
+    input_shape_list[dim] *= num_devices
+    input_shape = tuple(input_shape_list)
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
