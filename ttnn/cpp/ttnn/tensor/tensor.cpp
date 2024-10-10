@@ -705,7 +705,27 @@ Tensor create_device_tensor(
 
 Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+
+    if (layout == Layout::ROW_MAJOR) {
+        if (shape.has_tile_padding()) {
+            tt::log_debug("ttnn::Shape {} represents a row_major tensor with padding! Falling back to pass logical and padded shape to create_device_tensor.", shape);
+            return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+        }
+    } else {
+        for (size_t dim = 0; dim < shape.rank(); dim++) {
+            if (dim < shape.rank() - 2) {
+                if (shape.has_tile_padding(dim)) {
+                    tt::log_debug("ttnn::Shape {} has padding along dims that are not height and width! Falling back to pass logical and padded shape to create_device_tensor.", shape);
+                    return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+                }
+            } else if (shape.padded_shape()[dim] - shape.logical_shape()[dim] >= ttnn::TILE_SIZE) {
+                // NOTE: This also covers the case where logical dim 0 is padded up to 32
+                tt::log_debug("ttnn::Shape {} has padding along height or width that exceeds nearest tile! Falling back to pass logical and padded shape to create_device_tensor.", shape);
+                return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+            }
+        }
+    }
+    return create_device_tensor(shape.logical_shape(), data_type, layout, device, memory_config, tile);
 }
 
 namespace detail {
