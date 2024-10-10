@@ -26,7 +26,7 @@ class ElfFile {
 
     struct Segment {
         std::span<word_t const> contents;  // Non-owning span
-        address_t address = 0;             // word address or 0 for XIP
+        address_t address = 0;             // byte address or 0 for XIP
         offset_t bss = 0;                  // words of BSS
 
        public:
@@ -35,29 +35,48 @@ class ElfFile {
     };
 
    public:
-    ElfFile(std::string const &path);
+    ElfFile() = default;
     ~ElfFile();
 
-    // Uncopyable -- because of the owning buffer
+    // Uncopyable -- because of the owning buffer & pimpl object.
     ElfFile(ElfFile const &) = delete;
     ElfFile operator=(ElfFile const &) = delete;
 
-    // Move constructable -- take ownership
-    ElfFile(ElfFile &&s) : contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
+    // Move constructable & assignable -- take ownership
+    ElfFile(ElfFile &&s) : pimpl_(s.pimpl_),
+	contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
         s.contents_ = std::span<std::byte>();
+	s.pimpl_ = nullptr;
     }
     ElfFile &operator=(ElfFile &&s) {
         std::swap(contents_, s.contents_);
         segments_ = std::move(s.segments_);
+	std::swap(pimpl_, s.pimpl_);
         return *this;
     }
 
    public:
     std::vector<Segment> const &GetSegments() const { return segments_; }
 
+   public:
+    // Release the implementation data, leaving the segments and
+    // contents. Use this, after processing, if the elf object is long-lived.
+    void ReleaseImpl();
+
+    // Read an elf file, populate segments vector.
+    // Path must remain live throughout processing.
+    void ReadImage(std::string const &path);
+
    private:
     class Impl;
+    // We can't use unique_ptr here, because the above move semantics
+    // would require Impl be complete at this point, which is what
+    // we're trying to avoid.
+    Impl *pimpl_ = nullptr;
+
     std::span<std::byte> contents_;  // Owning buffer
+
+    // The first segment is the text segment, regardless of VMA ordering.
     std::vector<Segment> segments_;
 };
 
