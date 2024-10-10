@@ -21,7 +21,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "reglu13": {
         "batch_sizes": [(1,)],
         "height": [32, 384, 1024],
         "width": [64, 1024, 4096],
@@ -42,13 +42,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def torch_reglu(input_tensor, *args, **kwargs):
-    split_size = input_tensor.size(-1) // 2
-    split_tensors = torch.split(input_tensor, split_size_or_sections=[split_size, split_size], dim=-1)
-    tensA, tensB = split_tensors[0], split_tensors[1]
-    return tensA * torch.nn.functional.relu(tensB)
-
-
 # This is the run instructions for the test, defined by the developer.
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
@@ -67,7 +60,9 @@ def run(
     input_shape = (1, *batch_sizes, height, width)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    torch_output_tensor = torch_reglu(torch_input_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.reglu)
+    torch_output_tensor = golden_function(torch_input_tensor, dim=-1)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=dtype, device=device, memory_config=input_memory_config, layout=layout
