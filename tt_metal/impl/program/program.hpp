@@ -141,8 +141,6 @@ class Program {
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
-    void invalidate_compile();
-
     void invalidate_circular_buffer_allocation();
 
     void allocate_circular_buffers(const Device *device);
@@ -213,7 +211,7 @@ class Program {
     std::vector<Semaphore> semaphores_;
 
     CoreRangeSet worker_crs_;
-    std::unordered_map<chip_id_t, bool> compile_needed_;
+    std::unordered_set<chip_id_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;

@@ -122,7 +122,7 @@ Program::Program() :
 }
 
 KernelHandle Program::add_kernel(std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType &programmable_core_type) {
-    this->invalidate_compile();
+    TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
@@ -362,7 +362,7 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 }
 
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
-    this->invalidate_compile();
+    TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
@@ -558,7 +558,7 @@ void Program::init_semaphores(const Device &device, const CoreCoord &logical_cor
 }
 
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
-    this->invalidate_compile();
+    TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
@@ -635,12 +635,6 @@ void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs
 
             }
         }
-    }
-}
-
-void Program::invalidate_compile() {
-    for (auto &[device_id, compile_needed] : compile_needed_) {
-        compile_needed = true;
     }
 }
 
@@ -1035,8 +1029,7 @@ void Program::finalize() {
 
 void Program::compile(Device *device, bool fd_bootloader_mode) {
     ZoneScoped;
-    bool first_compile_on_device = compile_needed_.find(device->id()) == compile_needed_.end();
-    if (not first_compile_on_device and (not compile_needed_.at(device->id()))) {
+    if (compiled_.contains(device->id())) {
         return;
     }
 
@@ -1142,7 +1135,7 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(*this, device);
     }
-    compile_needed_[device->id()] = false;
+    compiled_.insert(device->id());
 }
 
 void Program::set_runtime_id(uint64_t id) { this->runtime_id = id; }
