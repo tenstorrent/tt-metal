@@ -351,7 +351,7 @@ void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
-void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim) {
+void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keepdim) {
     auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
@@ -362,11 +362,11 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
 
-    log_debug(LogOp, "{}:{} keep_dim {} dim {}", __func__, __LINE__, keep_dim, dim);
+    log_debug(LogOp, "{}:{} keepdim {} dim {}", __func__, __LINE__, keepdim, dim);
     log_debug(LogOp, "{}:{} input_shape {} wo_padding {}", __func__, __LINE__, input_shape, input_shape_wo_padding);
     log_debug(LogOp, "{}:{} output_shape {} wo_paddoutg {}", __func__, __LINE__, output_shape, output_shape_wo_padding);
 
-    if (keep_dim) {
+    if (keepdim) {
         bool ranks_are_equal = (input_rank == output_rank);
         input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
@@ -374,7 +374,7 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
         if (!ranks_are_equal) {
             log_warning(
                 LogOp,
-                "{}:{} input_rank {} and output_rank {} are not the same in keep_dim mode",
+                "{}:{} input_rank {} and output_rank {} are not the same in keepdim mode",
                 __func__,
                 __LINE__,
                 input_rank,

@@ -297,7 +297,7 @@ void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shap
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim);
 
-void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim);
+void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keepdim);
 
 void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank);
 
