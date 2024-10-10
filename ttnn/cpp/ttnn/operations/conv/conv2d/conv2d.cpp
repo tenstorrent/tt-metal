@@ -409,9 +409,9 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         uint32_t input_tensor_height_snapped_to_tile;
         if(conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             input_tensor_height_snapped_to_tile = tensor_height;
-        }else if(conv_config.use_max_cores) {
+        } else if(conv_config.use_max_cores) {
             input_tensor_height_snapped_to_tile =  tt::round_up(tensor_height, input_num_cores_nhw);
-        }else{
+        } else {
             input_tensor_height_snapped_to_tile =  tt::round_up(tensor_height, input_num_cores_nhw * 32);
         }
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);

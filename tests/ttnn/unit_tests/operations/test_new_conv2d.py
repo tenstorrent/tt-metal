@@ -2091,7 +2091,6 @@ def test_conv_for_vanilla_unet(
     )
 
 
-@skip_for_grayskull()
 @skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
@@ -2101,16 +2100,16 @@ def test_conv_for_vanilla_unet(
         # first conv post folding and input_channels padding to tile width
         (16, 64, 64, 14, 14, 3, 3, 1, 1, 1, 1, True, None),
         # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passing
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
         # rn50 layer2
         (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),  # passed
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),  # passed
+        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, True, None),
+        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
     ),
 )
 @pytest.mark.parametrize(
@@ -2149,6 +2148,19 @@ def test_non_height_multiple_tile_conv_wh(
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
 
+    if (
+        is_grayskull()
+        and activations_dtype == ttnn.bfloat16
+        and batch_size == 20
+        and (
+            output_channels == 64
+            or (
+                stride_h == 2
+                and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
+            )
+        )
+    ):
+        pytest.skip("Skipping test because it won't fit in L1!")
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
         device,
