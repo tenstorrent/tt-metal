@@ -40,6 +40,68 @@ std::string get_latest_kernel_binary_path(uint32_t mask, const std::shared_ptr<K
     return kernel->name() + "/" + latest_hash;
 }
 
+void construct_program(Program& program, Device * device, CoreCoord& core) {
+    uint32_t single_tile_size = 2 * 1024;
+    uint32_t num_tiles = 2048;
+    uint32_t dram_buffer_size =
+        single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
+
+    tt_metal::InterleavedBufferConfig buff_config{
+        .device = device,
+        .size = dram_buffer_size,
+        .page_size = dram_buffer_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
+
+    auto src_dram_buffer = CreateBuffer(buff_config);
+    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+    auto dst_dram_buffer = CreateBuffer(buff_config);
+    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
+
+    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
+    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
+
+    // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the
+    // input CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to
+    // math kernel, input CB and reader
+    uint32_t src0_cb_index = 0;
+    uint32_t num_input_tiles = 8;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(
+            num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+
+    uint32_t ouput_cb_index = 16;  // output operands start at index 16
+    uint32_t num_output_tiles = 1;
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(
+            num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(ouput_cb_index, single_tile_size);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+
+    auto unary_reader_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+
+    auto unary_writer_kernel = tt_metal::CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    vector<uint32_t> compute_kernel_args = {
+        uint(num_tiles)  // per_core_tile_cnt
+    };
+
+    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
+        core,
+        tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+}
+
 int main(int argc, char **argv) {
     bool pass = true;
 
@@ -72,65 +134,7 @@ int main(int argc, char **argv) {
             programs.push_back(Program());
             Program& program = programs.back();
 
-            uint32_t single_tile_size = 2 * 1024;
-            uint32_t num_tiles = 2048;
-            uint32_t dram_buffer_size =
-                single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-
-            tt_metal::InterleavedBufferConfig buff_config{
-                .device = device,
-                .size = dram_buffer_size,
-                .page_size = dram_buffer_size,
-                .buffer_type = tt_metal::BufferType::DRAM};
-
-            auto src_dram_buffer = CreateBuffer(buff_config);
-            uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-            auto dst_dram_buffer = CreateBuffer(buff_config);
-            uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-            auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-            auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
-            // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the
-            // input CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to
-            // math kernel, input CB and reader
-            uint32_t src0_cb_index = 0;
-            uint32_t num_input_tiles = 8;
-            tt_metal::CircularBufferConfig cb_src0_config =
-                tt_metal::CircularBufferConfig(
-                    num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                    .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-            uint32_t ouput_cb_index = 16;  // output operands start at index 16
-            uint32_t num_output_tiles = 1;
-            tt_metal::CircularBufferConfig cb_output_config =
-                tt_metal::CircularBufferConfig(
-                    num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-                    .set_page_size(ouput_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-            auto unary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
-                core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                "tt_metal/kernels/dataflow/writer_unary.cpp",
-                core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
-            vector<uint32_t> compute_kernel_args = {
-                uint(num_tiles)  // per_core_tile_cnt
-            };
-
-            auto eltwise_unary_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
-                core,
-                tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+            construct_program(program, device, core);
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application
@@ -166,14 +170,19 @@ int main(int argc, char **argv) {
                 }
             }
             tt_metal::detail::ClearKernelCache();
-            for (auto& program : programs) {
-                program.invalidate_compile();
+            std::vector<Program> new_programs;
+            for (int i = 0; i < num_devices; i++) {
+                auto& device = devices[i];
+                new_programs.push_back(Program());
+                Program& program = new_programs.back();
+                construct_program(program, device, core);
             }
+
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
-                auto& program = programs[i];
+                auto& program = new_programs[i];
                 ths.emplace_back([&] {
                     for (int j = 0; j < num_compiles; j++) {
                         uint32_t mask = device->build_key();
