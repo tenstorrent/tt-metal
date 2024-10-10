@@ -116,8 +116,6 @@ class LMHead(nn.Module):
 
         split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
         split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
-        # TODO remove prints
-        print(f"split_sizes: {split_sizes}")
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
