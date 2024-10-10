@@ -44,9 +44,13 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
         case TransposeOpDim::CN:
             tiled_only = true; // CN only has a tiled implementation at the moment
-        case TransposeOpDim::WH:
+            break;
+        case TransposeOpDim::WH: // THIS NEEDS TO BE FIXED
             if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
                 tiled_only = a.shape()[-2] > 256; // horrible hack because PCC on transpose HW row major is terrible on GS in this code path - kernel spits out garbage and has some demuxing for greater than this size that doesn't work
+            }
+            else if (a.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+                tiled_only = !a.is_sharded() && (a.shape()[-2]*a.shape()[-1] >= 400000); // CB blows up on large sizes, hack until transpose_wh_rm is optimized
             }
         default:
             break;
