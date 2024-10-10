@@ -382,8 +382,12 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-entry.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-exit.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
+                // kernels can abort to base-firmware.
+                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-exit.cc");
             }
 
             string linker_str;
