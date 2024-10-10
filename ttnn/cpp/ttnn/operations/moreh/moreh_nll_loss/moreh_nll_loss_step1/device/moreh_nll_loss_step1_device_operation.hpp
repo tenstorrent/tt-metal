@@ -15,7 +15,7 @@ struct MorehNllLossStep1DeviceOperation {
     struct operation_attributes_t {
         const std::string reduction = NONE;
         const uint32_t ignore_index = std::numeric_limits<uint32_t>::max();
-        const DataType output_dtype;
+        const DataType dtype;
         const uint32_t channel_size = 1;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
@@ -70,7 +70,7 @@ struct MorehNllLossStep1DeviceOperation {
         const std::optional<Tensor>& weight_tensor,
         const int32_t ignore_index,
         const std::string reduction,
-        const DataType output_dtype,
+        const DataType dtype,
         const uint32_t channel_size,
         const std::optional<MemoryConfig>& memory_config,
         const DeviceComputeKernelConfig& compute_kernel_config);

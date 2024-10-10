@@ -6,7 +6,7 @@
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "common/bfloat16.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
@@ -44,7 +44,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
                            .to(Layout::TILE)
                            .to(device);
     std::vector<int64_t> reduce_dims = {3};
-    Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims);
+    Tensor np_out = ttnn::moreh_sum(np_tensor, reduce_dims, false, std::nullopt, std::nullopt, std::nullopt);
     Tensor np_out_host = np_out.cpu();
     const bfloat16* golden_output = std::get<owned_buffer::Buffer<bfloat16>>(std::get<OwnedStorage>(np_out_host.get_storage()).buffer).begin();
     // Enable Asynchronous Execution and test ttnn runtime APIs
@@ -67,7 +67,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Host stalls until write is completed, before sending workload
     ttnn::event_synchronize(write_event);
     // Dispatch workload. Preallocated output_tensor is populated by op/
-    ttnn::moreh_sum(workload_dispatch_cq, input_tensor, /*dim*/3, false, output_tensor);
+    ttnn::moreh_sum(input_tensor, /*dim*/ 3, false, output_tensor, std::nullopt, std::nullopt);
     // Record completion of workload
     ttnn::record_event(device->command_queue(workload_dispatch_cq), workload_event);
     ttnn::event_synchronize(workload_event);

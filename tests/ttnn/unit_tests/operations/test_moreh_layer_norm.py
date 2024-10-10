@@ -65,7 +65,7 @@ def to_npu(
     return npu_tensor
 
 
-def torch_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
+def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
     mean_rstd_dims = list(range(-normalized_dims, 0))
 
@@ -80,7 +80,7 @@ def torch_layernorm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None
     return output, mean, rstd
 
 
-def torch_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
+def torch_layer_norm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
 
     input.requires_grad_()
@@ -104,7 +104,7 @@ def torch_layernorm_backward(input, output_grad, *, normalized_dims=1, eps=1e-5,
     return input.grad, gamma_grad, beta_grad
 
 
-def tt_layernorm(
+def tt_layer_norm(
     input,
     *,
     normalized_dims=1,
@@ -164,7 +164,7 @@ def tt_layernorm(
     return tt_output, tt_mean, tt_rstd
 
 
-def tt_layernorm_backward(
+def tt_layer_norm_backward(
     input, output_grad, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None, device=None, compute_kernel_config=None
 ):
     normalized_shape = input.shape[-normalized_dims:]
@@ -304,7 +304,7 @@ def make_input_tensors_gamma_or_beta(input_shape, normalized_dims, gamma_or_beta
     return cpu_input, cpu_gamma, cpu_beta, cpu_output_grad
 
 
-def run_moreh_layernorm(
+def run_moreh_layer_norm(
     input_shape_normalized_dims, elementwise_affine, eps, device, create_mean_rstd=True, compute_kernel_options=None
 ):
     input_shape, normalized_dims = input_shape_normalized_dims
@@ -314,12 +314,12 @@ def run_moreh_layernorm(
     cpu_input, cpu_gamma, cpu_beta, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine)
 
     # expected
-    expected_output, expected_mean, expected_rstd = torch_layernorm(
+    expected_output, expected_mean, expected_rstd = torch_layer_norm(
         cpu_input, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
     )
 
     # actual
-    actual_output, actual_mean, actual_rstd = tt_layernorm(
+    actual_output, actual_mean, actual_rstd = tt_layer_norm(
         cpu_input,
         normalized_dims=normalized_dims,
         eps=eps,
@@ -358,7 +358,7 @@ def run_moreh_layernorm(
         assert pass_rstd
 
 
-def run_moreh_layernorm_backward(
+def run_moreh_layer_norm_backward(
     input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options=None
 ):
     input_shape, normalized_dims = input_shape_normalized_dims
@@ -370,12 +370,12 @@ def run_moreh_layernorm_backward(
     )
 
     # expected
-    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layernorm_backward(
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layer_norm_backward(
         cpu_input, cpu_output_grad, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
     )
 
     # actual
-    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layernorm_backward(
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layer_norm_backward(
         cpu_input,
         cpu_output_grad,
         normalized_dims=normalized_dims,
@@ -412,7 +412,7 @@ def run_moreh_layernorm_backward(
         assert actual_beta_grad is None
 
 
-def run_moreh_layernorm_backward_with_gamma_or_beta(
+def run_moreh_layer_norm_backward_with_gamma_or_beta(
     input_shape_normalized_dims, gamma_or_beta, eps, device, compute_kernel_options=None
 ):
     input_shape, normalized_dims = input_shape_normalized_dims
@@ -424,12 +424,12 @@ def run_moreh_layernorm_backward_with_gamma_or_beta(
     )
 
     # expected
-    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layernorm_backward(
+    expected_input_grad, expected_gamma_grad, expected_beta_grad = torch_layer_norm_backward(
         cpu_input, cpu_output_grad, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
     )
 
     # actual
-    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layernorm_backward(
+    actual_input_grad, actual_gamma_grad, actual_beta_grad = tt_layer_norm_backward(
         cpu_input,
         cpu_output_grad,
         normalized_dims=normalized_dims,
@@ -482,9 +482,9 @@ def run_moreh_layernorm_backward_with_gamma_or_beta(
         ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
     ],
 )
-def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device):
+def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device):
     torch.manual_seed(2023)
-    run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
+    run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -504,9 +504,9 @@ def test_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, d
         ([5, 2, 3, 4, TILE_HEIGHT + 13, TILE_WIDTH + 13], 3),  # test 6d
     ],
 )
-def test_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device):
+def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device):
     torch.manual_seed(2023)
-    run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
+    run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -526,9 +526,9 @@ def test_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affin
         ([5, 2, 3, 4, TILE_HEIGHT + 13, TILE_WIDTH + 13], 3),  # test 6d
     ],
 )
-def test_moreh_layernorm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device):
+def test_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device):
     torch.manual_seed(2023)
-    run_moreh_layernorm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device)
+    run_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, device)
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -546,11 +546,11 @@ def test_moreh_layernorm_backward_with_gamma_or_beta(input_shape_normalized_dims
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_layernorm_compute_kernel_options(
+def test_moreh_layer_norm_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, device
 ):
     torch.manual_seed(2023)
-    run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
+    run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -568,11 +568,11 @@ def test_moreh_layernorm_compute_kernel_options(
     ],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_layernorm_backward_compute_kernel_options(
+def test_moreh_layer_norm_backward_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, device
 ):
     torch.manual_seed(2023)
-    run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
+    run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device, compute_kernel_options)
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -588,10 +588,10 @@ def test_moreh_layernorm_backward_compute_kernel_options(
         ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
     ],
 )
-def test_moreh_layernorm_callback(input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache):
+def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache):
     torch.manual_seed(2023)
     for _ in range(2):
-        run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device)
+        run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device)
     assert device.num_program_cache_entries() == 1
 
 
@@ -608,12 +608,12 @@ def test_moreh_layernorm_callback(input_shape_normalized_dims, elementwise_affin
         ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
     ],
 )
-def test_moreh_layernorm_backward_callback(
+def test_moreh_layer_norm_backward_callback(
     input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache
 ):
     torch.manual_seed(2023)
     for _ in range(2):
-        run_moreh_layernorm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
+        run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
     assert device.num_program_cache_entries() == (2 if elementwise_affine else 1)
 
 
@@ -631,6 +631,6 @@ def test_moreh_layernorm_backward_callback(
         ([5, 2, 3, 4, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 4),  # test 6d
     ],
 )
-def test_moreh_layernorm_no_mean_rstd(input_shape_normalized_dims, elementwise_affine, eps, device):
+def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_affine, eps, device):
     torch.manual_seed(2023)
-    run_moreh_layernorm(input_shape_normalized_dims, elementwise_affine, eps, device, create_mean_rstd=False)
+    run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device, create_mean_rstd=False)

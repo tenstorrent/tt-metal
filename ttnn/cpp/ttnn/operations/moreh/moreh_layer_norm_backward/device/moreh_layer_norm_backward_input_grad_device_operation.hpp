@@ -74,4 +74,4 @@ namespace ttnn::prim {
 constexpr auto moreh_layer_norm_backward_input_grad = ttnn::register_operation_with_auto_launch_op<
     "ttnn::prim::moreh_layer_norm_backward_input_grad",
     operations::moreh::moreh_layer_norm_backward_input_grad::MorehLayerNormBackwardInputGradOperation>();
-}
+}  // namespace ttnn::prim

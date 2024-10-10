@@ -12,7 +12,7 @@ void bind_moreh_sum_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_sum,
-        "Moreh moreh_sum Operation",
+        "Moreh Sum Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::arg("dim"),

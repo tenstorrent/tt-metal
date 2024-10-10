@@ -4,7 +4,7 @@
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 void MorehGroupNormBackwardInputGradOperation::validate_tensors(

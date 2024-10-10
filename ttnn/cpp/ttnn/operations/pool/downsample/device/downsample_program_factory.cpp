@@ -7,7 +7,7 @@
 #include <math.h>
 
 #include "ttnn/common/constants.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "tt_metal/common/constants.hpp"

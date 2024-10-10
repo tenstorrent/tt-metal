@@ -4,7 +4,7 @@
 
 #include "moreh_mean.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean {

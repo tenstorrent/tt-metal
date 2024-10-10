@@ -21,7 +21,7 @@ struct MorehAdamOperation {
         uint32_t step = 0;
         bool amsgrad = false;
 
-        const MemoryConfig output_mem_config;
+        const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 

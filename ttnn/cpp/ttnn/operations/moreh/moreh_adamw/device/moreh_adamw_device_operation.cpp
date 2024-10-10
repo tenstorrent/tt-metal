@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {

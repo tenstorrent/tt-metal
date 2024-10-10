@@ -462,7 +462,7 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
 
     cpu_layout = ttnn.ROW_MAJOR_LAYOUT
     tt_input_grad_cpu = (
-        ttnn.experimental.operations.primary.moreh_sum_backward(
+        ttnn.operations.moreh.sum_backward(
             tt_output_grad,
             input=tt_input,
             dim=dim,

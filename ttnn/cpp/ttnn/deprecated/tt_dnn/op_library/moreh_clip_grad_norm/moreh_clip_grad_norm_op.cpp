@@ -9,7 +9,7 @@
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace tt {
