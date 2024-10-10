@@ -164,6 +164,8 @@ def main(stdscr):
                             output_entries.append(entry)
                         # Update total_lines
                         total_lines = len(input_fields) + len(output_entries)
+                        current_line = 0
+                        screen_needs_update.set()
                     else:
                         # Otherwise if not the last field, move to next field
                         current_line = (current_line + 1) % total_lines
@@ -257,6 +259,7 @@ def define_color_pairs():
     global COLOR_PAIR_RUNNING
     global COLOR_PAIR_FINISHED
     global COLOR_PAIR_ERROR
+    global COLOR_PAIR_SPEED
 
     COLOR_PAIR_SELECTED = curses.color_pair(1)
     COLOR_PAIR_LABEL = curses.color_pair(2)
@@ -266,6 +269,7 @@ def define_color_pairs():
     COLOR_PAIR_RUNNING = curses.color_pair(6)
     COLOR_PAIR_FINISHED = curses.color_pair(7)
     COLOR_PAIR_ERROR = curses.color_pair(8)
+    COLOR_PAIR_SPEED = curses.color_pair(6)  # Use the same color as RUNNING
 
 
 def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_state):
@@ -332,8 +336,15 @@ def draw_input_field(stdscr, field, is_selected, max_x):
 
 
 def draw_output_entry(stdscr, entry, y, is_selected, max_x):
-    cols = [entry["command_name"], entry["model"], entry["device"], entry["status"], entry["output"]]
-    col_widths = [15, 10, 10, 20, max_x - 60]
+    cols = [
+        entry["command_name"],
+        entry["model"],
+        entry["device"],
+        entry["status"],
+        entry.get("speed", ""),
+        entry["output"],
+    ]
+    col_widths = [15, 10, 10, 20, 10, max_x - 70]  # Adjusted widths to accommodate the speed column
 
     x = 0
     for i, (col, width) in enumerate(zip(cols, col_widths)):
@@ -356,6 +367,8 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
                     color = COLOR_PAIR_ERROR
                 elif status == "Terminating" or status == "Resetting":
                     color = COLOR_PAIR_WAITING
+            elif i == 4:  # Speed column
+                color = COLOR_PAIR_SPEED
             else:
                 color = curses.color_pair(0)
             stdscr.addstr(y, x, col_text, color)
@@ -364,8 +377,8 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
 
 
 def format_header(max_x):
-    cols = ["Command", "Model", "Device", "Status", "Output"]
-    col_widths = [15, 10, 10, 20, max_x - 60]
+    cols = ["Command", "Model", "Device", "Status", "Speed", "Output"]
+    col_widths = [15, 10, 10, 20, 10, max_x - 70]  # Adjusted widths to accommodate the speed column
     formatted_cols = []
     for col, width in zip(cols, col_widths):
         formatted_cols.append(col[:width].ljust(width))
@@ -443,17 +456,19 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
             log_file.flush()
 
             # Update status and output based on output
-            status, output = parse_output_line(line, previous_line, entry["status"])
+            status, output, speed = parse_output_line(line, previous_line, entry["status"])
             # Append input and output of parse_output_line to a log file
             with open("parse_output_log.txt", "a") as parse_log:
                 parse_log.write(f"Input: {line.strip()}, Previous status: {entry['status']}\n")
-                parse_log.write(f"Output: Status: {status}, Output: {output}\n\n")
+                parse_log.write(f"Output: Status: {status}, Output: {output}, Speed: {speed}\n\n")
             previous_line = line.strip()
             with entry["lock"]:
-                if status != entry["status"] or output:
+                if status != entry["status"] or output or speed is not None:
                     entry["status"] = status
                     if output:
                         entry["output"] = output
+                    if speed is not None:
+                        entry["speed"] = f"{speed:.1f}"
                     screen_needs_update.set()
 
             with screen_lock:
@@ -502,35 +517,41 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 def parse_output_line(line, previous_line, current_status):
     line = line.strip()
     if "Initializing device" in line:
-        return "Initializing device", None
+        return "Initializing device", None, None
     elif "Loading weights" in line:
-        return "Loading weights", None
+        return "Loading weights", None, None
     elif re.search(r"layers\.\d+\.", line):
         match = re.search(r"layers\.(\d+)\.", line)
         if match:
             layer_number = match.group(1)
-            return f"Loading layer {layer_number}", None
+            return f"Loading layer {layer_number}", None, None
     elif "Starting inference..." in line:
-        return "Starting", None
+        return "Starting", None, None
     elif "Starting prefill..." in line:
-        return "Prefill", None
+        return "Prefill", None, None
     elif "Starting decode..." in line:
-        return "Decode", None
+        return "Decode", None, None
     elif line == "output:":
-        return "Waiting for output", None
+        return "Waiting for output", None, None
     elif current_status == "Waiting for output" and previous_line == "output:":
         if "<|start_header_id|>assistant<|end_header_id|>" in line:
             output = line.split("<|start_header_id|>assistant<|end_header_id|>", 1)[1].strip()
             if output:
-                return "Running", output
+                return "Running", output, None
             else:
-                return "Assistant output", None  # wait for a non-blank line
+                return "Assistant output", None, None  # wait for a non-blank line
         else:
-            return "Running", line
+            return "Running", line, None
     elif current_status == "Assistant output" and line:  # skip blank lines
-        return "Running", line
+        return "Running", line, None
 
-    return current_status, None
+    # Check for speed information
+    speed_match = re.search(r"@ (\d+\.\d+) tok/s/user", line)
+    if speed_match:
+        speed = float(speed_match.group(1))
+        return current_status, None, speed
+
+    return current_status, None, None
 
 
 def get_llama_dir(model):
