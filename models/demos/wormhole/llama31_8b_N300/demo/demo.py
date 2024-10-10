@@ -67,9 +67,9 @@ def preprocess_inputs_prefill(
     # To avoid running out of memory, clip to max_prefill_len
     if min_prompt_len > max_prefill_len:
         logger.info(f"Clipping prompts to {max_prefill_len}")
-        if instruct:  # When clipping, make sure to add the ` [/INST]` token at the end (4 tokens)
+        if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
             encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
-            dec_prompts = [tokenizer.decode(encod) + " [/INST]" for encod in encoded_prompts]
+            dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
             encoded_prompts = [tokenizer.encode(prompt) for prompt in dec_prompts]
         else:
             encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
@@ -351,6 +351,8 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         # Start decoding
         iteration = 0
         users_decoding = True  # reset to handle next batch
+        total_decoding_time = 0  # Track total decoding time
+        total_tokens_generated = 0  # Track total tokens generated
 
         ttnn.record_event(1, write_event)
 
@@ -382,6 +384,12 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
 
             # Print out generated outputs for each user at the end of every iteration
             iteration_time = time() - iteration_time_start
+
+            # Ignore the first iteration for average speed calculation
+            if iteration > 0:
+                total_decoding_time += iteration_time
+                total_tokens_generated += 1
+
             tokens_per_second_per_user = 1 / iteration_time
 
             # Print out generated outputs for each user at the end of every iteration
@@ -422,7 +430,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
                     for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                         text = tokenizer.decode(output)
                         if instruct_mode:
-                            split_text = text.split("[/INST]", 1)
+                            split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
                         else:
                             split_text = text.split(prompt, 1)
                         if len(split_text) > 1:
@@ -434,13 +442,22 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
                                 f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
                             )
                         else:
+                            # Strip leading newlines from output when sent to terminal
                             logger.info(
-                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
+                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt.strip()}\n"
                             )
 
+        # Calculate and print average decoding speed (ignoring the first iteration)
+        if total_tokens_generated > 0:
+            average_tokens_per_second = total_tokens_generated / total_decoding_time
+            average_tokens_per_second_per_user = average_tokens_per_second / batch_size
+            logger.info(
+                f"Average speed: {1000/average_tokens_per_second_per_user:.0f}ms @ {average_tokens_per_second_per_user:.1f} tok/s/user ({batch_size*average_tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
+
         num_tokens_generated_decode.append(
-            iteration - 1
-        )  # Save the number of tokens generated for each batch (excluding the first token which is used for compile time)
+            total_tokens_generated
+        )  # Save the number of tokens generated for each batch (excluding the first token)
 
         # Release trace
         ttnn.release_trace(mesh_device, trace_id)
