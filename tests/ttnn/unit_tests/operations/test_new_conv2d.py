@@ -165,6 +165,7 @@ def run_conv(
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
+        # memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
