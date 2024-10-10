@@ -282,7 +282,7 @@ def test_run_max_pool_yolov4(
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
 
 
-@pytest.mark.skip("See GH issue #12285")
+""" @pytest.mark.skip("See GH issue #12285")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override, xfail",
@@ -530,3 +530,4 @@ def test_pool_core_nondivis(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+ """

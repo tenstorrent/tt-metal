@@ -21,10 +21,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                            std::array<uint32_t, 2> stride,
                            std::array<uint32_t, 2> padding,
                            std::array<uint32_t, 2> dilation,
-                           TensorMemoryLayout sharding_strategy) {
-
-    printf("Op INVOKE CALLED\n");
-
+                           TensorMemoryLayout applied_shard_scheme) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
@@ -44,16 +41,12 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
     MemoryConfig memory_config = input_tensor_sharded.memory_config();
     uint32_t num_cores_nhw = 0;
 
-    printf("IF\n");
-
     if (!memory_config.shard_spec.has_value()) {
         // Input is not sharded. Perform sharding.
         applied_shard_scheme = applied_shard_scheme == TensorMemoryLayout::INTERLEAVED ? TensorMemoryLayout::HEIGHT_SHARDED : applied_shard_scheme; // default to height sharding
         TT_FATAL((applied_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) ||
                  (applied_shard_scheme == TensorMemoryLayout::WIDTH_SHARDED),
                  "Only height or width sharding strategies are supported.");
-
-        printf("Determining parallel config\n");
 
         parallel_config = conv::conv2d::determine_parallel_config(
                                             applied_shard_scheme,
@@ -67,24 +60,12 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                                             false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
 
-        printf("num_cores_nhw: %d\n", num_cores_nhw);
-
         TT_FATAL(applied_shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ||
                  (applied_shard_scheme == TensorMemoryLayout::WIDTH_SHARDED && (num_cores_nhw == 1)),
                  "If heigh sharding is used num_cores_nhw may vary, but if width sharding is used num_cores_nhw must be 1.");
 
-        printf("hit 1\n");
-
         auto sharded_mem_config = conv::conv2d::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-
-        printf("shape early: %d, %d\n", sharded_mem_config.shard_spec->shape[0], sharded_mem_config.shard_spec->shape[1]);
-
-        printf("hit 2\n");
-
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt);
-
-        printf("hit 3\n");
-
         memory_config = input_tensor_sharded.memory_config();
     } else {
         // input is already sharded, use it as is
@@ -98,8 +79,6 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         parallel_config.shard_orientation = shard_orientation;
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
     }
-
-    printf("SHARD SPEC\n");
 
     // update the shard spec to match the output shape
     auto shard_spec = memory_config.shard_spec.value();
@@ -122,8 +101,6 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
             .snap_to_tile = false
     };
 
-    printf("HALO CALLED \n");
-
     // call the halo uop
     uint32_t neg_inf_pad_val = 0xf7ff;
     auto haloed_tensor = ttnn::halo(
@@ -137,8 +114,6 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         input_tensor_sharded.memory_config(),
         is_out_tiled);
 
-    printf("MAX POOL 2D CALLED\n");
-
     return ttnn::prim::max_pool2d(
         queue_id,
         haloed_tensor,
@@ -147,14 +122,5 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         memory_config);
 }
 
-<<<<<<< HEAD
-=======
-// device template specializations
-template Tensor MaxPool2DOp::invoke<Device>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size,
-                                            std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, Device* device, TensorMemoryLayout applied_shard_scheme);
-template Tensor MaxPool2DOp::invoke<MeshDevice>(uint8_t queue_id, const Tensor& input_tensor, uint32_t batch_size, uint32_t input_h, uint32_t input_w, uint32_t channels, std::array<uint32_t, 2> kernel_size,
-                                                std::array<uint32_t, 2> stride, std::array<uint32_t, 2> padding, std::array<uint32_t, 2> dilation, MeshDevice* device, TensorMemoryLayout applied_shard_scheme);
-
->>>>>>> #13077: changed default to make more sense with pre-sharded tensor, but this might be worse
 }  // namespace operations::pool
 }  // namespace ttnn

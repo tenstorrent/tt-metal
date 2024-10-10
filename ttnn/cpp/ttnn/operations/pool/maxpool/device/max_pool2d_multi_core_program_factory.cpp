@@ -47,8 +47,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
     const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
-    printf("HIT 0\n");
-
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
@@ -389,9 +387,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 }
 
 MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
-
-    printf("CREATE CALLED\n");
-
     const auto& input = tensor_args.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;

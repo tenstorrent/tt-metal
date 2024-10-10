@@ -121,9 +121,6 @@ ParallelConfig determine_parallel_config(
             return grid;
 
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            printf("conv_out_2d_matrix_width_ntiles: %d\n", conv_out_2d_matrix_width_ntiles);
-            printf("input_channels: %d\n", input_channels);
-            printf("max_num_cores: %d\n", max_num_cores);
             uint32_t num_cores_channels = find_closest_common_largest_divisor(
                 conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)tt::constants::TILE_WIDTH), max_num_cores);
              log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
@@ -225,7 +222,6 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
-    printf("channels: %d, num_cores_channels: %d, channel_shard: %d, mod: %d\n", channels, num_cores_channels, channel_shard, channels % num_cores_channels);
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
