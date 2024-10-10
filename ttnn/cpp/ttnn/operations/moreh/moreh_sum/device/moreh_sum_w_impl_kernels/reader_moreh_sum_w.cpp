@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t scaler = get_compile_time_arg_val(1);
 
     constexpr uint32_t cb_id_in2 = 2;
-    generate_reduce_scaler(cb_id_in2, scaler);
+    generate_mm_scaler(cb_id_in2, scaler);
 
     constexpr uint32_t cb_id_mask_w = 3;
 #ifdef DO_MASK_W
