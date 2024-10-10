@@ -329,6 +329,7 @@ def test_moreh_matmul_1d(input_shape, device):
 
     assert passing
 
+
 @pytest.mark.parametrize(
     "params",
     (
@@ -476,6 +477,7 @@ def test_moreh_matmul_1d_backward(input_shape, requires_grad, device):
         logger.debug(f"other_grad passing={passing}")
         logger.debug(f"other_grad pcc={output_pcc}")
         assert passing
+
 
 @skip_for_grayskull("GS does not support fp32")
 @pytest.mark.parametrize(
