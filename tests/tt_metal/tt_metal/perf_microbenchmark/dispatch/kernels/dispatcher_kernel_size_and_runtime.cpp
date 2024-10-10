@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// #include "debug/dprint.h"
 #include "c_tensix_core.h"
 
 #if KERNEL_SIZE_BYTES > 16
@@ -11,5 +12,9 @@ uint8_t data1[KERNEL_SIZE_BYTES - empty_kernel_bytes] __attribute__ ((section ("
 
 void kernel_main() {
     const uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUNTIME_SECONDS;
-    while (c_tensix_core::read_wall_clock() < end_time);
+    // DPRINT << KERNEL_RUNTIME_SECONDS << ENDL();
+    // DPRINT << end_time << ENDL();
+    while (c_tensix_core::read_wall_clock() < end_time) {
+        // DPRINT << c_tensix_core::read_wall_clock() << ENDL();
+    }
 }
