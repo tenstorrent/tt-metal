@@ -325,18 +325,43 @@ def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float
         current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
         current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
+    # Create height sharded spec for the rot_matrix - 32 shards with shape [128,128]
+    shard_spec = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 3),
+            ),
+        }
+    )
+    rot_mat_memconfig = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_spec,
+            [
+                128,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
     return ttnn.from_torch(
         current_rot_mat.unsqueeze(0).transpose(-1, -2),  # 1,B,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     )
 
 

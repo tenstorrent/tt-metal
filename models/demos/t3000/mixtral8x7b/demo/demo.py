@@ -131,14 +131,14 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     generation_start_pos = 0
     max_generated_tokens = 50  # max_seq_len-1
 
-    cache_attention(
-        mesh_device,
-        state_dict,
-        model_args,
-        current_rot_mat,
-        rot_matrix,
-        dtype,
-    )
+    # cache_attention(
+    #     mesh_device,
+    #     state_dict,
+    #     model_args,
+    #     current_rot_mat,
+    #     rot_matrix,
+    #     dtype,
+    # )
 
     logger.info("Starting inference...")
 

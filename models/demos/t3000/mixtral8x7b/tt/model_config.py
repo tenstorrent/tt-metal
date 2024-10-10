@@ -172,16 +172,15 @@ class TtModelArgs:
         )
 
         # Create program configs for the different ttlib matmul ops
-        self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+
+        # 32 shards divided between 32 cores
+        self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
             compute_with_storage_grid_size=(8, 4),
-            in0_block_w=4,
+            in0_block_w=4,  # K = 128 / TILE = 4
             out_subblock_h=1,
             out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=4,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=False,
+            per_core_M=1,  # M = 32 / TILE = 1
+            per_core_N=4,  # N = 128 / TILE = 4
         )
 
         self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
