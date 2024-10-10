@@ -66,6 +66,7 @@ class DevicePool {
     std::unordered_map<uint32_t, uint32_t> device_to_core_map;
 
     void init_firmware_on_active_devices() const;
+    void init_profiler_devices() const;
     void activate_device(chip_id_t id);
     void initialize_device(Device *dev) const;
     void deactivate_device(chip_id_t id);

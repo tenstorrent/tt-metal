@@ -107,6 +107,37 @@ DevicePool* DevicePool::_inst = nullptr;
 // Should probably add a dispatch_core_manager.cpp and move this there
 tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
+void DevicePool::init_profiler_devices() const {
+#if defined(TRACY_ENABLE)
+    for (const auto& dev : this->get_all_active_devices()) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+        detail::InitDeviceProfiler(dev);
+        log_info(
+            tt::LogMetal,
+            "Profiler started on device {}",
+            mmio_device_id);
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    log_info(
+                            tt::LogMetal,
+                            "Starting profiler on device {}",
+                            this->devices[mmio_controlled_device_id].get()->id());
+                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
+                }
+            }
+        }
+    }
+#endif
+}
+
 void DevicePool::initialize(
     std::vector<chip_id_t> device_ids,
     const uint8_t num_hw_cqs,
@@ -114,6 +145,7 @@ void DevicePool::initialize(
     size_t trace_region_size,
     DispatchCoreType dispatch_core_type,
     const std::vector<uint32_t> &l1_bank_remap) noexcept {
+    ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_type, num_hw_cqs);
 
@@ -146,6 +178,7 @@ void DevicePool::initialize(
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+    _inst->init_profiler_devices();
 }
 
 void DevicePool::initialize_device(Device* dev) const {
@@ -178,7 +211,6 @@ void DevicePool::initialize_device(Device* dev) const {
     // Set up HW command queues on device for FD
     if (using_fast_dispatch)
         dev->init_command_queue_device();
-    detail::InitDeviceProfiler(dev);
 }
 
 void DevicePool::activate_device(chip_id_t id) {
