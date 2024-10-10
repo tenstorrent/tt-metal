@@ -19,7 +19,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
+    auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device *device{input.device()};

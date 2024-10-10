@@ -18,7 +18,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
+    auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* device = input.device();

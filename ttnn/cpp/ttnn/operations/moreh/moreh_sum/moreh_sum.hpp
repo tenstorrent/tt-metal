@@ -12,7 +12,7 @@ struct MorehSum {
         std::optional<std::variant<int64_t, std::vector<int64_t>>> dims,
         const bool keep_batch_dim,
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_mem_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_sum

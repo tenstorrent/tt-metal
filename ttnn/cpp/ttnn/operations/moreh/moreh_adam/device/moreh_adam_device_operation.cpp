@@ -82,34 +82,34 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     auto device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
-    auto output_mem_config = operation_attributes.output_mem_config;
+    auto memory_config = operation_attributes.memory_config;
 
     auto idx = uint32_t{0};
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, memory_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, memory_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else {
-        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, memory_config));
     }
     ++idx;
 
     if (tensor_args.output_tensors.at(idx).has_value()) {
         ret.push_back(tensor_args.output_tensors.at(idx).value());
     } else if (operation_attributes.amsgrad) {
-        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, output_mem_config));
+        ret.push_back(create_device_tensor(output_shapes.at(idx).value(), dtype, layout, device, memory_config));
     }
 
     return std::move(ret);
