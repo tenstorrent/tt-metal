@@ -26,7 +26,7 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
-    TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+    //TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
 
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
@@ -146,9 +146,6 @@ std::tuple<MaxPool2D::operation_attributes_t, MaxPool2D::tensor_args_t> MaxPool2
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     DataType output_dtype,
     MemoryConfig memory_config) {
-
-    printf("INVOKE CALLED\n");
-
     return {
         operation_attributes_t{sliding_window_config, output_dtype, memory_config},
         tensor_args_t{input_tensor}
