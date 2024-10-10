@@ -813,13 +813,16 @@ inline MatmulProgramConfig get_program_config(
 
 tt::tt_metal::Tile get_output_tile(const MemoryConfig& output_mem_config, const std::array<uint32_t, 2>& in0_tile_shape, const std::array<uint32_t, 2>& in1_tile_shape, const std::optional<const tt::tt_metal::Tile> output_tile) {
     if (output_tile.has_value()) {
-        TT_FATAL(output_tile->get_tile_shape()[1] % in1_tile_shape[1] == 0, "the override output tile width be multiple of in1 tile width");
-        TT_FATAL(output_tile->get_tile_shape()[0] == in0_tile_shape[0], "the override output tile height must equal to the in0 tile height");
-        if (output_tile->get_tile_shape()[1] != in1_tile_shape[1]) {
-            TT_FATAL(output_tile->get_tile_shape()[0] <= constants::FACE_HEIGHT, "the override output tile height must equal or less to face height");
+        const auto& out_tile_shape = output_tile->get_tile_shape();
+        TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
+        TT_FATAL(out_tile_shape[1] % in1_tile_shape[1] == 0, "the override output tile width be multiple of in1 tile width");
+        TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
+        TT_FATAL(out_tile_shape[0] == in0_tile_shape[0], "the override output tile height must equal to the in0 tile height");
+        if (out_tile_shape[1] != in1_tile_shape[1]) {
+            TT_FATAL(out_tile_shape[0] <= constants::FACE_HEIGHT, "the override output tile height must equal or less to face height");
         }
         if (!output_mem_config.is_sharded()) {
-            TT_FATAL(output_tile->get_tile_shape()[1] == in1_tile_shape[1], "the override output tile width must equal to the in0 tile width");
+            TT_FATAL(out_tile_shape[1] == in1_tile_shape[1], "the override output tile width must equal to the in0 tile width");
         }
     }
     return output_tile.value_or(tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]}));
