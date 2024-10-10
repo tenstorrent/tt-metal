@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <variant>
 #include "device_fixture.hpp"
 #include "tt_metal/common/bfloat8.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include <variant>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -14,9 +14,16 @@ namespace unit_tests::compute::reconfig {
 
 struct ReconfigConfig {
     size_t num_tiles = 0;
+    // Number of tiles finished with single LLK API call:
     size_t ublock_size_tiles = 0;
+    // Reconfig LLK API calls can either explicitly or implicitly take previous
+    // CB indices; which version of the call is used is defined by this flag:
     bool explicit_reconfig = false;
+    // Some reconfig calls are joined for SrcA/B; whether split or joined calls
+    // are used is defined with this flag:
     bool split_src_reconfig = false;
+    // This flag defines whether regular packing to L1 is used, or the one
+    // where the result is accumulated with the previous value:
     bool l1_acc = false;
     bool dst_full_sync_en = false;
 };
@@ -28,12 +35,11 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_config) {
-    bool pass = true;
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+    bool pass = true;
     uint32_t in0_id = 0;
     uint32_t in1_id = 1;
     uint32_t in2_id = 2;
@@ -41,7 +47,8 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     uint32_t out1_id = 17;
     static float out0_result_old = 0;
     // Since golden is not perfect, some corner cases for these values will
-    // make the tests fail. However, this is a representative example
+    // make the tests fail. However, this is a representative example since
+    // it utilizes the full BFP16 presicion and range:
     float in0_val = 1.0;
     float in1_val = 127.0;
     float in2_val = 0.0078125;
@@ -119,7 +126,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     std::map<string, string> defines;
 
 
-    defines["DST_ACCUM_MODE"] = "1"; // Needed always in order for reader kernel to load data from cb2
+    defines["DST_ACCUM_MODE"] = "1"; // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";
     defines["SPLIT_SRC_RECONFIG"] = test_config.split_src_reconfig ? "1" : "0";
     defines["BLOCK_COPY"] = test_config.block_copy ? "1" : "0";
@@ -155,7 +162,6 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
             uint32_t(test_config.ublock_size_tiles),
         });
 
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
@@ -174,6 +180,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     std::vector<uint32_t> src2_vec = create_constant_vector_of_bfloat16(
             dram_buffer_size_bfp16b,
             in2_val);
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
@@ -185,37 +192,44 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     // 19 bits since that's the width of srcA/B/FPU. This is why it's
     // float32 in golden. As for golden1, it should be Bfp8_b in the end,
     // but since there's no available conversion from Float16_b to Bfp8_b,
-    // it's left in float and then converted to Bfp8_b.
+    // it remains in float and is then converted to Bfp8_b.
     std::vector<float> temp_golden(input1.size());
 
     // It's tricky to make a variable-type vector, so create two for each case
     // of fp32_dest_acc_en, fp32 when true, fp16 when false
     std::vector<float> golden0_fp32(input1.size());
     std::vector<bfloat16> golden0_bfp16(input1.size());
-
+    // This vector will hold unpacked Bfp8 result:
     std::vector<float> golden1(input1.size());
+    // This vector will hold packed fp16_b/fp32 result:
     std::vector<uint32_t> packed_golden0(input1.size());
     for (auto i = 0; i < temp_golden.size(); i++) {
+        // Do temp = SrcA + SrcB:
         temp_golden[i] = input1[i].to_float() + bfloat16(input0[i]).to_float();
+        // Do temp + DST, store in out0 vector depending on fp32_dest_acc_en:
         if (test_config.fp32_dest_acc_en) {
             golden0_fp32[i] = temp_golden[i] + input2[i].to_float();
         } else {
             golden0_bfp16[i] = bfloat16(temp_golden[i] + input2[i].to_float());
         }
+        // Do out1 = temp + DST:
         golden1[i] = bfloat16(temp_golden[i] + input2[i].to_float()).to_float();
+        // Do out0[bfp16] = temp + L1, this makes sense only if not fp32_dest_acc_en:
         if (test_config.l1_acc && !test_config.fp32_dest_acc_en) {
-            // Makes sense only if fp32_dest_acc_en = false
             golden0_bfp16[i] = bfloat16(golden0_bfp16[i].to_float() + out0_result_old);
         } else {
             out0_result_old = golden0_bfp16[i].to_float();
         }
+        // Cast float32 to "packed "uint32 out0 vector if fp32_dest_acc_en:
         if (test_config.fp32_dest_acc_en) {
             packed_golden0[i] = std::bit_cast<uint32_t>(golden0_fp32[i]);
         }
     }
+    // Pack out0 vector if not fp32_dest_acc_en:
     if (!test_config.fp32_dest_acc_en) {
         packed_golden0 = pack_vector<uint32_t, bfloat16>(golden0_bfp16);
     }
+    // Pack out1 vector:
     std::vector<uint32_t> packed_golden1 = pack_fp32_vec_as_bfp8_tiles(golden1, true, false);
 
     // ////////////////////////////////////////////////////////////////////////////

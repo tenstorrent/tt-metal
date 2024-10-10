@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary.h"
 #include <cstdint>
+
+#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
@@ -17,7 +18,6 @@ void MAIN {
     constexpr auto cb_in0 = tt::CB::c_in0; // Bfp8_b
     constexpr auto cb_in1 = tt::CB::c_in1; // Bfp16_b
     constexpr auto cb_in2 = tt::CB::c_in2; // Bfp16_b
-//     constexpr auto cb_out0 = tt::CB::c_out0; // Bfp16_b
     constexpr auto cb_out0 = tt::CB::c_out0; // Fp32
     constexpr auto cb_out1 = tt::CB::c_out1; // Bfp8_b
 

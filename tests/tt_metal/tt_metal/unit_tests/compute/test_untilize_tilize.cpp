@@ -41,13 +41,17 @@ using GoldenFunc = std::variant<
     std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig &config)> >;
 
 struct TestConfig {
+    // Whether or not to use *_init_short LLK API calls:
     bool short_init = false;
     bool dst_full_sync_en = false;
     uint32_t input_single_tile_size;
     uint32_t output_single_tile_size;
+    // Block height in tiles:
     uint32_t num_tiles_r;
+    // Block width in tiles:
     uint32_t num_tiles_c;
     uint32_t num_faces_per_tile = 4;
+    // Face height in datums:
     uint32_t face_r_dim = 16;
     std::optional<UntilizeType> untilize_type = std::nullopt;
     std::optional<TilizeType> tilize_type = std::nullopt;
@@ -60,8 +64,6 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     CoreCoord core = {0, 0};
 
     uint32_t num_tiles = test_config.num_tiles_r * test_config.num_tiles_c;
-    log_info(tt::LogTest, "Running with num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}", test_config.num_tiles_r, test_config.num_tiles_c, test_config.fp32_dest_acc_en);
-
     uint32_t input_dram_buffer_size = test_config.input_single_tile_size * num_tiles;
     uint32_t output_dram_buffer_size = test_config.output_single_tile_size * num_tiles;
 
@@ -124,7 +126,7 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     } else if(test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp";
     } else {
-        reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+        reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp";
     }
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -208,7 +210,10 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
             {dram_buffer_src0_addr,
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
-            num_tiles
+            num_tiles,
+            src0_cb_index,
+            test_config.num_tiles_c,
+            false
             });
     }
 
@@ -251,8 +256,10 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 
     if(test_config.fp32_dest_acc_en) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
+        // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
         for (auto i = 0; i < golden_unpacked.size(); i++) {
+            // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
             golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
         }
     }
@@ -278,7 +285,11 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
     }
     ASSERT_TRUE(pass);
-    log_info(tt::LogTest, "Done running test for num_tiles_r = {}, num_tiles_c = {}, pass = {}", test_config.num_tiles_r, test_config.num_tiles_c, pass);
+    log_info(tt::LogTest, "Done running test with: num_tiles_r = {}, num_tiles_c = {}, FP32_DestAcc = {}, pass = {}",
+            test_config.num_tiles_r,
+            test_config.num_tiles_c,
+            test_config.fp32_dest_acc_en,
+            pass);
 }
 
 } // namespace unit_tests::compute::tilize
@@ -288,7 +299,7 @@ Following tests are for Unpack Tilize
 ***************************************/
 
 TEST_F(DeviceFixture, ComputeUnpackTilize) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -326,7 +337,7 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeA_B) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -349,7 +360,7 @@ Following tests are for Unpack Untilize
 ***************************************/
 
 TEST_F(DeviceFixture, ComputeUnpackUntilize) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -367,7 +378,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize) {
 }
 
 TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -389,7 +400,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
 Following tests are for pack untilize
 ***************************************/
 TEST_F(DeviceFixture, ComputePackUntilize) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -407,7 +418,7 @@ TEST_F(DeviceFixture, ComputePackUntilize) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {
@@ -426,7 +437,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
 }
 
 TEST_F(DeviceFixture, ComputePackUntilizeDst) {
-    vector<vector<uint32_t> > num_tiles = {{1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             unit_tests::compute::tilize::TestConfig test_config = {

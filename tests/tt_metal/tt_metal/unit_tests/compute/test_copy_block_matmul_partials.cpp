@@ -23,8 +23,6 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const CopyBlockMatmulPartialsConfig& test_config) {
-
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -91,7 +89,6 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
         uint(ouput_cb_index) // Output CB idx
     };
 
-
     std::map<string, string> defines;
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
@@ -103,7 +100,6 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
         tt_metal::ComputeConfig{.dst_full_sync_en = test_config.dst_full_sync_en,
                                 .compile_args = compute_kernel_args}
     );
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
@@ -150,7 +146,6 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
 
     std::vector<uint32_t> result_vec_bf16;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);
-
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

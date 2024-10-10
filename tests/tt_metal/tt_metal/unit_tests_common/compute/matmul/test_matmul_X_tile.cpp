@@ -29,8 +29,12 @@ struct MatmulTileStimuli {
 
 struct MatmulTileConfig {
     uint32_t M, K, N;
+    // Whether or not to add matmul result with bias is controlled with this
+    // flag:
     bool with_bias = false;
+    // Whether or not to use *_init_short LLK API calls:
     bool test_init_short = false;
+    // Whether or not to use *_with_dt LLK API init calls:
     bool with_dt = true;
     bool dst_full_sync_en = false;
     string reader_kernel;
@@ -63,6 +67,7 @@ void create_test_stimuli(MatmulTileStimuli &stimuli, uint32_t M, uint32_t K, uin
 
 }
 
+// This function creates bit masks to model math fidelity phases. This will mask the result only.
 void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     auto arch = get_arch_from_string(get_env_arch_name());
     switch (math_fidelity) {
