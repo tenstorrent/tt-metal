@@ -30,7 +30,7 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
 endif()
 
 project(Metalium
-        VERSION 1.0.0
+        VERSION 0.50.0
         DESCRIPTION "Tenstorrent Metalium"
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
