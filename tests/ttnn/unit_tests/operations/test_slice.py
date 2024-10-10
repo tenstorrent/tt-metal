@@ -311,7 +311,8 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
 @pytest.mark.parametrize("begins", [[2, 0, 0, 2]])
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
 @pytest.mark.parametrize("strides", [[2, 2, 2, 2]])
-def test_stride_slice_four_dim(dims, begins, ends, strides, device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
     torch.manual_seed(2005)
     torch_input = torch.rand(dims)
     slices = []
@@ -320,7 +321,28 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, device):
 
     torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize("dims", [[1, 56, 56, 96]])
+@pytest.mark.parametrize("begins", [[0, 0, 0, 0]])
+@pytest.mark.parametrize("ends", [[1, -1, 56, 96]])
+@pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, device):
+    torch.manual_seed(2005)
+    torch_input = torch.rand(dims)
+    slices = []
+    for i in range(len(dims)):
+        slices.append(slice(begins[i], ends[i], strides[i]))
+
+    torch_output = torch_input[slices[0], slices[1], slices[2], slices[3]]
+
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn_input[slices[0], slices[1], slices[2], slices[3]]
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -328,9 +350,10 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, device):
 
 
 # these tests are copy and paste from the yolo customers #8920
-def test_slice_usecase1(device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_usecase1(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
 
     torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., ::2, ::2]
@@ -339,9 +362,10 @@ def test_slice_usecase1(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
-def test_slice_usecase2(device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_usecase2(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
 
     torch_output = torch_input[..., ::2, 1::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., ::2, 1::2]
@@ -350,9 +374,10 @@ def test_slice_usecase2(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
-def test_slice_usecase3(device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_usecase3(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
 
     torch_output = torch_input[..., 1::2, ::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., 1::2, ::2]
@@ -361,9 +386,10 @@ def test_slice_usecase3(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
-def test_slice_usecase4(device):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_slice_usecase4(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
 
     torch_output = torch_input[..., 1::2, 1::2]  # torch_output shape: [1, 3, 320, 320]
     ttnn_output = ttnn_input[..., 1::2, 1::2]
