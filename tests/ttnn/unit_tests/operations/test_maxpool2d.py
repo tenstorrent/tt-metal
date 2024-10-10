@@ -48,6 +48,12 @@ def run_max_pool(
     if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
         pytest.skip("This case runs out of memory on Wormhole b0")
 
+    max_cores = device.core_grid.x * device.core_grid.y
+    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED & in_c < max_cores:
+        pytest.skip("Width shareding requires channles >= cores")
+
+    # if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED & in_c
+
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -98,6 +104,7 @@ def run_max_pool(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
+
     output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
@@ -218,7 +225,7 @@ def run_max_pool(
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
-    "shard_scheme", [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED]
+    "shard_scheme", [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED]
 )
 def test_run_max_pool(
     act_shape,

@@ -657,6 +657,7 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 Tensor create_device_tensor(
     const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
     ZoneScoped;
+    printf("hit create_device_tensor\n");
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", padded_shape, data_type, layout, device, memory_config);
 
     if (memory_config.is_sharded()) {
@@ -673,6 +674,8 @@ Tensor create_device_tensor(
 
         auto element_size = tensor_impl::element_size_bytes(data_type);
         auto page_shape = tensor_impl::get_sharded_page_shape(layout, data_type, shard_spec.shape, tile);
+        printf("shard_shape: %d, %d\n", shard_shape[0], shard_shape[1]);
+        printf("page_shape: %d, %d\n", page_shape[0], page_shape[1]);
         std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
         size_t packed_size_in_bytes =
