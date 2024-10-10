@@ -101,7 +101,7 @@ void MAIN {
         // Not testing for L1 accumulation
         pack_reconfig_l1_acc(false);
 
-        matmul_pack_tile(START_DST_TILE_ID, cb_out1, ublock_size_tiles);
+        matmul_pack_tile(0, cb_out1, ublock_size_tiles);
         release_dst();
 
         cb_pop_front(cb_in0, ublock_size_tiles);

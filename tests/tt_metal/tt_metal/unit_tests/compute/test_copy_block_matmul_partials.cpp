@@ -12,14 +12,18 @@ using namespace tt::test_utils;
 namespace unit_tests::compute::matmul_partials {
 
 struct CopyBlockMatmulPartialsConfig {
-    uint32_t single_tile_size;
-    uint32_t num_tiles;
-    uint32_t reader_ublock;
-    uint32_t writer_ublock;
-    uint32_t compute_ublock;
-    uint32_t src0_cb_index;
-    uint32_t ouput_cb_index;
-    bool dst_full_sync_en;
+    uint32_t single_tile_size = 2 * 32 * 32;
+    uint32_t num_tiles = 1;
+    // *_ublock defines no. of tiles finished with single LLK API call:
+    uint32_t reader_ublock = 1;
+    uint32_t writer_ublock = 1;
+    uint32_t compute_ublock = 1;
+    uint32_t src0_cb_index = 0;
+    uint32_t ouput_cb_index = 16;
+    // Whether or not we want the result to be stored in DST in FP32:
+    bool fp32_dest_acc_en = false;
+    // Whether or not to sync full/half DST between MATH and PACK:
+    bool dst_full_sync_en = false;
 };
 
 void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const CopyBlockMatmulPartialsConfig& test_config) {
@@ -97,8 +101,10 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         core,
-        tt_metal::ComputeConfig{.dst_full_sync_en = test_config.dst_full_sync_en,
-                                .compile_args = compute_kernel_args}
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                                .dst_full_sync_en = test_config.dst_full_sync_en,
+                                .compile_args = compute_kernel_args,
+                                .defines = defines}
     );
 
     ////////////////////////////////////////////////////////////////////////////
@@ -162,66 +168,56 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
 // - copy_block_matmul_partials
 // - matmul_pack_tile
 ////////////////////////////////////////////////////////////////////////////
-TEST_F(DeviceFixture, ComputeCopyBlockMatmulPartialsR8W8C8) {
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
-            .single_tile_size = 2 * 1024,
-            .num_tiles = 8,
-            .reader_ublock = 8,
-            .writer_ublock = 8,
-            .compute_ublock = 8,
-            .src0_cb_index = 0,
-            .ouput_cb_index = 16,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
+
+TEST_F(DeviceFixture, ComputeCopyBlockSingle) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        // FP32 dest acc not possible for GS
+        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en
+            };
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
+        }
+    }
+}
+TEST_F(DeviceFixture, ComputeCopyBlockMultiple) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        // FP32 dest acc not possible for GS
+        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+            unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 8,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en
+            };
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
+        }
     }
 }
 
-TEST_F(DeviceFixture, ComputeCopyBlockMatmulPartialsR8W8C1) {
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
-            .single_tile_size = 2 * 1024,
-            .num_tiles = 8,
-            .reader_ublock = 8,
-            .writer_ublock = 8,
-            .compute_ublock = 1,
-            .src0_cb_index = 0,
-            .ouput_cb_index = 16,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
-    }
-}
-
-TEST_F(DeviceFixture, ComputeCopyBlockMatmulPartialsR8W1C1) {
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
-            .single_tile_size = 2 * 1024,
-            .num_tiles = 8,
-            .reader_ublock = 8,
-            .writer_ublock = 1,
-            .compute_ublock = 1,
-            .src0_cb_index = 0,
-            .ouput_cb_index = 16,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
-    }
-}
-
-TEST_F(DeviceFixture, ComputeCopyBlockMatmulPartialsR1W1C1) {
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
-            .single_tile_size = 2 * 1024,
-            .num_tiles = 1,
-            .reader_ublock = 1,
-            .writer_ublock = 1,
-            .compute_ublock = 1,
-            .src0_cb_index = 0,
-            .ouput_cb_index = 16,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
+TEST_F(DeviceFixture, ComputeCopyBlockComputeBottleneck) {
+    for (bool fp32_dest_acc_en : {true, false}) {
+        // FP32 dest acc not possible for GS
+        if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
+                unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
+                .num_tiles = 8,
+                .reader_ublock = 8,
+                .writer_ublock = 8,
+                .compute_ublock = 1,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = dst_full_sync_en
+            };
+            unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(this->devices_.at(0), test_config);
+        }
     }
 }

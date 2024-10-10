@@ -25,6 +25,13 @@ struct ReconfigConfig {
     // This flag defines whether regular packing to L1 is used, or the one
     // where the result is accumulated with the previous value:
     bool l1_acc = false;
+    // Whether or not we want the result to be stored in DST in FP32 and/or
+    // accumulated with previous DST value is controlled with this flag:
+    bool fp32_dest_acc_en = false;
+    // Whether to test with copy_tile or copy_block_matmul_partials is contro-
+    // lled with this flag:
+    bool block_copy = true;
+    // Whether or not to sync full/half DST between MATH and PACK:
     bool dst_full_sync_en = false;
 };
 
@@ -150,8 +157,11 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/reconfig.cpp",
         core,
-        tt_metal::ComputeConfig{.dst_full_sync_en = test_config.dst_full_sync_en,
-                                .compile_args = compute_kernel_args, .defines = defines});
+        tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .compile_args = compute_kernel_args,
+            .defines = defines});
 
     SetRuntimeArgs(
         program,
@@ -318,77 +328,36 @@ TEST_F(DeviceFixture, TileCopyReconfigExplicitSplitDstAcc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::reconfig::ReconfigConfig test_config = {
-            .num_tiles = 1,
-            .ublock_size_tiles = 1,
-            .explicit_reconfig = true,
-            .split_src_reconfig = true,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TileCopyReconfigExplicitJoined) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::reconfig::ReconfigConfig test_config = {
-            .num_tiles = 1,
-            .ublock_size_tiles = 1,
-            .explicit_reconfig = true,
-            .split_src_reconfig = false,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TileCopyReconfigImplicitSplit) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::reconfig::ReconfigConfig test_config = {
-            .num_tiles = 1,
-            .ublock_size_tiles = 1,
-            .explicit_reconfig = false,
-            .split_src_reconfig = true,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TileCopyReconfigImplicitJoined) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::reconfig::ReconfigConfig test_config = {
-            .num_tiles = 1,
-            .ublock_size_tiles = 1,
-            .explicit_reconfig = false,
-            .split_src_reconfig = false,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+    for (bool explicit_reconfig : {true, false}) {
+        for (bool split_src_reconfig : {true, false}) {
+            for (bool fp32_dest_acc_en : {true, false}) {
+                for (bool block_copy : {true, false}) {
+                    for (bool dst_full_sync_en : {true, false}) {
+                        log_info(LogTest, "Block Copy = {}, "
+                                        "Explicit = {}, "
+                                        "Split = {}, "
+                                        "FP32DestAcc = {}"
+                                        "DstSyncFull = {}.",
+                                        block_copy,
+                                        explicit_reconfig,
+                                        split_src_reconfig,
+                                        fp32_dest_acc_en,
+                                        dst_full_sync_en);
+                        unit_tests::compute::reconfig::ReconfigConfig test_config = {
+                            .num_tiles = 1,
+                            .ublock_size_tiles = 1,
+                            .explicit_reconfig = explicit_reconfig,
+                            .split_src_reconfig = split_src_reconfig,
+                            .fp32_dest_acc_en = fp32_dest_acc_en,
+                            .block_copy = block_copy,
+                            .dst_full_sync_en = dst_full_sync_en
+                        };
+                        for (unsigned int id = 0; id < num_devices_; id++) {
+                            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -398,20 +367,17 @@ TEST_F(DeviceFixture, TileCopyReconfigL1Acc) {
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
-
-    for (bool dst_full_sync_en : {true, false}) {
-        unit_tests::compute::reconfig::ReconfigConfig test_config = {
-            .num_tiles = 1,
-            .ublock_size_tiles = 1,
-            .dst_full_sync_en = dst_full_sync_en
-        };
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            test_config.l1_acc = false;
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-            log_info(LogTest, "Passed without L1 accumulation");
-            test_config.l1_acc = true;
-            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
-            log_info(LogTest, "Passed with L1 accumulation");
+    for (bool l1_acc : {true, false}) {
+        for (bool dst_full_sync_en : {true, false}) {
+            log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
+            unit_tests::compute::reconfig::ReconfigConfig test_config = {
+                .num_tiles = 1,
+                .ublock_size_tiles = 1,
+                .dst_full_sync_en = dst_full_sync_en
+            };
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(devices_.at(id), test_config));
+            }
         }
     }
 }
