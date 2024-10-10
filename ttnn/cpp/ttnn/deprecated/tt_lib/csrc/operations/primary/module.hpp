@@ -8,8 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_sum_backward/moreh_sum_backward_op.hpp"
 
@@ -35,39 +33,6 @@ void py_module(py::module& m_primary) {
         R"doc(
         "Performs a moreh_clip_grad_norm operation.
     )doc");
-
-    m_primary.def(
-        "moreh_layernorm",
-        &moreh_layernorm,
-        py::arg("input").noconvert(),
-        py::arg("normalized_dims").noconvert(),
-        py::arg("eps").noconvert() = 1e-5f,
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("beta").noconvert() = std::nullopt,
-        py::kw_only(),
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("mean").noconvert() = std::nullopt,
-        py::arg("rstd").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a moreh_layernorm operation.");
-    m_primary.def(
-        "moreh_layernorm_backward",
-        &moreh_layernorm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mean").noconvert(),
-        py::arg("rstd").noconvert(),
-        py::arg("normalized_dims").noconvert(),
-        py::kw_only(),
-        py::arg("gamma").noconvert() = std::nullopt,
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("gamma_grad").noconvert() = std::nullopt,
-        py::arg("beta_grad").noconvert() = std::nullopt,
-        py::arg("memory_config").noconvert() = std::nullopt,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        "Performs a moreh_layernorm_backward operation.");
-
 
     m_primary.def(
         "moreh_sum",
