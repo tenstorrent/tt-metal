@@ -13,6 +13,7 @@ set(TT_METAL_OBJECTS
     ${CMAKE_CURRENT_SOURCE_DIR}/graph/graph_tracking.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed/mesh_device_view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/distributed/mesh_program.cpp
     $<TARGET_OBJECTS:profiler>
     $<TARGET_OBJECTS:common>
     $<TARGET_OBJECTS:jit_build>
@@ -53,4 +54,3 @@ set_target_properties(tt_metal PROPERTIES
 if(BUILD_PROGRAMMING_EXAMPLES)
     add_subdirectory(programming_examples)
 endif(BUILD_PROGRAMMING_EXAMPLES)
-
