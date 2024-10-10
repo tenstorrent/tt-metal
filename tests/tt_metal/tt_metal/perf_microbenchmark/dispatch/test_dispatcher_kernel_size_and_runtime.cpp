@@ -6,13 +6,11 @@
 #include <cstdlib>
 #include "assert.hpp"
 #include "common/core_coord.h"
-#include "impl/kernels/data_types.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/device/device.hpp"
+#include "impl/device/device_pool.hpp"
 #include "logger.hpp"
 #include "device/tt_cluster_descriptor_types.h"
 #include "test_common.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/host_api.hpp"
@@ -23,14 +21,16 @@
 using namespace tt;
 using namespace tt_metal;
 
+constexpr chip_id_t DEFAULT_DEVICE_ID = 0;
 constexpr uint32_t DEFAULT_NUM_KERNELS = 1;
-constexpr uint32_t DEFAULT_MIN_KERNEL_SIZE_BYTES = 17;
+constexpr uint32_t DEFAULT_MIN_KERNEL_SIZE_BYTES = 20;
 constexpr uint32_t DEFAULT_MAX_KERNEL_SIZE_BYTES = 4096;
 constexpr uint32_t DEFAULT_MIN_KERNEL_RUNTIME_CYCLES = 0;
 constexpr uint32_t DEFAULT_MAX_KERNEL_RUNTIME_CYCLES = 100000;
 constexpr bool DEFAULT_ONLY_DISPATCH_TO_TENSIX_CORES = false;
 constexpr bool DEFAULT_ONLY_DISPATCH_TO_ACTIVE_ETH_CORES = false;
 
+chip_id_t device_id_g;
 uint32_t num_kernels_g;
 uint32_t min_kernel_size_bytes_g;
 uint32_t max_kernel_size_bytes_g;
@@ -47,16 +47,18 @@ void init(int argc, char **argv) {
     if (test_args::has_command_option(input_args, "-h") ||
         test_args::has_command_option(input_args, "--help")) {
             log_info(LogTest, "Usage:");
-            log_info(LogTest, "  -n: Number of kernels (default: {})", DEFAULT_NUM_KERNELS);
-            log_info(LogTest, "  -smin: Minimum kernel size in bytes (default: {})", DEFAULT_MIN_KERNEL_SIZE_BYTES);
-            log_info(LogTest, "  -smax: Maximum kernel size in bytes (default: {})", DEFAULT_MAX_KERNEL_SIZE_BYTES);
-            log_info(LogTest, "  -rmin: Minimum kernel runtime in cycles (default: {})", DEFAULT_MIN_KERNEL_RUNTIME_CYCLES);
-            log_info(LogTest, "  -rmax: Maximum kernel runtime in cycles (default: {})", DEFAULT_MAX_KERNEL_RUNTIME_CYCLES);
-            log_info(LogTest, "  -t: Only dispatch to Tensix cores (default: {})", DEFAULT_ONLY_DISPATCH_TO_TENSIX_CORES);
-            log_info(LogTest, "  -e: Only dispatch to active ethernet cores (default: {})", DEFAULT_ONLY_DISPATCH_TO_ACTIVE_ETH_CORES);
+            log_info(LogTest, "  -d: Device to run on. (default: {})", DEFAULT_DEVICE_ID);
+            log_info(LogTest, "  -n: Number of kernels. (default: {})", DEFAULT_NUM_KERNELS);
+            log_info(LogTest, "  -smin: Minimum kernel size in bytes. Value must be divisible by 4. (default: {})", DEFAULT_MIN_KERNEL_SIZE_BYTES);
+            log_info(LogTest, "  -smax: Maximum kernel size in bytes. Value must be divisible by 4. (default: {})", DEFAULT_MAX_KERNEL_SIZE_BYTES);
+            log_info(LogTest, "  -rmin: Minimum kernel runtime in cycles. (default: {})", DEFAULT_MIN_KERNEL_RUNTIME_CYCLES);
+            log_info(LogTest, "  -rmax: Maximum kernel runtime in cycles. (default: {})", DEFAULT_MAX_KERNEL_RUNTIME_CYCLES);
+            log_info(LogTest, "  -t: Only dispatch to Tensix cores. (default: {})", DEFAULT_ONLY_DISPATCH_TO_TENSIX_CORES);
+            log_info(LogTest, "  -e: Only dispatch to active ethernet cores. (default: {})", DEFAULT_ONLY_DISPATCH_TO_ACTIVE_ETH_CORES);
             exit(0);
     }
 
+    device_id_g = test_args::get_command_option_uint32(input_args, "-d", DEFAULT_DEVICE_ID);
     num_kernels_g = test_args::get_command_option_uint32(input_args, "-n", DEFAULT_NUM_KERNELS);
     min_kernel_size_bytes_g = test_args::get_command_option_uint32(input_args, "-smin", DEFAULT_MIN_KERNEL_SIZE_BYTES);
     max_kernel_size_bytes_g = test_args::get_command_option_uint32(input_args, "-smax", DEFAULT_MAX_KERNEL_SIZE_BYTES);
@@ -65,16 +67,28 @@ void init(int argc, char **argv) {
     only_dispatch_to_tensix_cores_g = test_args::has_command_option(input_args, "-t");
     only_dispatch_to_active_eth_cores_g = test_args::has_command_option(input_args, "-e");
 
-    // if (num_kernels_g < DEFAULT_NUM_KERNELS) {
-    //     log_fatal("Number of kernels must be >= {}", DEFAULT_NUM_KERNELS);
-    //     exit(0);
-    // }
+    if (device_id_g >= GetNumAvailableDevices()) {
+        log_fatal("Device ID must be < {}", GetNumAvailableDevices());
+        exit(0);
+    }
     if (min_kernel_size_bytes_g < DEFAULT_MIN_KERNEL_SIZE_BYTES) {
         log_fatal("Minimum kernel size must be >= {} bytes", DEFAULT_MIN_KERNEL_SIZE_BYTES);
         exit(0);
     }
     if (max_kernel_size_bytes_g > DEFAULT_MAX_KERNEL_SIZE_BYTES) {
         log_fatal("Maximum kernel size must be <= {} bytes", DEFAULT_MAX_KERNEL_SIZE_BYTES);
+        exit(0);
+    }
+    if (min_kernel_size_bytes_g > max_kernel_size_bytes_g) {
+        log_fatal("Minimum kernel size must be <= maximum kernel size");
+        exit(0);
+    }
+    if (min_kernel_size_bytes_g % 4 != 0) {
+        log_fatal("Minimum kernel size must be divisible by 4");
+        exit(0);
+    }
+    if (max_kernel_size_bytes_g % 4 != 0) {
+        log_fatal("Maximum kernel size must be divisible by 4");
         exit(0);
     }
     if (min_kernel_runtime_cycles_g < DEFAULT_MIN_KERNEL_RUNTIME_CYCLES) {
@@ -91,7 +105,15 @@ void init(int argc, char **argv) {
     }
 }
 
-uint32_t generate_random_num(const uint32_t min, const uint32_t max) {
+bool does_device_have_active_eth_cores(const Device *device) {
+    return !(device->get_active_ethernet_cores(true).empty());
+}
+
+uint32_t generate_random_size(const uint32_t min, const uint32_t max) {
+    return min + (rand() % ((max - min) / 4 + 1)) * 4;
+}
+
+uint32_t generate_random_runtime(const uint32_t min, const uint32_t max) {
     return min + rand() % (max - min + 1);
 }
 
@@ -105,7 +127,7 @@ CoreRangeSet get_kernel_core_range_set(const Device* device, const CoreType& cor
     }
     else {
         TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
-        for (CoreCoord core : device->get_active_ethernet_cores()) {
+        for (CoreCoord core : device->get_active_ethernet_cores(true)) {
             cores.emplace(core);
         }
     }
@@ -114,8 +136,8 @@ CoreRangeSet get_kernel_core_range_set(const Device* device, const CoreType& cor
 }
 
 KernelHandle initialize_kernel(Program& program, const Device* device) {
-    const uint32_t kernel_size_bytes = generate_random_num(min_kernel_size_bytes_g, max_kernel_size_bytes_g);
-    const uint32_t kernel_runtime_cycles = generate_random_num(min_kernel_runtime_cycles_g, max_kernel_runtime_cycles_g);
+    const uint32_t kernel_size_bytes = generate_random_size(min_kernel_size_bytes_g, max_kernel_size_bytes_g);
+    const uint32_t kernel_runtime_cycles = generate_random_runtime(min_kernel_runtime_cycles_g, max_kernel_runtime_cycles_g);
     const std::map<string, string> defines = {
         {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
         {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_cycles)}
@@ -125,16 +147,13 @@ KernelHandle initialize_kernel(Program& program, const Device* device) {
     log_info(LogTest, "Runtime: {}", kernel_runtime_cycles);
 
     KernelHandle kernel_id;
-    if (only_dispatch_to_tensix_cores_g) {
+    if (only_dispatch_to_tensix_cores_g || !does_device_have_active_eth_cores(device)) {
         CoreRangeSet cores = get_kernel_core_range_set(device, CoreType::WORKER);
-        // CoreCoord start_core(0, 0);
-        // CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-        // CoreCoord end_core(worker_grid_size.x - 1, worker_grid_size.y - 1);
-        // CoreRange cores(start_core, end_core);
         log_info(LogTest, "Cores: {}", cores.str());
         kernel_id = CreateKernel(program, kernel_file_path, cores, DataMovementConfig{.defines = defines});
     } else if (only_dispatch_to_active_eth_cores_g) {
         CoreRangeSet cores = get_kernel_core_range_set(device, CoreType::ETH);
+        log_info(LogTest, "Cores: {}", cores.str());
         kernel_id = CreateKernel(program, kernel_file_path, cores, EthernetConfig{.defines = defines});
     } else {
         if (rand() % 2 == 0) {
@@ -164,20 +183,19 @@ int main(int argc, char **argv) {
 
     bool pass = true;
     try {
-        const chip_id_t device_id = 0;
-        Device *device = CreateDevice(device_id);
-        if (only_dispatch_to_active_eth_cores_g && device->get_active_ethernet_cores().empty()) {
-            log_fatal("Device {} does not have any active ethernet cores", device_id);
-            CloseDevice(device);
+        std::map<chip_id_t, Device *> device_ids_to_devices = detail::CreateDevices({device_id_g});
+        Device *device = DevicePool::instance().get_active_device(device_id_g);
+
+        if (only_dispatch_to_active_eth_cores_g && !does_device_have_active_eth_cores(device)) {
+            log_fatal("Device {} does not have any active ethernet cores", device_id_g);
+            detail::CloseDevices(device_ids_to_devices);
             exit(0);
         }
-
-        CommandQueue& cq = device->command_queue();
 
         Program program = initialize_program(device);
         RunProgram(device, program, use_slow_dispatch);
 
-        pass &= CloseDevice(device);
+        detail::CloseDevices(device_ids_to_devices);
     } catch (const std::exception& e) {
         pass = false;
         log_fatal(e.what());
