@@ -29,7 +29,7 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
 
-project(tt-metal
+project(Metallium
         VERSION 1.0
         DESCRIPTION "Tenstorrent Metallium"
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
@@ -270,11 +270,13 @@ endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
 install(TARGETS tt_metal
+    EXPORT ${PROJECT_NAME}Targets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
 )
 install(TARGETS ttnn
+    EXPORT ${PROJECT_NAME}Targets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     COMPONENT tt_build_artifacts
@@ -292,3 +294,6 @@ add_custom_target(clean-built
    COMMAND ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
    COMMENT "Cleaning `built` directory"
 )
+
+include(cmake/find_package.cmake)
+
