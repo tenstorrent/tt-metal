@@ -17,7 +17,7 @@ class Down1:
         self.conv1 = Conv(torch_model, "down1.conv1", [1, 320, 320, 3], (1, 1, 1, 1), act_block_h=128)
         self.conv2 = Conv(torch_model, "down1.conv2", [1, 320, 320, 32], (2, 2, 1, 1), reshard=True)
         self.conv3 = Conv(torch_model, "down1.conv3", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
-        self.conv4 = Conv(torch_model, "down1.conv4", [1, 160, 160, 64], (1, 1, 0, 0), reshard=True)
+        self.conv4 = Conv(torch_model, "down1.conv4", [1, 160, 160, 64], (1, 1, 0, 0))
         self.conv5 = Conv(torch_model, "down1.conv5", [1, 160, 160, 64], (1, 1, 0, 0), deallocate=False)
         self.conv6 = Conv(torch_model, "down1.conv6", [1, 160, 160, 32], (1, 1, 1, 1))
         self.conv7 = Conv(torch_model, "down1.conv7", [1, 160, 160, 64], (1, 1, 0, 0))
@@ -33,15 +33,15 @@ class Down1:
         output_tensor_left = self.conv3(device, output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
 
-        res_block_split = self.conv4(device, output_tensor_split)
-        res_block_split = ttnn.mish(res_block_split)
-        output_tensor = self.conv5(device, res_block_split)
+        output_tensor_split_2 = self.conv4(device, output_tensor_split)
+        output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
+        output_tensor = self.conv5(device, output_tensor_split_2)
         output_tensor = ttnn.mish(output_tensor)
         output_tensor = self.conv6(device, output_tensor)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor = res_block_split + output_tensor
+        output_tensor = output_tensor_split_2 + output_tensor
 
-        ttnn.deallocate(res_block_split)
+        ttnn.deallocate(output_tensor_split_2)
         output_tensor = self.conv7(device, output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
