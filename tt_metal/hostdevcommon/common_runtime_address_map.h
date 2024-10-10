@@ -18,13 +18,6 @@
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
-constexpr static std::uint32_t DRAM_UNRESERVED_BASE = DRAM_BARRIER_BASE + DRAM_BARRIER_SIZE; // Start of unreserved space
-
-// Take max alignment to satisfy NoC rd/wr constraints
-// Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
-// PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
-// Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
-constexpr static std::uint32_t ALLOCATOR_ALIGNMENT = DRAM_ALIGNMENT >= L1_ALIGNMENT ? DRAM_ALIGNMENT : L1_ALIGNMENT;
 
 // TODO: move these out of the memory map into profiler code
 constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
@@ -43,10 +36,6 @@ constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = MEM_IERISC_MAP
 
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
-
-constexpr static std::uint32_t L1_UNRESERVED_BASE = ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (ALLOCATOR_ALIGNMENT - 1)) + 1;
-
-constexpr static std::uint32_t ERISC_L1_UNRESERVED_BASE = L1_UNRESERVED_BASE; // Start of unreserved space
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
 #define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x-1-(x)))

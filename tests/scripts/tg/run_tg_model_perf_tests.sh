@@ -1,6 +1,11 @@
 #!/bin/bash
 
 run_tg_llm_tests() {
+
+  echo "LOG_METAL: Running run_t3000_llama2_70b_tests"
+  pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py -m "model_perf_tg" --timeout=600 ; fail+=$?
+
   # Merge all the generated reports
   env python models/perf/merge_perf_results.py; fail+=$?
 

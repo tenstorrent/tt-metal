@@ -274,7 +274,6 @@ void cb_wait_all_pages(uint32_t n) {
 }
 
 template<uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE
 void cb_acquire_pages(uint32_t n) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include "tt_metal/host_api.hpp"
 #include "impl/debug/watcher_server.hpp"
+#include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 
 using namespace tt;
@@ -15,7 +16,14 @@ using std::vector;
 string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
 
-void dump_data(vector<unsigned>& device_ids, bool dump_watcher, bool dump_cqs, bool dump_cqs_raw_data, int num_hw_cqs) {
+void dump_data(
+    vector<unsigned>& device_ids,
+    bool dump_watcher,
+    bool dump_cqs,
+    bool dump_cqs_raw_data,
+    bool dump_noc_xfers,
+    bool eth_dispatch,
+    int num_hw_cqs) {
     // Don't clear L1, this way we can dump the state.
     llrt::OptionsG.set_clear_l1(false);
 
@@ -33,13 +41,15 @@ void dump_data(vector<unsigned>& device_ids, bool dump_watcher, bool dump_cqs, b
         cout << "Dumping Watcher Log into: " << watcher_get_log_file_name() << endl;
 
     // Only look at user-specified devices
+    vector<Device *> devices;
     for (unsigned id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        auto* device = tt::tt_metal::CreateDeviceMinimal(id, num_hw_cqs, DispatchCoreType::WORKER);
+        Device* device = tt::tt_metal::CreateDeviceMinimal(id, num_hw_cqs, eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER);
+        devices.push_back(device);
         if (dump_cqs) {
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
                 std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
@@ -55,6 +65,10 @@ void dump_data(vector<unsigned>& device_ids, bool dump_watcher, bool dump_cqs, b
         watcher_read_kernel_ids_from_file();
         watcher_dump();
     }
+
+    // Dump noc data if requested
+    if (dump_noc_xfers)
+        DumpNocData(devices);
 }
 
 void print_usage(const char* exec_name) {
@@ -69,6 +83,10 @@ void print_usage(const char* exec_name) {
     cout << "\t-w, --dump-watcher: Dump watcher data, available data depends on whether watcher was enabled for "
             "original program."
          << endl;
+    cout << "\t--dump-noc-transfer-data: Dump NOC transfer data. Data is only available if previous run had "
+            "TT_METAL_RECORD_NOC_TRANSFER_DATA defined."
+         << endl;
+    cout << "\t--eth-dispatch: Assume eth dispatch, should match previous run." << endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -81,7 +99,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Go through user args, handle accordingly.
-    bool dump_watcher = false, dump_cqs = false, dump_cqs_raw_data = false;
+    bool dump_watcher = false, dump_cqs = false, dump_cqs_raw_data = false, dump_noc_xfers = false, eth_dispatch = false;
     int num_hw_cqs = 1;
     for (int idx = 1; idx < argc; idx++) {
         string s(argv[idx]);
@@ -116,6 +134,11 @@ int main(int argc, char* argv[]) {
             dump_cqs = true;
         } else if (s == "--dump-cqs-data") {
             dump_cqs_raw_data = true;
+        } else if (s == "--dump-noc-transfer-data") {
+            tt::llrt::OptionsG.set_record_noc_transfers(true);
+            dump_noc_xfers = true;
+        } else if (s == "--eth-dispatch") {
+            eth_dispatch = true;
         } else {
             cout << "Error: unrecognized command line argument: " << s << endl;
             print_usage(argv[0]);
@@ -124,6 +147,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Call dump function with user config.
-    dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, num_hw_cqs);
+    dump_data(device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
     std::cout << "Watcher dump tool finished." << std::endl;
 }

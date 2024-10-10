@@ -11,6 +11,9 @@ import ttnn
 
 
 def tensor_to_dtype(x, dtype):
+    if x.dtype == torch.bool:
+        x = x.to(torch.bfloat16)
+
     if dtype == ttnn.bfloat16:
         x = x.to(torch.bfloat16)
 
@@ -101,3 +104,30 @@ def gen_rand_exclude_range(size, excluderange=None, low=0, high=100):
         res = torch.where((res < lower) & (res > upper), res, random.uniform(low, high))
 
     return res
+
+
+def gen_rand_bitwise_left_shift(size, shift_bits=None, low=-2147483647, high=2147483648):
+    res = torch.randint(low, high, size, dtype=torch.int32)
+    if shift_bits is None:
+        return res
+
+    changebit = 31 - shift_bits
+    exludebit_mask = torch.bitwise_not(torch.tensor(2**changebit).to(torch.int32))
+    includebit_mask = torch.tensor(2**changebit).to(torch.int32)
+
+    res = torch.where(res < 0, torch.bitwise_or(res, includebit_mask), torch.bitwise_and(res, exludebit_mask))
+
+    return res
+
+
+def gen_with_zeroes(size, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.bfloat16):
+    element_count = 1
+    for i in size:
+        element_count = element_count * i
+    raw = torch.zeros(element_count).to(dtype)
+    raw[: int(probabilityzeroes * element_count)] = torch.Tensor(
+        size=(1, int(probabilityzeroes * element_count))
+    ).uniform_(low, high)
+    ridx = torch.randperm(element_count)  # a random permutation of the entries
+    mask = torch.reshape(raw[ridx], size)
+    return mask

@@ -5,6 +5,31 @@
 #include <cstdint>
 #include "ttnn/tensor/types.hpp"
 
+namespace ttnn {
+
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile) {
+    SimpleShape physical_shape = logical_shape;
+    if (layout == Layout::TILE) {
+        auto tile_height = tt::constants::TILE_HEIGHT;
+        auto tile_width = tt::constants::TILE_WIDTH;
+        if (tile.has_value()) {
+            auto tile_shape = tile.value().get_tile_shape();
+            tile_height = tile_shape[0];
+            tile_width = tile_shape[1];
+        }
+        auto rank = physical_shape.rank();
+        if (rank >= 1) {
+            physical_shape[rank - 1] = (physical_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
+            if (rank >= 2) {
+                physical_shape[rank - 2] = (physical_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
+            }
+        }
+    }
+    return physical_shape;
+}
+
+}
+
 namespace tt {
 
 namespace tt_metal {
@@ -160,6 +185,17 @@ const LegacyShape LegacyShape::without_padding() const {
     return LegacyShape(shape_without_padding);
 }
 
+ttnn::SimpleShape LegacyShape::logical_shape() const
+{
+    const LegacyShape logical = without_padding();
+
+    std::vector<uint32_t> values(rank());
+    for (size_t i = 0; i < values.size(); i++) {
+        values[i] = logical[i];
+    }
+    return ttnn::SimpleShape(std::move(values));
+}
+
 const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
@@ -293,3 +329,52 @@ MemoryConfig load_memory_config(const std::string& file_name) {
 }  // namespace tt_metal
 
 }  // namespace tt
+
+namespace ttnn {
+
+namespace {
+int32_t normalized_index(int32_t index, size_t container_size) {
+    int32_t size = static_cast<int32_t>(container_size);
+
+    if (index < 0) {
+        index += size;
+    }
+
+    if (index < 0 || index >= size) {
+        throw std::out_of_range("SimpleShape index out of range.");
+    }
+
+    return index;
+}
+}
+
+bool SimpleShape::operator==(const SimpleShape &other) const {
+    return this->value == other.value;
+}
+
+bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
+    return this->value == other;
+}
+
+uint32_t SimpleShape::operator[](int32_t index) const {
+    auto norm_index = normalized_index(index, value.size());
+    return value[norm_index];
+}
+
+uint32_t& SimpleShape::operator[](int32_t index) {
+    auto norm_index = normalized_index(index, value.size());
+    return value[norm_index];
+}
+
+uint64_t SimpleShape::volume() const {
+    return std::accumulate(this->value.begin(), this->value.end(),
+                           uint64_t{1}, std::multiplies<uint64_t>());
+}
+
+} // namespace ttnn
+
+namespace ttnn::types {
+
+uint32_t Shape::operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+
+}  // namespace ttnn::types

@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm {
-Tensor MorehBmm::invoke(
+Tensor MorehBMM::invoke(
     const Tensor& input,
     const Tensor& mat2,
     const std::optional<Tensor>& output,

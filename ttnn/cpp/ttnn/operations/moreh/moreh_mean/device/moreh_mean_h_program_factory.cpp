@@ -16,13 +16,12 @@ namespace ttnn::operations::moreh::moreh_mean {
 MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::MorehMeanHFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
 
     auto input = tensor_args.input;
-    auto output = output_tensor;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
     const auto shape = input.get_shape();
@@ -56,14 +55,13 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         split_work_to_cores(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     // create circular buffers
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
@@ -113,21 +111,22 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
     std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
+        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                      // Ht
         units_per_core_group_1,  // Wt
         1,                       // NC
         origin_H};
-    vector<uint32_t> compute_kernel_args_group_2 = {
+    std::vector<uint32_t> compute_kernel_args_group_2 = {
         Ht,                      // Ht
         units_per_core_group_2,  // Wt
         1,                       // NC
         origin_H};
 
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,
@@ -139,8 +138,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change unpack_to_dest_mode from false to fp32_dest_acc_en after fix #10337
-            // .unpack_to_dest_mode = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
@@ -153,7 +150,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             units_per_core = units_per_core_group_2;
         } else {
-            std::cout << "i " << i << "\n";
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         SetRuntimeArgs(
@@ -190,20 +186,20 @@ void MorehMeanOperation::MorehMeanHFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto src_buffer_address = tensor_args.input.buffer()->address();
+    auto dst_buffer_address = tensor_return_value.buffer()->address();
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
+            runtime_args[0] = src_buffer_address;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            runtime_args[0] = dst_buffer_address;
         }
     }
 }

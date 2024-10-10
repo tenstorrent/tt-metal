@@ -12,9 +12,9 @@
 #include "device.hpp"
 #include "profiler.hpp"
 #include "events.hpp"
-#include "multi_device.hpp"
 #include "tensor.hpp"
 #include "reports.hpp"
+#include "ttnn/distributed/distributed_pybind.hpp"
 #include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
 #include "ttnn/graph/graph_pybind.hpp"
 #include "types.hpp"
@@ -52,13 +52,12 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::tensor::pytensor_module_types(m_tensor);
     ttnn::graph::py_graph_module_types(m_graph);
 
-    tt::operations::primary::py_module_types(m_primary_ops);
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
-    ttnn::multi_device::py_module_types(m_multi_device);
+    ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::reports::py_module_types(m_reports);
 
@@ -80,7 +79,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
     ttnn::device::py_device_module(m_device);
-    ttnn::multi_device::py_module(m_multi_device);
+    ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);

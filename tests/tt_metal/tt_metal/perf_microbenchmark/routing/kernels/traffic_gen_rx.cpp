@@ -64,7 +64,6 @@ void kernel_main() {
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words*PACKET_WORD_SIZE_BYTES),
                 queue_size_words);
-    noc_init();
 
     for (uint32_t i = 0; i < num_src_endpoints; i++) {
         src_rnd_state[i].init(prng_seed, src_endpoint_start_id+i);

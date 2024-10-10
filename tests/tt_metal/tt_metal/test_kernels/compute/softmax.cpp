@@ -13,8 +13,8 @@
 #include "compute_kernel_api/softmax.h"
 #include "compute_kernel_api/reduce.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )

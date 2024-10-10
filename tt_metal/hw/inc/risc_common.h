@@ -20,6 +20,8 @@
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
+#define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
+#define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
 
 #define TILE_WORD_2_BIT ((256 + 64 + 32) >> 4)
 #define TILE_WORD_4_BIT ((512 + 64 + 32) >> 4)

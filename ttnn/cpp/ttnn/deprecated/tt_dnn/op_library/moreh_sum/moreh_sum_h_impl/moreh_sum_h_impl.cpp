@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
     tt_metal::ReduceOpDim reduce_dim = tt_metal::ReduceOpDim::H;
     float scaler = 1.0f;
 
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t Wt = W / TILE_WIDTH;
@@ -32,12 +32,12 @@ operation::ProgramWithCallbacks moreh_sum_h_impl(const Tensor &a, const Tensor &
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = shape.without_padding();
+    const auto input_shape_without_padding = a.get_logical_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] = get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
     log_debug(
         LogOp,
         "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",

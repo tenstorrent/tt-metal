@@ -33,6 +33,7 @@ set (TT_METAL_TESTS_SRCS
     test_compile_program.cpp
     test_kernel_path_env_var.cpp
     test_clean_init.cpp
+    test_create_kernel_from_string.cpp
 )
 
 foreach (TEST_SRC ${TT_METAL_TESTS_SRCS})
@@ -50,8 +51,6 @@ foreach (TEST_SRC ${TT_METAL_TESTS_SRCS})
     set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
-
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/programming_examples ${PROJECT_BINARY_DIR}/programming_examples)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)

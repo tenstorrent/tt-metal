@@ -26,15 +26,16 @@ enum DispatchWorkerType : uint32_t {
     PREFETCH_D = 1,
     DISPATCH = 2,
     DISPATCH_D = 3,
-    MUX = 4,
-    MUX_D = 5,
-    DEMUX = 6,
-    DEMUX_D = 7,
-    US_TUNNELER_LOCAL = 8,
-    US_TUNNELER_REMOTE = 9,
-    DS_TUNNELER_LOCAL = 10,
-    DS_TUNNELER_REMOTE = 11,
-    COUNT = 12
+    DISPATCH_S = 4,
+    MUX = 5,
+    MUX_D = 6,
+    DEMUX = 7,
+    DEMUX_D = 8,
+    US_TUNNELER_LOCAL = 9,
+    US_TUNNELER_REMOTE = 10,
+    DS_TUNNELER_LOCAL = 11,
+    DS_TUNNELER_REMOTE = 12,
+    COUNT = 13
 };
 
 enum DispatchCoreType: uint32_t {
@@ -45,6 +46,7 @@ enum DispatchCoreType: uint32_t {
 
 struct dispatch_worker_build_settings_t{
     std::string kernel_file;
+    std::string dispatch_s_kernel_file;
     std::vector<uint32_t> compile_args;
     std::vector<tt_cxy_pair> upstream_cores;
     std::vector<tt_cxy_pair> downstream_cores;
@@ -59,12 +61,16 @@ struct dispatch_worker_build_settings_t{
     std::vector<uint32_t> semaphores;
     uint32_t producer_semaphore_id;
     uint32_t consumer_semaphore_id;
+    uint32_t consumer_slave_semaphore_id;
+    tt_cxy_pair dispatch_s_logical_core;
+    tt_cxy_pair dispatch_s_physical_core;
     uint32_t cb_start_address;
     uint32_t cb_size_bytes;
     uint32_t cb_log_page_size;
     uint32_t cb_pages;
     uint32_t tunnel_stop;
     uint32_t num_compute_cores;
+    uint32_t compute_core_mcast_noc_coords;
     uint32_t vc_count;
 };
 
@@ -79,6 +85,7 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> tunneler = std::nullopt; // ethernet tunneler
     std::optional<tt_cxy_pair> prefetcher_d = std::nullopt;
     std::optional<tt_cxy_pair> dispatcher_d = std::nullopt;
+    std::optional<tt_cxy_pair> dispatcher_s = std::nullopt;
     std::optional<tt_cxy_pair> mux_d = std::nullopt; // Mux
     std::optional<tt_cxy_pair> demux_d = std::nullopt; // Demux
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
@@ -94,7 +101,7 @@ class dispatch_core_manager {
 
     //TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
-    static void initialize(DispatchCoreType dispatch_core_type) noexcept {
+    static void initialize(DispatchCoreType dispatch_core_type, uint8_t num_hw_cqs) noexcept {
         log_debug(tt::LogMetal, "DevicePool initialize");
         const std::unordered_map<DispatchCoreType, CoreType> dispatch_core_type_map = {
             {DispatchCoreType::WORKER, CoreType::WORKER},
@@ -102,10 +109,10 @@ class dispatch_core_manager {
         };
         auto internal_core_type = dispatch_core_type_map.at(dispatch_core_type);
         if (_inst == nullptr) {
-            static dispatch_core_manager dispatch_core_manager(internal_core_type);
+            static dispatch_core_manager dispatch_core_manager(internal_core_type, num_hw_cqs);
             _inst = &dispatch_core_manager;
-        } else if (_inst->dispatch_core_type_by_device[0] != internal_core_type) {
-            _inst->reset_dispatch_core_manager(internal_core_type);
+        } else if (_inst->dispatch_core_type_by_device[0] != internal_core_type or num_hw_cqs != _inst->num_hw_cqs) {
+            _inst->reset_dispatch_core_manager(internal_core_type, num_hw_cqs);
         }
     }
 
@@ -343,6 +350,11 @@ class dispatch_core_manager {
         return false;
     }
 
+    bool is_dispatcher_s_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        return assignment.dispatcher_s.has_value();
+    }
+
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a particular command queue
     /// @param device_id ID of the device that should be running the command
     /// @param channel assigned to the command queue where commands are enqueued
@@ -359,6 +371,28 @@ class dispatch_core_manager {
         return assignment.dispatcher_d.value();
     }
 
+    const tt_cxy_pair &dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+        dispatch_core_placement_t &assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
+        if (assignment.dispatcher_s.has_value()) {
+            return assignment.dispatcher_s.value();
+        }
+        CoreCoord dispatcher_s_coord;
+        if (this->get_dispatch_core_type(device_id) == CoreType::WORKER) {
+            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+            if (mmio_device_id == device_id) {
+                // dispatch_s is on the same tensix core as dispatch_hd
+                dispatcher_s_coord = this->dispatcher_core(device_id, channel, cq_id);
+            } else {
+                // dispatch_s is on the same tensix as dispatch_d
+                dispatcher_s_coord = this->dispatcher_d_core(device_id, channel, cq_id);
+            }
+        } else {
+            dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
+        }
+        assignment.dispatcher_s = tt_cxy_pair(device_id, dispatcher_s_coord.x, dispatcher_s_coord.y);
+        return assignment.dispatcher_s.value();
+    }
+
     CoreType get_dispatch_core_type(chip_id_t device_id) {
         return this->dispatch_core_type_by_device[device_id];
     }
@@ -371,19 +405,22 @@ class dispatch_core_manager {
         }
     }
 
+    std::vector<CoreCoord> get_all_logical_dispatch_cores(chip_id_t device_id) {
+        return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_type_by_device[device_id]);
+    }
    private:
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
     /// @param dispatch_core_type specfies the core type that is designated for dispatch functionality
-    dispatch_core_manager(CoreType dispatch_core_type) {
-        this->reset_dispatch_core_manager(dispatch_core_type);
+    dispatch_core_manager(CoreType dispatch_core_type, uint8_t num_hw_cqs) {
+        this->reset_dispatch_core_manager(dispatch_core_type, num_hw_cqs);
     }
 
 
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_type specfies the core type for dispatch kernels
-    void reset_dispatch_core_manager(CoreType dispatch_core_type) {
+    void reset_dispatch_core_manager(CoreType dispatch_core_type, uint8_t num_hw_cqs) {
         this->dispatch_core_assignments.clear();
         this->available_dispatch_cores_by_device.clear();
         this->dispatch_core_type_by_device.clear();
@@ -395,6 +432,7 @@ class dispatch_core_manager {
             }
 
             this->dispatch_core_type_by_device[device_id] = dispatch_core_type;
+            this->num_hw_cqs = num_hw_cqs;
         }
     }
 
@@ -419,6 +457,7 @@ class dispatch_core_manager {
     std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>> dispatch_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     std::unordered_map<chip_id_t, CoreType> dispatch_core_type_by_device;  //TODO: dispatch_core_type_by_device should probably be for all devices, not per device
+    uint8_t num_hw_cqs;
     static dispatch_core_manager *_inst;
 
 };

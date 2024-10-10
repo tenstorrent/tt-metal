@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 
 namespace {
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -55,12 +55,12 @@ operation::ProgramWithCallbacks reduce_nc_factory(const ttnn::Tensor &input, con
     const auto cb_1_data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto cb_1_tile_size = tt_metal::detail::TileSize(cb_1_data_format);
 
-    const auto &input_shape = input.get_legacy_shape();
-    const auto &input_shape_without_padding = input_shape.without_padding();
+    const auto input_shape = input.get_padded_shape();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] = extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
     const auto num_output_tiles = output.volume() / TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] = get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     // choose granularity as the largest factor of num_reduce_input_tile that is less than or equal to 8
     uint32_t input_granularity;
     for (input_granularity = 8; input_granularity > 1; --input_granularity) {

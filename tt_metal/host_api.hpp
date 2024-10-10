@@ -10,6 +10,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/device/device.hpp"
 
 /** @file */
 
@@ -29,6 +30,7 @@ class CoreRangeSet;
 namespace tt {
 
 namespace tt_metal {
+inline namespace v0 {
 
 class Program;
 class Device;
@@ -48,6 +50,13 @@ class Buffer;
  * Return value: size_t
  */
 size_t GetNumAvailableDevices();
+
+/**
+ * Returns whether Tenstorrent devices are in a Galaxy cluster
+ *
+ * Return value: bool
+ */
+bool IsGalaxyCluster();
 
 /**
  * Returns number of Tenstorrent devices that are connected to host via PCIe and can be targeted
@@ -124,6 +133,24 @@ Program CreateProgram();
 KernelHandle CreateKernel(
     Program &program,
     const std::string &file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
+
+/**
+ * Creates a compute or data movement kernel with the given compile time arguments and adds it to the program.
+ *
+ * Return value: Kernel ID (uintptr_t)
+ *
+ * | Argument           | Description                                                                                                                          | Type                                                     | Valid Range | Required |
+ * |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------|-------------|----------|
+ * | program            | The program to which this kernel will be added to                                                                                    | Program &                                                |             | Yes      |
+ * | kernel_src_code    | Source code for kernel                                                                                                               | const std::string &                                      |             | Yes      |
+ * | core_spec          | Either a single logical core, a range of logical cores or a set of logical core ranges that indicate which cores kernel is placed on | const std::variant<CoreCoord, CoreRange, CoreRangeSet> & |             | Yes      |
+ * | config             | Config for data movement or compute kernel                                                                                           | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &   |             | No       |
+ */
+KernelHandle CreateKernelFromString(
+    Program &program,
+    const std::string &kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> &config);
 
@@ -631,6 +658,7 @@ bool EventQuery(const std::shared_ptr<Event> &event);
  */
 void Synchronize(Device *device, const std::optional<uint8_t> cq_id = std::nullopt);
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

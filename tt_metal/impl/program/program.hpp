@@ -11,6 +11,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -19,13 +20,20 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
+inline namespace v0 {
+
 class Buffer;
 class Kernel;
 class CircularBuffer;
 class Device;
 class Program;
-class JitBuildOptions;
 class CircularBufferConfig;
+
+}  // namespace v0
+
+class EnqueueProgramCommand;
+class HWCommandQueue;
+class JitBuildOptions;
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
     KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
@@ -43,6 +51,7 @@ struct KernelGroup {
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
     launch_msg_t launch_msg;
+    go_msg_t go_msg;
 
     KernelGroup();
     KernelGroup(
@@ -69,9 +78,9 @@ struct ProgramConfig {
     uint32_t cb_size;
 };
 
-class Program {
-    friend class KernelGroup;
+inline namespace v0 {
 
+class Program {
    public:
     Program();
 
@@ -136,7 +145,7 @@ class Program {
 
     void invalidate_circular_buffer_allocation();
 
-    void allocate_circular_buffers();
+    void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const { return this->finalized_; }
     void finalize();
@@ -172,20 +181,20 @@ class Program {
         // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
         // To enable this, circular buffer address is the maximum address amongst all of its target cores
         // This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}};
+        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
         // Returns address for next circular buffer
         // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
         uint64_t get_cb_region_end() const {
-            return this->l1_regions.back().second;
+            return this->l1_regions.empty() ? 0 : this->l1_regions.back().second;
         }
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,
         //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size);
+        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
 
         // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions = {{L1_UNRESERVED_BASE, L1_UNRESERVED_BASE}}; }
+        void reset_available_addresses() { this->l1_regions.clear(); }
     };
 
     uint64_t id; // Need to make non-const due to move constructor
@@ -216,6 +225,9 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
+
+    std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -250,10 +262,14 @@ class Program {
     uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
     void set_launch_msg_sem_offsets();
 
-    friend class HWCommandQueue;
-    friend class EnqueueProgramCommand;
+    bool runs_on_noc_unicast_only_cores();
+    bool runs_on_noc_multicast_only_cores();
+
+    friend HWCommandQueue;
+    friend EnqueueProgramCommand;
 };
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

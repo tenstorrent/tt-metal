@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul.hpp"
-// #include "ttnn/cpp/ttnn/multi_device.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

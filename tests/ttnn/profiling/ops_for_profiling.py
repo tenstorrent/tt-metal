@@ -339,6 +339,10 @@ def primary_moreh_mean_backward(x, y):
     ttnn.operations.moreh.mean_backward(x, dim=[0], keepdim=True, input_grad=y)
 
 
+def primary_moreh_sum(x):
+    ttnn.operations.moreh.sum(x, dim=[0])
+
+
 def celu_bw(x, y):
     ttnn.celu_bw(x, y, alpha=1)
 
@@ -2398,7 +2402,7 @@ def group_norm(x, y, z):
 
 
 def primary_moreh_groupnorm(x, y, z):
-    tt_lib.operations.primary.moreh_groupnorm(
+    ttnn.operations.moreh.group_norm(
         input=x, num_groups=4, eps=0.0001, gamma=y, beta=y, are_required_outputs=(True, True, True), mean=z, rstd=z
     )
 

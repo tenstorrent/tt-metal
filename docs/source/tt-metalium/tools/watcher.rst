@@ -50,6 +50,10 @@ Watcher features can be disabled individually using the following environment va
    # In certain cases enabling watcher can cause the binary to be too large. In this case, disable inlining.
    export TT_METAL_WATCHER_NOINLINE=1
 
+   # If the above doesn't work, and dispatch kernels (cq_prefetch.cpp, cq_dispatch.cpp) are still too large, compile out
+   # debug tools on dispatch kernels.
+   export TT_METAL_WATCHER_DISABLE_DISPATCH=1
+
 Details
 -------
 

@@ -13,13 +13,12 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
 namespace operations {
 namespace core {
-
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape);
 
 template <std::size_t Rank>
 ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>& shape) {
@@ -38,10 +37,10 @@ ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>
     std::array<std::uint32_t, Rank> new_shape{};
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (new_volume < 0) {
-        const auto volume = tensor.get_shape().with_tile_padding().volume();
+        const auto volume = tensor.volume();
         new_shape[index_of_negative_1] = volume / (-new_volume);
     }
-    return reshape(tensor, ttnn::Shape(new_shape));
+    return ttnn::reshape(tensor, ttnn::Shape(new_shape));
 }
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
@@ -99,7 +98,6 @@ void release_trace(MeshDevice* device, const uint32_t tid);
 using operations::core::deallocate;
 using operations::core::from_device;
 using operations::core::reallocate;
-using operations::core::reshape;
 using operations::core::squeeze_from_4D;
 using operations::core::to_device;
 using operations::core::unsqueeze_to_4D;

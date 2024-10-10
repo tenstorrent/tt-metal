@@ -229,13 +229,17 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     except (ValueError, AttributeError):
         num_pcie_devices_requested = len(device_ids)
 
+    if num_pcie_devices_requested != 4:
+        pytest.skip("Only 4 PCIe devices are supported for testing")
+
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
     mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(1, num_pcie_devices_requested),
+        ttnn.MeshShape(2, 2),
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
-        physical_device_ids=device_ids[:num_pcie_devices_requested],
+        offset=(0, 1),
+        mesh_type=ttnn.MeshType.Ring,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -278,10 +282,12 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     if ttnn.get_num_devices() < 8:
         pytest.skip()
 
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(2, 4),
         dispatch_core_type=get_dispatch_core_type(),
         **device_params,
+        mesh_type=ttnn.MeshType.Ring,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")

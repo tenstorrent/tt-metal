@@ -21,6 +21,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 
+@torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
@@ -86,7 +87,7 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
+        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
             :, 0, :, :
         ].view(

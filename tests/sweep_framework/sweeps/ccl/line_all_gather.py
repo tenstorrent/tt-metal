@@ -65,7 +65,7 @@ def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = ttnn.get_t3k_physical_device_ids_ring()
     num_devices_requested = len(device_ids)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), device_ids[:num_devices_requested])
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), mesh_type=ttnn.MeshType.Line)
     print("ALL GATHER: Opened device mesh")
 
     yield (mesh_device, "T3000 Mesh")
@@ -94,8 +94,7 @@ def run(
     device,
 ) -> list:
     t3k_mesh_device = device
-    for device in t3k_mesh_device.get_devices():
-        device.enable_async(enable_async)
+    t3k_mesh_device.enable_async(enable_async)
 
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
@@ -107,7 +106,9 @@ def run(
 
     for i in range(num_iters):
         start_time = start_measuring_time()
-        tt_out_tensor = ttnn.line_all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
+        tt_out_tensor = ttnn.all_gather(
+            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+        )
         e2e_perf = stop_measuring_time(start_time)
 
         logger.info(f"Done iteration {i}")

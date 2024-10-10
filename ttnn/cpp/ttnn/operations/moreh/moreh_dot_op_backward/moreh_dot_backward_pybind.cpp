@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_dot_backward_pybind.hpp"
+
 #include <optional>
 
 #include "moreh_dot_backward.hpp"
@@ -12,17 +13,17 @@
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 void bind_moreh_dot_backward_operation(py::module& module) {
-bind_registered_operation(
-    module,
-    ttnn::moreh_dot_backward,
-    "Moreh moreh_matmul Operation",
-    ttnn::pybind_arguments_t{
-        py::arg("output_grad"),
-        py::arg("input"),
-        py::arg("other"),
-        py::kw_only(),
-        py::arg("input_grad") = std::nullopt,
-        py::arg("other_grad") = std::nullopt,
-        py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::moreh_dot_backward,
+        "Moreh moreh_matmul Operation",
+        ttnn::pybind_arguments_t{
+            py::arg("output_grad"),
+            py::arg("input"),
+            py::arg("other"),
+            py::kw_only(),
+            py::arg("input_grad") = std::nullopt,
+            py::arg("other_grad") = std::nullopt,
+            py::arg("memory_config") = std::nullopt});
 }
-}
+}  // namespace ttnn::operations::moreh::moreh_dot_backward

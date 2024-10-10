@@ -9,8 +9,8 @@ import ttnn
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_model_galaxy import TtLlamaModel_galaxy
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     BASE_URL,
     should_skip_model_load,
@@ -196,10 +196,8 @@ def test_Llama_perf_host(
     )
 
     check_mesh_device(mesh_device, model_config)
-
-    for device in mesh_device.get_devices():
-        device.enable_program_cache()
-        device.enable_async(True)
+    mesh_device.enable_async(True)
+    mesh_device.enable_program_cache()
     disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(

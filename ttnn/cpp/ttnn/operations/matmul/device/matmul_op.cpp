@@ -186,7 +186,7 @@ inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
     std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - L1_UNRESERVED_BASE;
+    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
     return max_l1_space;
 }
 
@@ -234,8 +234,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const std::optional<const UnaryWithParam> fused_activation,
     const bool fp32_dest_acc_en,
     const TensorMemoryLayout input_layout_a) {
-    auto a_padded_shape = input_shape_a.with_tile_padding();
-    auto b_padded_shape = input_shape_b.with_tile_padding();
+    auto a_padded_shape = input_shape_a.padded_shape();
+    auto b_padded_shape = input_shape_b.padded_shape();
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
@@ -1043,7 +1043,7 @@ void Matmul::validate(
     }
 
     std::visit(
-        [input_tensor_a, input_tensor_b, in0_tile_shape, in1_tile_shape, this](const auto& program_config) {
+        [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
             // We can uplift these variants to skip mcasting to support single core (1D) or single row/col (2D)
@@ -1088,6 +1088,15 @@ void Matmul::validate(
 
                         TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1, "Error");
                     }
+                    if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 && input_tensor_b.memory_config().is_sharded()) {
+                        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Operand B can only be interleaved or L1 width sharded.");
+                        TT_FATAL(program_config.per_core_N == (input_tensor_b.shard_spec().value().shape[1] / in1_tile_shape[1]), "Shard width must match per core N.");
+                        if (optional_bias.has_value()) {
+                            TT_FATAL(
+                                input_tensor_b.shard_spec().value().shape[1] == optional_bias.value().shard_spec().value().shape[1],
+                                "Bias shard spec width must match second inputs shard spec width.");
+                        }
+                    }
                 } else {
                     if (input_tensor_a.memory_config().is_sharded()) {
                         TT_FATAL(program_config.fuse_batch, "Error");
@@ -1122,8 +1131,8 @@ void Matmul::validate(
                         TT_FATAL(N == per_core_N, "Error");
                         TT_FATAL(program_config.out_subblock_w == per_core_N || program_config.out_subblock_h == 1, "Error");
                     }
+                    TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 }
-                TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -1289,29 +1298,24 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const tt::tt_metal::LegacyShape& input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const tt::tt_metal::LegacyShape& input_shape_b = input_tensors.at(1).get_legacy_shape();
+std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
+    ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    tt::tt_metal::LegacyShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
     for (auto index = 0; index < rank_difference; index++) {
         TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
-        dimensions_pads.push_back(input_shape_b.padding()[index]);
     }
     for (auto index = 0; index < a_rank - 1; index++) {
         output_shape[rank_difference + index] = input_shape_a[index];
-        dimensions_pads.push_back(input_shape_a.padding()[index]);
     }
     output_shape[-1] = input_shape_b[-1];
-    dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {std::move(output_shape)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

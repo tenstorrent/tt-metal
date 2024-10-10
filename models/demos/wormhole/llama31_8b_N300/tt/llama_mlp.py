@@ -84,7 +84,7 @@ class TtLlamaMLP(torch.nn.Module):
             x_in = x
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
-                x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+                x_in = ttnn.reshape(x_in, [1, seq_len // 1024, 1024, -1])
                 pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
                 pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"]
@@ -127,7 +127,6 @@ class TtLlamaMLP(torch.nn.Module):
 
         w3_out.deallocate(True)
         w1_out.deallocate(True)
-
         # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
         w2_out = ttnn.linear(
             w2_in,
@@ -148,7 +147,7 @@ class TtLlamaMLP(torch.nn.Module):
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 
         # All reduce
-        w2_out_gathered = ttnn.line_all_gather(w2_out, dim=1, num_links=1)
+        w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
         w2_out_reduced = ttnn.experimental.fast_reduce_nc(
             w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
         )

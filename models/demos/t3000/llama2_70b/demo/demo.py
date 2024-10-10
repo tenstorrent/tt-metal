@@ -457,9 +457,7 @@ def test_LlamaModel_demo(
 
     check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
-        device.enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

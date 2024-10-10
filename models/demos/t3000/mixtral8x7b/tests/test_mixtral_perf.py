@@ -51,8 +51,7 @@ def test_mixtral_model_perf(
     reset_seeds,
     is_ci_env,
 ):
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost
@@ -143,7 +142,7 @@ def test_mixtral_model_perf(
     (
         (128, 80, 0.23),
         (1024, 80, 1.5),  # FIXME #12318
-        (1024 * 2, 80, 4.6),  # FIXME #12318
+        (1024 * 2, 80, 4.7),  # FIXME #12318
         # (1024*4, 80, 60),
         # (1024*8, 150, 80),
         # (1024*16, 150, 100),
@@ -168,8 +167,7 @@ def test_mixtral_model_with_prefill_perf(
     reset_seeds,
     is_ci_env,
 ):
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     if not is_ci_env:  # Enable tracy signpost support in local runs only
         from tracy import signpost

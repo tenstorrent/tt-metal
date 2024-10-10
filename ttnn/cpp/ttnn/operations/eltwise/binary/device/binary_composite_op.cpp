@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_composite_op.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
@@ -15,6 +15,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace ttnn::operations::binary{

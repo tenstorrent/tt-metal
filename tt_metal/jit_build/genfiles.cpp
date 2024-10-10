@@ -15,7 +15,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
-#include "llrt/rtoptions.hpp"
 #include "noc/noc_parameters.h"
 
 namespace fs = std::filesystem;
@@ -24,10 +23,15 @@ using namespace std;
 
 namespace tt::tt_metal {
 
-static void gen_kernel_cpp(const string& src_name, const string& dst_name, vector<string>& prolog) {
+static void gen_kernel_cpp(const string& src, const string& dst_name, const vector<string>& prolog) {
     std::ofstream out(dst_name);
-    for (auto s : prolog) out << s;
-    out << "#include \"" << src_name << "\"\n";
+    for (const string& s : prolog) out << s;
+    out << src;
+}
+
+static void gen_kernel_cpp(const string& src, const string& dst_name) {
+    vector<string> empty_prolog;
+    gen_kernel_cpp(src, dst_name, empty_prolog);
 }
 
 static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path& file_path) {
@@ -77,22 +81,31 @@ static string get_absolute_path(const string& file_path_string) {
     return absolute_file_path.string();
 }
 
+static string get_kernel_source_to_include(const KernelSource& kernel_src) {
+    switch (kernel_src.source_type_) {
+        case KernelSource::FILE_PATH: return "#include \"" + get_absolute_path(kernel_src.source_) + "\"\n";
+        case KernelSource::SOURCE_CODE: return kernel_src.source_;
+        default: {
+            TT_THROW("Unsupported kernel source type!");
+        }
+    }
+}
+
 void jit_build_genfiles_kernel_include(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const string& input_hlk_file_path) {
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
     string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
     string kernel_header = out_dir + "kernel_includes.hpp";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
-    vector<string> prolog;
-    gen_kernel_cpp(abs_file_path, kernel_header, prolog);
+    gen_kernel_cpp(kernel_src_to_include, kernel_header);
 }
+
 void jit_build_genfiles_triscs_src(
-    const JitBuildEnv& env, const JitBuildSettings& settings, const string& input_hlk_file_path) {
+    const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src) {
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
@@ -107,8 +120,7 @@ void jit_build_genfiles_triscs_src(
     string pack_cpp = pack_base + ".cpp";
     string pack_llk_args_h = pack_base + "_llk_args.h";
 
-    // Get absolute path of kernel file to include
-    string abs_file_path = get_absolute_path(input_hlk_file_path);
+    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
     unpack_prolog.push_back("#define TRISC_UNPACK\n");
@@ -121,9 +133,9 @@ void jit_build_genfiles_triscs_src(
     pack_prolog.push_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
-    std::thread t0([&]() { gen_kernel_cpp(abs_file_path, unpack_cpp, unpack_prolog); });
-    std::thread t1([&]() { gen_kernel_cpp(abs_file_path, math_cpp, math_prolog); });
-    std::thread t2([&]() { gen_kernel_cpp(abs_file_path, pack_cpp, pack_prolog); });
+    std::thread t0([&]() { gen_kernel_cpp(kernel_src_to_include, unpack_cpp, unpack_prolog); });
+    std::thread t1([&]() { gen_kernel_cpp(kernel_src_to_include, math_cpp, math_prolog); });
+    std::thread t2([&]() { gen_kernel_cpp(kernel_src_to_include, pack_cpp, pack_prolog); });
     t0.join();
     t1.join();
     t2.join();
@@ -461,6 +473,22 @@ static void generate_dst_accum_mode_descriptor(JitBuildOptions& options) {
     file_stream.close();
 }
 
+static void generate_dst_sync_mode_descriptor(JitBuildOptions& options) {
+    string dst_sync_mode_descriptor = options.path + "chlkc_dst_sync_mode.h";
+
+    ofstream file_stream;
+
+    file_stream.open(dst_sync_mode_descriptor);
+
+    if (options.dst_full_sync_en) {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncFull" << endl;
+    } else {
+        file_stream << "#define DST_SYNC_MODE DstSync::SyncHalf" << endl;
+    }
+
+    file_stream.close();
+}
+
 static void generate_math_fidelity_descriptor(JitBuildOptions& options) {
     string math_fidelity_descriptor = options.path + "chlkc_math_fidelity.h";
     // assuming all cores within a op have the same desc
@@ -497,11 +525,13 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
         std::thread tm( [&]() { generate_math_fidelity_descriptor(options); } );
         std::thread ta( [&]() { generate_math_approx_mode_descriptor(options); } );
         std::thread tf( [&]() { generate_dst_accum_mode_descriptor(options); } );
+        std::thread ts( [&]() { generate_dst_sync_mode_descriptor(options); } );
         td.join();
         tt.join();
         tm.join();
         ta.join();
         tf.join();
+        ts.join();
     } catch (std::runtime_error& ex) {
         std::cerr << "EXCEPTION FROM THREADING IN GENERATE_DESCRIPTORS: " << ex.what() << std::endl;
     }
@@ -513,8 +543,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map) {
+    uint32_t allocator_alignment) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
@@ -536,7 +565,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(ALLOCATOR_ALIGNMENT) - 1 << endl;
+    ss << "#define ALLOCATOR_ALIGNMENT " << allocator_alignment << endl;
+    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(allocator_alignment) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -565,14 +595,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];" << endl;
     ss << "extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];" << endl;
     ss << "extern int32_t bank_to_l1_offset[NUM_L1_BANKS];" << endl;
-#if defined(TRACY_ENABLE)
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
-          "defined(COMPILE_FOR_ERISC))"
-       << endl;
-    ss << "extern uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y];" << endl;
-    ss << "extern uint16_t profiler_core_count_per_dram;" << endl;
-    ss << "#endif" << endl;
-#endif
 
     ss << endl;
     ss << "#else // !KERNEL_BUILD (FW_BUILD)" << endl;
@@ -599,43 +621,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     }
     ss << "};" << endl;
     ss << endl;
-
-#if defined(TRACY_ENABLE)
-    /*
-     * This part is adding the 2D array for sharing the flat IDs soc descriptor has assigned to every NOC coordinate,
-     * and the ceiled number of cores per DRAM banks.
-     *
-     * The logic of flat ID assignment can be optimized to lower NOC traffic. With this design the heuristic can be
-     * implemented in host and device just does look up to the table.
-     *
-     * For DRAM banks in particular, integer division of flat_id/core_count_per_dram gives the dram bank id and the
-     * modulo is the offset.
-     * */
-    ss << "#if defined(PROFILE_KERNEL) && (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || "
-          "defined(COMPILE_FOR_ERISC))"
-       << endl;
-    ss << "uint16_t profiler_core_count_per_dram __attribute__((used)) = ";
-    ss << core_count_per_dram << ";" << endl;
-    ss << endl;
-
-    ss << "uint8_t noc_xy_to_profiler_flat_id[noc_size_x][noc_size_y] __attribute__((used)) = {" << endl;
-    for (unsigned int x = 0; x < grid_size.x; x++) {
-        ss << "    {" << endl;
-        for (unsigned int y = 0; y < grid_size.y; y++) {
-            CoreCoord core = {x, y};
-            if (profiler_flat_id_map.find(core) == profiler_flat_id_map.end()) {
-                ss << "        " << 255 << "," << endl;
-            } else {
-                ss << "        " << profiler_flat_id_map.at(core) << "," << endl;
-            }
-        }
-        ss << "    }," << endl;
-    }
-    ss << "};" << endl;
-    ss << endl;
-    ss << "#endif" << endl;
-
-#endif
 
     ss << "uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used)) = {" << endl;
     for (unsigned int noc = 0; noc < 2; noc++) {
@@ -670,16 +655,14 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
     std::vector<int32_t>& l1_bank_offset_map,
-    int core_count_per_dram,
-    const std::map<CoreCoord, int32_t>& profiler_flat_id_map) {
+    uint32_t allocator_alignment) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
         l1_bank_offset_map,
-        core_count_per_dram,
-        profiler_flat_id_map);
+        allocator_alignment);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

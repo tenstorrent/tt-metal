@@ -440,6 +440,17 @@ Normalization
    ttnn.layer_norm
    ttnn.rms_norm
 
+
+Moreh Operations
+================
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.moreh_sum
+
 Transformer
 ===========
 
@@ -456,6 +467,18 @@ Transformer
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
    ttnn.transformer.scaled_dot_product_attention_decode_gqa
+
+CCL
+===
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: function.rst
+
+   ttnn.all_gather
+   ttnn.reduce_scatter
+
 
 Embedding
 =========

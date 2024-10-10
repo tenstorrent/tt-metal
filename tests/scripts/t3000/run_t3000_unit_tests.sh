@@ -38,6 +38,7 @@ run_t3000_ttnn_tests() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/test_multi_device_events.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/test_multi_device_async.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

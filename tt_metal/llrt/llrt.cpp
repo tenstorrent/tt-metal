@@ -149,17 +149,18 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ph
     return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
 
     uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
-    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
+    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
+    uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
     tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        tt::Cluster::instance().write_core((void *)&msg->go, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
+        tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
 }
 
@@ -280,14 +281,14 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
-    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
+    uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+    auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        // read a single uint32_t even though launch.run is smaller than that
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, go.run) & 3));
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr & ~0x3, sizeof(uint32_t));
+        go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
+        uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(
                 stderr,
@@ -296,14 +297,13 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                run == run_state || run == RUN_MSG_DONE,
                 "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;
     };
-
-    return get_mailbox_is_done(run_mailbox_addr);
+    return get_mailbox_is_done(go_msg_addr);
 }
 
 void wait_until_cores_done(
@@ -344,6 +344,12 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+        // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
+        // slow down for remote devices. So when debugging with these features, add a small delay to allow other
+        // host-driven transactions through.
+        if (llrt::OptionsG.get_watcher_enabled() ||
+            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 

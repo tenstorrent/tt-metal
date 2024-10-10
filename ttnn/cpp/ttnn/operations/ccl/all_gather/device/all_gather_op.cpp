@@ -26,14 +26,27 @@ AllGather create_all_gather_struct(
     uint32_t num_devices = devices.size();
 
     uint32_t device_index = 0; // Initialize device index
-    uint32_t receiver_device_id = 0; // Initialize receiver device ID
-    uint32_t sender_device_id = 0; // Initialize sender device ID
+    std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
+    std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
 
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices[i] == input_tensor.device()) {
             device_index = i;
-            receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-            sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+            if (topology == ttnn::ccl::Topology::Ring) {
+                // Ring topology
+                receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
+                sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+            } else if (topology == ttnn::ccl::Topology::Linear) {
+                // Linear topology
+                bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
+                bool is_last_chip_in_counter_clockwise_direction = i == 0;
+                receiver_device_id = is_last_chip_in_clockwise_direction ?
+                    std::nullopt :
+                    std::optional<chip_id_t>(devices.at(i+1)->id());
+                sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                    std::nullopt :
+                    std::optional<chip_id_t>(devices.at(i-1)->id());
+            }
             break;
         }
     }
@@ -49,7 +62,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
     }
 
     std::size_t eth_l1_capacity = eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    std::size_t tensor_size_bytes = input_tensor.shape().volume() * input_tensor.element_size();
+    std::size_t tensor_size_bytes = input_tensor.volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
     if (perf_degradation_from_full_tensor_mode) {
@@ -152,10 +165,10 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto shape = input_tensors[0].get_logical_shape();
     shape[this->dim] *= this->ring_size;
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
@@ -186,7 +199,7 @@ Tensor all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
-    ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Ring;
+    ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2){
         ccl_topology = ttnn::ccl::Topology::Linear;
@@ -207,6 +220,61 @@ Tensor all_gather(
         {input_tensor},
         output_tensors);
     return output_tensors.at(0);
+}
+
+Tensor all_gather(
+    const Tensor& input_tensor,
+    const uint32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    const ttnn::ccl::Topology topology) {
+
+    TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
+    const auto mesh_view = mesh_device.get_view();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    operation::launch_op(
+        [dim, num_links, memory_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+
+            const auto& input_device_tensor = input_tensors.at(0);
+
+            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+
+            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+                auto new_coord = coordinate;
+                if (cluster_axis == 0) {
+                    new_coord.row = line_index % num_devices;
+                } else {
+                    new_coord.col = line_index % num_devices;
+                }
+                return mesh_view->find_device_id(new_coord);
+            };
+
+            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+            auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+            auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
+
+            return operation::run(
+                ttnn::AllGather{
+                    dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_device_tensor.memory_config()), topology},
+                {input_device_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+
 }
 
 

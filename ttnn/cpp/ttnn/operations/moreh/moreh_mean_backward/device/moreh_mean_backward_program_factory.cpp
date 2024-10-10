@@ -55,9 +55,9 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::cached_program_t
 MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    tensor_return_value_t &output) {
     const auto &output_grad = tensor_args.output_grad;
-    const auto &input_grad = output_tensor;
+    const auto &input_grad = output;
     auto keepdim = operation_attributes.keepdim;
     auto dims = operation_attributes.dims;
     auto compute_kernel_config =
@@ -98,7 +98,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         }
     }
     const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -170,8 +170,6 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         tt::operations::primary::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change unpack_to_dest_mode from false to fp32_dest_acc_en after fix #10337
-            // .unpack_to_dest_mode = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
@@ -219,26 +217,26 @@ void MorehMeanBackwardOperation::MorehMeanBackwardFactory::override_runtime_argu
     cached_program_t &cached_program,
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor){
-        auto& program = cached_program.program;
-        auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-        auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-        auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-        auto num_cores_y = cached_program.shared_variables.num_cores_y;
+    tensor_return_value_t &output) {
+    auto &program = cached_program.program;
+    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
+    auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
-        const auto *output_grad_buffer = tensor_args.output_grad.buffer();
-        const auto *input_grad_buffer = output_tensor.buffer();
-        for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-            CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = output_grad_buffer->address();
-            }
+    auto output_grad_address = tensor_args.output_grad.buffer()->address();
+    auto input_grad_address = output.buffer()->address();
+    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        {
+            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            runtime_args[0] = output_grad_address;
+        }
 
-            {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = input_grad_buffer->address();
-            }
+        {
+            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            runtime_args[0] = input_grad_address;
         }
     }
+}
 }  // namespace ttnn::operations::moreh::moreh_mean_backward

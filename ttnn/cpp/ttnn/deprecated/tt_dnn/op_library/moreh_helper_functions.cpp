@@ -5,7 +5,7 @@
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
 
 #include "common/constants.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/work_split.hpp"
 
@@ -331,7 +331,7 @@ uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
+void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -341,7 +341,7 @@ void expand_to_max_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacySha
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
     auto input_shape = input.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
+    auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
     TT_FATAL(
@@ -352,12 +352,12 @@ void validate_input_with_dim(const Tensor &input, const int64_t &dim) {
 }
 
 void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keep_dim) {
-    auto input_shape = input.get_legacy_shape();
-    auto input_shape_wo_padding = input_shape.without_padding();
+    auto input_shape = input.get_padded_shape();
+    auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
 
-    const auto &output_shape = output.get_legacy_shape();
-    const auto &output_shape_wo_padding = output_shape.without_padding();
+    const auto output_shape = output.get_padded_shape();
+    const auto output_shape_wo_padding = output.get_logical_shape();
     const auto output_rank = output_shape.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
@@ -440,7 +440,7 @@ std::vector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal::LegacyShape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -455,7 +455,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const tt::tt_metal
     return { W, H, other_dims_product};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const tt::tt_metal::LegacyShape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");

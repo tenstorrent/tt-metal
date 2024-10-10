@@ -43,8 +43,8 @@ class LockFreeQueue {
 
     public:
         // Optional - Set these if the worker and parent thread state needs to be tracked
-        std::atomic<uint64_t> worker_thread_id = 0;
-        std::atomic<uint64_t> parent_thread_id = 0;
+        std::atomic<std::thread::id> worker_thread_id;
+        std::atomic<std::thread::id> parent_thread_id;
         LockFreeQueue()
         {
             // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one, which points to the head.

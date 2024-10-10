@@ -9,7 +9,7 @@ specifications.
 ```bash
     export ARCH_NAME=<arch name>
     export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh
+    ./build_metal.sh --build-tests
     ./build/programming_examples/shard_data_rm
 ```
 # Device setup
@@ -21,8 +21,8 @@ CommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 ```
 
-We start the source code by creating an object that designates the hardware device that we will be using for the program. For this example, we select the device with an ID of 0. 
-In order to dispatch commands to the device for execution we must also retrieve the `CommandQueue` object associated with `device`. Commands will be dispatched through this object to be executed on the device. 
+We start the source code by creating an object that designates the hardware device that we will be using for the program. For this example, we select the device with an ID of 0.
+In order to dispatch commands to the device for execution we must also retrieve the `CommandQueue` object associated with `device`. Commands will be dispatched through this object to be executed on the device.
 The `Program` object is created to encapsulate our kernels and buffers.
 
 # Initialize source data
@@ -39,7 +39,7 @@ for (uint32_t i = 0; i < src_vec.size(); i++) {
 constexpr size_t data_size = sizeof(bfloat16);
 ```
 
-For this example, we will be using a tensor with shape `(16, 1)` as our source vector. The vector contains the values `{2, 4, 6, ... , 28, 30, 32}`. 
+For this example, we will be using a tensor with shape `(16, 1)` as our source vector. The vector contains the values `{2, 4, 6, ... , 28, 30, 32}`.
 Note that the process of initializing the source data can be done at any point before loading the values into the DRAM and executing the program.
 
 # Core designation
@@ -51,7 +51,7 @@ uint32_t num_cores = 4;
 CoreRange cores(start_core, end_core);
 ```
 
-For simplicity, we will be using just 4 cores in this program. In order to designate which cores to use, we must designate the logical coordinates of the start and end cores. 
+For simplicity, we will be using just 4 cores in this program. In order to designate which cores to use, we must designate the logical coordinates of the start and end cores.
 The start and end cores must form a rectangle in order for the cores to be utilized; the intermediary cores are determined by the start and end cores.
 
 # Sharding specifications
@@ -63,11 +63,11 @@ uint32_t shard_size = shard_height * shard_width;
 uint32_t input_unit_size = sizeof(uint32_t);
 uint32_t shard_width_bytes = shard_width * data_size;
 uint32_t num_units_per_row = shard_width * input_unit_size;
-uint32_t padded_offset_bytes = align(input_unit_size, ALLOCATOR_ALIGNMENT);
+uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
 ```
 
-In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function. 
-For this situation, 16 units of data will be sharded across 4 cores; each core will have 4 units of data in their corresponding circular buffer. 
+In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function.
+For this situation, 16 units of data will be sharded across 4 cores; each core will have 4 units of data in their corresponding circular buffer.
 The `padded_offset_bytes` is set to ensure that the correct address is read from the kernel function when moving data to the circular buffer; in this case, the addresses are aligned to L1 memory.
 This example demonstrates height sharding; the shard height is therefore set to evenly distribute the number of vector values across the cores.
 If the sharding strategy was different (i.e. width sharding or block sharding), the appropriate values for both the shard height and width would need to be set.
@@ -100,7 +100,7 @@ CircularBufferConfig input_cb_config = CircularBufferConfig(shard_size * input_u
 auto cb_input = tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
 ```
 
-Across each core, the `CircularBuffer` indicated by the index corresponding to `CB::c_in0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size. 
+Across each core, the `CircularBuffer` indicated by the index corresponding to `CB::c_in0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size.
 The corresponding `CircularBuffer` objects are then allocated with this configuration across each of the designated cores.
 
 # Create data movement kernels for sharding
@@ -177,8 +177,8 @@ Each stick will then contain 2 of the BFloat16 tensor values. The generator is u
 
 In the indicated kernel function file, we call `cb_reserve_back` for the indicated circular buffer in order to wait for space of the specified data segment size to be free, then load the data into the circular buffer by reading the value from the NoC address (indicated by `src_noc_addr`) to the L1 memory address (indicated by `l1_write_addr`).
 
-In our example, the `shard_height` is 2, so each of the cores will read in 2 values of the given page size at incremental addresses from the source vector. Then, the BFloat16 values are read and printed out from the kernel. 
-For this example, each core will read in 4 BFloat16 values; there will be 2 pages read, each with 2 BFloat16 values. 
+In our example, the `shard_height` is 2, so each of the cores will read in 2 values of the given page size at incremental addresses from the source vector. Then, the BFloat16 values are read and printed out from the kernel.
+For this example, each core will read in 4 BFloat16 values; there will be 2 pages read, each with 2 BFloat16 values.
 Once the data is written to the circular buffer, `cb_push_back` is called to make the data visible.
 
 # Program execution
@@ -190,7 +190,7 @@ Finish(cq);
 CloseDevice(device);
 ```
 
-`EnqueueWriteBuffer` is called in order to load the source vector into the interleaved DRAM buffer. 
+`EnqueueWriteBuffer` is called in order to load the source vector into the interleaved DRAM buffer.
 `EnqueueProgram` is then called to dispatch the program to the device for execution. Upon conclusion of the program execution, the device is closed.
 
 # Conclusion

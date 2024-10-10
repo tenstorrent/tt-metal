@@ -35,10 +35,10 @@ namespace ttnn::operations::moreh::moreh_sum {
 struct MorehSumOperation {
     struct operation_attributes_t {
         const int64_t dim;
-        const bool keep_batch_dim;
+        const bool keepdim;
 
         const MemoryConfig output_mem_config;
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
@@ -72,7 +72,7 @@ struct MorehSumOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const int64_t dim,
-        const bool keep_batch_dim,
+        const bool keepdim,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& output_mem_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

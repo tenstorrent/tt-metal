@@ -183,6 +183,9 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_GO: break;
             case CQ_DISPATCH_CMD_SINK: break;
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
+            case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
+            case CQ_DISPATCH_SET_UNICAST_ONLY_CORES: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
@@ -376,7 +379,7 @@ void dump_issue_queue_entries(
     uint32_t issue_write_ptr =
         get_cq_issue_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
     uint32_t issue_q_bytes = cq_interface.issue_fifo_size << 4;
-    uint32_t issue_q_base_addr = cq_interface.offset + CQ_START;
+    uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     vector<uint8_t> read_data;
@@ -532,7 +535,7 @@ void dump_command_queue_raw_data(
             get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
             << 4;
         bytes_to_read = cq_interface.issue_fifo_size << 4;
-        base_addr = cq_interface.offset + CQ_START;
+        base_addr = cq_interface.offset + cq_interface.cq_start;
         queue_type_name = "Issue";
     } else {
         TT_THROW("Unrecognized CQ type: {}", queue_type);

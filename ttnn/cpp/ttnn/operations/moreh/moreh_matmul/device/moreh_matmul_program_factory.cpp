@@ -28,7 +28,8 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape 
     }
 }
 
-std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape &a_shape, const tt::tt_metal::LegacyShape &b_shape) {
+std::vector<int64_t> find_reduce_dim(
+    const tt::tt_metal::LegacyShape &a_shape, const tt::tt_metal::LegacyShape &b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -39,7 +40,7 @@ std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape &a_shape, c
     // batch dims
     for (int i = 0; i < rank - 2; ++i) {
         int idx = rank - 1 - i;
-        TT_ASSERT(idx >= 0);
+        TT_FATAL(idx >= 0, "idx < 0");
         if (a_dim[idx] != b_dim[idx]) {
             dims.push_back(i);
             log_debug(tt::LogOp, "find_reduce_dim :{} push {} dim", __LINE__, i);
@@ -237,7 +238,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_h,
         other_mask_w);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,
@@ -279,6 +280,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     const uint32_t im0_t{1};   // temp
     const uint32_t im1_t{2};   // transpose for input
     const uint32_t im2_t{2};   // transpose for other
+    const uint32_t im3_t{1};   // temp for bias add
     const uint32_t out0_t{2};  // output
 
     tt::operations::primary::CreateCircularBuffer(
@@ -294,6 +296,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             {tt::CB::c_intermed0, im0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
             {tt::CB::c_intermed1, im1_t},
             {tt::CB::c_intermed2, im2_t},
+            {tt::CB::c_intermed3, im3_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
             {tt::CB::c_out0, out0_t},
         });
 
