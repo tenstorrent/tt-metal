@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/util.hpp"

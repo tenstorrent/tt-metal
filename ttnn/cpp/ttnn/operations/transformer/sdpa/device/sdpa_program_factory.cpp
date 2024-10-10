@@ -11,7 +11,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
 using namespace tt::constants;

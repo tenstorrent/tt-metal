@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <algorithm>
 
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"

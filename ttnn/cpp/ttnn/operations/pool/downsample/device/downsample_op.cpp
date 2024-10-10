@@ -7,7 +7,7 @@
 
 #include <math.h>
 
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
 
 using namespace tt::constants;

@@ -4,7 +4,7 @@
 
 #include "common/core_coord.h"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "eth_l1_address_map.h"

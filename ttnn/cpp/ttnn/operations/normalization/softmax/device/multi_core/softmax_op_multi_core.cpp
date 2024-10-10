@@ -6,7 +6,7 @@
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
 

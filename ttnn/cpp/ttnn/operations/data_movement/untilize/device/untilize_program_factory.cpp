@@ -6,8 +6,8 @@
 
 #include <math.h>
 
-#include "ttnn/operations/moreh/cb_utils.hpp"
-#include "ttnn/operations/moreh/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
