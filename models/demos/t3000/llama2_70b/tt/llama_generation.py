@@ -124,7 +124,9 @@ class TtLlamaModelForGeneration:
         tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        rot_mat = ttnn.to_device(rot_mat, self.mesh_device, memory_config=self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+        rot_mat_rm = ttnn.to_device(rot_mat, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+        rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
 
@@ -134,12 +136,14 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+        rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+        rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
         tt_logits = self.tt_model(tt_inp_emb, rot_mat, start_pos, cache_idxs=cache_idxs_tt, mode="decode")
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp, rot_mat, cache_idxs_tt, tt_logits
+        return trace_id, tt_inp, rot_mat_rm, cache_idxs_tt, tt_logits
 
     def delete_trace(self, trace_id):
         ttnn.release_trace(self.mesh_device, trace_id)

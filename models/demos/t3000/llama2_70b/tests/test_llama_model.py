@@ -165,6 +165,9 @@ def run_test_LlamaModel_inference(
         if mode == "decode":
             tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
+            rot_mat_rm = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+            rot_mat = ttnn.interleaved_to_sharded(rot_mat, model_config["ROT_MAT_MM_IN1_MEMCFG"])
             tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
             rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
             cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
