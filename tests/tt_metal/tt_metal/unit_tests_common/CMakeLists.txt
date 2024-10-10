@@ -1,6 +1,7 @@
 
 set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/basic/test_device_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/basic/test_kernel_creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/test_bit_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/common/test_dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_flatten.cpp
