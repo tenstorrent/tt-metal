@@ -7,8 +7,8 @@
 namespace tt::tt_metal {
 
 enum class DataMovementProcessor {
-    RISCV_0 = 0,  // BRISC
-    RISCV_1 = 1,  // NCRISC
+    RISCV_0 = 0,  // DM0
+    RISCV_1 = 1,  // DM1
 };
 
 enum NOC : uint8_t {

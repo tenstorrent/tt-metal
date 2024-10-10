@@ -680,6 +680,10 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_iec(path + "/idle_erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_iec << output_string;
     file_stream_iec.close();
+    fs::create_directories(path + "/slave_idle_erisc");
+    ofstream file_stream_siec(path + "/slave_idle_erisc/generated_bank_to_noc_coord_mapping.h");
+    file_stream_siec << output_string;
+    file_stream_siec.close();
 }
 
 static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {

@@ -281,7 +281,7 @@ void Device::initialize_build() {
     auto init_helper = [this, dispatch_message_addr] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
 
-        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 7);
+        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 8);
 
         build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 0] =
             std::make_shared<JitBuildDataMovement>(
@@ -306,6 +306,9 @@ void Device::initialize_build() {
             build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1] =
                 std::make_shared<JitBuildEthernet>(
                     this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+            build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 2] =
+                std::make_shared<JitBuildEthernet>(
+                    this->build_env_, JitBuiltStateConfig{.processor_id = 2, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
         }
 
        return build_states;
@@ -346,11 +349,13 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
         } else {
             tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
             if (not llrt::OptionsG.get_skip_loading_fw()) {
-                int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
-                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+                for (int eriscv_id_offset = 1; eriscv_id_offset < 3; eriscv_id_offset++) {
+                    int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + eriscv_id_offset;
+                    ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
+                    uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
+                    log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                    llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+                }
             }
             llrt::program_risc_startup_addr(this->id(), phys_core);
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
@@ -3181,7 +3186,7 @@ float Device::sfpu_inf() const{
 pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {
     constexpr int DataMovementBuildCount = 2;
     constexpr int ComputeBuildCount = 3;
-    constexpr int EthernetBuildCount = 2;
+    constexpr int EthernetBuildCount = 3;
 
     switch (t) {
     case JitBuildProcessorType::DATA_MOVEMENT: return pair<int, int>(0, DataMovementBuildCount);

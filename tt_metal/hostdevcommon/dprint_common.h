@@ -21,9 +21,15 @@ enum DebugPrintHartIndex : unsigned int {
     DPRINT_RISCV_INDEX_TR2 = 3,
     DPRINT_RISCV_INDEX_BR  = 4,
     DPRINT_RISCV_INDEX_ER  = 0,
+    DPRINT_RISCV_INDEX_ER1 = 1,
 };
+// TODO: remove these and pull these from the HAL
 #define DPRINT_NRISCVS 5
+#ifdef ARCH_BLACKHOLE
+#define DPRINT_NRISCVS_ETH 2
+#else
 #define DPRINT_NRISCVS_ETH 1
+#endif
 
 #define DPRINT_TYPES                 \
     DPRINT_PREFIX(CSTR)              \

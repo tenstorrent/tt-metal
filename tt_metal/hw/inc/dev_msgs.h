@@ -56,6 +56,7 @@ enum dispatch_core_processor_classes {
 
     // Ethernet processor classes
     DISPATCH_CLASS_ETH_DM0 = 0,
+    DISPATCH_CLASS_ETH_DM1 = 1,
 
     DISPATCH_CLASS_MAX = 3,
 };
@@ -66,6 +67,7 @@ enum dispatch_core_processor_masks {
     DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE = 1 << DISPATCH_CLASS_TENSIX_COMPUTE,
 
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
+    DISPATCH_CLASS_MASK_ETH_DM1 = 1 << DISPATCH_CLASS_ETH_DM1,
 };
 
 enum noc_index {
@@ -121,6 +123,7 @@ struct slave_sync_msg_t {
     union {
         volatile uint32_t all;
         struct {
+            // rename to DM1 to work for secondary eth processor?
             volatile uint8_t ncrisc;  // ncrisc must come first, see ncrisc-halt.S
             volatile uint8_t trisc0;
             volatile uint8_t trisc1;
@@ -187,6 +190,7 @@ typedef enum debug_sanitize_which_riscv {
     DebugTrisc2 = 4,
     DebugErisc = 5,
     DebugIErisc = 6,
+    DebugSlaveIErisc = 7,
     DebugNumUniqueRiscs
 } riscv_id_t;
 
@@ -220,7 +224,11 @@ constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#ifdef ARCH_BLACKHOLE
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
+#else
+constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
+#endif
 #else
 constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
 #endif
@@ -256,7 +264,11 @@ static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 // TODO: when device specific headers specify number of processors
 // (and hal abstracts them on host), get these from there (same as above for dprint)
 #if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+#ifdef ARCH_BLACKHOLE
 static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#else
+static constexpr uint32_t PROFILER_RISC_COUNT = 1;
+#endif
 #else
 static constexpr uint32_t PROFILER_RISC_COUNT = 5;
 #endif

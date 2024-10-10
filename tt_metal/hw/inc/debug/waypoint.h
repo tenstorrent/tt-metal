@@ -43,7 +43,7 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t *debug_waypoint) {
 #elif defined(COMPILE_FOR_ERISC)
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
 #elif defined(COMPILE_FOR_IDLE_ERISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
+#define WATCHER_WAYPOINT_MAILBOX_OFFSET (COMPILE_FOR_IDLE_ERISC)
 #else
 #define WATCHER_WAYPOINT_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
 #endif

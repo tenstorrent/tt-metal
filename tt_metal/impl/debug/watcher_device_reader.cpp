@@ -25,6 +25,7 @@ static const char *get_riscv_name(const CoreCoord &core, uint32_t type) {
         case DebugNCrisc: return "ncrisc";
         case DebugErisc: return "erisc";
         case DebugIErisc: return "ierisc";
+        case DebugSlaveIErisc: return "slave_ierisc";
         case DebugTrisc0: return "trisc0";
         case DebugTrisc1: return "trisc1";
         case DebugTrisc2: return "trisc2";
@@ -40,6 +41,7 @@ static uint32_t get_riscv_stack_size(const CoreDescriptor &core, uint32_t type) 
         case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
         case DebugErisc: return 0; // Not managed/checked by us.
         case DebugIErisc: return MEM_BRISC_STACK_SIZE;
+        case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
         case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
         case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
         case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
@@ -798,6 +800,7 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor &core, const launch_msg
         case DebugBrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
         case DebugErisc:
         case DebugIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
+        case DebugSlaveIErisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
         case DebugNCrisc: return kernel_names[launch_msg->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
         case DebugTrisc0:
         case DebugTrisc1:

@@ -401,13 +401,13 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
                             env_.root_ + linker_str;
             break;
         }
-        case 1:
+        case 1: {
             this->target_name_ = "idle_erisc";
             this->cflags_ =
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
-                "-DCOMPILE_FOR_IDLE_ERISC "
+                "-DCOMPILE_FOR_IDLE_ERISC=0 "
                 "-DERISC "
                 "-DRISC_B0_HW ";
 
@@ -427,6 +427,34 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
             }
 
             break;
+        }
+        case 2: {
+            this->target_name_ = "slave_idle_erisc";
+            this->cflags_ =
+                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+
+            this->defines_ +=
+                "-DCOMPILE_FOR_IDLE_ERISC=1 "
+                "-DERISC "
+                "-DRISC_B0_HW ";
+
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+            if (this->is_fw_) {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/slave_idle_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+            }
+            this->lflags_ = env_.lflags_ + "-Os ";
+
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_slave_ierisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_slave_ierisc.ld ";
+            }
+
+            break;
+        }
     }
     this->process_defines_at_compile = true;
 

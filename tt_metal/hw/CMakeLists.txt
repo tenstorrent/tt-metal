@@ -7,6 +7,7 @@ set(PROCS
     trisc1
     trisc2
     ierisc
+    slave_ierisc
 )
 set(TYPES
     firmware

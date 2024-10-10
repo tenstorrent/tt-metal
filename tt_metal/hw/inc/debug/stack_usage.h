@@ -16,8 +16,10 @@ uint32_t get_stack_size() {
     return MEM_BRISC_STACK_SIZE;
 #elif defined(COMPILE_FOR_NCRISC)
     return MEM_NCRISC_STACK_SIZE;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0
     return MEM_IERISC_STACK_SIZE;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
+    return MEM_SLAVE_IERISC_STACK_SIZE
 #elif COMPILE_FOR_TRISC == 0
     return MEM_TRISC0_STACK_SIZE;
 #elif COMPILE_FOR_TRISC == 1
@@ -34,8 +36,10 @@ uint32_t get_stack_base() {
     return MEM_BRISC_STACK_BASE;
 #elif defined(COMPILE_FOR_NCRISC)
     return MEM_NCRISC_STACK_BASE;
-#elif defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0
     return MEM_IERISC_STACK_BASE;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
+    return MEM_SLAVE_IERISC_STACK_BASE
 #elif COMPILE_FOR_TRISC == 0
     return MEM_TRISC0_STACK_BASE;
 #elif COMPILE_FOR_TRISC == 1
@@ -52,8 +56,10 @@ uint32_t get_dispatch_class() {
     return DISPATCH_CLASS_TENSIX_DM0;
 #elif defined(COMPILE_FOR_NCRISC)
     return DISPATCH_CLASS_TENSIX_DM1;
-#elif defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+#elif defined(COMPILE_FOR_ERISC) || (defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 0)
     return DISPATCH_CLASS_ETH_DM0;
+#elif defined(COMPILE_FOR_IDLE_ERISC) && COMPILE_FOR_IDLE_ERISC == 1
+    return DISPATCH_CLASS_ETH_DM1;
 #else
     return DISPATCH_CLASS_TENSIX_COMPUTE;
 #endif

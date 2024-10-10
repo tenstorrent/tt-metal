@@ -22,6 +22,7 @@
 #include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "dataflow_api.h"
+#include "risc_common.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -87,6 +88,18 @@ void flush_icache() {
 #endif
 }
 
+inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+    }
+}
+
+inline void wait_slave_eriscs() {
+    WAYPOINT("SEW");
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
+    WAYPOINT("SED");
+}
+
 int main() {
     conditionally_disable_l1_cache();
     DIRTY_STACK_MEMORY();
@@ -106,6 +119,10 @@ int main() {
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
+
+    deassert_all_reset(); // Bring all riscs on eth cores out of reset
+    mailboxes->go_message.signal = RUN_MSG_DONE;
+
     while (1) {
 
         init_sync_registers();
@@ -126,22 +143,30 @@ int main() {
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
 
+            flush_icache();
+
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            run_slave_eriscs(enables);
+
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 launch_msg_address->kernel_config.cb_offset);
-            setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg_address->kernel_config.max_cb_index, true, true, false);
-
-            flush_icache();
 
             // Run the ERISC kernel
             WAYPOINT("R");
-            kernel_init();
-            RECORD_STACK_USAGE();
+            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg_address->kernel_config.max_cb_index, true, true, false);
+                kernel_init();
+                RECORD_STACK_USAGE();
+            }
             WAYPOINT("D");
+
+            wait_slave_eriscs();
+
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
-            if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
+            if (launch_msg_address->kernel_config.mode == DISPATCH_CLASS_MASK_ETH_DM0) {
                 launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr =
                     NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
