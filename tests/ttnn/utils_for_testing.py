@@ -49,6 +49,29 @@ def check_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     return pcc_passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
 
 
+def check_with_pcc_list(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if len(expected_pytorch_result) != len(actual_pytorch_result):
+        return (
+            False,
+            f"len(expected_pytorch_result)={len(expected_pytorch_result)} vs len(actual_pytorch_result)={len(actual_pytorch_result)}",
+        )
+
+    pcc_passed = []
+    pcc_message = ""
+    for i in range(len(expected_pytorch_result)):
+        pcc_passed_, pcc_message_ = check_with_pcc(expected_pytorch_result[i], actual_pytorch_result[i], pcc)
+        pcc_passed.append(pcc_passed_)
+        pcc_message += pcc_message_ + ", "
+
+    if all(pcc_passed):
+        passed = True
+    else:
+        passed = False
+
+    pcc_message = pcc_message[:-2]
+    return passed, construct_pcc_assert_message(pcc_message, expected_pytorch_result, actual_pytorch_result)
+
+
 def check_with_pcc_without_tensor_printout(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     if expected_pytorch_result.shape != actual_pytorch_result.shape:
         return (
