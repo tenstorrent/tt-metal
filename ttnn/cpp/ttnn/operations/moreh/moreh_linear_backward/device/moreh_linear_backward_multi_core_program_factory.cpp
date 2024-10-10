@@ -6,6 +6,7 @@
 
 #include "moreh_linear_backward_device_operation.hpp"
 #include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -63,7 +64,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const uint32_t in0_t = 2;
     const uint32_t in1_t = 1;
-    const uint32_t in2_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
+    const uint32_t in2_t = 2;  // mask_h_w
 
     const uint32_t out0_t = 1;
     const uint32_t im0_t = 1;
@@ -84,9 +85,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-
+    const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
+    const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)), packed_scaler_value};
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(bias_grad))};
 
@@ -108,8 +110,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
+        unpack_to_dest_mode[tt::CB::c_intermed1] = UnpackToDestMode::UnpackToDestFp32;
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";
@@ -121,7 +125,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         compute_defines,
         math_fidelity,
         fp32_dest_acc_en,
-        math_approx_mode);
+        math_approx_mode,
+        unpack_to_dest_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -133,7 +138,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
             compute_defines,
             math_fidelity,
             fp32_dest_acc_en,
-            math_approx_mode);
+            math_approx_mode,
+            unpack_to_dest_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////

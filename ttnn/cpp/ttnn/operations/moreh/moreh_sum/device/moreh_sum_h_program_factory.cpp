@@ -160,8 +160,10 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         1,                          // NC
         origin_H};
 
-    // set unpack_to_dest_mode to the same value as fp32_dest_acc_en
     vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
