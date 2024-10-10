@@ -29,7 +29,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 32, 32], 8)
         + gen_shapes([1, 1], [256, 256], [32, 32], 8),
-        "round_mode": ["None", "trunc", "floor"],
+        "approximate": ["none"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -41,7 +41,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 32, 32], 8)
         + gen_shapes([1, 1], [256, 256], [32, 32], 8),
-        "round_mode": ["None", "trunc", "floor"],
+        "approximate": ["none", "tanh"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -57,13 +57,9 @@ parameters = {
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["round_mode"] in ["floor", "trunc"] and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, f"bfloat8_b is not supported when using round_mode {test_vector['round_mode']}"
+        return True, "Inputs to eltwise binary must be tilized"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["grad_dtype"] == ttnn.bfloat8_b
+        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
     ):
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
@@ -75,7 +71,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    round_mode,
+    approximate,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -97,13 +93,8 @@ def run(
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_a.retain_grad()
 
-    factor = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
-
-    # Don't use rdiv_bw golden function here, it caues low pcc in some cases.
-    golden_function = ttnn.get_golden_function(ttnn.rdiv)
-    intermediate_result = golden_function(
-        torch_input_tensor_a, factor, round_mode=None if round_mode == "None" else round_mode
-    )
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    intermediate_result = torch.nn.functional.gelu(torch.add(torch_input_tensor_a, scalar), approximate=approximate)
     intermediate_result.backward(gradient=torch_grad_tensor)
     torch_output_tensor = torch_input_tensor_a.grad
 
@@ -124,10 +115,12 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rdiv_bw(
-        grad_tensor, input_tensor_a, scalar=factor, round_mode=round_mode, memory_config=output_memory_config
+    output_tensor = ttnn.bias_gelu_bw(
+        grad_tensor, input_tensor_a, scalar, approximate=approximate, memory_config=output_memory_config
     )[0]
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    info_string = f"Dtypes - grad:{grad_dtype}, input:{input_a_dtype}. Approximation:{approximate}"
+
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf, info_string]
