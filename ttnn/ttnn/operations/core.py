@@ -143,6 +143,7 @@ Example::
     ttnn.Shape([32, 64])
 
 """
+ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 
 # TODO(arakhmati): remove this once underlying C++ code can handle non-4D shapes
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
