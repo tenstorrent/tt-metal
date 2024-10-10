@@ -21,22 +21,24 @@
 ---
 
 ## LLMs
-| Model                                                                | Batch | Hardware                                                 | ttft (s)   | t/s/u | Target t/s/u | Release                                                                   |
-|----------------------------------------------------------------------|-------|----------------------------------------------------------|------------|-------|--------------|---------------------------------------------------------------------------|
-| [Falcon7B-decode](./models/demos/ttnn_falcon7b)                      | 32    | [e150](https://tenstorrent.com/hardware/grayskull)       |            | 4.2   | 4.4          |                                                                           |
-| [Falcon7B](./models/demos/wormhole/falcon7b)                         | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.07       | 16.7  | 26           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9)   |
-| [Mistral-7B](./models/demos/wormhole/mistral7b)                      | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |            | 9.9   | 25           | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
-| [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.04       | 12.3  | 41           | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
-| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.20       | 21.4  | 23           | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
-| [Falcon7B (data parallel)](./models/demos/t3000/falcon7b)            | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.10       | 14.4  | 26           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9) |
-| [LLaMA-2-70B - (tensor parallel)](./models/demos/t3000/llama2_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 15.1  | 20           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9) |
-| [LLaMA-3.1-70B (tensor parallel)](./models/demos/t3000/llama3_70b)   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19       | 15.1  | 20           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9) |
-| [Falcon40B (tensor parallel)](./models/demos/t3000/falcon40b)        | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |            | 5.3   | 36           | [v0.53.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc2) |
-| [Mixtral7Bx8 (tensor parallel)](./models/demos/t3000/mixtral8x7b)    | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.23       | 14.2  | 33           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9) |
-| [Falcon7B (data parallel)](./models/demos/tg/falcon7b)               |1024   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 0.21       | 4.4   | 26           | [v0.53.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc9) |
+| Model                                                                | Batch | Hardware                                                 | ttft (s) | t/s/u | Target t/s/u | t/s    | Release                                                                   |
+|----------------------------------------------------------------------|-------|----------------------------------------------------------|----------|-------|--------------|--------|---------------------------------------------------------------------------|
+| [Falcon7B-decode](./models/demos/ttnn_falcon7b)                      | 32    | [e150](https://tenstorrent.com/hardware/grayskull)       |          | 4.2   | 4.4          | 134.4  |                                                                           |
+| [Falcon7B](./models/demos/wormhole/falcon7b)                         | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.07     | 16.7  | 26           | 534.4  | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [Mistral-7B](./models/demos/wormhole/mistral7b)                      | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |          | 9.9   | 25           | 316.8  | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |
+| [Mamba-2.8B](./models/demos/wormhole/mamba)                          | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.04     | 12.3  | 41           | 393.6  | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |
+| [LLaMA-3.1-8B](./models/demos/wormhole/llama31_8b)                   | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.20     | 21.4  | 23           | 21.4   | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [Falcon7B (DP=8)](./models/demos/t3000/falcon7b)                     | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.10     | 14.4  | 26           | 3686.4 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-2-70B - (TP=8)](./models/demos/t3000/llama2_70b)              | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19     | 15.1  | 20           | 483.2  | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-3.1-70B (TP=8)](./models/demos/t3000/llama3_70b)              | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.19     | 15.1  | 20           | 483.2  | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [Falcon40B (TP=8)](./models/demos/t3000/falcon40b)                   | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |          | 5.3   | 36           | 169.6  | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [Mixtral7Bx8 (TP=8)](./models/demos/t3000/mixtral8x7b)               | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 0.23     | 14.2  | 33           | 454.4  | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [Falcon7B (DP=32)](./models/demos/tg/falcon7b)                       | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 0.24     | 4.4   | 26           | 4505.6 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
+| [LLaMA-3.1-70B (DP=4, TP=8)](./models/demos/t3000/llama3_70b)        | 128   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 0.19     | 14.3  | 20           | 1835.5 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |
 > **Last Update:** October 7, 2024
 
 > **Notes:**
+> - TP = Tensor Parallel, DP = Data Parallel; Defines parallelization factors across multiple devices.
 > - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 
@@ -45,22 +47,20 @@
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [ResNet-50 (224x224)](./models/demos/grayskull/resnet50)                    | 20    | [e150](https://tenstorrent.com/hardware/grayskull)       | 5,100   | 10,000     |             |
 | [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,100   | 7,000      |             |
-| [ResNet-50 (224x224) (data parallel)](./models/demos/t3000/resnet50)        | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 32,250  | 56,000     |             |
-| [ResNet-50 (224x224) (data parallel)](./models/demos/tg/resnet50)           | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 95,900  | 224,000    |             |
-| [ResNet-50 (224x224) (data parallel)](./models/demos/tgg/resnet50)          | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
+| [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 32,250  | 56,000     |             |
+| [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 95,900  | 224,000    |             |
+| [ResNet-50 (224x224) (DP=64)](./models/demos/tgg/resnet50)                  | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 128,800 | 448,000    |             |
 | [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [ViT](./models/demos/wormhole/vit)                                          | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
 
 ## NLPs
-| Model                                               | Batch | Hardware                                           | sen/sec   | Target sen/sec | Release     |
-|-----------------------------------------------------|-------|----------------------------------------------------|-----------|----------------|-------------|
-| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 12    | [e150](https://tenstorrent.com/hardware/grayskull) | 370       | 410            |             |
-| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270       | 400            |             |
-| [T5 small](.models/demos/grayskull/t5)              |       | [e150](https://tenstorrent.com/hardware/grayskull) | 140       |                |             |
-| [Bloom](.models/demos/grayskull/functional_bloom)   |       | [e150](https://tenstorrent.com/hardware/grayskull) | 70        |                |             |
-
-
+| Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
+|-----------------------------------------------------|-------|----------------------------------------------------|---------|----------------|---------|
+| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 12    | [e150](https://tenstorrent.com/hardware/grayskull) | 370     | 410            |         |
+| [BERT-Large](./models/demos/metal_BERT_large_11/)   | 8     | [n150](https://tenstorrent.com/hardware/wormhole)  | 270     | 400            |         |
+| [T5 small](.models/demos/grayskull/t5)              |       | [e150](https://tenstorrent.com/hardware/grayskull) | 140     |                |         |
+| [Bloom](.models/demos/grayskull/functional_bloom)   |       | [e150](https://tenstorrent.com/hardware/grayskull) | 70      |                |         |
 
 ## Model Updates
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
