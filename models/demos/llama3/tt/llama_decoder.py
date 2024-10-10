@@ -4,8 +4,8 @@
 import torch
 import ttnn
 from typing import Optional
-from models.demos.wormhole.llama31_8b_N300.tt.llama_attention import TtLlamaAttention
-from models.demos.wormhole.llama31_8b_N300.tt.llama_mlp import TtLlamaMLP
+from models.demos.llama3.tt.llama_attention import TtLlamaAttention
+from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 

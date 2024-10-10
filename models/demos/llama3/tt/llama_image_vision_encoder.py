@@ -11,10 +11,10 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.wormhole.llama31_8b_N300.tt.llama_conv2d_patch import TtLlamaConv2dPatch
-from models.demos.wormhole.llama31_8b_N300.tt.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
-from models.demos.wormhole.llama31_8b_N300.tt.llama_layernorm import TtLayerNorm
-from models.demos.wormhole.llama31_8b_N300.tt.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.llama3.tt.llama_conv2d_patch import TtLlamaConv2dPatch
+from models.demos.llama3.tt.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.demos.llama3.tt.llama_layernorm import TtLayerNorm
+from models.demos.llama3.tt.llama_image_transformer import TtLlamaImageTransformer
 
 import importlib
 

@@ -7,8 +7,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_mlp import TtLlamaMLP
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 from models.utility_functions import (
     comp_pcc,
