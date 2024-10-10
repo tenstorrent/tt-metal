@@ -31,4 +31,4 @@ namespace ttnn {
 constexpr auto moreh_dot_backward = ttnn::register_operation_with_auto_launch_op<
     "ttnn::moreh_dot_backward",
     ttnn::operations::moreh::moreh_dot_backward::MorehDotBackward>();
-}
+}  // namespace ttnn

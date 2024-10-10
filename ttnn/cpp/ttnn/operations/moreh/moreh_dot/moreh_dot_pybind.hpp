@@ -10,4 +10,4 @@ namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_dot {
 void bind_moreh_dot_operation(py::module& module);
-}
+}  // namespace ttnn::operations::moreh::moreh_dot

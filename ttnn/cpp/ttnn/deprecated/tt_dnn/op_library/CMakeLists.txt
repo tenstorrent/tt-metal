@@ -17,10 +17,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_impl/moreh_sum_backward_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum_backward/moreh_sum_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot/single_core/moreh_dot_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot/moreh_dot_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot_backward/single_core/moreh_dot_backward_op_single_core.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_dot_backward/moreh_dot_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm/moreh_layernorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp
