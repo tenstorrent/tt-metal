@@ -47,7 +47,6 @@ class ElfFile::Impl {
    private:
     std::span<Elf32_Phdr const> phdrs_;
     std::span<Elf32_Shdr const> shdrs_;
-    std::span<std::byte const> strtab_;
     std::string const &path_;
 
    private:
@@ -64,6 +63,7 @@ class ElfFile::Impl {
     Elf32_Ehdr const &GetHeader() const { return *reinterpret_cast<Elf32_Ehdr const *>(GetContents().data()); }
     std::span<Elf32_Phdr const> GetPhdrs() const { return phdrs_; }
     std::span<Elf32_Shdr const> GetShdrs() const { return shdrs_; }
+    Elf32_Shdr const &GetShdr(unsigned ix) const { return shdrs_[ix]; }
     std::vector<Segment> &GetSegments() const { return owner_.segments_; }
     std::span<std::byte> &GetContents() const { return owner_.contents_; }
     std::span<std::byte> GetContents(Elf32_Phdr const &phdr) {
@@ -72,13 +72,49 @@ class ElfFile::Impl {
     std::span<std::byte> GetContents(Elf32_Shdr const &shdr) {
         return GetContents().subspan(shdr.sh_offset, shdr.sh_size);
     }
-    char const *GetString(size_t offset) {
-        if (offset < strtab_.size())
-            return ByteOffset<char const>(strtab_.data(), offset);
-        else
-            return "*BADSTRING*";
+    char const *GetString(size_t offset, unsigned ix) {
+        if (ix >= GetShdrs().size())
+        bad:
+            return "*bad*";
+        auto &shdr = GetShdr(ix);
+        if (shdr.sh_type != SHT_STRTAB)
+            goto bad;
+        auto strings = GetContents(GetShdr(ix));
+        if (offset >= strings.size())
+            goto bad;
+        return ByteOffset<char const>(strings.data(), offset);
     }
-    char const *GetName(Elf32_Shdr const &shdr) { return GetString(shdr.sh_name); }
+    char const *GetName(Elf32_Shdr const &shdr) { return GetString(shdr.sh_name, GetHeader().e_shstrndx); }
+    std::span<Elf32_Sym> GetSymbols(Elf32_Shdr const &shdr) {
+        auto section = GetContents(shdr);
+        return std::span(ByteOffset<Elf32_Sym>(section.data()), section.size() / shdr.sh_entsize);
+    }
+    char const *GetName(Elf32_Sym const &sym, unsigned lk) { return GetString(sym.st_name, lk); }
+    std::span<Elf32_Rela> GetRelocations(Elf32_Shdr const &shdr) {
+        auto section = GetContents(shdr);
+        return std::span(ByteOffset<Elf32_Rela>(section.data()), section.size() / shdr.sh_entsize);
+    }
+
+    static bool IsInSegment(Segment const &segment, Elf32_Shdr const &shdr) {
+        // Remember, Segments use word_t sizes
+        return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr >= segment.address &&
+	    shdr.sh_addr + shdr.sh_size <=
+	    segment.address + (segment.contents.size() + segment.bss) * sizeof (word_t);
+    }
+    bool IsInSegment(unsigned ix, Elf32_Shdr const &shdr) const { return IsInSegment(GetSegments()[ix], shdr); }
+    bool IsInText(Elf32_Shdr const &shdr) const { return IsInSegment(GetSegments().front(), shdr); };
+    int GetSegmentIx(Elf32_Shdr const &shdr) const {
+        for (unsigned ix = GetSegments().size(); ix--;)
+            if (IsInSegment(ix, shdr))
+                return ix;
+        return -1;
+    };
+    bool IsTextSymbol(Elf32_Sym const &symbol) const {
+        return symbol.st_shndx < GetShdrs().size() && IsInText(GetShdr(symbol.st_shndx));
+    }
+    bool IsDataSymbol(Elf32_Sym const &symbol) const {
+        return symbol.st_shndx < GetShdrs().size() && GetSegmentIx(GetShdr(symbol.st_shndx)) > 0;
+    }
 
    private:
     template <typename T = std::byte>
@@ -91,7 +127,18 @@ class ElfFile::Impl {
     }
 };
 
-ElfFile::ElfFile(std::string const &path) {
+ElfFile::~ElfFile() {
+    ReleaseImpl();
+    if (!contents_.empty())
+        munmap(contents_.data(), contents_.size());
+}
+
+void ElfFile::ReleaseImpl() {
+    delete pimpl_;
+    pimpl_ = nullptr;
+}
+
+void ElfFile::ReadImage(std::string const &path) {
     int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st;
     void *buffer = MAP_FAILED;
@@ -105,14 +152,8 @@ ElfFile::ElfFile(std::string const &path) {
 
     contents_ = std::span(reinterpret_cast<std::byte *>(buffer), st.st_size);
 
-    Impl impl(*this, path);
-
-    impl.LoadImage();
-}
-
-ElfFile::~ElfFile() {
-    if (!contents_.empty())
-        munmap(contents_.data(), contents_.size());
+    pimpl_ = new Impl(*this, path);
+    pimpl_->LoadImage();
 }
 
 void ElfFile::Impl::LoadImage() {
@@ -147,7 +188,6 @@ void ElfFile::Impl::LoadImage() {
     shdrs_ = std::span(ByteOffset<Elf32_Shdr const>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
     if (!hdr.e_shstrndx || hdr.e_shstrndx >= GetShdrs().size())
         TT_THROW("{}: string table is missing or malformed", path_);
-    strtab_ = GetContents(GetShdrs()[hdr.e_shstrndx]);
 
     // We care about the location of some sections.
     for (auto const &section : GetShdrs())
@@ -186,13 +226,13 @@ void ElfFile::Impl::LoadImage() {
         offset_t mem_size = (phdr.p_memsz + sizeof(word_t) - 1) / sizeof(word_t);
         GetSegments().emplace_back(
             std::span(reinterpret_cast<word_t const *>(contents.data()), file_size),
-            phdr.p_vaddr / sizeof(word_t),
-            mem_size - file_size);
+            phdr.p_vaddr, mem_size - file_size);
     }
     if (textIx < 0)
         TT_THROW("{}: cannot find text segment", path_);
     if (textIx > 0) {
         auto &segments = GetSegments();
-        std::rotate(segments.begin(), std::next(segments.begin(), textIx), segments.end());
+	auto text = std::next(segments.begin(), textIx);
+        std::rotate(segments.begin(), text, std::next(text, 1));
     }
 }
