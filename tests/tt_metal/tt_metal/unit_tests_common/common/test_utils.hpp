@@ -4,7 +4,61 @@
 
 #pragma once
 #include <deque>
+#include "impl/kernels/kernel.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
+
+// Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
+// Optionally force the max size for one of the vectors.
+inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
+    const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
+    // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via
+    // padding
+    uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
+    uint32_t num_rt_args_common =
+        num_rt_args_unique < tt::tt_metal::max_runtime_args ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1) : 0;
+
+    if (force_max_size) {
+        if (rand() % 2) {
+            num_rt_args_unique = tt::tt_metal::max_runtime_args;
+            num_rt_args_common = 0;
+        } else {
+            num_rt_args_common = tt::tt_metal::max_runtime_args;
+            num_rt_args_unique = 0;
+        }
+    }
+
+    vector<uint32_t> rt_args_common;
+    for (uint32_t i = 0; i < num_rt_args_common; i++) {
+        rt_args_common.push_back(common_base + i);
+    }
+
+    vector<uint32_t> rt_args_unique;
+    for (uint32_t i = 0; i < num_rt_args_unique; i++) {
+        rt_args_unique.push_back(unique_base + i);
+    }
+
+    log_trace(
+        tt::LogTest,
+        "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}",
+        __FUNCTION__,
+        num_rt_args_unique,
+        num_rt_args_common,
+        force_max_size);
+    return std::make_pair(rt_args_unique, rt_args_common);
+}
+
+// Helper function to run a Program, according to which dispatch mode is set.
+inline void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program, const bool use_slow_dispatch) {
+    const uint64_t program_id = program.get_id();
+    if (use_slow_dispatch) {
+        tt::tt_metal::detail::LaunchProgram(device, program);
+    } else {
+        tt::tt_metal::CommandQueue& cq = device->command_queue();
+        tt::tt_metal::EnqueueProgram(cq, program, false);
+        tt::tt_metal::Finish(cq);
+    }
+}
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
 inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
