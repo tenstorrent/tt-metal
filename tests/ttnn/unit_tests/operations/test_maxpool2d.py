@@ -23,7 +23,7 @@ def run_max_pool(
     dilation,
     device,
     dtype,
-    shard_scheme,
+    shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -49,7 +49,7 @@ def run_max_pool(
         pytest.skip("This case runs out of memory on Wormhole b0")
 
     max_cores = device.core_grid.x * device.core_grid.y
-    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED & in_c < max_cores:
+    if (shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED) and (in_c < max_cores):
         pytest.skip("Width shareding requires channles >= cores")
 
     # if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED & in_c
