@@ -6,7 +6,7 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/operations/moreh/cb_utils.hpp"
 #include "ttnn/operations/moreh/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"

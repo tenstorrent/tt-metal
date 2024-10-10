@@ -5,7 +5,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/operations/moreh/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 

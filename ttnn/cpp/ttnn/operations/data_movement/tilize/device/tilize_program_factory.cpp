@@ -5,7 +5,7 @@
 
 #include <math.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
+#include "ttnn/operations/moreh/cb_utils.hpp"
 #include "ttnn/operations/moreh/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
