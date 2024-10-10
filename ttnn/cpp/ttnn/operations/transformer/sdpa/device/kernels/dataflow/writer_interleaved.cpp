@@ -5,7 +5,6 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
 
 template<uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -181,10 +180,8 @@ void kernel_main() {
     constexpr uint32_t cb_scale_in = tt::CB::c_in4;
     constexpr uint32_t cb_identity_scale_in = tt::CB::c_in5;
 
-
     generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
-    generate_mm_scaler(tt::CB::c_in6, identity_scalar_packed);
 
     uint32_t out_tile_id = 0;
 
