@@ -35,6 +35,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
         case TransposeOpDim::HC:
             pad_c = a.get_layout() == Layout::TILE && a.get_shape().with_tile_padding()[1] % 32 != 0;
             break;
+        // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({2, 1, 0, 3}), output_mem_config);
         case TransposeOpDim::NW:
@@ -42,7 +43,11 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
         case TransposeOpDim::CW:
             return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
         case TransposeOpDim::CN:
-            tiled_only = true;
+            tiled_only = true; // CN only has a tiled implementation at the moment
+        case TransposeOpDim::WH:
+            if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
+                tiled_only = a.shape()[-2] > 256; // horrible hack because PCC on transpose HW row major is terrible on GS in this code path - kernel spits out garbage and has some demuxing for greater than this size that doesn't work
+            }
         default:
             break;
     }

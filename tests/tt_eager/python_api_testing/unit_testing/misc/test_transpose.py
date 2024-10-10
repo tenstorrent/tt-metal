@@ -708,8 +708,6 @@ def test_transpose_3D(dtype, shape, layout, dims, device):
 
 
 def test_transpose_4d(device):
-    if is_grayskull():
-        pytest.skip("transpose on WH where H is greater than 256 has bad pcc atm")
     shape = [4, 3, 1280, 40]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(-1, -2)
