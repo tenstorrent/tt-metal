@@ -140,6 +140,7 @@ class TtLlamaImageAttention(LightweightModule):
         self.scale = self.head_dim**-0.5
 
     def forward(self, x, mask):
+        return self.forward_tt(x, mask)
         if os.environ.get("ATTN") == "tt":
             return self.forward_tt(x, mask)
         else:

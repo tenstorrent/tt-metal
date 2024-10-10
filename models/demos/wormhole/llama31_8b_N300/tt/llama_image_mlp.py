@@ -55,6 +55,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
 
     def forward(self, x):
+        return self.forward_tt(x)
         if os.environ.get("MLP") == "tt":
             return self.forward_tt(x)
         else:

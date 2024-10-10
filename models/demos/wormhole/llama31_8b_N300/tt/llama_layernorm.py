@@ -83,6 +83,7 @@ class TtLayerNorm(LightweightModule):
             self.sharded_output_config = self.sharded_input_config
 
     def forward(self, x):
+        return self.forward_tt(x)
         if os.environ.get("LN") == "tt":
             return self.forward_tt(x)
         else:

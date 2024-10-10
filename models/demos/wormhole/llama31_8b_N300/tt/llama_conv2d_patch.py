@@ -46,7 +46,7 @@ class TtLlamaConv2dPatch(LightweightModule):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = (kernel_size,) * 2
+        self.kernel_size = kernel_size
         self.stride = stride
 
         self.bias = (
@@ -112,7 +112,7 @@ class TtLlamaConv2dPatch(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=2, x=8),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
 
         return out
