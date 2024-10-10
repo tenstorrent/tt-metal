@@ -356,6 +356,9 @@ std::vector<Device*> DevicePool::get_all_active_devices() const {
 }
 
 bool DevicePool::close_device(chip_id_t device_id) {
+    // Sync and close one device
+    // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
+    // from device close, we can call this on remote devices too
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -371,13 +374,97 @@ bool DevicePool::close_device(chip_id_t device_id) {
     return pass;
 }
 
+void DevicePool::close_devices(std::vector<Device *> devices) {
+    // Sync and close all tunnels needed to support <devices>
+    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
+
+    // Ordered, because we need to shutdown tunnels from the farthest to the closest.
+    std::vector<chip_id_t> devices_to_close;
+
+    // Loop over all devices and add remote devices to devices_to_close
+    // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
+    for (const auto dev : devices) {
+        const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+        if (std::find(devices_to_close.begin(), devices_to_close.end(), dev->id()) == devices_to_close.end()) {
+            auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
+            auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+            //iterate over all tunnels origination from this mmio device
+            for (auto t : tunnels_from_mmio) {
+                //iterate over all tunneled devices (tunnel stops) in this tunnel
+                for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
+                    if (t[ts] == dev->id()) {
+                        // found the target device to shutdown, add all devices in this tunnel
+                        for (uint32_t i = t.size() - 1; i > 0; i--) {
+                            devices_to_close.push_back(t[i]);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    // Loop over all devices and add any mmio devices
+    for (const auto dev : devices) {
+        if(dev->is_mmio_capable()) {
+            devices_to_close.push_back(dev->id());
+        }
+    }
+    // FIXME: ideally we can close mmio devices, and other active devices in the destructor of DevicePool.
+    // Was encountering issues with the dispatch_constants being destroyed before the DevicePool destructor,
+    // which leads to device->close() hitting asserts. We need to move the ownership of dispatch_constants
+    // to the device, so it doesn't go out of scope before the device is closed.
+    bool auto_close_mmio = is_galaxy;
+    // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
+    if (is_galaxy) {
+        for (const auto dev : devices) {
+            bool auto_close_mmio = true;
+            const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+            auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
+            auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+            //iterate over all tunnels origination from this mmio device
+            for (auto t : tunnels_from_mmio) {
+                //iterate over all tunneled devices (tunnel stops) in this tunnel
+                for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
+                    // If the device is active and not in the list of devices to close, don't auto close mmio
+                    if (this->is_device_active(t[ts]) and std::find(devices_to_close.begin(), devices_to_close.end(), t[ts]) == devices_to_close.end()) {
+                        auto_close_mmio = false;
+                        break;
+                    }
+                }
+            }
+            if (auto_close_mmio and std::find(devices_to_close.begin(), devices_to_close.end(), mmio_device_id) == devices_to_close.end()) {
+                devices_to_close.push_back(mmio_device_id);
+            }
+        }
+    }
+
+    // Global Sync across all devices that are being closed
+    // We need to ensure that commands sent to each device have been completed
+    // before closing any device + modifying routing info.
+    // If this is not done, non-blocking CCLs followed by a close will hang, since
+    // the main thread will modify device state while the CCL is running on device.
+    for (const auto dev_id : devices_to_close) {
+        auto *dev = tt::DevicePool::instance().get_active_device(dev_id);
+        dev->synchronize(); // Synchronize worker queue
+        Synchronize(dev); // Synchronize device
+    }
+
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false, devices_to_close);
+    for (const auto dev_id : devices_to_close) {
+        auto *dev = tt::DevicePool::instance().get_active_device(dev_id);
+        dev->close();
+        // When a device is closed, its worker thread is joined. Stop tracking this
+        // worker thread.
+        this->unregister_worker_thread_for_device(this->devices[dev_id].get());
+    }
+}
+
 DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            dev->close();
+            // See FIXME in close_devices
+            TT_FATAL(false, "Device {} was not closed before DevicePool destruction", dev->id());
         }
     }
     this->devices.clear();

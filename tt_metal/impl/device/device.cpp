@@ -2906,8 +2906,6 @@ bool Device::close() {
         }
     }
 
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     // After device close, no buffers on this device should be used

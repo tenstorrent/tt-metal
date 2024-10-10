@@ -195,7 +195,8 @@ class Cluster {
     //       set_internal_routing_info_for_ethernet_cores(false);
     //       CloseDevice(0)
     //       CloseDevice(1)
-    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const;
+    // If device_ids is not specified, all devices in the cluster will be toggled.
+    void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, std::vector<chip_id_t> device_ids={}) const;
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
