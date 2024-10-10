@@ -23,6 +23,7 @@ def run_max_pool(
     dilation,
     device,
     dtype,
+    memory_config=None,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -107,10 +108,9 @@ def run_max_pool(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
+        memory_config=memory_config,
     )
 
-    # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
-    # output = ttnn.to_memory_config(output, interleaved_mem_config)
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
@@ -128,9 +128,6 @@ def run_max_pool(
     ## test for equivalance
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
-
-    # torch.save(output_pytorch, "output_pytorch.pt")
-    # torch.save(golden_pytorch, "golden_pytorch.pt")
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch)
@@ -150,6 +147,10 @@ def run_max_pool(
     assert isclose
     if dtype == ttnn.bfloat16:
         assert isequal
+
+    if memory_config:
+        logger.debug(f"Output memory config: {memory_config}")
+        assert ttnn.get_memory_config(output) == memory_config
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -226,6 +227,26 @@ def test_run_max_pool(
     use_program_cache,
 ):
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [8, 64, 112, 112],
+            [1, 512, 10, 10],
+        )
+    ),
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_run_max_pool_mem_config(
+    act_shape,
+    device,
+    memory_config,
+    use_program_cache,
+):
+    run_max_pool(act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, ttnn.bfloat16, memory_config=memory_config)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

@@ -305,6 +305,7 @@ def conv2d(
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv2dConfig = None,  # config overrides by user
+    memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
@@ -324,6 +325,7 @@ def conv2d(
         groups=groups,
         bias_tensor=bias_tensor,
         conv_config=conv_config,
+        memory_config=memory_config,
     )
 
 
