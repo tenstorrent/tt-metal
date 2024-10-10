@@ -10,7 +10,6 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 
-
 namespace ttnn::operations::kv_cache {
 
 using namespace tt::constants;
@@ -26,20 +25,8 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
 
     tt::tt_metal::Device *device = input_tensor.device();
 
-    bool fp32_dest_acc_en;
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-            fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-            fp32_dest_acc_en = input_cb_data_format == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-        } else {
-            TT_THROW("arch not supported");
-        }
-
-    }, compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     tt::DataFormat interm_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t interm_single_tile_size = tt::tt_metal::detail::TileSize(interm_cb_data_format);

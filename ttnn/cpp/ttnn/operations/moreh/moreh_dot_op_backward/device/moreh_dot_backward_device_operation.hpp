@@ -26,7 +26,7 @@ struct MorehDotBackwardOperation {
         const std::vector<std::optional<Tensor>> output_tensors;
     };
 
-    using shape_return_value_t = std::vector<std::optional<Shape>>;
+    using shape_return_value_t = std::vector<std::optional<ttnn::SimpleShape>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct SingleCore {
