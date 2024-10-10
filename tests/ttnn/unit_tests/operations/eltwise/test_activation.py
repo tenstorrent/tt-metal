@@ -186,6 +186,38 @@ def torch_prelu(x, *args, weight, **kwargs):
     return result
 
 
+def run_activation_test_elu(device, h, w, scalar, ttnn_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor_a, alpha=scalar)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, alpha=scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+def run_activation_test_leaky_relu(device, h, w, scalar, ttnn_function, pcc=0.99):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor_a, negative_slope=scalar)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_function(input_tensor_a, negative_slope=scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 def run_activation_test_scalarB(device, h, w, scalar, ttnn_function, pcc=0.99):
     torch.manual_seed(0)
 
@@ -222,7 +254,7 @@ def run_activation_test_scalarB_key(device, h, w, value, ttnn_function, pcc=0.99
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_elu(device, h, w, scalar):
-    run_activation_test_scalarB(device, h, w, scalar, ttnn.elu)
+    run_activation_test_elu(device, h, w, scalar, ttnn.elu)
 
 
 @pytest.mark.parametrize("alpha", [1, 2.5, 5.0])
@@ -268,11 +300,11 @@ def test_scalarB_heaviside(device, h, w, value):
     run_activation_test_scalarB_key(device, h, w, value, ttnn.heaviside)
 
 
-@pytest.mark.parametrize("scalar", [-0.5, 0, 0.5])
+@pytest.mark.parametrize("scalar", [-0.5, 0, 0.1, 0.01, 0.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_leaky_relu(device, h, w, scalar):
-    run_activation_test_scalarB(device, h, w, scalar, ttnn.leaky_relu)
+    run_activation_test_leaky_relu(device, h, w, scalar, ttnn.leaky_relu)
 
 
 @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
