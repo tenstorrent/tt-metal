@@ -938,12 +938,12 @@ INPUT                  = tt_metal/hw/inc/dataflow_api.h \
                          tt_metal/include/compute_kernel_api/eltwise_binary.h \
                          tt_metal/include/compute_kernel_api/matmul.h \
                          tt_metal/include/compute_kernel_api/pack.h \
+                         tt_metal/include/compute_kernel_api/reconfig_data_format.h \
                          tt_metal/include/compute_kernel_api/reduce.h \
                          tt_metal/include/compute_kernel_api/reg_api.h \
                          tt_metal/include/compute_kernel_api/tile_move_copy.h \
                          tt_metal/include/compute_kernel_api/tilize.h \
                          tt_metal/include/compute_kernel_api/transpose_wh.h \
-                         tt_metal/include/compute_kernel_api/unpack.h \
                          tt_metal/include/compute_kernel_api/untilize.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp
