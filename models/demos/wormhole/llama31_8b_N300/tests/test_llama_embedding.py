@@ -31,6 +31,8 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import HostEmbedding
 def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
 
+    mesh_device.enable_async(True)
+
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     tokenizer = Tokenizer(model_args.tokenizer_path)

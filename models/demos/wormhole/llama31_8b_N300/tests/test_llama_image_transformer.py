@@ -41,6 +41,8 @@ def test_llama_image_transformer_inference(seq_len, mesh_device, is_global, use_
     dtype = ttnn.bfloat16
     pcc = 0.99
 
+    mesh_device.enable_async(True)
+
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
