@@ -23,6 +23,7 @@ def run_max_pool(
     dilation,
     device,
     dtype,
+    shard_scheme,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -107,7 +108,7 @@ def run_max_pool(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
-        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        applied_shard_scheme=shard_scheme,
     )
 
     # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
@@ -216,6 +217,9 @@ def run_max_pool(
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "shard_scheme", [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED]
+)
 def test_run_max_pool(
     act_shape,
     kernel_size,
@@ -224,9 +228,10 @@ def test_run_max_pool(
     dilation,
     device,
     dtype,
+    shard_scheme,
     use_program_cache,
 ):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, shard_scheme)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
