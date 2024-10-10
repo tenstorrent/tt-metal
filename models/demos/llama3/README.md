@@ -1,6 +1,14 @@
-# Llama 3.1 8B Demo
+# Llama3 family of models
 
-Demo showcasing Llama 3.1 8B running on Wormhole N300 (tensor-parallel on 2 chips), using ttnn.
+Includes the following text models:
+- Llama3.1-8B
+- Llama3.2-1B
+- Llama3.2-3B
+
+All llama models are compatible with the following Tenstorrent hardware:
+- N150 (single-chip)
+- N300 (2-chips)
+- T3000 (8-chips)
 
 ## How to Run
 
