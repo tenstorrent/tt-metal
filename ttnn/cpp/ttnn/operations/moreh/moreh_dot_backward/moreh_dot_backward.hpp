@@ -12,7 +12,7 @@ struct MorehDotBackward {
         const Tensor &other,
         const std::optional<const Tensor> &input_grad,
         const std::optional<const Tensor> &other_grad,
-        const std::optional<MemoryConfig> &mem_config);
+        const std::optional<MemoryConfig> &memory_config);
 
     static std::vector<Tensor> create_async_output_tensors(
         const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>> &optional_inputs);
@@ -23,7 +23,7 @@ struct MorehDotBackward {
         const Tensor &other,
         const std::optional<const Tensor> &input_grad,
         const std::optional<const Tensor> &other_grad,
-        const std::optional<MemoryConfig> &mem_config);
+        const std::optional<MemoryConfig> &memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_dot_backward
 

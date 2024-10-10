@@ -13,8 +13,8 @@ std::vector<std::optional<Tensor>> MorehDotBackward::invoke(
     const Tensor &other,
     const std::optional<const Tensor> &input_grad,
     const std::optional<const Tensor> &other_grad,
-    const std::optional<MemoryConfig> &mem_config) {
-    return ttnn::prim::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, mem_config);
+    const std::optional<MemoryConfig> &memory_config) {
+    return ttnn::prim::moreh_dot_backward(output_grad, input, other, input_grad, other_grad, memory_config);
 }
 
 std::vector<Tensor> MorehDotBackward::create_async_output_tensors(
@@ -35,7 +35,7 @@ std::vector<bool> MorehDotBackward::create_async_return_flag(
     const Tensor &other,
     const std::optional<const Tensor> &input_grad,
     const std::optional<const Tensor> &other_grad,
-    const std::optional<MemoryConfig> &mem_config) {
+    const std::optional<MemoryConfig> &memory_config) {
     return {input_grad.has_value(), other_grad.has_value()};
 }
 

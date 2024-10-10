@@ -114,7 +114,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
             result[0] = tensor_args.gamma_grad.value();
         } else {
             result[0] = create_device_tensor(
-                output_shapes[0].value(), dtype, layout, device, operation_attributes.gamma_grad_mem_config);
+                output_shapes[0].value(), dtype, layout, device, operation_attributes.gamma_grad_memory_config);
         }
     }
 
@@ -124,7 +124,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
             result[1] = tensor_args.beta_grad.value();
         } else {
             result[1] = create_device_tensor(
-                output_shapes[1].value(), dtype, layout, device, operation_attributes.beta_grad_mem_config);
+                output_shapes[1].value(), dtype, layout, device, operation_attributes.beta_grad_memory_config);
         }
     }
 
@@ -143,14 +143,14 @@ MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     const std::vector<bool>& are_required_outputs,
     const std::optional<const Tensor> gamma_grad,
     const std::optional<const Tensor> beta_grad,
-    const std::optional<MemoryConfig>& gamma_grad_mem_config,
-    const std::optional<MemoryConfig>& beta_grad_mem_config,
+    const std::optional<MemoryConfig>& gamma_grad_memory_config,
+    const std::optional<MemoryConfig>& beta_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{
         num_groups,
         are_required_outputs,
-        gamma_grad_mem_config.value_or(output_grad.memory_config()),
-        beta_grad_mem_config.value_or(output_grad.memory_config()),
+        gamma_grad_memory_config.value_or(output_grad.memory_config()),
+        beta_grad_memory_config.value_or(output_grad.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
     tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
     return {operation_attributes, tensor_args};
