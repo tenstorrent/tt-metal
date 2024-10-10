@@ -45,12 +45,25 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
     const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
 
+    // distributing out_hw across the grid
+    auto grid_size = device->compute_with_storage_grid_size();
+    auto all_cores = input.shard_spec().value().grid;
+    uint32_t ncores = all_cores.num_cores();
+    auto core_range = all_cores;
+    auto core_range_cliff = CoreRangeSet({});
+    uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
+    uint32_t in_nhw_per_core_cliff = 0;
+    uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
+    uint32_t ncores_w = grid_size.x;
+
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
-    uint32_t in_nbytes_c = input_shape[3] * in_nbytes;                                      // row of input (channels)
-    uint32_t out_nbytes_c = output_shape[3] * out_nbytes;                                   // row of output (channels)
+    uint32_t in_nbytes_c = out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ?
+        input_shape[3] * in_nbytes : input_shape[3] / ncores * in_nbytes;                                      // row of input (channels)
+    uint32_t out_nbytes_c = out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ?
+        output_shape[3] * out_nbytes : output_shape[3] / ncores * out_nbytes;                                // row of output (channels)
     TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
     TT_ASSERT(
         (out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2");  // out_nbytes_c is power of 2
@@ -79,18 +92,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
-
-    // distributing out_hw across the grid
-    auto grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = input.shard_spec().value().grid;
-    uint32_t ncores = all_cores.num_cores();
-    auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet({});
-    uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
-    uint32_t in_nhw_per_core_cliff = 0;
-    uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
-
-    uint32_t ncores_w = grid_size.x;
 
     // TODO: support generic nblocks
     TT_ASSERT(
