@@ -16,6 +16,7 @@ on:
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
+          - eltwise.unary.abs.abs
           - eltwise.unary.cos.cos
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
