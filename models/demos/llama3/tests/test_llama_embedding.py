@@ -6,15 +6,15 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.wormhole.llama31_8b_N300.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import HostEmbedding
+from models.demos.llama3.tt.llama_common import HostEmbedding
 
 
 @torch.no_grad()

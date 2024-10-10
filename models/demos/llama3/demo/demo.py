@@ -11,7 +11,7 @@ import os
 import ttnn
 import math
 import pytest
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
+from models.demos.llama3.tt.llama_common import (
     get_single_rot_mat,
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
@@ -19,8 +19,8 @@ from models.demos.wormhole.llama31_8b_N300.tt.llama_common import (
     HostEmbedding,
     encode_prompt_llama_instruct,
 )
-from models.demos.wormhole.llama31_8b_N300.tt.llama_model import TtTransformer
-from models.demos.wormhole.llama31_8b_N300.tt.llama_embedding import TtLlamaEmbedding
+from models.demos.llama3.tt.llama_model import TtTransformer
+from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -116,7 +116,7 @@ def preprocess_inputs_prefill(
 def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_ci_env, num_batches, print_to_file):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_directory = "models/demos/wormhole/llama31_8b_N300/demo/output"
+    output_directory = "models/demos/llama3/demo/output"
     os.makedirs(output_directory, exist_ok=True)
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
@@ -127,7 +127,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         os.environ["LLAMA_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
         os.environ["LLAMA_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/N300/"
     # This module requires the env paths above for CI runs
-    from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+    from models.demos.llama3.tt.model_config import TtModelArgs
 
     dtype = ttnn.bfloat8_b
 
@@ -466,10 +466,10 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches",
     [
-        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 1),
-        ("models/demos/wormhole/llama31_8b/demo/input_data_prefill_128.json", False, 3),
-        ("models/demos/wormhole/llama31_8b_N300/demo/input_data_questions_prefill_128.json", True, 1),
-        ("models/demos/wormhole/llama31_8b/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 1),
+        ("models/demos/llama3/demo/input_data_prefill_128.json", False, 3),
+        ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1),
+        ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 3),
     ],
     ids=[
         "general_weights-1_batch",

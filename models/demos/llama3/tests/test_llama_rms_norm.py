@@ -7,7 +7,7 @@ from loguru import logger
 import os
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.demos.wormhole.llama31_8b_N300.tt.model_config import TtModelArgs
+from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as RefRMSNorm
 from models.utility_functions import (
     comp_pcc,

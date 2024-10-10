@@ -10,7 +10,7 @@ from pathlib import Path
 from loguru import logger
 import torch
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.wormhole.llama31_8b_N300.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
+from models.demos.llama3.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
 from typing import Tuple
 from models.utility_functions import nearest_32
 
@@ -138,7 +138,7 @@ class TtModelArgs:
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
             assert os.path.isfile(
                 self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/wormhole/llama31_8b/scripts/get_weights.py` to download and untar the weights."
+            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
