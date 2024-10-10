@@ -703,7 +703,13 @@ Tensor create_device_tensor(
 
 Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+    for (size_t dim = 0; dim < shape.rank() - 2; dim++) {
+        if (shape.has_tile_padding(dim)) {
+            tt::log_warning("ttnn::Shape {} has padding along dims that are not height and width! Falling back to pass logical and padded shape to create_device_tensor.", shape);
+            return create_device_tensor(shape.logical_shape(), shape.padded_shape(), data_type, layout, device, memory_config, tile);
+        }
+    }
+    return create_device_tensor(shape.logical_shape(), data_type, layout, device, memory_config, tile);
 }
 
 namespace detail {
