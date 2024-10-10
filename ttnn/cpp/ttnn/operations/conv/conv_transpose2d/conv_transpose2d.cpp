@@ -35,6 +35,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const conv2d::Conv2dConfig> conv_config_)
     {
+        conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
+
         //Inverse of sliding_window.get_output_shape()
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
             .batch_size = batch_size,
@@ -44,30 +46,30 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             .pad_hw = padding,
             .output_pad_hw = output_padding,
             .dilation_hw = {dilation[0], dilation[1]},
-            .is_transpose = true
+            .is_transpose = false
         };
 
         uint32_t output_height = (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
         uint32_t output_width  = (input_width  - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
 
         //Dimensions of Input to Conv u_op
-        uint32_t final_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
-        uint32_t final_input_width  =  output_width + dilation[1] * (kernel_size[1] - 1);
+        uint32_t full_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
+        uint32_t full_input_width  =  output_width + dilation[1] * (kernel_size[1] - 1);
 
         //Size of input after adding interleaved 0s.
         uint32_t strided_input_height = (input_height - 1) * stride[0] + 1;
         uint32_t strided_input_width  = (input_width -  1) * stride[1] + 1;
 
-        uint32_t input_pad_top  = (final_input_height - strided_input_height)/2;
-        uint32_t input_pad_bottom = final_input_height - strided_input_height - input_pad_top;
+        uint32_t input_pad_top  = (full_input_height - strided_input_height)/2;
+        uint32_t input_pad_bottom = full_input_height - strided_input_height - input_pad_top;
 
-        uint32_t input_pad_left = (final_input_width - strided_input_width)/2;
-        uint32_t input_pad_right = final_input_width - strided_input_width - input_pad_left;
+        uint32_t input_pad_left = (full_input_width - strided_input_width)/2;
+        uint32_t input_pad_right = full_input_width - strided_input_width - input_pad_left;
 
         log_debug(LogOp, "Input : {}x{}", input_height, input_width);
         log_debug(LogOp, "Output : {}x{}", output_height, output_width);
 
-        log_debug(LogOp, "Conv Op Input : {}x{}", final_input_height, final_input_width);
+        log_debug(LogOp, "Conv Op Input : {}x{}", full_input_height, full_input_width);
         log_debug(LogOp, "Strided Input : {}x{}", strided_input_height, strided_input_width);
 
         log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
@@ -77,8 +79,30 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 
         //Call Halo Transpose
 
+        auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = conv2d::shard_or_reshard_tensor_if_required(
+            device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride);
+
+        if (tensor_manipulated) {
+            if (conv_config.deallocate_activation) {
+                ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
+                input_tensor_.deallocate();
+                // ttnn::operations::core::deallocate(input_tensor_);
+            }
+            conv_config.deallocate_activation = true;
+        }
+
+        auto halo_output = ttnn::halo(
+            DefaultQueueId,
+            input_tensor_post_tm,
+            sliding_window_config,
+            0,
+            false,
+            parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+            0,
+            input_tensor_post_tm.memory_config());
+
         //Call Conv2d u_op with Stride = 1, Padding = 0.
-        return {input_tensor, output_height, output_width, weight_tensor, bias_tensor};
+        return {input_tensor_post_tm, output_height, output_width, weight_tensor, bias_tensor};
 
 
     }

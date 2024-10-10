@@ -4,6 +4,7 @@
 
 #include "sliding_window.hpp"
 #include <vector>
+#include "tt_metal/common/assert.hpp"
 
 namespace ttnn::operations::sliding_window{
 std::size_t SlidingWindowConfig::get_hash() const {
@@ -45,6 +46,31 @@ Shape SlidingWindowConfig::get_output_shape() const {
     return Shape({batch_size, output_h, output_w, 0});
 }
 
+Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
+    TT_ASSERT(is_transpose == true);
+    auto output_shape = get_output_shape();
+    uint32_t full_input_height = output_shape[1] + dilation_hw.first * (window_hw.first - 1);
+    uint32_t full_input_width = output_shape[2] + dilation_hw.second * (window_hw.second - 1);
+    return Shape( std::vector<uint32_t>{batch_size, full_input_height, full_input_width, 0});
+}
+
+std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() const {
+    TT_ASSERT(is_transpose == true);
+
+    auto full_input_shape = get_transposed_full_input_shape();
+    //Size of input after adding interleaved 0s.
+    uint32_t strided_input_height = (input_hw.first   - 1) * stride_hw.first + 1;
+    uint32_t strided_input_width  = (input_hw.second  - 1) * stride_hw.second + 1;
+
+    uint32_t input_pad_top  = (full_input_shape[1] - strided_input_height)/2;
+    uint32_t input_pad_bottom = full_input_shape[1] - strided_input_height - input_pad_top;
+
+    uint32_t input_pad_left = (full_input_shape[2] - strided_input_width)/2;
+    uint32_t input_pad_right = full_input_shape[2] - strided_input_width - input_pad_left;
+
+    return {std::pair{input_pad_top, input_pad_bottom}, std::pair{input_pad_left, input_pad_right}};
+}
+
 /**
     * Calculate output tensor shard height
     */
@@ -59,35 +85,87 @@ uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
 
 
 std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
-    uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
-    std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
+    if(config.is_transpose) {
 
-    for (uint32_t b = 0; b < config.batch_size; ++b) {
-        for (uint32_t h = 0; h < padded_input_h; ++h) {
-            for (uint32_t w = 0; w < padded_input_w; ++w) {
-                if (h < config.pad_hw.first || h >= config.pad_hw.first + config.input_hw.first ||
-                    w < config.pad_hw.second || w >= config.pad_hw.second + config.input_hw.second) {
-                    pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
+        auto full_input_shape = config.get_transposed_full_input_shape();
+        auto full_input_height = full_input_shape[1];
+        auto full_input_width = full_input_shape[2];
+
+        auto real_padding = config.get_transposed_real_padding();
+        std::vector<bool> pad_metadata(config.batch_size * full_input_height * full_input_width, false);
+
+
+        //Size of input after adding interleaved 0s.
+        uint32_t strided_input_height = (config.input_hw.first -  1) * config.stride_hw.first + 1;
+        uint32_t strided_input_width  = (config.input_hw.second - 1) * config.stride_hw.second + 1;
+
+        auto [input_pad_top, input_pad_bottom]  = real_padding[0];
+        auto [input_pad_left, input_pad_right] = real_padding[1];
+
+        for (uint32_t b = 0; b < config.batch_size; ++b) {
+            for (uint32_t h = 0; h < full_input_height; ++h) {
+                for (uint32_t w = 0; w < full_input_width; ++w) {
+                    if (h < input_pad_top || h >= strided_input_height + input_pad_top ||
+                        w < input_pad_left || w >= strided_input_width + input_pad_left) {
+                        pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] = true;
+                    } else {
+                        if(((h - input_pad_top) % config.stride_hw.first != 0 || ((w - input_pad_left) % config.stride_hw.second != 0 ))) {
+                            pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] = true;
+                        }
+                    }
                 }
             }
         }
+        return pad_metadata;
+
+    } else {
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
+
+        for (uint32_t b = 0; b < config.batch_size; ++b) {
+            for (uint32_t h = 0; h < padded_input_h; ++h) {
+                for (uint32_t w = 0; w < padded_input_w; ++w) {
+                    if (h < config.pad_hw.first || h >= config.pad_hw.first + config.input_hw.first ||
+                        w < config.pad_hw.second || w >= config.pad_hw.second + config.input_hw.second) {
+                        pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
+                    }
+                }
+            }
+        }
+        return pad_metadata;
     }
-    return pad_metadata;
 }
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
-    uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
-    uint32_t i = 0;
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
-    for (uint32_t b = 0; b < output_shape[0]; ++b) {
-        for (uint32_t h = 0; h < output_shape[1]; ++h) {
-            for (uint32_t w = 0; w < output_shape[2]; ++w) {
-                uint32_t input_index = b * padded_input_h * padded_input_w + h * config.stride_hw.first * padded_input_w + w * config.stride_hw.second;
-                op_trace_metadata[i++] = input_index;
+
+    if(config.is_transpose) {
+        auto full_input_shape = config.get_transposed_full_input_shape();
+        uint32_t padded_input_h = full_input_shape[1];
+        uint32_t padded_input_w = full_input_shape[2];
+        uint32_t i = 0;
+        for (uint32_t b = 0; b < output_shape[0]; ++b) {
+            for (uint32_t h = 0; h < output_shape[1]; ++h) {
+                for (uint32_t w = 0; w < output_shape[2]; ++w) {
+                    //In Transpose as Conv2d, Stride is always 1
+                    uint32_t input_index = b * padded_input_h * padded_input_w + h * padded_input_w + w;
+                    op_trace_metadata[i++] = input_index;
+                }
+            }
+        }
+    } else {
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        uint32_t i = 0;
+        for (uint32_t b = 0; b < output_shape[0]; ++b) {
+            for (uint32_t h = 0; h < output_shape[1]; ++h) {
+                for (uint32_t w = 0; w < output_shape[2]; ++w) {
+                    uint32_t input_index = b * padded_input_h * padded_input_w + h * config.stride_hw.first * padded_input_w + w * config.stride_hw.second;
+                    op_trace_metadata[i++] = input_index;
+                }
             }
         }
     }
@@ -100,7 +178,10 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
-
+    if(config.is_transpose)
+    {
+        padded_input_w = config.get_transposed_full_input_shape()[2];
+    }
     uint32_t dilated_window_h = config.window_hw.first + (config.dilation_hw.first - 1) * (config.window_hw.first - 1 );
     uint32_t dilated_window_w = config.window_hw.second + (config.dilation_hw.second - 1) * (config.window_hw.second - 1 );
     uint32_t halo_with_pad_len = (dilated_window_h - 1) * padded_input_w + dilated_window_w - 1;

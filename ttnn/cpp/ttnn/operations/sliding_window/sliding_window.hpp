@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <string>
 #include <tuple>
 #include <fmt/core.h>
@@ -70,6 +71,9 @@ struct SlidingWindowConfig {
         */
     Shape get_output_shape() const;
 
+    Shape get_transposed_full_input_shape() const;
+
+    std::array<uint32_pair_t, 2> get_transposed_real_padding() const;
     /**
         * Calculate output tensor shard height
         */
