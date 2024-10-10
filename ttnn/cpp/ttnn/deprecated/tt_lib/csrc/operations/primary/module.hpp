@@ -7,8 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm/moreh_bmm_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_bmm_backward/moreh_bmm_backward_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm/moreh_layernorm_op.hpp"
 #include "ttnn/deprecated/tt_dnn/op_library/moreh_layernorm_backward/moreh_layernorm_backward_op.hpp"
@@ -38,35 +36,6 @@ void py_module(py::module& m_primary) {
         py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         R"doc(
         "Performs a moreh_clip_grad_norm operation.
-    )doc");
-
-    m_primary.def(
-        "moreh_bmm",
-        &moreh_bmm,
-        py::arg("input").noconvert(),
-        py::arg("mat2").noconvert(),
-        py::kw_only(),
-        py::arg("output").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_bmm operation.
-    )doc");
-    m_primary.def(
-        "moreh_bmm_backward",
-        &moreh_bmm_backward,
-        py::arg("output_grad").noconvert(),
-        py::arg("input").noconvert(),
-        py::arg("mat2").noconvert(),
-        py::kw_only(),
-        py::arg("are_required_outputs").noconvert() = std::vector<bool>{true, true},
-        py::arg("input_grad").noconvert() = std::nullopt,
-        py::arg("mat2_grad").noconvert() = std::nullopt,
-        py::arg("input_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("mat2_grad_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("compute_kernel_config").noconvert() = std::nullopt,
-        R"doc(
-        "Performs a moreh_bmm_backward operation.
     )doc");
 
     // moreh_matmul
