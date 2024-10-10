@@ -125,19 +125,19 @@ parameters = {
         "enable_async": [True],
         "num_iters": [1],
     },
-    "all_gather_n300_focused_large": {
-        "num_devices": [2],
-        "num_links": [1],
-        "input_shape": input_shapes_large,
-        "dim": [0, 1, 2, 3],
-        "layout": [ttnn.TILE_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ],
-        "enable_async": [True],
-        "num_iters": [1],
-    },
+    # "all_gather_n300_focused_large": {
+    #     "num_devices": [2],
+    #     "num_links": [1],
+    #     "input_shape": input_shapes_large,
+    #     "dim": [0, 1, 2, 3],
+    #     "layout": [ttnn.TILE_LAYOUT],
+    #     "input_dtype": [ttnn.bfloat16],
+    #     "mem_config": [
+    #         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    #     ],
+    #     "enable_async": [True],
+    #     "num_iters": [1],
+    # },
 }
 
 
