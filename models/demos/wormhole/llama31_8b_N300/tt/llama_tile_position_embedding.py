@@ -108,6 +108,8 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
         # Get the correct embeddings for the given aspect ratios
         out_pos_embed = []
         for [h, w] in ar:
+            if isinstance(h, torch.Tensor):
+                h, w = h.item(), w.item()
             idx = self.ar_mapping[(h, w)]
             out_pos_embed.append(
                 self.padded_embeddings[idx : idx + 1],  # Select the correct embedding

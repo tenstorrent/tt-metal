@@ -93,6 +93,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
             )
 
     def forward(self, x, mask):
+        return self.forward_tt(x, mask)
         if os.environ.get("BLOCK") == "tt":
             return self.forward_tt(x, mask)
         else:
