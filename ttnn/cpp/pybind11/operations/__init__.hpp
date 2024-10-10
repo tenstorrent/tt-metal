@@ -53,24 +53,28 @@ void py_module(py::module& module) {
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_bind_all_gather(m_ccl);
+    ccl::py_bind_reduce_scatter(m_ccl);
+
+    //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
 
+    auto m_ternary = module.def_submodule("ternary", "ternary operations");
+    ternary::py_module(m_ternary);
+
+    auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
+    unary_backward::py_module(m_unary_backward);
+
     auto m_binary_backward = module.def_submodule("binary_backward", "binary_backward operations");
     binary_backward::py_module(m_binary_backward);
 
     auto m_ternary_backward = module.def_submodule("ternary_backward", "ternary_backward operations");
     ternary_backward::py_module(m_ternary_backward);
-
-    auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
-    unary_backward::py_module(m_unary_backward);
-
-    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_reduce_scatter(m_ccl);
 
     auto m_complex = module.def_submodule("complex", "complex tensor creation");
     complex::py_module(m_complex);
@@ -80,9 +84,6 @@ void py_module(py::module& module) {
 
     auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
     complex_unary_backward::py_module(m_complex_unary_backward);
-
-    auto m_ternary = module.def_submodule("ternary", "ternary operations");
-    ternary::py_module(m_ternary);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
