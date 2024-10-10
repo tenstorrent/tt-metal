@@ -105,7 +105,7 @@ inline uint32_t DebugPrintStrLen(const char* val) {
     return uint32_t(end-val)+1;
 }
 
-inline uint32_t DebugPrintStrCopy(char* dst, const char* src) {
+inline uint32_t DebugPrintStrCopy(volatile char* dst, const char* src) {
     uint32_t len = DebugPrintStrLen(src);
     for (uint32_t j = 0; j < len; j++)
         dst[j] = src[j];
@@ -160,26 +160,15 @@ template<> const uint8_t* DebugPrintTypeAddr<char*>(char** val)              { r
 
 
 struct DebugPrinter {
-    volatile tt_l1_ptr uint32_t* wpos() {
-        auto printbuf = get_debug_print_buffer();
-        return &reinterpret_cast<DebugPrintMemLayout*>(printbuf)->aux.wpos;
-    }
-    volatile tt_l1_ptr uint32_t* rpos() {
-        auto printbuf = get_debug_print_buffer();
-        return &reinterpret_cast<DebugPrintMemLayout*>(printbuf)->aux.rpos;
-    }
-    uint8_t* buf() { return get_debug_print_buffer(); }
-    uint8_t* data() { return reinterpret_cast<DebugPrintMemLayout*>(buf())->data; }
-    uint8_t* bufend() { return buf() + DPRINT_BUFFER_SIZE; }
-
     DebugPrinter() {
 #if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
-        if (*wpos() == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
+        volatile tt_l1_ptr DebugPrintMemLayout *dprint_buffer = get_debug_print_buffer();
+        if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             // Host debug print server writes this value
             // we don't want to reset wpos/rpos to 0 unless this is the first time
             // DebugPrinter() is created (even across multiple kernel calls)
-            *wpos() = 0;
-            *rpos() = 0;
+            dprint_buffer->aux.wpos = 0;
+            dprint_buffer->aux.rpos = 0;
         }
 #endif // ENABLE_DEBUG_PRINT
     }
@@ -193,7 +182,8 @@ struct DebugPrintData {
 
 __attribute__((__noinline__))
 void debug_print(DebugPrinter &dp, DebugPrintData data) {
-    if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+    volatile tt_l1_ptr DebugPrintMemLayout *dprint_buffer = get_debug_print_buffer();
+    if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
         // skip all prints if this hart+core was not specifically enabled on the host
         return;
     }
@@ -203,24 +193,24 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
     uint8_t typecode = data.type_id;
     constexpr int code_sz = 1; // size of type code
     constexpr int sz_sz = 1; // size of serialized size
-    uint32_t wpos = *dp.wpos(); // copy wpos into local storage
+    uint32_t wpos = dprint_buffer->aux.wpos; // copy wpos into local storage
     auto sum_sz = payload_sz + code_sz + sz_sz;
-    if (dp.data() + wpos + sum_sz >= dp.bufend()) {
+    if (wpos + sum_sz >= sizeof(DebugPrintMemLayout().data)) {
         // buffer is full - wait for the host reader to flush+update rpos
         WAYPOINT("DPW");
-        while (*dp.rpos() < *dp.wpos()) {
+        while (dprint_buffer->aux.rpos < dprint_buffer->aux.wpos) {
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
-            if (*dp.wpos() == DEBUG_PRINT_SERVER_DISABLED_MAGIC)
+            if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC)
                 return;
             ; // wait for host to catch up to wpos with it's rpos
         }
         WAYPOINT("DPD");
-        *dp.wpos() = 0;
+        dprint_buffer->aux.wpos = 0;
         // TODO(AP): are these writes guaranteed to be ordered?
-        *dp.rpos() = 0;
+        dprint_buffer->aux.rpos = 0;
         wpos = 0;
         if (payload_sz >= sizeof(DebugPrintMemLayout::data)-2) {
             // Handle a special case - this value cannot be printed because it cannot fit in the buffer.
@@ -232,19 +222,18 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
             // Another possibility is to wait for the device to flush and print the string piecemeal.
             // As a negative side effect,
             // unfortunately this special case increases the code size generated for each instance of <<.
-            uint8_t* printbuf = dp.data();
+            volatile uint8_t* printbuf = dprint_buffer->data;
             payload_sz = DebugPrintStrCopy(
-                reinterpret_cast<char*>(printbuf+code_sz+sz_sz),
-                debug_print_overflow_error_message);
+                reinterpret_cast<volatile char*>(printbuf + code_sz + sz_sz), debug_print_overflow_error_message);
             printbuf[0] = DPrintCSTR;
             printbuf[code_sz] = payload_sz;
             wpos = payload_sz + sz_sz + code_sz;
-            *dp.wpos() = wpos;
+            dprint_buffer->aux.wpos = wpos;
             return;
         }
     }
 
-    uint8_t* printbuf = dp.data();
+    volatile uint8_t* printbuf = dprint_buffer->data;
     // no need for a circular buffer since perf is not critical
     printbuf[wpos] = typecode;
     wpos += code_sz;
@@ -256,7 +245,7 @@ void debug_print(DebugPrinter &dp, DebugPrintData data) {
 
     // our message needs to be atomic w.r.t code, size and payload
     // so we only update wpos in the end
-    *dp.wpos() = wpos;
+    dprint_buffer->aux.wpos = wpos;
 }
 
 template<typename T>

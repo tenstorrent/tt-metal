@@ -144,6 +144,12 @@ inline uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_e
     return mantissa;
 }
 
+#if 0
+template <tt::DataFormat BfpFormat>
+uint32_t convert_bfp_to_u32(uint8_t input, uint32_t shared_exp, bool is_exp_a) {
+}
+#endif
+
 template <tt::DataFormat BfpFormat>
 inline uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t> &u32_vec, uint32_t shared_exp, bool is_exp_a) {
     TT_ASSERT(
