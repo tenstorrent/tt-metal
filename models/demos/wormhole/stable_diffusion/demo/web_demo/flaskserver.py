@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 from flask import Flask, request, jsonify, send_from_directory, send_file, send_from_directory
 import json
 import os
