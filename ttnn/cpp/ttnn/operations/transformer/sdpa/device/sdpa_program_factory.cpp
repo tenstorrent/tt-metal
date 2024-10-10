@@ -318,8 +318,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    // tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
@@ -368,11 +367,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CB::c_in5, scalar_df}})
                             .set_page_size(tt::CB::c_in5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
-
-    // identity scale input MM
-    auto c_in6_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CB::c_in6, scalar_df}})
-                            .set_page_size(tt::CB::c_in6, scalar_tile_size);
-    auto cb_in6_id = CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CB::c_intermed0, im_df}})
