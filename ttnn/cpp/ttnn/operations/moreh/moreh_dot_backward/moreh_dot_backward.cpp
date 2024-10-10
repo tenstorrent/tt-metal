@@ -4,7 +4,7 @@
 
 #include "moreh_dot_backward.hpp"
 
-#include "ttnn/operations/moreh/moreh_dot_op_backward/device/moreh_dot_backward_device_operation.hpp"
+#include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 std::vector<std::optional<Tensor>> MorehDotBackward::invoke(
