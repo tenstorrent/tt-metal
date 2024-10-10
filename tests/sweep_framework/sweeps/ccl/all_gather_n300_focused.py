@@ -153,6 +153,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # )
     # if is_known_failure:
     #     return True, f"Skipping unsupported case {message}."
+    if test_vector["input_shape"][test_vector["dim"]] <= 1:
+        return True, f"Skipping unsupported case."
     return False, None
 
 
@@ -218,7 +220,7 @@ def run(
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = ttnn.to_torch(t)
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
