@@ -26,10 +26,12 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
-    //TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+    TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
+             (input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED), "Only height or width sharded tensors are supported.");
 
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
-    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+    TT_FATAL((out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
+             (out_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED), "Only height or width sharded tensors are supported.");
 }
 
 void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {

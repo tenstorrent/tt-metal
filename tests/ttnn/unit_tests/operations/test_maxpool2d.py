@@ -52,7 +52,9 @@ def run_max_pool(
     if (shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED) and (in_c < max_cores):
         pytest.skip("Width shareding requires channles >= cores")
 
-    # if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED & in_c
+    data_size = 2 if dtype == ttnn.bfloat16 else 1
+    if (data_size * in_c / max_cores < 16) and (shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED):
+        pytest.skip("Width shareding requires large enough channels to shard")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)

@@ -171,13 +171,20 @@ void validate_sharded_buffer_allocation(
     }
     if (layout == Layout::TILE) {
         auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
+        printf("--\n");
+        printf("Tile shape: %d, %d\n", tile_shape[0], tile_shape[1]);
+        printf("Shard shape: %d, %d\n", shard_shape[0], shard_shape[1]);
         TT_FATAL(
             (shard_shape[0] % tile_shape[0] == 0 && shard_shape[1] % tile_shape[1] == 0),
             "Shard shape must be tile sized");
+        printf("passed assert\n");
     } else if (layout == Layout::ROW_MAJOR) {
+        printf("--\n");
         printf("Shard shape: %d, %d\n", shard_shape[0], shard_shape[1]);
         printf("Element size: %d\n", tensor_impl::element_size_bytes(data_type));
         TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0, "Error");
+        // width of shard shape needs to be multiple 4
+        printf("passed assert\n");
     }
 }
 
