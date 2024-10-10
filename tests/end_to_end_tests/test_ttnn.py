@@ -7,7 +7,7 @@ import pytest
 import ttnn
 import torch
 
-import ttnn.operations.binary
+import ttnn.operations.eltwise.binary
 
 
 @pytest.mark.eager_host_side

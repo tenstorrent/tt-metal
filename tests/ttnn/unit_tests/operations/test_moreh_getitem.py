@@ -359,7 +359,7 @@ def test_getitem_tilized_one_index(shape_index_dim, dtype, index_size, row_major
     else:
         dev_idx = (
             ttnn.Tensor(idx, ttnn.int32)
-            .reshape([1, 1, 1, 1, index_size])
+            .reshape([1, index_size])
             .pad_to_tile(float("nan"))
             .to(ttnn.TILE_LAYOUT)
             .to(device)
@@ -452,7 +452,7 @@ def test_getitem_tilized_two_indices(shape_index_dims, dtype, index_size, row_ma
         else:
             dev_idx = (
                 ttnn.Tensor(idx, ttnn.int32)
-                .reshape([1, 1, 1, 1, index_size])
+                .reshape([1, index_size])
                 .pad_to_tile(float("nan"))
                 .to(ttnn.TILE_LAYOUT)
                 .to(device)
@@ -541,7 +541,7 @@ def test_getitem_tilized_three_indices(shape_index_dims, dtype, index_size, row_
         else:
             dev_idx = (
                 ttnn.Tensor(idx, ttnn.int32)
-                .reshape([1, 1, 1, 1, index_size])
+                .reshape([1, index_size])
                 .pad_to_tile(float("nan"))
                 .to(ttnn.TILE_LAYOUT)
                 .to(device)
@@ -625,7 +625,7 @@ def test_getitem_tilized_four_indices(shape_index_dims, dtype, index_size, row_m
         else:
             dev_idx = (
                 ttnn.Tensor(idx, ttnn.int32)
-                .reshape([1, 1, 1, 1, index_size])
+                .reshape([1, index_size])
                 .pad_to_tile(float("nan"))
                 .to(ttnn.TILE_LAYOUT)
                 .to(device)
@@ -706,7 +706,7 @@ def test_getitem_tilized_five_indices(shape_index_dims, dtype, index_size, row_m
         else:
             dev_idx = (
                 ttnn.Tensor(idx, ttnn.int32)
-                .reshape([1, 1, 1, 1, index_size])
+                .reshape([1, index_size])
                 .pad_to_tile(float("nan"))
                 .to(ttnn.TILE_LAYOUT)
                 .to(device)
@@ -751,7 +751,7 @@ def run_moreh_geitem_tilized_one_index(shape_index_dim, dtype, index_size, row_m
     else:
         dev_idx = (
             ttnn.Tensor(idx, ttnn.int32)
-            .reshape([1, 1, 1, 1, index_size])
+            .reshape([1, index_size])
             .pad_to_tile(float("nan"))
             .to(ttnn.TILE_LAYOUT)
             .to(device)

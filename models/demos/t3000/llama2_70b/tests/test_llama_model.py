@@ -159,15 +159,7 @@ def run_test_LlamaModel_inference(
         if device_perf:
             signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
         # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tt_inp_ids, start_pos, mode=mode)
-
-        # Send to device
-        if mode == "decode":
-            tt_inp_emb = ttnn.to_device(tt_inp_emb, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
-            tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            rot_mat = ttnn.to_device(rot_mat, t3k_mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
-            cache_idxs = ttnn.to_device(cache_idxs, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_inp_emb, start_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tt_inp_ids, start_pos, mode=mode)
 
         tt_out = tt_model(
             tt_inp_emb,
@@ -285,8 +277,8 @@ def run_test_LlamaModel_inference(
 )
 @pytest.mark.parametrize(
     "batch, seq_len",
-    ((32, 1), (16, 1), (1, 1), (1, 128), (1, 2048), (1, 8192), (1, 128 * 1024)),
-    ids=("decode", "decodeb16", "decodeb1", "prefill_128", "prefill_2k", "prefill_8k", "prefill_128k"),
+    ((32, 1), (16, 1), (1, 1), (1, 128), (1, 2048), (1, 8192), (1, 128 * 1024), (1, 3 * 1024)),
+    ids=("decode", "decodeb16", "decodeb1", "prefill_128", "prefill_2k", "prefill_8k", "prefill_128k", "prefill_3k"),
 )
 @pytest.mark.parametrize(
     "max_batch_size, max_context_len",

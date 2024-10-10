@@ -91,27 +91,8 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
     //////////////////////////////////////////////////////////////////////////
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-
-    std::visit([&](auto&& compute_kernel_config) {
-        using T = std::decay_t<decltype(compute_kernel_config)>;
-        if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-            TT_ASSERT(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = false;
-        } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-            TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-            math_fidelity = compute_kernel_config.math_fidelity;
-            math_approx_mode = compute_kernel_config.math_approx_mode;
-            fp32_dest_acc_en = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype()) == tt::DataFormat::Float32 ? true : compute_kernel_config.fp32_dest_acc_en;
-        } else {
-            TT_THROW("arch not supported");
-        }
-
-    }, compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
