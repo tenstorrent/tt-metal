@@ -299,6 +299,7 @@ REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
 REGISTER_UNARY_OPERATION(tanh, TANH);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
+REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
 
 constexpr auto log_sigmoid = ttnn::register_operation_with_auto_launch_op<"ttnn::log_sigmoid", ttnn::operations::unary::ExecuteUnary<
     ttnn::operations::unary::UnaryOpType::SIGMOID,
@@ -331,7 +332,6 @@ REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_right_shift, RIGHT_SHIFT
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_and, BITWISE_AND, int32_t);
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_or, BITWISE_OR, int32_t);
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_xor, BITWISE_XOR, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_not, BITWISE_NOT, int32_t);
 
 
 

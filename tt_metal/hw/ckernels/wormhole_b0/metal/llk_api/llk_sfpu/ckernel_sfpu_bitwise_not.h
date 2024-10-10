@@ -15,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_bitwise_not(const uint value) {
+inline void calculate_bitwise_not() {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vInt input = dst_reg[0];
