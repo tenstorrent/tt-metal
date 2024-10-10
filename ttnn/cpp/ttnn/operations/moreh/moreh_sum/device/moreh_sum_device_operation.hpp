@@ -83,4 +83,4 @@ struct MorehSumOperation {
 namespace ttnn::prim {
 constexpr auto moreh_sum =
     ttnn::register_operation<"ttnn::prim::moreh_sum", ttnn::operations::moreh::moreh_sum::MorehSumOperation>();
-}
+}  // namespace ttnn::prim
