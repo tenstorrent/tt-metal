@@ -236,6 +236,7 @@ import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
+import ttnn.operations.eltwise
 
 sub = ttnn.subtract
 sub_ = ttnn.subtract_

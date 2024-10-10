@@ -8,8 +8,8 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-ALWI void ACQ() { acquire_dst(tt::DstMode::Half); }
-ALWI void REL() { release_dst(tt::DstMode::Half); }
+ALWI void ACQ() { acquire_dst(); }
+ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {

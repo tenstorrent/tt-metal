@@ -7,14 +7,13 @@
 from loguru import logger
 import numpy as np
 import pytest
+from pathlib import Path
 
-from tt_metal.tools.profiler.process_model_log import run_device_profiler, post_process_ops_log
+from tt_metal.tools.profiler.process_model_log import run_device_profiler, post_process_ops_log, get_profiler_folder
 
 from models.utility_functions import is_wormhole_b0, is_blackhole
 
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-
-profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -75,15 +74,16 @@ def run_op_test():
 
     op_name = "tt::operations::primary::Matmul"
     duration_cols = ["DEVICE KERNEL DURATION [ns]"]
+    profiler_out_dir = "op_profiler_results"
 
     run_device_profiler(
-        "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_2d.py", "op_profiler_results"
+        "pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_2d.py", profiler_out_dir
     )
-    results = post_process_ops_log("op_profiler_results", duration_cols, False, op_name)
+    results = post_process_ops_log(profiler_out_dir, duration_cols, False, op_name)
     kernel_durations_ns = results[duration_cols[0]]
 
     setup = device_post_proc_config.default_setup()
-    setup.deviceInputLog = profiler_log_path
+    setup.deviceInputLog = generate_logs_folder(get_profiler_folder(profiler_out_dir)) / PROFILER_DEVICE_SIDE_LOG
     deviceData = import_log_run_stats(setup)
     freq = deviceData["deviceInfo"]["freq"]
     freq_to_cycle_ratio = freq / 1000.0

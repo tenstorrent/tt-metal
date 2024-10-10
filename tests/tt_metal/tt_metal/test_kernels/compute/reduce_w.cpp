@@ -31,7 +31,7 @@ void MAIN {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             for(uint32_t wt = 0; wt < Wt; ++wt) {
                 cb_wait_front(tt::CB::c_in0, onetile);
 #if (MATH_ONLY == 1)
@@ -48,7 +48,7 @@ void MAIN {
             cb_reserve_back(tt::CB::c_out0, onetile);
             pack_tile(reduce_dst_idx, tt::CB::c_out0);
             cb_push_back(tt::CB::c_out0, onetile);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
     }
 #ifdef SHORT_INIT

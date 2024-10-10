@@ -7,12 +7,17 @@ import subprocess
 from pathlib import Path
 import pandas as pd
 
-from tt_metal.tools.profiler.common import PROFILER_OUTPUT_DIR, PROFILER_SCRIPTS_ROOT
+from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
+
+
+def get_profiler_folder(output_logs_subdir):
+    return PROFILER_ARTIFACTS_DIR / output_logs_subdir
 
 
 def get_latest_ops_log_filename(output_logs_subdir):
-    runDate = sorted(os.listdir(PROFILER_OUTPUT_DIR / output_logs_subdir))[-1]
-    filename = PROFILER_OUTPUT_DIR / output_logs_subdir / runDate / f"ops_perf_results_{runDate}.csv"
+    output_report_dir = generate_reports_folder(get_profiler_folder(output_logs_subdir))
+    runDate = sorted(os.listdir(output_report_dir))[-1]
+    filename = output_report_dir / runDate / f"ops_perf_results_{runDate}.csv"
     return filename
 
 
@@ -40,8 +45,8 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
 
 
 def run_device_profiler(command, output_logs_subdir):
-    output_logs_dir = PROFILER_OUTPUT_DIR / output_logs_subdir
-    profiler_cmd = f"python -m tracy -p -r -o {output_logs_dir} -t 5000 -m {command}"
+    output_profiler_dir = get_profiler_folder(output_logs_subdir)
+    profiler_cmd = f"python -m tracy -p -r -o {output_profiler_dir} -t 5000 -m {command}"
     subprocess.run([profiler_cmd], shell=True, check=True)
 
 

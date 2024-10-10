@@ -19,7 +19,7 @@ void MAIN {
     for (uint32_t nc = 0; nc < NC; nc++) {
         constexpr int onetile = 1;
         int reduce_dst_idx = 0;
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         for(uint32_t ht = 0; ht < Ht; ++ht) {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
@@ -34,7 +34,7 @@ void MAIN {
         cb_reserve_back(tt::CB::c_out0, onetile);
         pack_tile(reduce_dst_idx, tt::CB::c_out0);
         cb_push_back(tt::CB::c_out0, onetile);
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 }

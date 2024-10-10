@@ -20,7 +20,7 @@
 
 #include "concepts.hpp"
 #include "third_party/json/json.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "type_name.hpp"
 #include "tt_metal/common/logger.hpp"
 

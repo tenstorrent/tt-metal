@@ -11,8 +11,8 @@
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -103,20 +103,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    MathFidelity math_fidelity = MathFidelity::Invalid;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -1298,29 +1285,24 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const tt::tt_metal::LegacyShape& input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const tt::tt_metal::LegacyShape& input_shape_b = input_tensors.at(1).get_legacy_shape();
+std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
+    ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    tt::tt_metal::LegacyShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
     for (auto index = 0; index < rank_difference; index++) {
         TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
-        dimensions_pads.push_back(input_shape_b.padding()[index]);
     }
     for (auto index = 0; index < a_rank - 1; index++) {
         output_shape[rank_difference + index] = input_shape_a[index];
-        dimensions_pads.push_back(input_shape_a.padding()[index]);
     }
     output_shape[-1] = input_shape_b[-1];
-    dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {std::move(output_shape)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

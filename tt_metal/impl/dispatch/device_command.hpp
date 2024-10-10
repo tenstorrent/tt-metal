@@ -51,8 +51,13 @@ class DeviceCommand {
     DeviceCommand &operator=(DeviceCommand &&other) {
         this->cmd_sequence_sizeB = other.cmd_sequence_sizeB;
         this->cmd_write_offsetB = other.cmd_write_offsetB;
-        this->cmd_region_vector = other.cmd_region_vector;
-        this->deepcopy(other);
+        this->cmd_region_vector = std::move(other.cmd_region_vector);
+        if constexpr (hugepage_write) {
+            this->deepcopy(other);
+        } else {
+            this->cmd_region = this->cmd_region_vector.data();
+        }
+
         return *this;
     }
     DeviceCommand(const DeviceCommand &other) :
@@ -64,8 +69,12 @@ class DeviceCommand {
     DeviceCommand(DeviceCommand &&other) :
         cmd_sequence_sizeB(other.cmd_sequence_sizeB),
         cmd_write_offsetB(other.cmd_write_offsetB),
-        cmd_region_vector(other.cmd_region_vector) {
-        this->deepcopy(other);
+        cmd_region_vector(std::move(other.cmd_region_vector)) {
+        if constexpr (hugepage_write) {
+            this->deepcopy(other);
+        } else {
+            this->cmd_region = this->cmd_region_vector.data();
+        }
     }
 
     // Constants

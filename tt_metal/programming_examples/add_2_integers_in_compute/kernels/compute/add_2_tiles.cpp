@@ -37,7 +37,7 @@ void MAIN {
     cb_push_back(cb_out0, 1);
 
     /*
-    acquire_dst(tt::DstMode::Full);
+    acquire_dst();
 
     cb_wait_front(tt::CB::c_in0, 1);
     cb_wait_front(tt::CB::c_in1, 1);
@@ -51,7 +51,7 @@ void MAIN {
     pack_tile(0, tt::CB::c_out0);
     cb_push_back(tt::CB::c_out0, 1);
 
-    release_dst(tt::DstMode::Full);
+    release_dst();
     */
 }
 }
