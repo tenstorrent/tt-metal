@@ -93,10 +93,6 @@ sfpi_inline vFloat sfpu_sine_maclaurin_series(vFloat val) {
     tmp = tmp * val * val;
     output += 0.0000027557 * tmp;
 
-    // x^11/11!
-    tmp = tmp * val * val;
-    output += -0.00000002505 * tmp;
-
     if constexpr (not APPROXIMATION_MODE) {
         // x^11/11!
         tmp = tmp * val * val;

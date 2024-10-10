@@ -23,7 +23,7 @@ inline Tensor unary_impl(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST) ? static_cast<DataType>(op_chain[0].params[1]) : input_tensor.get_dtype();
-    bool preserve_fp32_precision = (op_chain[0].op_type == UnaryOpType::TYPECAST) and (input_tensor.get_dtype() == DataType::FLOAT32);
+    bool preserve_fp32_precision = input_tensor.get_dtype() == DataType::FLOAT32;
     bool fp32_dest_acc_en = preserve_fp32_precision or
                             output_dtype == DataType::UINT32 or
                             output_dtype == DataType::INT32 or
