@@ -34,6 +34,7 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
         // tilize
         // need to add this hw config here, otherwise pcc is bad
         UNPACK(( llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_untilize) ));
+        MATH(( llk_math_hw_configure_disaggregated(cb_untilize, cb_untilize) ));
         untilize_init_short(cb_untilize);
         cb_wait_front(cb_untilize, Ht);
         cb_reserve_back(cb_out, Ht);

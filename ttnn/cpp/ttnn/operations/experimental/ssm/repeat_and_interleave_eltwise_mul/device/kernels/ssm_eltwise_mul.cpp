@@ -41,7 +41,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
         tile_regs_wait();
 
         transpose_wh_init_short(cb_id_in0);
-        unpack_reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
+        reconfig_data_format_srca(cb_out_transposed, cb_id_in0);
         pack_reconfig_data_format(cb_id_out, cb_in0_transposed);
         transpose_wh_tile(cb_id_in0, 0, 0);
 
@@ -66,7 +66,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
 // If input b is not repeat_interleaved, then no need to transpose, bcast row
 #ifndef REPEAT_INTERLEAVE_IN1
         mul_tiles_init(cb_id_in0, cb_id_in1);
-        unpack_reconfig_data_format_srca(cb_id_out, cb_id_in0);
+        reconfig_data_format_srca(cb_id_out, cb_id_in0);
         pack_reconfig_data_format(cb_in0_transposed, cb_id_out);
         mul_tiles(cb_id_in0, cb_id_in1, 0, 0, 0);
 
@@ -79,7 +79,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
         cb_pop_front(cb_id_in1, onetile);
 #else
         transpose_wh_init_short(cb_id_in1);
-        unpack_reconfig_data_format_srca(cb_id_in1);
+        reconfig_data_format_srca(cb_id_in1);
         pack_reconfig_data_format(cb_in1_transposed);
         transpose_wh_tile(cb_id_in1, 0, 0);
 
@@ -100,7 +100,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
             tile_regs_wait();
 
             transpose_wh_init_short(cb_id_in0);
-            unpack_reconfig_data_format_srca(cb_id_in0);
+            reconfig_data_format_srca(cb_id_in0);
             pack_reconfig_data_format(cb_in0_transposed);
             transpose_wh_tile(cb_id_in0, 0, 0);
 
@@ -120,7 +120,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
             tile_regs_wait();
 
             mul_bcast_rows_init_short(cb_in0_transposed, cb_in1_bcast_row);
-            unpack_reconfig_data_format_srca(cb_in0_transposed);
+            reconfig_data_format_srca(cb_in0_transposed);
             pack_reconfig_data_format(cb_out_transposed);
             mul_tiles_bcast_rows(cb_in0_transposed, cb_in1_bcast_row, 0, 0, 0);
 
@@ -141,7 +141,7 @@ for(uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++){
             tile_regs_wait();
 
             transpose_wh_init_short(cb_out_transposed);
-            unpack_reconfig_data_format(cb_in0_transposed, cb_out_transposed);
+            reconfig_data_format(cb_in0_transposed, cb_out_transposed);
             pack_reconfig_data_format(cb_out_transposed, cb_id_out);
             transpose_wh_tile(cb_out_transposed, 0, 0);
 

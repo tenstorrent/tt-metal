@@ -87,7 +87,7 @@ void MAIN {
         cb_wait_front(cb_divisor_recip, onetile);
         tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_tmp3, cb_divisor_recip);
+        reconfig_data_format(cb_tmp3, cb_divisor_recip);
 #endif
         mul_tiles_bcast_scalar_init_short(cb_tmp3, cb_divisor_recip);
         mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
@@ -119,7 +119,7 @@ void MAIN {
 
         tile_regs_acquire();
 #if defined FP32_DEST_ACC_EN
-        unpack_reconfig_data_format(cb_tmp1, cb_divisor_recip);
+        reconfig_data_format(cb_tmp1, cb_divisor_recip);
 #endif
         mul_tiles_bcast_scalar_init_short();
         mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);

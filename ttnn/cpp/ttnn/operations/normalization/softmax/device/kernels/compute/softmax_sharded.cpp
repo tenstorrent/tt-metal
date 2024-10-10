@@ -22,7 +22,7 @@ template<uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t cb_max, uint32_t cb_out) {
     // calculate max val per row
     ACQ();
-    unpack_reconfig_data_format(cb_in, cb_bcast_scaler);
+    reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_reserve_back(cb_max, 1);
     reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>();
     cb_wait_front(cb_bcast_scaler, 1);
@@ -37,7 +37,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
-    unpack_reconfig_data_format_srcb(cb_max);
+    reconfig_data_format_srcb(cb_max);
     cb_wait_front(cb_max, 1);
     sub_bcast_cols_init_short();
     uint32_t index_subblock_w_offset = 0;
@@ -94,7 +94,7 @@ void MAIN {
     for (uint32_t i = 0; i < block_h; i++) {
         #if FUSED_SCALE_MASK
             // fused scale
-            unpack_reconfig_data_format(cb_in0, cb_fused_scale);
+            reconfig_data_format(cb_in0, cb_fused_scale);
             pack_reconfig_data_format(cb_scale_mask);
             cb_wait_front(cb_fused_scale, 1);
             mul_tiles_bcast_scalar_init_short();
@@ -112,7 +112,7 @@ void MAIN {
                 index_subblock_w_offset += subblock_w;
             }
             cb_pop_front(cb_in0, block_w);
-            unpack_reconfig_data_format(cb_scale_mask, cb_fused_attn);
+            reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
             // fused attn
             cb_wait_front(cb_scale_mask, block_w);
@@ -168,14 +168,14 @@ void MAIN {
             #ifdef CAUSAL_MASK
                 cb_pop_front(cb_fused_attn, block_w);
             #endif
-            unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
+            reconfig_data_format(cb_exps, cb_bcast_scaler);
 
         #else
 
             #ifdef NUMERIC_STABLE
                 calc_numeric_stable<block_w, num_subblocks_w, subblock_w>(cb_in0, cb_bcast_scaler, cb_max, cb_exps);
             #else
-                unpack_reconfig_data_format(cb_in0, cb_in0);
+                reconfig_data_format(cb_in0, cb_in0);
                 pack_reconfig_data_format(cb_exps);
                 // exp(x)
                 index_subblock_w_offset = 0;
@@ -197,7 +197,7 @@ void MAIN {
                     index_subblock_w_offset += subblock_w;
                 }
                 cb_pop_front(cb_in0, block_w);
-                unpack_reconfig_data_format(cb_exps, cb_bcast_scaler);
+                reconfig_data_format(cb_exps, cb_bcast_scaler);
             #endif
         #endif // FUSED_SCALE_MASK
 
@@ -219,7 +219,7 @@ void MAIN {
         REL();
 
         // exp(x) / (sum(exp(x)))
-        unpack_reconfig_data_format(cb_exps, cb_recipsumexps);
+        reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);
         cb_wait_front(cb_recipsumexps, 1);
         mul_bcast_cols_init_short();

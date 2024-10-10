@@ -27,7 +27,7 @@ void MAIN {
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         add_tiles_init(cb_in0, cb_in1, true);
-        unpack_reconfig_data_format(cb_in0, cb_in1);
+        reconfig_data_format(cb_in0, cb_in1);
         tile_regs_acquire();
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
             cb_wait_front(cb_in0, input_granularity);
