@@ -463,34 +463,13 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0])
+@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0, 0.1])
 def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
     cq_id = 0
-    ttnn.leaky_relu(input_tensor, slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0])
-def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.leaky_relu(input_tensor, slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
+    ttnn.leaky_relu(input_tensor, negative_slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
