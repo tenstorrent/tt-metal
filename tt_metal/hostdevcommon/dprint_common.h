@@ -156,3 +156,30 @@ enum TypedU32_ARRAY_Format {
 static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
 // We use DebugPrintMemLayout to hold noc xfer data, 32 buckets (one for each bit in noc xfer length field).
 static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));
+
+// Size of datum in bytes, dprint-specific to support device-side and bfp* DataFormats
+inline constexpr static uint32_t dprint_datum_size(const DataFormat& format) {
+    switch (format) {
+        case DataFormat::Bfp2:
+        case DataFormat::Bfp2_b:
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp4_b:
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp8_b: return 0; // TODO
+        case DataFormat::Float16:
+        case DataFormat::Float16_b: return 2;
+        case DataFormat::Float32: return 4;
+        case DataFormat::Tf32: return 0; // Unsupported
+        case DataFormat::Int8: return 1;
+        case DataFormat::Lf8: return 1;
+        case DataFormat::UInt8: return 1;
+        case DataFormat::UInt16: return 2;
+        case DataFormat::UInt32: return 4;
+        case DataFormat::RawUInt8: return 1;
+        case DataFormat::RawUInt16: return 2;
+        case DataFormat::Int32: return 4;
+        case DataFormat::RawUInt32: return 4;
+        case DataFormat::Invalid: return 0; // Invalid
+        default: return 0; // Unknown
+    }
+}
