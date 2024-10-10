@@ -193,6 +193,7 @@ def extract_device_info(deviceInfo):
 
 def import_device_profile_log(logPath):
     devicesData = {"devices": {}}
+    doOpsDetection = True
     with open(logPath) as csvFile:
         csvReader = csv.reader(csvFile, delimiter=",")
         arch = ""
@@ -243,6 +244,11 @@ def import_device_profile_log(logPath):
                     devicesData["devices"][chipID] = {
                         "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData, statData)]}}}}
                     }
+                if doOpsDetection and "zone_name" in timerID.keys() and "dispatch" in timerID["zone_name"].lower():
+                    logger.warning(
+                        "Dispatch core data is detected, stats across ops are skipped as op detection cannot work with dispatch data present"
+                    )
+                    doOpsDetection = False
 
     def sort_timeseries_and_find_min(devicesData):
         globalMinTS = (1 << 64) - 1
@@ -288,7 +294,7 @@ def import_device_profile_log(logPath):
     # Sort all timeseries and find global min timestamp
     sort_timeseries_and_find_min(devicesData)
 
-    return devicesData
+    return devicesData, doOpsDetection
 
 
 def is_new_op_core(tsRisc):
@@ -654,7 +660,9 @@ def validate_setup(ctx, param, setup):
 
 
 def import_log_run_stats(setup=device_post_proc_config.default_setup()):
-    devicesData = import_device_profile_log(setup.deviceInputLog)
+    devicesData, doOpsDetection = import_device_profile_log(setup.deviceInputLog)
+    if not doOpsDetection:
+        setup.detectOps = False
     risc_to_core_timeseries(devicesData, setup.detectOps)
     core_to_device_timeseries(devicesData, setup.detectOps)
 
