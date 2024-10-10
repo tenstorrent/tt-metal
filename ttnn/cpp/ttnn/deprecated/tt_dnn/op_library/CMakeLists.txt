@@ -7,18 +7,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/moreh_clip_grad_norm_step1.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/moreh_clip_grad_norm_step2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/moreh_clip_grad_norm_step3.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/moreh_softmax_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_small/softmax_w_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_small/softmax_h_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_w_large/softmax_w_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_h_large/softmax_h_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax/softmax_c_large/softmax_c_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/moreh_softmax_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_w_small/softmax_backward_w_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_h_small/softmax_backward_h_small.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_w_large/softmax_backward_w_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_h_large/softmax_backward_h_large.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_softmax_backward/softmax_backward_c_large/softmax_backward_c_large.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_sum_h_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_h_impl/moreh_int_sum_h_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_sum/moreh_sum_w_impl/moreh_sum_w_impl.cpp
@@ -42,8 +30,6 @@ set(TT_DNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/moreh_layernorm_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/input_grad/moreh_layernorm_backward_input_grad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/moreh_layernorm_backward/gamma_beta_grad/moreh_layernorm_backward_gamma_beta_grad.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_nc/moreh_cumsum_nc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/moreh_cumsum/moreh_cumsum_op.cpp
 
     CACHE INTERNAL "tt_dnn sources to reuse in ttnn build"
 )

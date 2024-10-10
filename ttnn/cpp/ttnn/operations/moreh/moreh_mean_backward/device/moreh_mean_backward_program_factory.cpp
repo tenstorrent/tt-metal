@@ -98,7 +98,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         }
     }
     const auto num_input_grad_tiles = input_grad.volume() / tt::constants::TILE_HW;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(output_grad.device()->arch(), compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -170,8 +170,6 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         tt::operations::primary::ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            // TODO(hyungsuk): change unpack_to_dest_mode from false to fp32_dest_acc_en after fix #10337
-            // .unpack_to_dest_mode = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});

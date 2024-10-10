@@ -11,6 +11,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -19,13 +20,20 @@ namespace tt {
 namespace tt_metal {
 
 // Fwd declares
+inline namespace v0 {
+
 class Buffer;
 class Kernel;
 class CircularBuffer;
 class Device;
 class Program;
-class JitBuildOptions;
 class CircularBufferConfig;
+
+}  // namespace v0
+
+class EnqueueProgramCommand;
+class HWCommandQueue;
+class JitBuildOptions;
 namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const Device *device);
     KernelHandle AddKernel (Program &program, std::shared_ptr<Kernel> kernel, const HalProgrammableCoreType core_type);
@@ -70,9 +78,9 @@ struct ProgramConfig {
     uint32_t cb_size;
 };
 
-class Program {
-    friend class KernelGroup;
+inline namespace v0 {
 
+class Program {
    public:
     Program();
 
@@ -217,6 +225,9 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
+
+    std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);
@@ -254,10 +265,11 @@ class Program {
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
 
-    friend class HWCommandQueue;
-    friend class EnqueueProgramCommand;
+    friend HWCommandQueue;
+    friend EnqueueProgramCommand;
 };
 
+}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

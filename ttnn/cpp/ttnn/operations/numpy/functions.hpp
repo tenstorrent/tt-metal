@@ -242,7 +242,7 @@ static Tensor arange(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output = Tensor(OwnedStorage{owned_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
@@ -454,7 +454,7 @@ static Tensor fill_first_val_into_tensor(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
+    const ttnn::SimpleShape input_tensor_strides = input_tensor.strides();
     for (uint32_t i = 0; i < physical_volume; i++) {
         owned_buffer[i] = input_buffer[0];
     }
@@ -488,7 +488,7 @@ static Tensor prod_result_computation_GS(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
+    const ttnn::SimpleShape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {
         for (int32_t j = s_a[1] - 1; j < s_a[1]; j++) {
@@ -537,7 +537,7 @@ static Tensor prod_result_computation_WH_B0(
         tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
     auto input_buffer = owned_buffer::create<T>(std::move(data_vec));
-    const tt::tt_metal::LegacyShape input_tensor_strides = input_tensor.strides();
+    const ttnn::SimpleShape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
     // need to access the last 4 rows and alternating columns of index 17 ,19, 21, 23, 25, 27, 29, 31
     for (uint32_t i = s_a[0] - 1; i < s_a[0]; i++) {

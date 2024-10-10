@@ -105,9 +105,6 @@ def run(
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
 
-    # for device in devices:
-    #    device.disable_and_clear_program_cache()
-
     input_tensor = torch.rand(input_shape).bfloat16()
 
     input_tensors = torch.chunk(input_tensor, num_devices, dim)

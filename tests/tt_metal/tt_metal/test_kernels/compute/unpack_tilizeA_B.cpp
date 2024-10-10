@@ -41,11 +41,11 @@ void MAIN {
         unpack_tilizeA_B_block(tt::CB::c_in0, tt::CB::c_in1, per_core_block_tile_cnt, b);
 
         for(uint i=0; i<per_core_block_tile_cnt; ++i) {
-            acquire_dst(tt::DstMode::Half);
+            acquire_dst();
             add_tiles_math(tt::CB::c_in0, tt::CB::c_in1, i, i, 0);
             // dprint_tensix_dest_reg(0);
             pack_tile(0, tt::CB::c_out0);
-            release_dst(tt::DstMode::Half);
+            release_dst();
         }
 
         cb_push_back(tt::CB::c_out0, per_core_block_tile_cnt);

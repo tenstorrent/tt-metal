@@ -117,16 +117,18 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
-        [](ttnn::Device * device,
-            const ttnn::Tensor& input_tensor,
-            const Conv2dConfig& conv_config,
-            uint32_t batch_size,
-            uint32_t height,
-            uint32_t width,
-            uint32_t in_channels,
-            uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+        [](ttnn::Device* device,
+           const ttnn::Tensor& input_tensor,
+           const Conv2dConfig& conv_config,
+           uint32_t batch_size,
+           uint32_t height,
+           uint32_t width,
+           uint32_t in_channels,
+           uint32_t out_channels,
+           std::array<uint32_t, 2> kernel_size,
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
-                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
+                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },
         py::kw_only(),
         py::arg("device"),
@@ -136,20 +138,24 @@ void py_bind_conv2d(py::module& module) {
         py::arg("height"),
         py::arg("width"),
         py::arg("in_channels"),
-        py::arg("out_channels"));
+        py::arg("out_channels"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
-        [](MeshDevice * device,
-            const ttnn::Tensor& input_tensor,
-            const Conv2dConfig& conv_config,
-            uint32_t batch_size,
-            uint32_t height,
-            uint32_t width,
-            uint32_t in_channels,
-            uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+        [](MeshDevice* device,
+           const ttnn::Tensor& input_tensor,
+           const Conv2dConfig& conv_config,
+           uint32_t batch_size,
+           uint32_t height,
+           uint32_t width,
+           uint32_t in_channels,
+           uint32_t out_channels,
+           std::array<uint32_t, 2> kernel_size,
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
-                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels);
+                device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },
         py::kw_only(),
         py::arg("device"),
@@ -159,7 +165,9 @@ void py_bind_conv2d(py::module& module) {
         py::arg("height"),
         py::arg("width"),
         py::arg("in_channels"),
-        py::arg("out_channels"));
+        py::arg("out_channels"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -186,7 +194,7 @@ void py_bind_conv2d(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, TensorMemoryLayout, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -202,7 +210,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("act_block_w_div") = 1,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
-            py::arg("shard_layout") = TensorMemoryLayout::HEIGHT_SHARDED,
+            py::arg("shard_layout") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("transpose_shards") = true,
             py::arg("output_layout") = Layout::TILE,

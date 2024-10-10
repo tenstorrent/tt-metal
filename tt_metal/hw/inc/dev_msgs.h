@@ -68,6 +68,17 @@ enum dispatch_core_processor_masks {
     DISPATCH_CLASS_MASK_ETH_DM0 = 1 << DISPATCH_CLASS_ETH_DM0,
 };
 
+enum noc_index {
+    NOC_0 = 0,
+    NOC_1 = 1,
+};
+
+enum noc_mode : uint8_t {
+    DM_DEDICATED_NOC = 0,
+    DM_DYNAMIC_NOC = 1,
+    DM_INVALID_NOC = 2,
+};
+
 // Address offsets to kernel runtime configuration components
 // struct to densely packs values used by each processor
 struct dyn_mem_map_t {
@@ -89,9 +100,9 @@ struct kernel_config_msg_t {
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
+    volatile uint8_t brisc_noc_mode;
     volatile uint8_t max_cb_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t pad;
     volatile uint8_t enables;
 } __attribute__((packed));
 

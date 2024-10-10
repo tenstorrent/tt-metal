@@ -9,9 +9,12 @@
 #include <fstream>
 #include <string>
 namespace tt::tt_metal {
+inline namespace v0 {
 
 class Program;
 class Device;
+
+}  // namespace v0
 namespace detail {
 
 /**
@@ -74,6 +77,5 @@ class MemoryReporter {
     std::ofstream program_detailed_memory_usage_report_;
 };
 
-}   // namespace detail
-
-}   // namespace tt::tt_metal
+}  // namespace detail
+}  // namespace tt::tt_metal

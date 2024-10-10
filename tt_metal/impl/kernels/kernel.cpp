@@ -105,6 +105,7 @@ void DataMovementKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
+    callback("NOC_MODE", std::to_string(this->config_.noc_mode));
 }
 
 void ComputeKernel::process_defines(
@@ -112,12 +113,16 @@ void ComputeKernel::process_defines(
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);
     }
+    // pass default noc mode as compute does not need it, just for compile to pass
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
 void EthernetKernel::process_defines(
     const std::function<void(const string &define, const string &value)> callback) const {
     Kernel::process_defines(callback);
     callback("NOC_INDEX", std::to_string(this->config_.noc));
+    // pass default noc mode as eth does not need it, just for compile to pass
+    callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
 void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
@@ -159,10 +164,11 @@ std::string EthernetKernel::config_hash() const {
 
 std::string ComputeKernel::config_hash() const {
     return fmt::format(
-        "{}_{}_{}",
+        "{}_{}_{}_{}",
         magic_enum::enum_name(this->config_.math_fidelity),
         this->config_.fp32_dest_acc_en,
-        this->config_.math_approx_mode);
+        this->config_.math_approx_mode,
+        this->config_.dst_full_sync_en);
 }
 
 std::string Kernel::compute_hash() const {
@@ -310,6 +316,7 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
+    build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.hlk_defines = this->defines_;
 }

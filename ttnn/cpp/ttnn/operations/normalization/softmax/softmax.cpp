@@ -4,11 +4,13 @@
 
 #include "softmax.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_softmax/moreh_softmax_op.hpp"
+#include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "device/softmax_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::normalization {
+
+using namespace moreh::moreh_softmax;
 
 ttnn::Tensor ExecuteSoftmax::invoke(
     const ttnn::Tensor& input_tensor,
@@ -31,7 +33,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
         return ttnn::reshape(output_tensor, input_shape);
     } else {
         auto dim_4D = dim + 4 - rank;
-        auto output_tensor = tt::operations::primary::moreh_softmax(input_tensor_4D, dim_4D);
+        auto output_tensor = ttnn::prim::moreh_softmax(input_tensor_4D, dim_4D, std::nullopt, MorehSoftmaxOp::SOFTMAX, MorehSoftmaxOpParallelizationStrategy::NONE, memory_config.value_or(input_tensor.memory_config()), compute_kernel_config);
         return ttnn::reshape(output_tensor, input_shape);
     }
 }

@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks moreh_layernorm_impl(
          num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     // This could be inefficient.
@@ -405,39 +405,26 @@ void MorehLayerNorm::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::SimpleShape> MorehLayerNorm::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto input = input_tensors.at(0);
 
     // compute mean_rstd_shape
-    tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
-    auto input_shape_without_padding = input_shape.without_padding();
+    auto input_shape = input.get_logical_shape();
     auto input_rank = input_shape.rank();
     auto output_rank = input_rank - normalized_dims;
 
-    std::vector<uint32_t> output_size_vec;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    std::vector<uint32_t> output_shape_vec;
 
     // special case handling
     if (output_rank == 1) {
-        output_size_vec.push_back(32);
-        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+        output_shape_vec.push_back(1);
     }
 
     for (uint32_t dim = 0 ; dim < output_rank; dim++) {
-        auto input_shape_without_padding_size = input_shape_without_padding[dim];
-        if (is_hw_dim(dim, output_rank)) {
-            output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
-
-            auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});
-        } else {
-            output_size_vec.push_back(input_shape_without_padding_size);
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
-        }
+        output_shape_vec.push_back(input_shape[dim]);
     }
 
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto mean_rstd_output_shape = tt::tt_metal::LegacyShape(output_size_vec, padding);
+    ttnn::SimpleShape mean_rstd_output_shape(std::move(output_shape_vec));
 
     return {input_shape, mean_rstd_output_shape, mean_rstd_output_shape};
 }

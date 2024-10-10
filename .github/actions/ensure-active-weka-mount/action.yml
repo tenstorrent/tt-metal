@@ -1,0 +1,17 @@
+name: "Ensure Active Weka Mount"
+description: "Make sure weka mount is active"
+
+inputs:
+  os:
+    description: 'Runner OS'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Ensure active weka mount
+      shell: bash
+      run: |
+        sudo systemctl restart mnt-MLPerf.mount
+        sudo /etc/rc.local
+        ls -al /mnt/MLPerf/bit_error_tests

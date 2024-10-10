@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 
-static inline int hv (enum HalMemAddrType v) {
+static inline int hv (enum HalL1MemAddrType v) {
     return static_cast<int>(v);
 }
 

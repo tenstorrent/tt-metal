@@ -11,9 +11,11 @@
 #include <memory>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "common/env_lib.hpp"
 #include "tt_metal/common/base.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
@@ -21,10 +23,14 @@
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 
 namespace tt::tt_metal {
+inline namespace v0 {
 
+class CommandQueue;
 class Event;
 class Trace;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
+
+}  // namespace v0
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
@@ -47,7 +53,6 @@ enum class EnqueueCommandType {
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
-class CommandQueue;
 class CommandInterface;
 
 using WorkerQueue = LockFreeQueue<CommandInterface>;
@@ -295,21 +300,6 @@ class EnqueueProgramCommand : public Command {
     uint32_t unicast_cores_launch_message_wptr = 0;
 
    public:
-    struct CachedProgramCommandSequence {
-        HostMemDeviceCommand preamble_command_sequence;
-        HostMemDeviceCommand stall_command_sequence;
-        std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
-        uint32_t runtime_args_fetch_size_bytes;
-        HostMemDeviceCommand program_command_sequence;
-        std::vector<uint32_t*> cb_configs_payloads;
-        std::vector<std::vector<std::shared_ptr<CircularBuffer>>> circular_buffers_on_core_ranges;
-        std::vector<launch_msg_t*> go_signals;
-        uint32_t program_config_buffer_data_size_bytes;
-        std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
-        std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;
-        CQDispatchGoSignalMcastCmd* mcast_go_signal_cmd_ptr;
-    };
-    thread_local static std::unordered_map<uint64_t, CachedProgramCommandSequence> cached_program_command_sequences;
 
     EnqueueProgramCommand(
         uint32_t command_queue_id,
@@ -322,10 +312,13 @@ class EnqueueProgramCommand : public Command {
         uint32_t multicast_cores_launch_message_wptr,
         uint32_t unicast_cores_launch_message_wptr);
 
-    void assemble_preamble_commands(std::vector<ConfigBufferEntry>& kernel_config_addrs);
-    void assemble_stall_commands(bool prefetch_stall);
-    void assemble_device_commands(bool is_cached, std::vector<ConfigBufferEntry>& kernel_config_addrs);
-    void assemble_runtime_args_commands();
+    void assemble_preamble_commands(ProgramCommandSequence& program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
+    void assemble_stall_commands(ProgramCommandSequence& program_command_sequence, bool prefetch_stall);
+    void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence);
+    void assemble_device_commands(ProgramCommandSequence& program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
+    void update_device_commands(ProgramCommandSequence& cached_program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
+
+    void write_program_command_sequence(const ProgramCommandSequence& program_command_sequence, bool stall_first);
 
     void process();
 
@@ -591,8 +584,8 @@ class HWCommandQueue {
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend void FinishImpl(CommandQueue& cq);
     friend void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
-    friend class CommandQueue;
-    friend class Device;
+    friend CommandQueue;
+    friend Device;
 };
 
 // Common interface for all command queue types
@@ -609,6 +602,8 @@ struct CommandInterface {
     std::optional<std::shared_ptr<Event>> event;
     std::optional<uint32_t> trace_id;
 };
+
+inline namespace v0 {
 
 class CommandQueue {
     friend class Device;
@@ -696,6 +691,8 @@ class CommandQueue {
     inline static uint32_t num_async_cqs = 0;
     inline static uint32_t num_passthrough_cqs = 0;
 };
+
+}  // namespace v0
 
 // Primitives used to place host only operations on the SW Command Queue.
 // These are used in functions exposed through tt_metal.hpp or host_api.hpp

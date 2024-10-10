@@ -69,6 +69,8 @@ private:
     std::vector<uint32_t> value;
 };
 
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+
 } // namespace ttnn
 
 inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
@@ -303,6 +305,7 @@ class LegacyShape {
     friend std::ostream &operator<<(std::ostream &os, const LegacyShape &shape);
 
     Array4D to_array_4D() const {
+        TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
         Array4D ret_array;
         for (int i = 0; i < rank(); i++) {
             ret_array[i] = this->operator[](i);

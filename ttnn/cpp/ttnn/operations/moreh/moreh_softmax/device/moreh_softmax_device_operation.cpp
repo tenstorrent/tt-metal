@@ -9,11 +9,11 @@ namespace ttnn::operations::moreh::moreh_softmax {
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto w = tensor.get_legacy_shape()[-1];
+    auto w = tensor.get_shape()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     auto arch = tensor.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -39,11 +39,11 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
 }
 
 bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto h = tensor.get_legacy_shape()[-2];
+    auto h = tensor.get_shape()[-2];
     int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     auto arch = tensor.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
@@ -83,15 +83,15 @@ MorehSoftmaxOperation::program_factory_t MorehSoftmaxOperation::select_program_f
 
 void MorehSoftmaxOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
-    TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
+    const auto& input = tensor_args.input;
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
+    TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
-        input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B,
+        input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B,
         "Inputs must be of bfloat16 or bfloat8_b type");
 
-    const auto rank = input_tensor.get_legacy_shape().rank();
+    const auto rank = input.get_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -108,30 +108,26 @@ void MorehSoftmaxOperation::validate_on_program_cache_hit(
 
 MorehSoftmaxOperation::shape_return_value_t MorehSoftmaxOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input_tensor.get_shape();
+    return tensor_args.input.get_shape();
 }
 
 MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_tensor = tensor_args.output_tensor;
-    if (output_tensor.has_value())
-        return output_tensor.value();
+    const auto& output = tensor_args.output;
+    if (output.has_value())
+        return output.value();
 
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto& output_shape = input_tensor.get_legacy_shape();
+    const auto& input = tensor_args.input;
+    const auto& output_shape = input.get_shape();
     return create_device_tensor(
-        output_shape,
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        operation_attributes.memory_config);
+        output_shape, input.get_dtype(), input.get_layout(), input.device(), operation_attributes.memory_config);
 }
 
 std::tuple<MorehSoftmaxOperation::operation_attributes_t, MorehSoftmaxOperation::tensor_args_t>
 MorehSoftmaxOperation::invoke(
-    const Tensor& input_tensor,
+    const Tensor& input,
     uint32_t dim,
-    const std::optional<Tensor>& output_tensor,
+    const std::optional<Tensor>& output,
     const MorehSoftmaxOp op,
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
@@ -141,20 +137,19 @@ MorehSoftmaxOperation::invoke(
             dim,
             op,
             strategy,
-            memory_config.value_or(input_tensor.memory_config()),
-            init_device_compute_kernel_config(
-                input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input_tensor, output_tensor}};
+            memory_config.value_or(input.memory_config()),
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        tensor_args_t{input, output}};
 }
 
 MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization_strategy(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
+    const auto& input = tensor_args.input;
     const auto strategy = operation_attributes.strategy;
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto rank = input.get_legacy_shape().rank();
+    auto rank = input.get_shape().rank();
     if (strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_w_small_available(input, compute_kernel_config)) {

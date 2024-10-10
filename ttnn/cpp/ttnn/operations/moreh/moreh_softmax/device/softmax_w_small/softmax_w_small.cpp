@@ -13,7 +13,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     log_info(tt::LogTest, "Large tensor algorithm selected");
-    const auto& input = tensor_args.input_tensor;
+    const auto& input = tensor_args.input;
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
@@ -21,7 +21,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input.get_legacy_shape();
+    auto shape = input.get_shape().value;
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
@@ -37,7 +37,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         tt::operations::primary::split_work_to_cores(core_range, num_kernel_rows);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     Program program = Program();
@@ -156,12 +156,11 @@ void MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::override_runtime_argument
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+            runtime_args[0] = tensor_args.input.buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
