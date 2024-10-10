@@ -203,11 +203,12 @@ def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
     os.environ["TT_METAL_PROFILER_SYNC"] = "1"
-    deviceData = run_device_profiler_test(testName="pytest ./tests/tt_metal/tools/profiler/test_all_devices.py")
-    reprotedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
-
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
 
+    deviceData = run_device_profiler_test(
+        testName="pytest ./tests/tt_metal/tools/profiler/test_all_devices.py::test_all_devices"
+    )
+    reprotedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
     assert os.path.isfile(syncInfoFile)
 
     syncinfoDF = pd.read_csv(syncInfoFile)
@@ -215,5 +216,21 @@ def test_profiler_host_device_sync():
     for device in devices:
         freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
 
-        assert freq < (reprotedFreq * (1 + TOLERANCE)), "Frequency too large on this {ENV_VAR_ARCH_NAME}"
-        assert freq > (reprotedFreq * (1 - TOLERANCE)), "Frequency too small on this {ENV_VAR_ARCH_NAME}"
+        assert freq < (reprotedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
+        assert freq > (reprotedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+
+    clear_profiler_runtime_artifacts()
+
+    deviceData = run_device_profiler_test(
+        testName="pytest ./tests/tt_metal/tools/profiler/test_all_devices.py::test_with_ops"
+    )
+    reprotedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
+    assert os.path.isfile(syncInfoFile)
+
+    syncinfoDF = pd.read_csv(syncInfoFile)
+    devices = sorted(syncinfoDF["device id"].unique())
+    for device in devices:
+        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
+
+        assert freq < (reprotedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
+        assert freq > (reprotedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
