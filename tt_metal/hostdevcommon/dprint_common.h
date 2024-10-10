@@ -11,7 +11,15 @@
 #pragma once
 
 #include <cstddef>
-#include <dev_msgs.h>
+
+constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204; // per thread
+// TODO: when device specific headers specify number of processors
+// (and hal abstracts them on host), get these from there
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
+constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 1;
+#else
+constexpr static std::uint32_t DPRINT_BUFFERS_COUNT = 5;
+#endif
 
 // Used to index into the DPRINT buffers. Erisc is separate because it only has one buffer.
 enum DebugPrintHartIndex : unsigned int {
@@ -77,41 +85,65 @@ constexpr int DEBUG_PRINT_SERVER_DISABLED_MAGIC = 0x23455432;
 // (making it impossible to print) we will instead print this message.
 constexpr const char* debug_print_overflow_error_message = "*** INTERNAL DEBUG PRINT BUFFER OVERFLOW ***\n\n";
 
-#define ATTR_ALIGN4 __attribute__((aligned(4)))
-#define ATTR_ALIGN2 __attribute__((aligned(2)))
-#define ATTR_ALIGN1 __attribute__((aligned(1)))
+constexpr int TILE_DIM = 32; // Feels like this should be defined somewhere, haven't seen it though.
+
 #define ATTR_PACK   __attribute__((packed))
 
 struct DebugPrintMemLayout {
     struct Aux {
         // current writer offset in buffer
-        uint32_t wpos ATTR_ALIGN4;
-        uint32_t rpos ATTR_ALIGN4;
-        uint16_t core_x ATTR_ALIGN2;
-        uint16_t core_y ATTR_ALIGN2;
-    } aux ATTR_ALIGN4;
+        uint32_t wpos;
+        uint32_t rpos;
+        uint16_t core_x;
+        uint16_t core_y;
+    } aux ATTR_PACK;
     uint8_t data[DPRINT_BUFFER_SIZE-sizeof(Aux)];
 
     static size_t rpos_offs() { return offsetof(DebugPrintMemLayout::Aux, rpos) + offsetof(DebugPrintMemLayout, aux); }
 
 } ATTR_PACK;
 
-template<int MAXCOUNT=0>
-struct TileSliceHostDev {
-    uint32_t ptr_                ATTR_ALIGN4; // also print the cb fifo pointer for debugging
-    uint16_t h0_                 ATTR_ALIGN2;
-    uint16_t h1_                 ATTR_ALIGN2;
-    uint16_t hs_                 ATTR_ALIGN2;
-    uint16_t w0_                 ATTR_ALIGN2;
-    uint16_t w1_                 ATTR_ALIGN2;
-    uint16_t ws_                 ATTR_ALIGN2;
-    uint8_t cb_id_               ATTR_ALIGN1;
-    uint8_t count_               ATTR_ALIGN1;
-    uint8_t endl_rows_           ATTR_ALIGN1;
-    uint8_t data_format_         ATTR_ALIGN1;
-    uint16_t samples_[MAXCOUNT]  ATTR_ALIGN2;
+struct SliceRange {
+    // A slice object encoding semantics of np.slice(h0:h1:hs, w0:w1:ws)
+    // This is only used with DPRINT for TileSlice object
+    uint8_t h0, h1, hs, w0, w1, ws;
+    // [0:32:16, 0:32:16]
+    static inline SliceRange hw0_32_16() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 16, .w0 = 0, .w1 = 32, .ws = 16 }; }
+    // [0:32:8, 0:32:8]
+    static inline SliceRange hw0_32_8() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 8, .w0 = 0, .w1 = 32, .ws = 8 }; }
+    // [0:32:4, 0:32:4]
+    static inline SliceRange hw0_32_4() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 4, .w0 = 0, .w1 = 32, .ws = 4 }; }
+    // [0, 0:32]
+    static inline SliceRange h0_w0_32() { return SliceRange{ .h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1 }; }
+    // [0:32, 0]
+    static inline SliceRange h0_32_w0() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1 }; }
+    // [0:32:1, 1]
+    static inline SliceRange h0_32_w1() { return SliceRange{ .h0 = 0, .h1 = 32, .hs = 1, .w0 = 1, .w1 = 2, .ws = 1 }; }
+    // [0:4:1, 0:4:1]
+    static inline SliceRange hw041() { return SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1}; }
 } ATTR_PACK;
 
+template <int MAX_BYTES=0>
+struct TileSliceHostDev {
+    uint32_t cb_ptr;
+    struct SliceRange slice_range;
+    uint8_t cb_id;
+    uint8_t data_format;
+    uint8_t data_count;
+    uint8_t endl_rows;
+    uint8_t return_code;
+    uint8_t pad;
+    uint8_t data[MAX_BYTES];
+} ATTR_PACK;
+
+enum dprint_tileslice_return_code_enum {
+    DPrintOK = 2,
+    DPrintErrorBadPageSize = 3,
+    DPrintErrorBadPointer = 4,
+    DPrintErrorUnsupportedFormat = 5,
+    DPrintErrorMath = 6,
+    DPrintErrorEthernet = 7,
+};
 enum TypedU32_ARRAY_Format {
     TypedU32_ARRAY_Format_INVALID,
 
