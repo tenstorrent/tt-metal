@@ -57,7 +57,7 @@ static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device* device) {
 inline uint64_t GetDprintBufAddr(tt::tt_metal::Device *device, const CoreCoord &phys_core, int risc_id) {
 
     dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
-    return reinterpret_cast<uint64_t>(buf->data[risc_id]);
+    return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
 inline int GetNumRiscs(const CoreDescriptor &core) {
