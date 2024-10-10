@@ -294,5 +294,5 @@ add_custom_target(clean-built
 )
 
 # Debian Package
-include(cmake/CPackLinux.cmake)
+include(cmake/packaging.cmake)
 
