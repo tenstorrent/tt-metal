@@ -71,7 +71,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto *device = output_grad.device();
-    auto program = Program();
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -228,7 +228,7 @@ operation::ProgramWithCallbacks moreh_sum_backward_impl(
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
                                                    const void *operation,
-                                                   const Program &program,
+                                                   const ProgramHandle program,
                                                    const std::vector<Tensor> &input_tensors,
                                                    const std::vector<std::optional<const Tensor>> &,
                                                    const std::vector<Tensor> &output_tensors) {

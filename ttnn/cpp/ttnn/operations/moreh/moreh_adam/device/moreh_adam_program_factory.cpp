@@ -40,7 +40,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -239,7 +239,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void MorehAdamOperation::ProgramFactory::override_runtime_arguments(

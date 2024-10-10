@@ -303,7 +303,7 @@ template<bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
     auto device = input.device();
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
@@ -408,7 +408,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_0, local_cores](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
@@ -436,7 +436,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto device = input.device();
     auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
 
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
@@ -518,7 +518,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    auto program = tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         program, writer_kernel_id, core, {output.buffer()->address(), num_tensor_tiles / out_dim_divider, 0});
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto src_dram_buffer = input_buffers.at(0);
@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace tt_metal

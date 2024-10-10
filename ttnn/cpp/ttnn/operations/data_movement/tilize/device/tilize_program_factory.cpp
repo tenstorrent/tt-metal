@@ -18,7 +18,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -132,7 +132,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
-                                              const Program& program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer*>& input_buffers,
                                               const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
@@ -152,11 +152,11 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, Tensor& output) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -289,7 +289,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     auto override_runtime_args_callback =
         [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const Program& program,
+            const ProgramHandle program,
             const std::vector<Buffer*>& input_buffers,
             const std::vector<Buffer*>& output_buffers) {
             auto src_buffer = input_buffers.at(0);
@@ -309,11 +309,11 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -385,7 +385,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     auto override_runtime_arguments_callback =
         [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output](
             const void* operation,
-            Program& program,
+            ProgramHandle program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {

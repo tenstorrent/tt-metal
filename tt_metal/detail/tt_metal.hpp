@@ -11,6 +11,7 @@
 #include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/core_coord.h"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/program/program_handle.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -80,7 +81,6 @@ inline namespace v0 {
         // Launches all kernels on cores specified with kernels in the program.
         // All kernels on a given Tensix core must be launched.
         void LaunchProgram(Device *device, Program &program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-        void LaunchProgram(Device *device, std::shared_ptr<Program> program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
         void WaitProgramDone(Device *device, Program &program);
 
         /**

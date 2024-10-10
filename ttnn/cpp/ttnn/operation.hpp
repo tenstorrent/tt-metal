@@ -26,7 +26,7 @@ static Hash hash_operation(const Types&... objects) {
 }
 
 using OverrideAddressesCallback =
-    std::function<void(const Program&, const std::vector<tt::tt_metal::Buffer*>&, const std::vector<tt::tt_metal::Buffer*>&)>;
+    std::function<void(ProgramHandle, const std::vector<tt::tt_metal::Buffer*>&, const std::vector<tt::tt_metal::Buffer*>&)>;
 
 using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
@@ -34,11 +34,11 @@ using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
 
 template <typename OutputTensors = Tensors>
 using OverrideRuntimeArgumentsCallback = std::function<void(
-    const void* operation, Program&, const Tensors&, const OptionalConstTensors&, const OutputTensors&)>;
+    const void* operation, ProgramHandle, const Tensors&, const OptionalConstTensors&, const OutputTensors&)>;
 
 template <typename OutputTensors = Tensors>
 struct CacheableProgram {
-    Program program{};
+    ProgramHandle program{};
     std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
     std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
 
@@ -423,7 +423,7 @@ struct DeviceOperation final {
 
     inline void override_runtime_arguments(
         OverrideRuntimeArgumentsCallback<OutputTensors>& override_runtime_arguments_callback,
-        Program& program,
+        ProgramHandle program,
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
@@ -592,7 +592,7 @@ struct DeviceOperation final {
         override_runtime_arguments_impl_{
             [](const storage_t& storage,
                OverrideRuntimeArgumentsCallback<OutputTensors>& override_runtime_arguments_callback,
-               Program& program,
+               ProgramHandle program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> void {
@@ -764,7 +764,7 @@ struct DeviceOperation final {
     void (*override_runtime_arguments_impl_)(
         const storage_t& value,
         OverrideRuntimeArgumentsCallback<OutputTensors>&,
-        Program&,
+        ProgramHandle,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);

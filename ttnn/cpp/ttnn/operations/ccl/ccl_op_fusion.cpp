@@ -24,7 +24,7 @@ void AllGatherFusedOpSignaler::init_fused_op(
 }
 
 void AllGatherFusedOpSignaler::init_all_gather(
-    Program& program,
+    tt::tt_metal::ProgramHandle program,
     Device const* device,
 
     CoreRangeSet const& all_gather_workers,
@@ -102,7 +102,7 @@ void MatmulFusedOpSignaler::init_all_gather(
 }
 
 void MatmulFusedOpSignaler::init_fused_op(
-    Program& program,
+    tt::tt_metal::ProgramHandle program,
     Device const* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode

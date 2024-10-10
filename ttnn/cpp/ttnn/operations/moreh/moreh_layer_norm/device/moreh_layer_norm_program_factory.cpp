@@ -59,7 +59,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device* device = input.device();
-    Program program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -372,7 +372,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         tile_offset += num_rows_per_core * num_inner;
     }
 
-    return {std::move(program), {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
+    return {program, {reader_kernels_id, writer_kernels_id, num_cores, num_cores_y}};
 }
 
 void MorehLayerNormOperation::ProgramFactory::override_runtime_arguments(

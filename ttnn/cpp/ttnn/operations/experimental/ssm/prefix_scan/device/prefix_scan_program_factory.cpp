@@ -17,7 +17,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     Tensor& output,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto program = tt::tt_metal::CreateProgram();
 
     auto* a_buffer = a.buffer();
     auto* bx_buffer = bx.buffer();
@@ -150,7 +150,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
          cb_a_in,
          cb_bx_in,
          cb_h_in,
-         cb_out](Program& program, const Tensor& a, const Tensor& bx, const Tensor& h, const Tensor& output) {
+         cb_out](ProgramHandle program, const Tensor& a, const Tensor& bx, const Tensor& h, const Tensor& output) {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
             tt::tt_metal::Buffer* bx_buffer = bx.buffer();
             tt::tt_metal::Buffer* h_buffer = h.buffer();
@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     auto override_runtime_arguments_callback = [set_runtime_args](
                                                    const void* operation,
-                                                   Program& program,
+                                                   ProgramHandle program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {

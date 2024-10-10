@@ -19,7 +19,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 
 operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tensor &output, bool backwards) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     bool tilized = output.get_layout() == Layout::TILE;
 
@@ -198,7 +198,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
             cores
         ]
     (
-        const Program &program,
+        const ProgramHandle program,
         const std::vector<Buffer*>& input_buffers,
         const std::vector<Buffer*>& output_buffers
     ) {
@@ -220,7 +220,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }

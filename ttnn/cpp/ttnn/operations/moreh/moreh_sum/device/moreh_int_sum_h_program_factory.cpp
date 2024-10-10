@@ -21,7 +21,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::Device* device{input.device()};
-    tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
+    auto program = tt::tt_metal::CreateProgram();
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
     const auto shape{input.get_padded_shape()};
@@ -183,7 +183,7 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
         num_cols_read += num_cols_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {program, {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void MorehSumOperation::MorehSumHIntFactory::override_runtime_arguments(

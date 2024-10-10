@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
 
 namespace ttnn::operations::sliding_window::halo {
 
@@ -95,11 +96,12 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(const std::v
     auto local_config_device_tensor = sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_config_device_tensor = sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
 
-    Program program = CreateProgram();
+    auto program = CreateProgram();
 
-    tt::tt_metal::detail::AddConfigBuffer(program, pad_config_device_tensor.device_buffer());
-    tt::tt_metal::detail::AddConfigBuffer(program, local_config_device_tensor.device_buffer());
-    tt::tt_metal::detail::AddConfigBuffer(program, remote_config_device_tensor.device_buffer());
+    auto* program_ptr = ProgramPool::instance().get_program(program);
+    tt::tt_metal::detail::AddConfigBuffer(*program_ptr, pad_config_device_tensor.device_buffer());
+    tt::tt_metal::detail::AddConfigBuffer(*program_ptr, local_config_device_tensor.device_buffer());
+    tt::tt_metal::detail::AddConfigBuffer(*program_ptr, remote_config_device_tensor.device_buffer());
 
     return {data_movement::detail::untilize_with_halo_multi_core_v2(
         program,

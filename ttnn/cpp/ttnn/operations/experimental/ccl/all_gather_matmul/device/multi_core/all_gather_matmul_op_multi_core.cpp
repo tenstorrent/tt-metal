@@ -39,7 +39,7 @@ struct DatacopyParams {
 };
 
 DatacopyParams setup_datacopy(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramHandle program,
     const Tensor& input_tensor,
     const Tensor& all_gather_output_tensor,
     Tensor& datacopy_output_tensor,
@@ -169,7 +169,7 @@ DatacopyParams setup_datacopy(
 
     auto override_runtime_arguments_callback = [datacopy_kernel_id, all_datacopy_cores] (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors
@@ -229,7 +229,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     bool untilize_out
 
 ) {
-    tt::tt_metal::Program program{};
+    auto program = tt::tt_metal::CreateProgram();
     bool use_datacopy = false; /* Enable for debugging purposes */
 
     ////////////// Params for fused op signalers //////////////
@@ -361,7 +361,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     // Fuse the override runtime arguments callbacks
     auto override_runtime_arguments_callback = [use_datacopy, all_gather_override_runtime_arguments_callback, matmul_override_runtime_arguments_callback, datacopy_params] (
         const void* operation,
-        Program& program,
+        ProgramHandle program,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         const std::vector<Tensor>& output_tensors

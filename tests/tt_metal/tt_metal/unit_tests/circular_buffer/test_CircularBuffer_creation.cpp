@@ -8,6 +8,9 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/program/program_pool.hpp"
+
 
 using namespace tt::tt_metal;
 
@@ -52,7 +55,7 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
     CoreRange cr({0, 0}, {0, 1});
     CoreRangeSet cr_set({cr});
 
-    Program program;
+    auto program = tt::tt_metal::CreateProgram();
     initialize_program(program, cr_set);
 
     uint32_t l1_unreserved_base = devices_.at(0)->get_base_allocator_addr(HalMemType::L1);
@@ -75,10 +78,11 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
         .set_page_size(24, cb_config.page_size);
     auto cb = CreateCircularBuffer(program, cr_set, config);
 
-    program.finalize();
+    auto* program_ptr = tt::tt_metal::ProgramPool::instance().get_program(program);
+    program_ptr->finalize();
 
     for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(test_cb_config_written_to_core(program, this->devices_.at(id), cr_set, golden_cb_config));
+        EXPECT_TRUE(test_cb_config_written_to_core(*program_ptr, this->devices_.at(id), cr_set, golden_cb_config));
     }
 }
 
@@ -89,14 +93,14 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtInvalidIndex) {
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
-    Program program;
+    auto program = tt::tt_metal::CreateProgram();
     CBConfig cb_config;
 
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
 TEST_F(DeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
-    Program program;
+    auto program = tt::tt_metal::CreateProgram();
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {1, 1});

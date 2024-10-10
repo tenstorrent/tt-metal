@@ -32,7 +32,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    Program program{};
+    auto program = tt::tt_metal::CreateProgram();
 
     bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -162,7 +162,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const Program &program,
+                                              const ProgramHandle program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
         auto grad_dram_buffer = input_buffers.at(0);
@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
         }
     };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {program, override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::embedding_backward::detail

@@ -6,19 +6,19 @@
 
 #include <unordered_map>
 
-#include "tt_metal/impl/program/program.hpp"
+#include "tt_metal/impl/program/program_handle.hpp"
 #include "tt_metal/tt_stl/unique_any.hpp"
 
 namespace tt::tt_metal::program_cache::detail {
 
 template <typename shared_variables_t>
 struct CachedProgram {
-    tt::tt_metal::Program program;
+    tt::tt_metal::ProgramHandle program;
     // Cached program needs to share shared_variables between create and override_runtime_arguments functions
     shared_variables_t shared_variables;
 
-    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
-        program{std::move(program)}, shared_variables{std::forward<shared_variables_t>(shared_variables)} {}
+    CachedProgram(tt::tt_metal::ProgramHandle program, shared_variables_t&& shared_variables) :
+        program{program}, shared_variables{std::forward<shared_variables_t>(shared_variables)} {}
 };
 
 struct CachedProgramFactory {

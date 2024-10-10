@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
                                            compute_kernels_id = compute_kernels_id,
                                            single_core = single_core](
                                               const void* operation,
-                                              Program& program,
+                                              ProgramHandle program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>&) {

@@ -15,7 +15,7 @@ public:
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program, bool wait_for_dump = false) {
+    void RunProgram(Device* device, ProgramHandle program, bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         CommonFixture::RunProgram(device, program);
