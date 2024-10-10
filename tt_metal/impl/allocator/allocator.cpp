@@ -362,9 +362,21 @@ DeviceAddr base_alloc(
     return bank_manager.allocate_buffer(size, page_size, bottom_up, config.compute_grid_size, num_shards);
 }
 
-void disable_allocs(Allocator &allocator) { allocator.disabled_allocs = true; }
+void mark_allocations_unsafe(Allocator &allocator) { allocator.allocations_unsafe = true; }
 
-void enable_allocs(Allocator &allocator) { allocator.disabled_allocs = false; }
+void mark_allocations_safe(Allocator &allocator) { allocator.allocations_unsafe = false; }
+
+void verify_safe_allocation(Allocator& allocator) {
+    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
+    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
+    // have a lifetime that ends before the trace is executed.
+    // Print the warning once per device, to ensure that user output is not clobbered.
+    thread_local static bool warning_generated = false;
+    if (allocator.allocations_unsafe and not warning_generated) {
+        log_warning("Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed.");
+        warning_generated = true;
+    }
+}
 
 uint64_t allocate_buffer(
     Allocator &allocator,
@@ -374,7 +386,7 @@ uint64_t allocate_buffer(
     bool bottom_up,
     std::optional<uint32_t> num_shards) {
     uint64_t address = 0;
-    TT_FATAL(!allocator.disabled_allocs, "Allocation of new buffers has been disabled");
+    verify_safe_allocation(allocator);
     switch (buffer_type) {
         case BufferType::DRAM:
             return allocator.descriptor.dram.alloc(
