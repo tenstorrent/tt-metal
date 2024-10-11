@@ -14,11 +14,6 @@
 * This file contains addresses that are visible to both host and device compiled code.
 */
 
-// Reserved DRAM addresses
-// Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been committed
-constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
-constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
-
 // TODO: move these out of the memory map into profiler code
 constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
 constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT +  kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT + kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
