@@ -101,9 +101,9 @@ DeviceAddr base_alloc(const AllocatorConfig & config, BankManager &bank_manager,
 
 DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, DeviceAddr page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards = std::nullopt);
 
-void disable_allocs(Allocator &allocator);
+void mark_allocations_unsafe(Allocator &allocator);
 
-void enable_allocs(Allocator &allocator);
+void mark_allocations_safe(Allocator &allocator);
 
 void deallocate_buffer(Allocator &allocator, DeviceAddr address, const BufferType &buffer_type);
 void deallocate_buffers(Allocator &allocator);
@@ -114,8 +114,9 @@ void clear(Allocator &allocatator);
 
 struct Allocator {
     Allocator(const AllocatorConfig &alloc_config, const allocator::AllocDescriptor &alloc_descriptor);
-
-    bool disabled_allocs = false;
+    // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
+    // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
+    bool allocations_unsafe = false;
     allocator::BankManager dram_manager;
     allocator::BankManager l1_manager;
     allocator::BankManager l1_small_manager;
