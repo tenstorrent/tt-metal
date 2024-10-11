@@ -393,7 +393,7 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
-        self.model_config["WQKV_PREFILL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        self.model_config["WQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=4,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
@@ -402,18 +402,21 @@ class TtModelArgs:
             per_core_N=3,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
-            fuse_batch=False,
+            fuse_batch=seq_len <= 2048,  # False
         )
-        self.model_config["WO_PREFILL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+
+        self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # how much inner dim you take each time
             out_subblock_h=1,  # Must be divisible by per_core_M
             out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-            per_core_M=8,  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_M=max(
+                1, seq_len // (512 if seq_len > 2048 else 256)
+            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
             per_core_N=16,  # N / TILE_WIDTH / Grid_Size
             transpose_mcast=False,
             fused_activation=None,
-            fuse_batch=False,
+            fuse_batch=seq_len <= 2048,
         )
 
         # Chunk values based on what works best empirically

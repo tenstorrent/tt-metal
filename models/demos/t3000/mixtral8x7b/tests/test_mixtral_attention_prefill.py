@@ -83,7 +83,6 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
         tt_out = tt_model(
             attention_input,
             start_pos_ids,
-            attn_mask,
             rot_mats,
             transformation_mats,
             user_id=0,  # single-user prefill

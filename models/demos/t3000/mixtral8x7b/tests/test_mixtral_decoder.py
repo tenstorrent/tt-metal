@@ -60,6 +60,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         tt_model.mesh_device,
+        model_args.rot_mat_grid_range,
     )
 
     generation_length = 10

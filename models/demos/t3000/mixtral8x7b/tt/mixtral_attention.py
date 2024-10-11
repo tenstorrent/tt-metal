@@ -277,10 +277,9 @@ class TtMixtralAttention(LightweightModule):
         dense_outputs_11BH = ttnn.matmul(self.reduce_mask, dense_outputs_11BH)
         return dense_outputs_11BH
 
-    def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):
+    def forward_prefill(self, xs_11SH, rot_mats, transformation_mats, user_id: int = 0):
         """
         x: (1, 1, seq_len, hidden_dim)
-        attn_masks: (1, 1, seq_len, seq_len)
         rot_mats: rotation matrices for each device
         transformation_mats: transformation matrix (rotary embedding) for each device
         user_id: user id for the kv cache
@@ -301,7 +300,7 @@ class TtMixtralAttention(LightweightModule):
         xqkv_mem_config = ttnn.L1_MEMORY_CONFIG
         if seq_len > 8192:  # Too large to fit in L1. Reshape and parallelize in multiple cores
             xs_11SH = ttnn.reshape(xs_11SH, (1, seq_len // 2048, 2048, -1))
-            xqkv_program_config = self.model_config["WQKV_PREFILL_PROGCFG"]
+            xqkv_program_config = self.model_config["WQKV_PREFILL_PROGCFG"](seq_len)
             xqkv_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
         xqkv_fused = ttnn.linear(
@@ -385,7 +384,7 @@ class TtMixtralAttention(LightweightModule):
         attn_output_14SD.deallocate(True)
 
         if seq_len >= 1024:  # Specific program config to make better usage of cores and to avoid di/dt ND issues
-            wo_program_config = self.model_config["WO_PREFILL_PROGCFG"]
+            wo_program_config = self.model_config["WO_PREFILL_PROGCFG"](seq_len)
         else:
             wo_program_config = None  # For 128 seqlen case just use default program config
 
@@ -413,9 +412,8 @@ class TtMixtralAttention(LightweightModule):
         output_11BH_gathered.deallocate(True)
         return output_11BH_reduced
 
-    def forward(self, xs, start_pos_ids, attn_masks, rot_mats, transformation_mats=None, user_id=0, mode="decode"):
+    def forward(self, xs, start_pos_ids, rot_mats, transformation_mats=None, user_id=0, mode="decode"):
         if mode == "prefill":
-            return self.forward_prefill(xs, attn_masks, rot_mats, transformation_mats, user_id)
+            return self.forward_prefill(xs, rot_mats, transformation_mats, user_id)
         else:
-            assert attn_masks is None, "attn_masks should be None for decode mode"
             return self.forward_decode(xs, start_pos_ids, rot_mats)

@@ -92,7 +92,7 @@ class TtMixtralMLP(LightweightModule):
                 program_config=pc_3,
             )
 
-            x.deallocate(True)
+            # x.deallocate(True)
             w2_in = ttnn.multiply(w1_out, w3_out, output_tensor=w1_out)
 
             w3_out.deallocate(True)

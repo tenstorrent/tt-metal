@@ -42,6 +42,7 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         tt_model.mesh_device,
+        model_args.rot_mat_grid_range,
     )
 
     generation_start_pos = 0
@@ -57,11 +58,9 @@ def test_mixtral_attention_inference(t3k_mesh_device, use_program_cache, reset_s
             model_args.dim,
             tt_model.mesh_device,
         )
-
         tt_out = tt_model(
             attention_input,
             start_pos_ids,
-            None,
             current_rot_mat,
         )
 

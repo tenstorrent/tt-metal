@@ -91,7 +91,6 @@ def test_mixtral_decoder_inference(t3k_mesh_device, use_program_cache, reset_see
         tt_out_b1sh = tt_model(
             decode_input_b1sh,
             start_pos_ids,
-            attn_mask,
             rot_mats,
             transformation_mats,
             user_id=0,

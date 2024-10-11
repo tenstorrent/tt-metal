@@ -125,6 +125,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_e
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         tt_model.mesh_device,
+        model_args.rot_mat_grid_range,
     )
 
     generation_start_pos = 0

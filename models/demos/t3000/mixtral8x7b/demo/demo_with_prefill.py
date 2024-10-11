@@ -196,7 +196,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
             pt_prefill_input[batch_id][
                 :, decoding_pos[batch_id] :, :
             ] = 0  # Zero out the tokens after the prefill length
-        prefill_input, attn_mask, _ = prepare_inputs_ttnn_prefill(
+        prefill_input = prepare_inputs_ttnn_prefill(
             pt_prefill_input[batch_id],
             mesh_device,
             num_tokens=decoding_pos[batch_id],
@@ -204,7 +204,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         tt_out = tt_model(
             prefill_input,
             decoding_pos,
-            attn_mask,
             rot_mats_prefill,
             transformation_mats,
             user_id=batch_id,
@@ -217,7 +216,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
                 :, (decoding_pos[batch_id] - 1) % 32, :
             ].unsqueeze(1)
         )
-
         if batch_id == 0:  # First user prefill also accounts for compile time
             profiler.end(f"compile_prefill")
 
@@ -282,13 +280,13 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
                 .detach()
                 .float()
             )[:batch_size, ...]
-            # tt_token_batch = tt_output_torch.squeeze().argmax(axis=-1)
+
             # Argmax on host to get the new generated tokens
             tt_token_batch = sample(tt_output_torch, temperature=0, top_p=0.8)
             tt_token_batch = tt_token_batch[:, 0].unsqueeze(1)
             pt_decode_input = embd(tt_token_batch).view(batch_size, 1, -1)
+
         else:  # Embedding/argmax on device
-            # TODO Update argmax to ttnn when OP becomes available
             tt_out_B11B = ttnn.argmax(tt_out_11BH, dim=-1)
             tt_out_1B = ttnn.reshape(tt_out_B11B[:1, :, :, :], ttnn.Shape([1, batch_size]))  # [1, 32] Bfloat16
             decode_input_1B = tt_out_1B

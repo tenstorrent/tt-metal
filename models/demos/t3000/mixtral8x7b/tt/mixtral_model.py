@@ -74,7 +74,6 @@ class TtTransformer(LightweightModule):
         self,
         x,
         start_pos_ids,
-        attn_masks=None,
         rot_mats=None,
         transformation_mats=None,
         user_id=0,
@@ -94,9 +93,7 @@ class TtTransformer(LightweightModule):
                 else:
                     rot_mats = self.current_rot_mat
 
-            x = layer(x, start_pos_ids, attn_masks, rot_mats, transformation_mats, user_id, mode)
-        if attn_masks is not None:
-            attn_masks.deallocate(True)
+            x = layer(x, start_pos_ids, rot_mats, transformation_mats, user_id, mode)
 
         if mode == "prefill" and get_last_token == -1:
             return x

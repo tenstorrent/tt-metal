@@ -115,7 +115,6 @@ def preprocess_inputs_prefill(
         prompt_lens = [len(x) for x in encoded_prompts]
         min_prompt_len = min(prompt_lens)
         max_prompt_len = max(prompt_lens)
-
     assert (
         max_prompt_len <= model_args.max_seq_len
     ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
@@ -271,7 +270,7 @@ def get_single_rot_mat_torch(dhead, start_pos=0, theta: float = 1000000.0):
     return current_rot_mat.unsqueeze(0).unsqueeze(0).transpose(-1, -2), rot_matrix.unsqueeze(0).unsqueeze(0)
 
 
-def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 1000000.0):
+def get_single_rot_mat(dhead, mesh_device, rot_mat_grid_range, start_pos=0, theta: float = 1000000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
     rot_matrix = torch.zeros(dhead, dhead)
@@ -290,18 +289,36 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 1000000.0
     current_rot_mat[torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
     current_rot_mat[torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
+    # Create height sharded spec for the rot_matrix with shape [128,128]
+    shard_spec = rot_mat_grid_range
+    rot_mat_memconfig = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_spec,
+            [
+                128,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
     return ttnn.from_torch(
         current_rot_mat.unsqueeze(0).unsqueeze(0).transpose(-1, -2),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     )
 
 
@@ -417,32 +434,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device, num_tokens=None):
     S: sequence len (1)
     H: dim (4096)
     """
-    batch = x_bsh.size(0)
-    seq_len = x_bsh.size(1)
-
     x_1BSH = x_bsh.unsqueeze(0)
-
-    # Attention mask
-    attn_mask = torch.full((seq_len, seq_len), torch.finfo(torch.float32).min)
-    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    if num_tokens is not None:  # Mask any additional tokens that were prefilled
-        attn_mask_torch[num_tokens:, num_tokens:] = torch.finfo(torch.float32).min
-    attn_mask = attn_mask_torch.view(1, 1, seq_len, seq_len)
-
-    if seq_len == 128:
-        attn_mask_dtype = ttnn.bfloat16
-    else:
-        attn_mask_dtype = ttnn.bfloat8_b
-    attn_mask = ttnn.from_torch(
-        attn_mask,
-        device=mesh_device,
-        dtype=attn_mask_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(mesh_device),
-    )
-
-    # input goes to L1
     xs_1BSH = ttnn.from_torch(
         x_1BSH,
         device=mesh_device,
@@ -451,7 +443,7 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device, num_tokens=None):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
-    return xs_1BSH, attn_mask, attn_mask_torch
+    return xs_1BSH
 
 
 # Updates some model arg parameters above their default values
