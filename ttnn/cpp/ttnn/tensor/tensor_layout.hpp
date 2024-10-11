@@ -47,9 +47,10 @@ class Alignment : public ttnn::SimpleShape {
 public:
     using ttnn::SimpleShape::SimpleShape;
     size_t size() const { return rank(); }
+
 };
 
-inline std::ostream &operator<<(std::ostream &os, const Alignment &value) {
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value) {
     os << "Alignment([";
     for (size_t i = 0; i < value.size(); ++i) {
         if (i > 0) {

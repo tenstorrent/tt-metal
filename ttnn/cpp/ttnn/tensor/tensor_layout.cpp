@@ -106,7 +106,7 @@ namespace {
 //      which in theory takes physical space (1 * 1 * 16, 16)
 //      will take (1 * 1 * 32, 32)
 //
-// 3. Given LegacyPaddedShape (2, 3, 32, 32), alignment is (2, 3*32, 32, 32).
+// 3. Given LegacyPaddedShape (2, 3, 32, 32), alignment is (2*3*32, 3*32, 32, 32).
 //    Shape (2, 2, 16, 16)
 //      which in theory takes physical space (2 * 2 * 16, 16)
 //      will take (2 * 3 * 32, 32)
@@ -116,13 +116,13 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShap
     const auto rank = legacyPaddedShape.rank();
     values.resize(rank);
 
-    if(rank > 1) {
+    if(rank >= 1) {
         values[rank - 1] = legacyPaddedShape[rank - 1];
     }
-    if(rank > 2) {
+    if(rank >= 2) {
         values[rank - 2] = legacyPaddedShape[rank - 2];
     }
-    for (size_t i = rank - 3; i >= 0; i--) {
+    for (int i = rank - 3; i >= 0; i--) {
         values[i] = legacyPaddedShape[i] * values[i + 1];
     }
 
@@ -147,7 +147,8 @@ void TensorLayout::initializeAlignment() {
 
     switch(mLayout) {
         case Layout::ROW_MAJOR: {
-            mAlignment = Alignment({sizeof(uint32_t) % element_size_bytes()});
+            TT_FATAL(mDataType != DataType::BFLOAT4_B && mDataType != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
+            mAlignment = Alignment({sizeof(uint32_t) / element_size_bytes()});
             break;
         }
         case Layout::TILE: {
@@ -167,10 +168,10 @@ void TensorLayout::validateCustomAlignment() const
     switch(mLayout) {
         case Layout::ROW_MAJOR: {
             if(mAlignment.size() > 0) {
-                auto widthAlignment = mAlignment[-1];
-                auto element_size = element_size_bytes();
-                auto page_alignment = sizeof(uint32_t) % element_size;
-                TT_FATAL(widthAlignment % page_alignment == 0,
+                uint32_t widthAlignment = mAlignment[-1];
+                uint32_t element_size = element_size_bytes();
+                uint32_t page_alignment = sizeof(uint32_t) / element_size;
+                TT_FATAL((widthAlignment % page_alignment) == 0,
                 "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packes as uint32_t (4 bytes).",
                     mAlignment,
                     element_size,
@@ -179,16 +180,16 @@ void TensorLayout::validateCustomAlignment() const
             break;
         }
         case Layout::TILE: {
-            if(mAlignment.size() > 1) {
-                auto widthAlignment = mAlignment[-1];
-                TT_FATAL(widthAlignment % mTileSize.width() == 0,
-                "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", mAlignment, mTileSize.width());
-            }
-            if(mAlignment.size() > 2) {
-                auto heightAlignment = mAlignment[-2];
-                TT_FATAL(heightAlignment % mTileSize.height() == 0,
-                "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", mAlignment, mTileSize.height());
-            }
+            TT_FATAL(mAlignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
+
+            auto widthAlignment = mAlignment[-1];
+            TT_FATAL(widthAlignment % mTileSize.width() == 0,
+            "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", mAlignment, mTileSize.width());
+
+            auto heightAlignment = mAlignment[-2];
+            TT_FATAL((heightAlignment % mTileSize.height()) == 0,
+            "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", mAlignment, mTileSize.height());
+
             break;
         }
         case Layout::INVALID:
@@ -196,16 +197,21 @@ void TensorLayout::validateCustomAlignment() const
     }
 }
 
+// Assume shape rank 4
+// Assume mAlignment rank 2
+// align mAlignment to the right of shape
 Size TensorLayout::get_physical_size(const ttnn::SimpleShape& shape) const {
     TT_FATAL(shape.rank() > 2, "Shape should have at least 2 dimensions");
+    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
 
-    auto padded_shape = get_padded_shape(shape);
-
-    size_t width = padded_shape[-1];
-    size_t height = padded_shape[-2];
-    for (size_t i = 0; i < padded_shape.rank() - 2; i++) {
-        height *= padded_shape[i];
-        height = round_up(height, mAlignment[i]);
+    const int rank = static_cast<int>(shape.rank());
+    const size_t width = round_up(shape[-1], mAlignment[-1]);
+    size_t height = 1;
+    for (int i = -2; i >= -rank; --i) {
+        height *= shape[i];
+        if (mAlignment.size() >= static_cast<size_t>(-i)) {
+            height = round_up(height, mAlignment[i]);
+        }
     }
 
     Size size{height, width};
@@ -334,7 +340,7 @@ Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
     std::vector<uint32_t> strides;
     strides.resize(shape.rank());
 
-    for (size_t i = shape.rank() - 1; i >= 0; i--) {
+    for (int i = shape.rank() - 1; i >= 0; i--) {
         if (i == shape.rank() - 1) {
             strides[i] = 1;
         } else {

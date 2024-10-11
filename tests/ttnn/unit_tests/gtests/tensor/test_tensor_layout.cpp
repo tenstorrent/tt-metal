@@ -53,7 +53,7 @@ INSTANTIATE_TEST_SUITE_P(
             },
             Expected{
                 .physical_size = {32, 32},
-                .strides = ttnn::SimpleShape({1, 1, 32, 32})
+                .strides = ttnn::SimpleShape({1, 1, 1, 1})
             }
         },
 
@@ -64,8 +64,20 @@ INSTANTIATE_TEST_SUITE_P(
                 .layout = Layout::ROW_MAJOR
             },
             Expected{
-                .physical_size = {1, 1},
+                .physical_size = {1, 2},
                 .strides = ttnn::SimpleShape({1, 1, 1, 2})
+            }
+        },
+
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{1, 1, 1, 1},
+                .data_type = DataType::UINT32,
+                .layout = Layout::ROW_MAJOR
+            },
+            Expected{
+                .physical_size = {1, 1},
+                .strides = ttnn::SimpleShape({1, 1, 1, 1})
             }
         }
     )
