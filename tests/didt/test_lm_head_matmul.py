@@ -63,7 +63,6 @@ class LMHeadTest(MatmulTestBase):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
-@skip_for_blackhole("Not functional on Blackhole")
 def test_lm_head_matmul(
     mesh_device, iterations, determinism_check_iterations, use_program_cache, simulate_bh_harvesting
 ):
@@ -75,13 +74,23 @@ def test_lm_head_matmul(
     # Initialize matmul configurations
     compute_grid = get_blackhole_grid_size(simulate_bh_harvesting) if is_blackhole() else ttnn.CoreCoord(8, 8)
 
+    seq_len = 32
+    per_core_M = seq_len // 32
+    per_core_N = 32
+    weights_n = (per_core_N * (compute_grid.x * compute_grid.y) * 32) - 512
+
+    out_subblock_h = 1
+    out_subblock_w = 8
+    assert per_core_M % out_subblock_h == 0
+    assert per_core_N % out_subblock_w == 0
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
         in0_block_w=2,
-        per_core_M=1,
-        per_core_N=32,
-        out_subblock_h=1,
-        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -96,9 +105,9 @@ def test_lm_head_matmul(
 
     lm_head_test = LMHeadTest(
         mesh_device,
-        seq_len=32,
+        seq_len=seq_len,
         inner_dim=4544,
-        weights_n=65024,
+        weights_n=weights_n,
         in0_mem_config=in0_mem_config,
         in1_mem_config=in1_mem_config,
         out_mem_config=out_mem_config,
