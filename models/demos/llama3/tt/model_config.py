@@ -13,6 +13,8 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Trans
 from models.demos.llama3.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix
 from typing import Tuple
 from models.utility_functions import nearest_32
+from pathlib import Path
+from tqdm import tqdm
 
 
 def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
@@ -136,9 +138,9 @@ class TtModelArgs:
                 self.DEFAULT_CACHE_PATH
             ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please use export LLAMA_CACHE_PATH=..."
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-            assert os.path.isfile(
-                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
+        #            assert os.path.isfile(
+        #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
@@ -604,7 +606,8 @@ class TtModelArgs:
             state_dict = reference_model.state_dict()
             state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
         else:
-            state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
+            state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
+            # state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
@@ -666,3 +669,70 @@ class TtModelArgs:
             per_core_N=math.ceil(n / (32 * grid_size[0] * grid_size[1])),
             fused_activation=None,
         )
+
+
+def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
+    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
+    is_chunked = "layers_" in str(checkpoints[0])
+    if is_chunked:
+        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
+    else:
+        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
+
+    return checkpoint
+
+
+def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
+    checkpoint = {}
+
+    print(f"Loading {len(checkpoints)} checkpoint files")
+    for ckpt in tqdm(checkpoints):
+        if n_layers:
+            # Layer range is in the file name, like layers_start-end.pth
+            layer_range = ckpt.stem.split("_")[1]
+            start_layer, end_layer = map(int, layer_range.split("-"))
+            if start_layer > n_layers + start_layer_idx:
+                continue
+            if end_layer < start_layer_idx:
+                continue
+
+        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        checkpoint.update(loaded_ckpt)
+    return checkpoint
+
+
+def load_sharded_checkpoints(checkpoints, n_layers):
+    checkpoint = {}
+    print(f"Loading {len(checkpoints)} checkpoint files")
+    for ckpt in tqdm(checkpoints):
+        loaded_ckpt = torch.load(ckpt, map_location="cpu")
+        for (
+            key,
+            value,
+        ) in loaded_ckpt.items():
+            if "layers." in key:
+                layer_num = int(key.split("layers.")[1].split(".")[0])
+                if n_layers and layer_num >= n_layers:
+                    continue
+            if key in checkpoint:
+                checkpoint[key] += [value]
+            else:
+                checkpoint[key] = [value]
+        del loaded_ckpt
+
+    # concat checkpoint values
+    for key, value in checkpoint.items():
+        if len(value) == 1 or "norm" in key:
+            checkpoint[key] = value[0]
+        else:
+            if key == "tok_embeddings.weight" or key == "output.weight":
+                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
+                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
+                checkpoint[key] = torch.cat(value, dim=0)
+            else:
+                # cat_dim is index of the smallest dimension in value[0].shape
+                cat_dim = torch.argmin(torch.tensor(value[0].shape))
+                checkpoint[key] = torch.cat(value, dim=cat_dim)
+
+    return checkpoint
