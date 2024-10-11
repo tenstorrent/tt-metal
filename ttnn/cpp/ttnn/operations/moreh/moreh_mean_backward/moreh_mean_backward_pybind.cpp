@@ -12,7 +12,7 @@ void bind_moreh_mean_backward_operation(py::module &module) {
     bind_registered_operation(
         module,
         ttnn::moreh_mean_backward,
-        "Moreh moreh_mean_backward Operation",
+        "Moreh Mean Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::kw_only(),

@@ -4,7 +4,7 @@
 
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 #include "tt_metal/host_api.hpp"

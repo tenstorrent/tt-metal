@@ -75,4 +75,4 @@ namespace ttnn::prim {
 constexpr auto moreh_layer_norm_backward_gamma_beta_grad = ttnn::register_operation<
     "ttnn::prim::moreh_layer_norm_backward_gamma_beta_grad",
     operations::moreh::moreh_layer_norm_backward_gamma_beta_grad::MorehLayerNormBackwardGammaBetaGradOperation>();
-}
+}  // namespace ttnn::prim

@@ -5,7 +5,7 @@
 #include "layernorm_pre_all_gather_op.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

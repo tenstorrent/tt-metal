@@ -5,7 +5,7 @@
 #include "moreh_sum_backward.hpp"
 
 #include "device/moreh_sum_backward_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 Tensor MorehSumBackward::invoke(

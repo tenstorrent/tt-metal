@@ -4,7 +4,7 @@
 
 #include "moreh_group_norm_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
     uint32_t block_size{1};

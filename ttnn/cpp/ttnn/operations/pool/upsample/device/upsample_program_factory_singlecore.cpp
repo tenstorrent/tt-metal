@@ -5,7 +5,7 @@
 #include <math.h>
 
 #include "upsample_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"

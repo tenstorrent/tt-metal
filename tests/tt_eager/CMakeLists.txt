@@ -12,9 +12,6 @@ set(TT_EAGER_TESTS_OPS
     ops/test_eltwise_unary_op.cpp
     ops/test_softmax_op.cpp
     ops/test_layernorm_op.cpp
-    # ops/test_moreh_adam_op.cpp              # <- not called in run_tt_eager.py
-    # ops/test_moreh_matmul_op.cpp            # <- not called in run_tt_eager.py
-    # ops/test_moreh_layernorm_op.cpp         # <- not called in run_tt_eager.py
     ops/test_transpose_op.cpp
     ops/test_transpose_wh_single_core.cpp
     ops/test_transpose_wh_multi_core.cpp

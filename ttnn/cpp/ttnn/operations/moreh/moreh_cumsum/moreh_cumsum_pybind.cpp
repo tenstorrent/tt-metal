@@ -15,7 +15,7 @@ void bind_moreh_cumsum_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_cumsum,
-        "ttnn::moreh_cumsum",
+        "Moreh Cumsum Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::arg("dim"),
@@ -30,7 +30,7 @@ void bind_moreh_cumsum_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_cumsum_backward,
-        "ttnn::moreh_cumsum_backward",
+        "Moreh Cumsum Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::arg("dim"),
