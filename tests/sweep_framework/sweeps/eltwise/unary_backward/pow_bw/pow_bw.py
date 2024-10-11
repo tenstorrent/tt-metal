@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes, tensor_to_dtype
+from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -26,9 +26,22 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 8)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 8)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 8),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "allow_exponent_zero": [False],
+        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "allow_exponent_zero": [True],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -46,7 +59,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["grad_dtype"] == ttnn.bfloat8_b
+        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
     ):
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
@@ -58,6 +71,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    allow_exponent_zero,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -78,7 +92,11 @@ def run(
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
 
-    exponent = torch.tensor(1, dtype=torch.bfloat16).uniform_(0, 100).item()
+    if allow_exponent_zero:
+        low = 0
+    else:
+        low = 1
+    exponent = torch.tensor(1, dtype=torch.int).random_(low, 10).item()
 
     golden_function = ttnn.get_golden_function(ttnn.pow_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, exponent)[0]
@@ -104,4 +122,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf, info_string]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
