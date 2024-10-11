@@ -302,7 +302,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
-    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
     //on a Galaxy cluster.
@@ -329,7 +329,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         Synchronize(dev); // Synchronize device
     }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    std::map<chip_id_t, Device *> mmio_devices = {};
+    std::map<chip_id_t, v1::DeviceHandle> mmio_devices = {};
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
 
     if (is_galaxy) {
@@ -346,7 +346,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
     } else {
         for (const auto &[device_id, dev] : devices) {
             if(dev->is_mmio_capable()) {
-                mmio_devices.insert({device_id, dev});
+                mmio_devices.insert({device_id, tt::DevicePool::instance().get_handle(dev)});
             }
         }
         for (const auto &[device_id, dev] : mmio_devices) {
@@ -366,7 +366,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     devices[t[ts]]->close();
                     // When a device is closed, its worker thread is joined. Stop tracking this
                     // worker thread.
-                    tt::DevicePool::instance().unregister_worker_thread_for_device(devices[t[ts]]);
+                    tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(devices[t[ts]]));
                 }
             }
         }
