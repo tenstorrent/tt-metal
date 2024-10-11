@@ -162,11 +162,10 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
     auto print_float = [&ss](uint32_t uvalue) {
         float value;
         memcpy(&value, &uvalue, sizeof(float));
-        ss << std::setprecision(4) << std::setw(8) << value << " ";
+        ss << std::setw(8) << value << " ";
     };
 
     auto print_new_line = [&ss, data_format](uint32_t i) {
-        const std::string_view front_space = "        ";
         if (i > 0) {
             ss << std::endl;
         }
@@ -174,11 +173,9 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
 
         if (i % num_uint32_per_tile == 0) {
             ss << "Tile ID = " << i / num_uint32_per_tile << std::endl;
-            ss << std::fixed << std::setprecision(4) << std::setw(8);
         }
-        ss << front_space;
     };
-
+    ss << std::fixed << std::setprecision(4);
     for (uint32_t i = 0; i < data.size(); ++i) {
         if (data_format == tt::DataFormat::Float32) {
             if (i % 16 == 0) {

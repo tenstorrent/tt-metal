@@ -21,7 +21,7 @@ void MAIN {
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_remap_addrs_RMW>(remap);
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_swizzle_32b_RMW>(swizzle);
 #endif
-    acquire_dst(tt::DstMode::Half);
+    acquire_dst();
     cb_wait_front(tt::CB::c_in0, per_core_tile_cnt);
     cb_reserve_back(tt::CB::c_out0, per_core_tile_cnt);
 
@@ -36,6 +36,6 @@ void MAIN {
         cb_push_back(tt::CB::c_out0, 1);
     }
 
-    release_dst(tt::DstMode::Half);
+    release_dst();
 }
 }  // namespace NAMESPACE

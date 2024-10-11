@@ -26,17 +26,16 @@ class float32 {
     float32(float float_num) {
         static_assert(sizeof float_num == sizeof uint32_data, "Can only support 32bit fp");
         // just move upper 16 to lower 16 (truncate)
-        uint32_data = (*reinterpret_cast<uint32_t*>(&float_num) >> 16);
+        uint32_data = (*reinterpret_cast<uint32_t*>(&float_num));
     }
 
     // store lower 16 as 16-bit uint
     float32(uint32_t new_uint32_data) { uint32_data = new_uint32_data; }
 
     float to_float() const {
-        // move lower 16 to upper 16 (of 32)
-        uint32_t uint32_data_tmp = (uint32_t)uint32_data << 16;
-        // return 32 bits as float
-        return *reinterpret_cast<float*>(&uint32_data_tmp);
+        float v;
+        memcpy(&v, &uint32_data, sizeof(float));
+        return v;
     }
     uint32_t to_packed() const { return uint32_data; }
     bool operator==(float32 rhs) { return uint32_data == rhs.uint32_data; }
