@@ -6,7 +6,7 @@
 #include <cstring>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
     #include "debug/dprint.h"
@@ -93,20 +93,42 @@ void kernel_main() {
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
+
+    uint32_t print_id = 0;
+
+    if (reader_id == print_id) {
+        DPRINT << "reader_id: " << reader_id << " reader_nindices: " << reader_nindices << ENDL();
+        DPRINT << "window_h: " << window_h << " window_w: " << window_w << ENDL();
+        DPRINT << "in_nbytes_c: " << in_nbytes_c << " in_nbytes_c_log2: " << in_nbytes_c_log2 << ENDL();
+
+        print_pages(in_l1_read_base_addr, 8, 36);
+
+        DPRINT << ENDL();
+    }
     while (counter < reader_nindices) {
         cb_reserve_back(in_cb_id, npages_to_reserve);
         uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
         uint32_t out_l1_write_addr = out_l1_write_addr_base;
         uint16_t top_left_local_index = reader_indices_ptr[counter ++];
+        if (reader_id == print_id) {
+            DPRINT << "top_left_local_index: " << top_left_local_index << ENDL();
+        }
         uint32_t h_multiples = 0;
         for (uint32_t h = 0; h < window_h; ++ h, h_multiples += in_w_padded) {
             uint32_t stick_offset = top_left_local_index + h_multiples;
             uint32_t read_offset = in_l1_read_base_addr + (stick_offset << in_nbytes_c_log2);
             noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
             out_l1_write_addr += in_nbytes_c * window_w;
+            if (reader_id == print_id) {
+                DPRINT << "h: " << h << " stick_offset: " << stick_offset << ENDL();
+            }
         }
         if (split_reader) counter++; // interleave the indices
         noc_async_read_barrier();
+        if (reader_id == print_id) {
+            print_pages(out_l1_write_addr_base, 8, 4);
+            DPRINT << ENDL();
+        }
         cb_push_back(in_cb_id, npages_to_reserve);
     }
 } // kernel_main()

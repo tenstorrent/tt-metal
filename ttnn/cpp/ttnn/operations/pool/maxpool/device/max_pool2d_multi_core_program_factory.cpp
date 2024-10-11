@@ -105,6 +105,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
+    printf("input shard_shape: %d, %d\n", input.shard_spec()->shape[0], input.shard_spec()->shape[1]);
+    printf("output shard_shape: %d, %d\n", output.shard_spec()->shape[0], output.shard_spec()->shape[1]);
 
     uint32_t ncores_w = grid_size.x;
 
@@ -134,6 +136,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     // this input shard has halo and padding inserted.
     auto raw_in_cb_id = tt::CB::c_in2;
     uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
+    printf("raw_in_cb_npages: %d\n", raw_in_cb_npages);
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
     CircularBufferConfig raw_in_cb_config =
         CircularBufferConfig(raw_in_cb_npages * raw_in_cb_pagesize, {{raw_in_cb_id, in_df}})
@@ -147,6 +150,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
+    printf("indices_nbytes: %d\n", indices_nbytes);
+    printf("out_nhw_per_core: %d\n", out_nhw_per_core);
+    printf("in_reader_indices_cb_pagesize: %d\n", in_reader_indices_cb_pagesize);
     log_debug(
         tt::LogOp,
         "CB {} :: PS = {}, NP = {}",

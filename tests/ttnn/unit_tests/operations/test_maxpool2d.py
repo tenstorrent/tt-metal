@@ -60,7 +60,7 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = torch.ones(act_shape, dtype=torch.bfloat16)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # act = torch.ones(act_shape, dtype=torch.bfloat16)
     # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
@@ -205,7 +205,7 @@ def run_max_pool(
             # ## wide for vgg
             # [1, 256, 56, 56],
             # [1, 512, 28, 28],
-            [1, 512, 4, 4],
+            [1, 512, 6, 6],
         )
     ),
 )
