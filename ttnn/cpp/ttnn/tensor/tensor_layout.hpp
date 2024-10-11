@@ -73,7 +73,7 @@ std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value)
 //     PHY = [H:768, W:32]
 //
 // LegacyPaddedShape is a padding shape for each dimension of the tensor.
-// All tensor calculations (like physical_size or strides) ar edone using Alignment, so internally we always convert LegacyPaddedShape to Alignment.
+// All tensor calculations (like physical_size or strides) are done using Alignment, so internally we always convert LegacyPaddedShape to Alignment.
 // Example:
 //   Given tensor with shape (2, 3, 10, 16) and LegacyPaddedShape (2, 4, 32, 32).
 //   PHY_LEGACY = [2*4*32, 32] = [256, 32]
