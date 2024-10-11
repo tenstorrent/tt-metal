@@ -76,7 +76,7 @@ std::vector<int> get_hamiltonian_cycle(vector<vector<int>>& adj, int N, int s = 
     return {};
 }
 
-std::vector<Device*> get_device_ring(std::vector<tt::tt_metal::Device*> devices) {
+std::vector<v1::DeviceKey> get_device_ring(std::vector<tt::tt_metal::v1::DeviceKey> devices) {
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
@@ -90,7 +90,7 @@ std::vector<Device*> get_device_ring(std::vector<tt::tt_metal::Device*> devices)
     }
 
     const auto& device_ring_idx = get_hamiltonian_cycle(adj, devices.size(), 0);
-    std::vector<Device*> device_ring;
+    std::vector<v1::DeviceKey> device_ring;
     device_ring.reserve(device_ring_idx.size());
     for (const auto& device_idx : device_ring_idx) {
         device_ring.push_back(devices[device_idx]);
@@ -99,7 +99,7 @@ std::vector<Device*> get_device_ring(std::vector<tt::tt_metal::Device*> devices)
 }
 
 std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
-    std::vector<tt::tt_metal::Device*> device_ring) {
+    std::vector<tt::tt_metal::v1::DeviceKey> device_ring) {
     std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> sender_receivers;
     sender_receivers.reserve(device_ring.size() - 1);
 
@@ -169,7 +169,7 @@ namespace unit_tests::erisc::kernels {
  *                                         ╚══════╝░░░╚═╝░░░╚═╝░░╚═╝
  */
 bool eth_direct_ring_gather_sender_receiver_kernels(
-    std::vector<tt::tt_metal::Device*> device_ring,
+    std::vector<tt::tt_metal::v1::DeviceKey> device_ring,
     const size_t& byte_size_per_device,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
@@ -313,7 +313,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 }
 
 bool eth_interleaved_ring_gather_sender_receiver_kernels(
-    std::vector<tt::tt_metal::Device*> device_ring,
+    std::vector<tt::tt_metal::v1::DeviceKey> device_ring,
     const BankedConfig& cfg,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,

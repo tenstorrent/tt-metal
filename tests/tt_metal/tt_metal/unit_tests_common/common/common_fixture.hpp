@@ -48,7 +48,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    vector<tt::tt_metal::Device*> devices_;
+    vector<tt::tt_metal::v1::DeviceKey> devices_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 

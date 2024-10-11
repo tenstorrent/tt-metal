@@ -47,7 +47,7 @@ class DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceKey> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
@@ -116,7 +116,7 @@ class GalaxyFixture : public ::testing::Test {
         this->devices_.clear();
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceKey> devices_;
 
    private:
     std::map<chip_id_t, Device*> device_ids_to_devices_;
