@@ -13,6 +13,8 @@
 
 #include "ttnn_test_fixtures.hpp"
 
+namespace {
+
 void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -53,6 +55,7 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
 struct CreateTensorParams {
     ttnn::SimpleShape shape;
 };
+}
 
 class CreateTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CreateTensorParams> {};
 

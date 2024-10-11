@@ -9,7 +9,6 @@
 
 namespace {
 const tt::tt_metal::MemoryConfig DefaultMemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
-}
 
 struct Inputs {
     ttnn::SimpleShape shape;
@@ -26,6 +25,7 @@ struct TensorLayoutTestParams {
     Inputs inputs;
     Expected expected;
 };
+}
 
 class TensorLayoutTests : public ::testing::TestWithParam<TensorLayoutTestParams> {};
 

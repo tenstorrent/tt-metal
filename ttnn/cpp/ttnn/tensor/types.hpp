@@ -34,7 +34,12 @@ Plan:
 **/
 class SimpleShape {
 public:
-    template <typename T>
+    SimpleShape() = default;
+    SimpleShape(const ttnn::SimpleShape& shape) = default;
+    SimpleShape(ttnn::SimpleShape&& shape) = default;
+    SimpleShape& operator=(const ttnn::SimpleShape& shape) = default;
+    SimpleShape& operator=(ttnn::SimpleShape&& shape) = default;
+
     explicit SimpleShape(const std::vector<uint32_t>& shape) : value(shape) {}
     explicit SimpleShape(std::vector<uint32_t>&& shape) : value(std::move(shape)) {}
     explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}

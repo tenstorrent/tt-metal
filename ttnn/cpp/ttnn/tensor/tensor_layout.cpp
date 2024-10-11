@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor_layout.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "types.hpp"
 
 namespace tt::tt_metal {
@@ -60,18 +61,22 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)
     return os;
 }
 
-TensorLayout::TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig)
+TensorLayout::TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig, const Alignment& alignment)
     : mDataType(dataType),
       mTileSize(tileSize),
-      mMemoryConfig(memoryConfig) {
+      mMemoryConfig(memoryConfig),
+      mAlignment(alignment) {
 
     mLayout = mTileSize.height() == 1 ? Layout::ROW_MAJOR : Layout::TILE;
+    initializeAlignment();
+    validateCustomAlignment();
 }
 
-TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig)
+TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const Alignment& alignment)
     : mLayout(layout),
       mDataType(dataType),
-      mMemoryConfig(memoryConfig) {
+      mMemoryConfig(memoryConfig),
+      mAlignment(alignment) {
 
     if (mLayout == Layout::TILE) {
         mTileSize = Size(32, 32);
@@ -79,21 +84,128 @@ TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig&
     else {
         mTileSize = Size(1, 1); // width 1 makes no sense? need juggestions
     }
+
+    initializeAlignment();
+    validateCustomAlignment();
+}
+
+namespace {
+
+// This function is used to convert the legacy padded shape to Alignment
+// This is a temporary solution until we get rid of the LegacyPaddedShape
+// Keep in mind:
+//    The benefit of Alignment compared to LegacyPaddedShape is that it allows
+//    to pad between Channels and Batches with a row granularity.
+// Examples:
+// 1. Given LegacyPaddedShape (1, 1, 16, 20), alignment is (1, 1, 16, 20)
+//    means Shape (1, 1, 16, 16) which in theory takes physical space (1 * 1 * 16, 16)
+//    will take (1 * 1 * 16, 20)
+//
+// 2. Given LegacyPaddedShape (1, 1, 32, 32), alignment is (1, 1, 32, 32)
+//    Shape (1, 1, 16, 16)
+//      which in theory takes physical space (1 * 1 * 16, 16)
+//      will take (1 * 1 * 32, 32)
+//
+// 3. Given LegacyPaddedShape (2, 3, 32, 32), alignment is (2, 3*32, 32, 32).
+//    Shape (2, 2, 16, 16)
+//      which in theory takes physical space (2 * 2 * 16, 16)
+//      will take (2 * 3 * 32, 32)
+
+Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShape) {
+    std::vector<uint32_t> values;
+    const auto rank = legacyPaddedShape.rank();
+    values.resize(rank);
+
+    if(rank > 1) {
+        values[rank - 1] = legacyPaddedShape[rank - 1];
+    }
+    if(rank > 2) {
+        values[rank - 2] = legacyPaddedShape[rank - 2];
+    }
+    for (size_t i = rank - 3; i >= 0; i--) {
+        values[i] = legacyPaddedShape[i] * values[i + 1];
+    }
+
+    Alignment result(values);
+    return result;
+}
+}
+
+// Private constructor to create TensorLayout from LegacyPaddedShape
+TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
+    : TensorLayout(dataType, layout, memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
+    mLegacyPaddedShape = legacyPaddedShape;
+}
+
+TensorLayout TensorLayout::fromLegacyPaddeShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
+    return TensorLayout(dataType, layout, memoryConfig, legacyPaddedShape);
+}
+
+void TensorLayout::initializeAlignment() {
+    if(mAlignment.size() != 0)
+        return;
+
+    switch(mLayout) {
+        case Layout::ROW_MAJOR: {
+            mAlignment = Alignment({sizeof(uint32_t) % element_size_bytes()});
+            break;
+        }
+        case Layout::TILE: {
+            mAlignment = Alignment({mTileSize.height(), mTileSize.width()});
+            break;
+        }
+        case Layout::INVALID:
+            TT_THROW("Invalid Layout");
+    }
+}
+
+void TensorLayout::validateCustomAlignment() const
+{
+    if(mAlignment.size() == 0)
+        return;
+
+    switch(mLayout) {
+        case Layout::ROW_MAJOR: {
+            if(mAlignment.size() > 0) {
+                auto widthAlignment = mAlignment[-1];
+                auto element_size = element_size_bytes();
+                auto page_alignment = sizeof(uint32_t) % element_size;
+                TT_FATAL(widthAlignment % page_alignment == 0,
+                "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packes as uint32_t (4 bytes).",
+                    mAlignment,
+                    element_size,
+                    page_alignment);
+            }
+            break;
+        }
+        case Layout::TILE: {
+            if(mAlignment.size() > 1) {
+                auto widthAlignment = mAlignment[-1];
+                TT_FATAL(widthAlignment % mTileSize.width() == 0,
+                "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", mAlignment, mTileSize.width());
+            }
+            if(mAlignment.size() > 2) {
+                auto heightAlignment = mAlignment[-2];
+                TT_FATAL(heightAlignment % mTileSize.height() == 0,
+                "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", mAlignment, mTileSize.height());
+            }
+            break;
+        }
+        case Layout::INVALID:
+            TT_THROW("Invalid Layout");
+    }
 }
 
 Size TensorLayout::get_physical_size(const ttnn::SimpleShape& shape) const {
     TT_FATAL(shape.rank() > 2, "Shape should have at least 2 dimensions");
 
-    size_t width = shape[-1];
-    size_t height = shape[-2];
+    auto padded_shape = get_padded_shape(shape);
 
-    if (mLayout == Layout::TILE) {
-        width = round_up(width, mTileSize.width());
-        height = round_up(height, mTileSize.height());
-    }
-
-    for (size_t i = 0; i < shape.rank() - 2; i++) {
-        height *= shape[i];
+    size_t width = padded_shape[-1];
+    size_t height = padded_shape[-2];
+    for (size_t i = 0; i < padded_shape.rank() - 2; i++) {
+        height *= padded_shape[i];
+        height = round_up(height, mAlignment[i]);
     }
 
     Size size{height, width};
@@ -141,9 +253,16 @@ uint32_t TensorLayout::get_page_elements_count(const ttnn::SimpleShape& shape) c
         return physical_size.height() * physical_size.width();
     }
 
-    uint32_t elements_in_page = shape[-1];
-    if(mTileSize.height() > 1) { // not row major
-        elements_in_page = mTileSize.height() * mTileSize.width();
+    uint32_t elements_in_page = 0;
+    switch(mLayout) {
+        case Layout::ROW_MAJOR:
+            elements_in_page = shape[-1];
+            break;
+        case Layout::TILE:
+            elements_in_page = mTileSize.height() * mTileSize.width();
+            break;
+        default:
+            TT_THROW("Unsupported layout");
     }
 
     return elements_in_page;
@@ -209,28 +328,31 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
     return page_size_bytes;
 }
 
-Size TensorLayout::get_tile_alignment_padding(const ttnn::SimpleShape& shape) const {
-    size_t height = 0;
-    size_t width = 0;
-    if (mLayout == Layout::TILE) {
-        height = mTileSize.height() - shape[-2] % mTileSize.height();
-        width = mTileSize.width() - shape[-1] % mTileSize.width();
+Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
+    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
+
+    std::vector<uint32_t> strides;
+    strides.resize(shape.rank());
+
+    for (size_t i = shape.rank() - 1; i >= 0; i--) {
+        if (i == shape.rank() - 1) {
+            strides[i] = 1;
+        } else {
+            strides[i] = strides[i + 1] * shape[i + 1];
+            if(mAlignment.size() > i) {
+                strides[i] = round_up(strides[i], mAlignment[i]);
+            }
+        }
     }
-    return Size(height, width);
+
+    Alignment result(strides);
+    return result;
 }
 
 ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
 {
-    if (mLayout == Layout::TILE) {
-        auto padding = get_tile_alignment_padding(shape);
-        auto values = shape.as_vector();
-        values[shape.rank() - 1] += padding.width();
-        values[shape.rank() - 1] += padding.height();
-        ttnn::SimpleShape padded_shape(std::move(values));
-        return padded_shape;
-    }
-
-    return shape;
+    TT_FATAL(mLegacyPaddedShape.has_value(), "Use get_physical_size() or get_strides(). Calling get_padded_shape() is not allowed for TensorLayout created w/o LegacyPaddedShape. ");
+    return mLegacyPaddedShape.value();
 }
 
 } // namespace tt::tt_metal
