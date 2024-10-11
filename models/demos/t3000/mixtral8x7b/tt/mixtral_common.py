@@ -305,7 +305,7 @@ def get_single_rot_mat(dhead, mesh_device, start_pos=0, theta: float = 1000000.0
     )
 
 
-def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float = 1000000.0):
+def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, rot_mat_grid_range, theta: float = 1000000.0):
     freqs = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
     rot_matrix = torch.zeros(dhead, dhead)
@@ -325,18 +325,36 @@ def get_single_rot_mat_multi_pos(dhead, mesh_device, start_pos_ids, theta: float
         current_rot_mat[i, torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
         current_rot_mat[i, torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
+    # Create height sharded spec for the rot_matrix with shape [128,128]
+    shard_spec = rot_mat_grid_range
+    rot_mat_memconfig = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            shard_spec,
+            [
+                128,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+            False,
+        ),
+    )
+
     return ttnn.from_torch(
         current_rot_mat.unsqueeze(0).transpose(-1, -2),  # 1,B,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     ), ttnn.from_torch(
         rot_matrix.unsqueeze(0).unsqueeze(0).repeat(1, len(start_pos_ids), 1, 1),  # 1,1,head_dim,head_dim
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
+        memory_config=rot_mat_memconfig,
     )
 
 

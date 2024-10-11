@@ -126,15 +126,34 @@ class TtModelArgs:
 
         # Useful core grid based on batch size
         if self.max_batch_size == 32:
+            grid_by_batch = (8, 4)
             core_grid_by_batch = ttnn.CoreGrid(y=4, x=8)
         elif self.max_batch_size == 16:
+            grid_by_batch = (8, 2)
             core_grid_by_batch = ttnn.CoreGrid(y=2, x=8)
         elif self.max_batch_size == 8:
+            grid_by_batch = (8, 1)
             core_grid_by_batch = ttnn.CoreGrid(y=1, x=8)
         elif self.max_batch_size == 4:
+            grid_by_batch = (4, 1)
             core_grid_by_batch = ttnn.CoreGrid(y=1, x=4)
+        elif self.max_batch_size == 2:
+            grid_by_batch = (2, 1)
+            core_grid_by_batch = ttnn.CoreGrid(y=1, x=2)
+        elif self.max_batch_size == 1:
+            grid_by_batch = (1, 1)
+            core_grid_by_batch = ttnn.CoreGrid(y=1, x=1)
         else:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
+
+        self.rot_mat_grid_range = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
+                )
+            }
+        )
 
         # Create sharded memory configs for different ops
         self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -171,17 +190,13 @@ class TtModelArgs:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # Create program configs for the different ttlib matmul ops
-        self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
-            in0_block_w=4,
+        self.model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=grid_by_batch,
+            in0_block_w=4,  # K = 128 / TILE = 4
             out_subblock_h=1,
             out_subblock_w=4,
-            per_core_M=1,
-            per_core_N=4,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=False,
+            per_core_M=1,  # M = 32 / TILE = 1
+            per_core_N=4,  # N = 128 / TILE = 4
         )
 
         self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(

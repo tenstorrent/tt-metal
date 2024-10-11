@@ -17,7 +17,6 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     prepare_inputs_ttnn_prefill,
     get_single_rot_mat,
     sample,
-    cache_attention,
     get_rot_transformation_mat,
     get_prefill_rot_mat,
 )
@@ -229,17 +228,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     profiler.end(f"inference_prefill")
     logger.info(f"Prefill finished")
 
-    profiler.start("cache_attention")
-    cache_attention(
-        mesh_device,
-        state_dict,
-        model_args,
-        current_rot_mat,
-        rot_matrix,
-        dtype,
-    )
-    profiler.end("cache_attention")
-
     logger.info("Starting decode...")
 
     # Preparing first decode token
@@ -413,7 +401,6 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
         "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
         "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
         "prepare_rot_mat_for_decode": profiler.get_duration("prepare_rot_mat_for_decode"),
-        "cache_attention": profiler.get_duration("cache_attention"),
         "prepare_rot_mat_for_prefill": profiler.get_duration("prepare_rot_mat_for_prefill"),
         "prepare_input_decode": profiler.get_duration("prepare_input_decode"),
         "decode_and_argmax": profiler.get_duration("decode_and_argmax"),
