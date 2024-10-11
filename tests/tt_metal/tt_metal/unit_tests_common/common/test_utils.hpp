@@ -3,10 +3,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <deque>
 #include "impl/kernels/kernel.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+
+inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
+    const uint32_t num_unique_rt_args,
+    const uint32_t num_common_rt_args,
+    const uint32_t unique_base,
+    const uint32_t common_base) {
+    TT_FATAL(
+        num_unique_rt_args + num_common_rt_args <= tt::tt_metal::max_runtime_args,
+        "Number of unique runtime args and common runtime args exceeds the maximum limit of {} runtime args",
+        tt::tt_metal::max_runtime_args);
+
+    vector<uint32_t> common_rt_args;
+    for (uint32_t i = 0; i < num_common_rt_args; i++) {
+        common_rt_args.push_back(common_base + i);
+    }
+
+    vector<uint32_t> unique_rt_args;
+    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
+        unique_rt_args.push_back(unique_base + i);
+    }
+
+    return std::make_pair(unique_rt_args, common_rt_args);
+}
 
 // Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
 // Optionally force the max size for one of the vectors.
@@ -28,16 +52,6 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
         }
     }
 
-    vector<uint32_t> rt_args_common;
-    for (uint32_t i = 0; i < num_rt_args_common; i++) {
-        rt_args_common.push_back(common_base + i);
-    }
-
-    vector<uint32_t> rt_args_unique;
-    for (uint32_t i = 0; i < num_rt_args_unique; i++) {
-        rt_args_unique.push_back(unique_base + i);
-    }
-
     log_trace(
         tt::LogTest,
         "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}",
@@ -45,7 +59,8 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
         num_rt_args_unique,
         num_rt_args_common,
         force_max_size);
-    return std::make_pair(rt_args_unique, rt_args_common);
+
+    return create_runtime_args(num_rt_args_unique, num_rt_args_common, unique_base, common_base);
 }
 
 // Helper function to run a Program, according to which dispatch mode is set.
