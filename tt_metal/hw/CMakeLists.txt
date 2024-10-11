@@ -43,79 +43,87 @@ foreach(ARCH IN LISTS ARCHS)
     endforeach(PROC IN LISTS PORCS)
 endforeach(ARCH IN LISTS ARCHS)
 
-# Build hw lib objects
-if("$ENV{ARCH_NAME}" STREQUAL "grayskull")
-    set(GPP_FLAGS -mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32)
-    set(ALIAS_ARCH_NAME "grayskull")
-elseif("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0" OR "$ENV{ARCH_NAME}" STREQUAL "wormhole")
-    set(GPP_FLAGS -mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32)
-    set(ALIAS_ARCH_NAME "wormhole")
-elseif("$ENV{ARCH_NAME}" STREQUAL "blackhole")
-    set(GPP_FLAGS -mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32)
-    set(ALIAS_ARCH_NAME "blackhole")
-endif()
+# Function appends b0 if its wormhole
+function(get_alias INPUT_STRING OUTPUT_VAR)
+    if("${INPUT_STRING}" STREQUAL "wormhole")
+        set(${OUTPUT_VAR} "wormhole_b0" PARENT_SCOPE)
+    else()
+        set(${OUTPUT_VAR} "${INPUT_STRING}" PARENT_SCOPE)
+    endif()
+endfunction()
 
-set(GPP_FLAGS ${GPP_FLAGS} -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -Os -fno-tree-loop-distribute-patterns)
-
-set(HW_LIB_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib)
+# Define the compiler command
 set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
-# -Os -fno-tree-loop-distribute-patterns -DARCH_$ENV{ARCH_NAME} -DCOMPILE_FOR_NCRISC -DLOCAL_MEM_EN=0 -DFW_BUILD
-set(GPP_INCLUDES -I. -I.. -I${PROJECT_SOURCE_DIR} -I${PROJECT_SOURCE_DIR}/tt_metal -I${PROJECT_SOURCE_DIR}/tt_metal/include -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ALIAS_ARCH_NAME} -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ALIAS_ARCH_NAME}/$ENV{ARCH_NAME}_defines -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ALIAS_ARCH_NAME}/noc -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/$ENV{ARCH_NAME} -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/$ENV{ARCH_NAME}/metal/common -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/$ENV{ARCH_NAME}/metal/llk_io -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_$ENV{ARCH_NAME}/common/inc -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_$ENV{ARCH_NAME}/llk_lib -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/$ENV{ARCH_NAME}/metal/common -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/$ENV{ARCH_NAME}/metal/llk_io)
 
-add_custom_command(
-    OUTPUT tmu-crt0
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/tmu-crt0.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0.S
-    COMMENT "Building hw lib tmu-crt0.o"
-    VERBATIM
-)
+# Define flags for each architecture
+set(GPP_FLAGS_grayskull -mgrayskull -march=rv32iy -mtune=rvtt-b1 -mabi=ilp32)
+set(GPP_FLAGS_wormhole  -mwormhole -march=rv32imw -mtune=rvtt-b1 -mabi=ilp32)
+set(GPP_FLAGS_blackhole -mblackhole -march=rv32iml -mtune=rvtt-b1 -mabi=ilp32)
 
-add_custom_command(
-    OUTPUT tmu-crt0k
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/tmu-crt0k.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0k.S
-    COMMENT "Building hw lib tmu-crt0k.o"
-    VERBATIM
-)
+# Define common flags for all architectures
+set(GPP_FLAGS_common -std=c++17 -flto -ffast-math -fno-use-cxa-atexit -fno-exceptions -Wall -Werror -Wno-unknown-pragmas -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -Os -fno-tree-loop-distribute-patterns)
 
-add_custom_command(
-    OUTPUT substitutes
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/substitutes.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/substitutes.cpp
-    COMMENT "Building hw lib substitutes.o"
-    VERBATIM
-)
+# We are going to build 5 or 6 object files foreach ARCH
+foreach(ARCH IN LISTS ARCHS)
+    get_alias(${ARCH} ARCH_B0)
 
-add_custom_command(
-    OUTPUT tdma_xmov
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/tdma_xmov.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c
-    COMMENT "Building hw lib tdma_xmov.o"
-    VERBATIM
-)
-
-add_custom_command(
-    OUTPUT noc
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-    COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/noc.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ALIAS_ARCH_NAME}/noc.c
-    COMMENT "Building hw lib noc.o"
-    VERBATIM
-)
-
-list(APPEND HW_LIB tmu-crt0 tmu-crt0k substitutes tdma_xmov noc)
-
-# Only build ncrisc haltl for Grayskull and Wormhole since Blackhole ncrisc does not have IRAM
-if (ALIAS_ARCH_NAME STREQUAL "grayskull" OR ALIAS_ARCH_NAME STREQUAL "wormhole")
-    add_custom_command(
-        OUTPUT ncrisc-halt
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
-        COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/ncrisc-halt.o ${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt.S
-        COMMENT "Building hw lib ncrisc-halt.o"
-        VERBATIM
+    # These are the set of object files we are to build foreach ARCH
+    set(HWLIBS
+        tmu-crt0
+        tmu-crt0k
+        substitutes
+        tdma_xmov
+        noc
+        ncrisc-halt
     )
-    list(APPEND HW_LIB ncrisc-halt)
-endif()
+
+    # Map each .o to its source file
+    set(tmu-crt0_SOURCE        "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0.S")
+    set(tmu-crt0k_SOURCE       "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/tmu-crt0k.S")
+    set(substitutes_SOURCE     "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/substitutes.cpp")
+    set(tdma_xmov_SOURCE       "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tdma_xmov.c")
+    set(noc_SOURCE             "${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/${ARCH}/noc.c")
+    set(ncrisc-halt_SOURCE     "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/ncrisc-halt.S")
+
+    # Set GPP_FLAGS based on ARCH
+    set(GPP_FLAGS ${GPP_FLAGS_${ARCH}} ${GPP_FLAGS_common})
+
+    # Dump object files to this directory
+    set(HW_LIB_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/lib/${ARCH})
+
+    # Includes independent from ARCH
+    set(GPP_INCLUDES -I. -I.. -I${PROJECT_SOURCE_DIR} -I${PROJECT_SOURCE_DIR}/tt_metal -I${PROJECT_SOURCE_DIR}/tt_metal/include -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src)
+
+    # Architecture specific include paths
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH})
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/${ARCH_B0}_defines)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/noc)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH})
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_B0}/metal/common)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_B0}/metal/llk_io)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_${ARCH_B0}/common/inc)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_${ARCH_B0}/llk_lib)
+
+    foreach(HWLIB IN LISTS HWLIBS)
+
+        if("${ARCH}" STREQUAL "blackhole" AND "${HWLIB}" STREQUAL "ncrisc-halt")
+            continue() # Skip the iteration, blackhole doesn't have IRAM
+        endif()
+
+        set(HW_OUTPUT_FILE "${HW_LIB_DIR}/${HWLIB}.o")
+        add_custom_command(
+            OUTPUT ${HW_OUTPUT_FILE}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
+            COMMAND ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
+            COMMENT "Building hw lib ${HWLIB}.o"
+            VERBATIM
+        )
+        list(APPEND PREPROCESSED_O_FILES ${HW_OUTPUT_FILE})
+
+    endforeach(HWLIB IN LISTS HWLIBS)
+endforeach(ARCH IN LISTS ARCHS)
 
 # custom target that depends on all the output files
-add_custom_target(hw_toolchain ALL DEPENDS ${PREPROCESSED_LD_FILES} ${HW_LIB})
+add_custom_target(hw_toolchain ALL DEPENDS ${PREPROCESSED_LD_FILES} ${PREPROCESSED_O_FILES})

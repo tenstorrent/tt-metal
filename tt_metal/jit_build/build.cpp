@@ -172,7 +172,7 @@ void JitBuildState::finish_init() {
     }
 
     // Append hw build objects compiled offline
-    std::string build_dir = llrt::OptionsG.get_root_dir() + "runtime/hw/lib/";
+    std::string build_dir = llrt::OptionsG.get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
     if (this->is_fw_) {
         if (this->target_name_ == "brisc") {
             this->link_objs_ += build_dir + "tdma_xmov.o ";
