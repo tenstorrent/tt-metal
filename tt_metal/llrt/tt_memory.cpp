@@ -24,10 +24,13 @@ memory::memory() {
     packed_size_ = 0;
 }
 
-memory::memory(std::string const &path) : memory() {
+memory::memory(std::string const &path, Relocate relo_type) : memory() {
     ElfFile elf;
 
     elf.ReadImage(path);
+    if (relo_type == Relocate::XIP) {
+        elf.MakeExecuteInPlace();
+    }
 
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.
@@ -50,7 +53,7 @@ memory::memory(std::string const &path) : memory() {
     if (text)
         emit_segment(*text);
 
-    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(uint32_t));
+    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
     set_packed_size(total_size * sizeof(uint32_t));
 }
 
@@ -145,6 +148,7 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span;
     this->data_ = new_data;
+    this->text_addr_ = new_span.addr;
 }
 
 }  // namespace ll_api
