@@ -173,13 +173,13 @@ class TtNeck:
 
     def __call__(self, device, input_tensor):
         output_tensor = self.conv1(device, input_tensor[0])
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv2(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv3(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         pool_1 = ttnn.max_pool2d(
             input_tensor=output_tensor,
@@ -229,16 +229,16 @@ class TtNeck:
         ttnn.deallocate(pool_1)
 
         output_tensor = self.conv4(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv5(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv6(device, output_tensor)
-        output_tensor_left_1 = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor_left_1 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv7(device, output_tensor_left_1)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -247,7 +247,7 @@ class TtNeck:
 
         outDowSample5 = input_tensor[1]
         output_tensor = self.conv7_2(device, outDowSample5)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
@@ -257,22 +257,22 @@ class TtNeck:
         ttnn.deallocate(output_tensor_upsample_1)
 
         output_tensor = self.conv7_3(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv8(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv7_4(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv8_2(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv7_5(device, output_tensor)
-        output_tensor_left_2 = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor_left_2 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv9(device, output_tensor_left_2)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -282,7 +282,7 @@ class TtNeck:
         outDowSample3 = input_tensor[2]
 
         output_tensor = self.conv9_2(device, outDowSample3)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.concat(
@@ -291,18 +291,18 @@ class TtNeck:
         ttnn.deallocate(output_tensor_upsample_2)
 
         output_tensor = self.conv9_3(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv10(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv9_4(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv10_2(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv9_5(device, output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, slope=0.1)
+        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         return output_tensor, output_tensor_left_1, output_tensor_left_2
