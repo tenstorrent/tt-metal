@@ -36,4 +36,4 @@ namespace ttnn {
 constexpr auto moreh_matmul_backward = ttnn::register_operation_with_auto_launch_op<
     "ttnn::moreh_matmul_backward",
     ttnn::operations::moreh::moreh_matmul_backward::MorehMatmulBackward>();
-}
+} // namespace ttnn

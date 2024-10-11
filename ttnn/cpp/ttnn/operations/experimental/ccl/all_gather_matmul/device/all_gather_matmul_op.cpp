@@ -4,7 +4,7 @@
 
 #include "common/core_coord.h"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "eth_l1_address_map.h"
@@ -54,15 +54,15 @@ void AllGatherMatmul::validate(const std::vector<Tensor> &input_tensors, const s
     }
 }
 
-std::vector<ttnn::SimpleShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> AllGatherMatmul::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
 
     // All Gather shape
-    ttnn::SimpleShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
-    ttnn::SimpleShape datacopy_output_shape = all_gather_output_shape;
+    tt::tt_metal::LegacyShape all_gather_output_shape = this->all_gather_struct.compute_output_shapes({input_tensors[0]})[0];
+    tt::tt_metal::LegacyShape datacopy_output_shape = all_gather_output_shape;
 
 
     // Matmul shape
-    ttnn::SimpleShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
+    tt::tt_metal::LegacyShape matmul_output_shapes = this->matmul_struct.compute_output_shapes({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_shape, matmul_output_shapes, datacopy_output_shape};
 }

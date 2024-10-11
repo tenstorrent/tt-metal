@@ -12,7 +12,7 @@ void bind_moreh_getitem_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_getitem,
-        "Moreh moreh_getitem operation",
+        "Moreh Getitem operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::arg("index_tensors"),

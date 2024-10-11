@@ -70,13 +70,11 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value); }
 
+    friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
+
 private:
     std::vector<uint32_t> value;
 };
-
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile = std::nullopt);
-
-} // namespace ttnn
 
 inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
     os << "SimpleShape([";
@@ -89,6 +87,8 @@ inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape
     os << "])";
     return os;
 }
+
+} // namespace ttnn
 
 namespace tt {
 
@@ -893,5 +893,7 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 }  // namespace types
 
 using types::Shape;
+
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile = std::nullopt);
 
 }  // namespace ttnn

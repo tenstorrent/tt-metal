@@ -12,7 +12,7 @@ void bind_moreh_sgd_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_sgd,
-        "Moreh Sgd Operation",
+        "Moreh SGD Operation",
         ttnn::pybind_arguments_t{
             py::arg("param_in"),
             py::arg("grad"),

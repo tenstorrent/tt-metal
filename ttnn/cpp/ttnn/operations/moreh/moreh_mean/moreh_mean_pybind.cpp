@@ -12,7 +12,7 @@ void bind_moreh_mean_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_mean,
-        "Moreh moreh_mean Operation",
+        "Moreh Mean Operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::kw_only(),
