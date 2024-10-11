@@ -47,7 +47,7 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None):
     logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
     logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
 
-    assert rand_from <= min_val and max_val <= rand_to
+    assert rand_from <= min_val and max_val < rand_to
     assert np.allclose(npu_mean, expected_mean, rtol=0.5)
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 

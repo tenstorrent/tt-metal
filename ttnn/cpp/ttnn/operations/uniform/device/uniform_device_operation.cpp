@@ -23,7 +23,7 @@ void UniformDeviceOperation::validate_inputs(
         tensor_args.input_tensor.get_dtype() == DataType::BFLOAT16 ||
             tensor_args.input_tensor.get_dtype() == DataType::FLOAT32,
         "Uniform: Input tensor must be Float32 or Bfloat16");
-    TT_FATAL(operation_attributes.from <= operation_attributes.to, "Uniform: from param must be <= to");
+    TT_FATAL(operation_attributes.from < operation_attributes.to, "Uniform: from param must be < to");
 }
 
 void UniformDeviceOperation::validate_on_program_cache_miss(
