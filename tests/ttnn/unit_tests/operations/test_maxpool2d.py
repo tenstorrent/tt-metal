@@ -107,7 +107,6 @@ def run_max_pool(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
-        device=device,
     )
 
     # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
@@ -477,7 +476,6 @@ def test_pool_core_nondivis(
         stride=[stride_h, stride_w],
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
-        device=device,
     )
 
     # interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
