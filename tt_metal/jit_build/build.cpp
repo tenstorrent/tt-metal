@@ -230,9 +230,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
             }
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_brisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_brisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_brisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_brisc.ld ";
             }
 
             break;
@@ -252,9 +252,9 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
             }
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_ncrisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ncrisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_ncrisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ncrisc.ld ";
             }
 
             break;
@@ -307,9 +307,9 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=0 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc0.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc0.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc0.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc0.ld ";
             }
 
             break;
@@ -322,9 +322,9 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=1 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc1.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc1.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc1.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc1.ld ";
             }
 
             break;
@@ -337,9 +337,9 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
             this->defines_ += "-DCOMPILE_FOR_TRISC=2 ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_trisc2.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_trisc2.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_trisc2.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_trisc2.ld ";
             }
 
             break;
@@ -421,9 +421,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
             this->lflags_ = env_.lflags_ + "-Os ";
 
             if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/firmware_ierisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_ierisc.ld ";
             } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/kernel_ierisc.ld ";
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ierisc.ld ";
             }
 
             break;

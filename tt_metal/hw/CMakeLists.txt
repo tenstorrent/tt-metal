@@ -1,5 +1,9 @@
 # Temporary workaround for Issue #8767
-set(HW_OUTPUT_DIR ${PROJECT_SOURCE_DIR}/runtime/hw/toolchain)
+set(ARCHS
+    grayskull
+    wormhole
+    blackhole
+)
 set(PROCS
     brisc
     ncrisc
@@ -13,34 +17,31 @@ set(TYPES
     kernel
 )
 
-if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/dev_mem_map.h")
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole")
-else()
-    set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}/dev_mem_map.h")
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}")
-endif()
+foreach(ARCH IN LISTS ARCHS)
+    set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
+    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
+    set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+    foreach(PROC IN LISTS PROCS)
+        foreach(TYPE IN LISTS TYPES)
+            set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
+            string(TOUPPER ${PROC} PROC_DEFINE)
+            string(TOUPPER ${TYPE} TYPE_DEFINE)
 
-foreach(PROC IN LISTS PROCS)
-    foreach(TYPE IN LISTS TYPES)
-        set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
-        string(TOUPPER ${PROC} PROC_DEFINE)
-        string(TOUPPER ${TYPE} TYPE_DEFINE)
+            # custom command to preprocess/generate the output file
+            add_custom_command(
+              OUTPUT ${HW_OUTPUT_FILE}
+              COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
+              COMMAND ${CMAKE_CXX_COMPILER} -DLD_TARGET=${PROC_DEFINE} -DLD_TYPE=${TYPE_DEFINE} -DTARGET_${PROC_DEFINE} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
+              DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld ${DEV_MEM_MAP}
+              COMMENT "Preprocessing toolchain/${PROC}.ld"
+              VERBATIM
+              )
 
-        # custom command to preprocess/generate the output file
-        add_custom_command(
-          OUTPUT ${HW_OUTPUT_FILE}
-          COMMAND ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
-          COMMAND ${CMAKE_CXX_COMPILER} -DLD_TARGET=${PROC_DEFINE} -DLD_TYPE=${TYPE_DEFINE} -DTARGET_${PROC_DEFINE} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_FILE} ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-          DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/memory.ld ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/sections.ld ${DEV_MEM_MAP}
-          COMMENT "Preprocessing toolchain/${PROC}.ld"
-          VERBATIM
-          )
-
-        # add output file to the custom target
-        list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
-    endforeach()
-endforeach()
+            # add output file to the custom target
+            list(APPEND PREPROCESSED_LD_FILES ${HW_OUTPUT_FILE})
+        endforeach(TYPE IN LISTS TYPES)
+    endforeach(PROC IN LISTS PORCS)
+endforeach(ARCH IN LISTS ARCHS)
 
 # Build hw lib objects
 if("$ENV{ARCH_NAME}" STREQUAL "grayskull")
