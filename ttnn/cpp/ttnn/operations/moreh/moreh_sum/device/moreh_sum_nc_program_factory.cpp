@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -18,7 +18,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
+    auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* device = input.device();

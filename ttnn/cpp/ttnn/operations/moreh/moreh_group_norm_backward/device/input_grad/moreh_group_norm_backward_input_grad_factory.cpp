@@ -6,7 +6,7 @@
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory::cached_program_t
@@ -113,12 +113,12 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        log_info(LogTest, "Large moreh_layernorm_backward_input_grad algorithm is selected.");
+        log_info(LogTest, "Large moreh_layer_norm_backward_input_grad algorithm is selected.");
         im0_t = 1;
         im1_t = 1;
         im7_t = 0;
     } else {
-        log_info(LogTest, "Small moreh_layernorm_backward_input_grad algorithm is selected.");
+        log_info(LogTest, "Small moreh_layer_norm_backward_input_grad algorithm is selected.");
     }
 
     CreateCircularBuffer(

@@ -13,7 +13,7 @@ void bind_moreh_matmul_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_matmul_backward,
-        "Moreh moreh_matmul_backward Operation",
+        "Moreh Matmul Backward Operation",
         ttnn::pybind_arguments_t{
             py::arg("output_grad"),
             py::arg("input_a"),

@@ -6,7 +6,7 @@
 
 #include "moreh_adamw_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
 MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation::MultiCore::create(

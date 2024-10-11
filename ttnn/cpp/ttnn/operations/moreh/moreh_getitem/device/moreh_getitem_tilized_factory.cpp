@@ -6,7 +6,7 @@
 #include <iostream>
 
 #include "moreh_getitem_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 struct IndexInfo {
     bool is_defined;

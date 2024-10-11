@@ -56,7 +56,7 @@ MorehNllLossStep1DeviceOperation::tensor_return_value_t MorehNllLossStep1DeviceO
     auto device = tensor_args.target_tensor.device();
 
     return create_device_tensor(
-        output_shape, operation_attributes.output_dtype, layout, device, operation_attributes.memory_config);
+        output_shape, operation_attributes.dtype, layout, device, operation_attributes.memory_config);
 }
 
 std::tuple<MorehNllLossStep1DeviceOperation::operation_attributes_t, MorehNllLossStep1DeviceOperation::tensor_args_t>
@@ -65,7 +65,7 @@ MorehNllLossStep1DeviceOperation::invoke(
     const std::optional<Tensor>& weight_tensor,
     const int32_t ignore_index,
     const std::string reduction,
-    const DataType output_dtype,
+    const DataType dtype,
     const uint32_t channel_size,
     const std::optional<MemoryConfig>& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -73,7 +73,7 @@ MorehNllLossStep1DeviceOperation::invoke(
         operation_attributes_t{
             reduction,
             ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
-            output_dtype,
+            dtype,
             channel_size,
             memory_config.value_or(target_tensor.memory_config()),
             compute_kernel_config},

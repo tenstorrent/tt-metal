@@ -11,7 +11,7 @@
 #include "ttnn/operations/moreh/moreh_bmm_backward/moreh_bmm_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_cumsum/moreh_cumsum_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_dot_op_backward/moreh_dot_backward_pybind.hpp"
+#include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/moreh_getitem_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_pybind.hpp"

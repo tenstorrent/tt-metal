@@ -25,4 +25,4 @@ struct MorehBMMBackward {
 namespace ttnn {
 constexpr auto moreh_bmm_backward = ttnn::
     register_operation<"ttnn::moreh_bmm_backward", ttnn::operations::moreh::moreh_bmm_backward::MorehBMMBackward>();
-}
+} // namespace ttnn

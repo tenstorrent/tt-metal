@@ -6,8 +6,8 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"

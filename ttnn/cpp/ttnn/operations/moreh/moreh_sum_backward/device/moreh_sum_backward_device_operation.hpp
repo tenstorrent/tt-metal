@@ -69,4 +69,4 @@ namespace ttnn::prim {
 constexpr auto moreh_sum_backward = ttnn::register_operation<
     "ttnn::prim::moreh_sum_backward",
     ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation>();
-}
+}  // namespace ttnn::prim

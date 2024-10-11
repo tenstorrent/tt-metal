@@ -67,4 +67,4 @@ struct MorehDotOperation {
 namespace ttnn::prim {
 constexpr auto moreh_dot =
     ttnn::register_operation<"ttnn::prim::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDotOperation>();
-}
+}  // namespace ttnn::prim

@@ -7,7 +7,7 @@
 
 #include <numeric>
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
