@@ -111,7 +111,9 @@ Program::Program() :
     runtime_id(0),
     worker_crs_(),
     local_circular_buffer_allocation_needed_(false),
-    finalized_(false) {
+    finalized_(false),
+    cached_(false) {
+
     uint32_t programmable_core_count = hal.get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count; i++) {
         kernels_.push_back({});
@@ -206,6 +208,7 @@ KernelGroup::KernelGroup(
 
     for (uint32_t index = 0; index < MaxProcessorsPerCoreType; index ++) {
         this->kernel_bin_sizes[index] = 0;
+        this->kernel_text_offsets[index] = 0;
         this->launch_msg.kernel_config.kernel_text_offset[index] = 0;
     }
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
@@ -648,23 +651,6 @@ void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs
 }
 
 void Program::populate_dispatch_data(Device *device) {
-    static const uint32_t processor_to_firmware_base[] = {
-        MEM_BRISC_FIRMWARE_BASE,
-        MEM_NCRISC_FIRMWARE_BASE,
-        MEM_TRISC0_FIRMWARE_BASE,
-        MEM_TRISC1_FIRMWARE_BASE,
-        MEM_TRISC2_FIRMWARE_BASE,
-        eth_l1_mem::address_map::FIRMWARE_BASE
-    };
-    static const uint32_t processor_to_firmware_size[] = {
-        MEM_BRISC_FIRMWARE_SIZE,
-        MEM_NCRISC_INIT_IRAM_L1_SIZE,
-        MEM_TRISC0_FIRMWARE_SIZE,
-        MEM_TRISC1_FIRMWARE_SIZE,
-        MEM_TRISC2_FIRMWARE_SIZE,
-        eth_l1_mem::address_map::FIRMWARE_SIZE
-    };
-
     auto extract_dst_noc_unicast_info =
         [&device](const auto &ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -750,16 +736,11 @@ void Program::populate_dispatch_data(Device *device) {
 
                 TT_ASSERT(kernel_bin.num_spans() == 1);
 
-                uint32_t max_kernel_bin_size = processor_to_firmware_size[sub_kernels[sub_kernel_index]];
-
+                // TODO: spans are packed into 1 now, just grab it and go
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
-                    max_kernel_bin_size -= dst - processor_to_firmware_base[sub_kernels[sub_kernel_index]];
-
-                    uint64_t relo_addr =
-                        tt::llrt::relocate_dev_addr(dst);
-
-                    dst_base_addrs[transfer_info_index] = (uint32_t)relo_addr;
+                    // Set dst for eth kernels until they move to ring buffer
+                    dst_base_addrs[transfer_info_index] = dst;
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
@@ -770,12 +751,6 @@ void Program::populate_dispatch_data(Device *device) {
                         align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
-
-                uint32_t bin_size = kernel_bin.size() * sizeof(uint32_t);
-                // TODO: remove this check when the ring buffer is in place (checked there)
-                TT_FATAL(bin_size <= max_kernel_bin_size,
-                    "Kernel binary size, {}, overflowed kernel binary storage size, {}",
-                     bin_size, max_kernel_bin_size);
             }
 
             kernel_bins_transfer_info kb_transfer_info = {
@@ -803,9 +778,16 @@ void Program::populate_dispatch_data(Device *device) {
                         kernel_group.core_ranges.ranges(), core_type);
 
                 vector<KernelHandle> kernel_ids;
-                for (auto &optional_id : kernel_group.kernel_ids) {
+                for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
+                    auto &optional_id = kernel_group.kernel_ids[dispatch_class];
                     if (optional_id) {
                         kernel_ids.push_back(optional_id.value());
+                        int proc_sub_class = 0;
+                        for (uint32_t& dst_addr : kernel_transfer_info.at(optional_id.value()).dst_base_addrs) {
+                            // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
+                            dst_addr = kernel_group.kernel_text_offsets[dispatch_class + proc_sub_class];
+                            proc_sub_class++;
+                        }
                     }
                 }
 
@@ -1015,29 +997,33 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
             auto& optional_id = kg.kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = this->get_kernel(optional_id.value());
+                std::vector<ll_api::memory> const &binaries = kernel->binaries(device->build_key());
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                         kg.kernel_bin_sizes[0] = binary_packed_size;
+                        kg.kernel_text_offsets[0] = offset;
                         kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                         kg.kernel_bin_sizes[1] = binary_packed_size;
+                        kg.kernel_text_offsets[1] = offset;
                         kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
                         offset += binary_packed_size;
+                        offset = align(offset, l1_alignment);
 
                         uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
                         TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
                         kg.launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                        offset = align(offset, l1_alignment);
                     } else {
                         constexpr uint32_t max_math_processors_count = 3;
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
                             uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
                             kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
+                            kg.kernel_text_offsets[2 + proc_type_index] = offset;
                             kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                             offset += binary_packed_size;
                             offset = align(offset, l1_alignment);
@@ -1046,9 +1032,18 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                 } else {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
                     kg.kernel_bin_sizes[0] = binary_packed_size;
-                    kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
-                    offset += binary_packed_size;
-                    offset = align(offset, l1_alignment);
+
+                    // No kernel config buffer on active eth yet
+                    if (hal.get_programmable_core_type(kg.programmable_core_type_index) ==
+                        HalProgrammableCoreType::IDLE_ETH) {
+                        kg.kernel_text_offsets[0] = offset;
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                        offset += binary_packed_size;
+                        offset = align(offset, l1_alignment);
+                    } else {
+                        kg.kernel_text_offsets[0] = binaries[0].get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
+                    }
                 }
             }
         }
@@ -1067,6 +1062,9 @@ uint32_t& Program::get_program_config_size(uint32_t programmable_core_type_index
 }
 
 void Program::finalize(Device *device) {
+
+    this->construct_core_range_set_for_worker_cores();
+
     // Store the number of tensix "go signals" for use by CQ
     // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
     // TODO: should store all the counts
@@ -1081,6 +1079,7 @@ void Program::finalize(Device *device) {
     }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = static_cast<HalProgrammableCoreType>(index);
         uint32_t offset = 0;
 
         offset = finalize_rt_args(index, offset);
@@ -1092,15 +1091,24 @@ void Program::finalize(Device *device) {
         offset = finalize_cbs(index, offset);
         TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
 
-        // TODO: update the offset when kernel bins are moved into the kernel config buffer
-        (void)finalize_kernel_bins(device, index, offset);
+        offset = finalize_kernel_bins(device, index, offset);
         TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
 
         this->get_program_config_size(index) = offset;
+
+        auto max_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        TT_FATAL(offset < max_size,
+                 "Program size ({}) too large for kernel config buffer ({}) on {}",
+                 offset, max_size, magic_enum::enum_name(programmable_core_type));
     }
 
     // The sem offsets cross programmable_core_types so must be set after the loop above
     this->set_launch_msg_sem_offsets();
+
+    // TODO: This check is wrong - it populates dispatch data for dispatch kernels
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        this->populate_dispatch_data(device);  // TODO: maybe rename
+    }
 
     finalized_ = true;
 }
@@ -1201,11 +1209,6 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
     }
 
     sync_build_step(events);
-
-    this->construct_core_range_set_for_worker_cores();
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->populate_dispatch_data(device);  // TODO: maybe rename
-    }
 
     if (detail::CompilationReporter::enabled()) {
         detail::CompilationReporter::inst().flush_program_entry(*this, enable_persistent_kernel_cache);

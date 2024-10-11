@@ -27,8 +27,9 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS];
 uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 
 extern uint32_t __kernel_init_local_l1_base[];
+extern uint32_t __fw_export_end_text[];
 
-void kernel_launch() {
+void kernel_launch(uint32_t kernel_base_addr) {
 
   DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
@@ -37,11 +38,8 @@ void kernel_launch() {
     while (c_tensix_core::read_wall_clock() < KERNEL_RUN_TIME);
 #endif
 #else
-#ifdef ARCH_BLACKHOLE
-    firmware_kernel_common_init((void tt_l1_ptr *)__kernel_init_local_l1_base);
-#else
-    firmware_kernel_common_init((void tt_l1_ptr *)(MEM_NCRISC_INIT_IRAM_L1_BASE + (uint32_t)__kernel_init_local_l1_base - MEM_NCRISC_IRAM_BASE));
-#endif
+
+    firmware_kernel_common_init((void tt_l1_ptr *)(kernel_base_addr + (uint32_t) __kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         noc_local_state_init(NOC_INDEX);

@@ -94,21 +94,27 @@ int main(int argc, char *argv[]) {
         while (*trisc_run != RUN_SYNC_MSG_GO);
         DeviceZoneScopedMainN("TRISC-FW");
 
-        uint32_t kernel_config_base = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+
+        uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
+            launch_msg->kernel_config.cb_offset);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg->kernel_config.max_cb_index, cb_init_read, cb_init_write, cb_init_write);
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+            launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+            launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
-        kernel_init();
+        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
+        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+        (*kernel_address)((uint32_t)kernel_address);
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 
