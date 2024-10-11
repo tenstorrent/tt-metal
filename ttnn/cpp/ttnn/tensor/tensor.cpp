@@ -677,8 +677,7 @@ Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, 
 
 Tensor create_device_tensor(
     const ttnn::Shape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    auto alignment = shape.padded_shape().as_vector();
-    return create_device_tensor(shape.logical_shape(), TensorLayout(data_type, layout, memory_config, alignment), device);
+    return create_device_tensor(shape.logical_shape(), TensorLayout::fromLegacyPaddeShape(data_type, layout, memory_config, shape.padded_shape()), device);
 }
 
 namespace detail {

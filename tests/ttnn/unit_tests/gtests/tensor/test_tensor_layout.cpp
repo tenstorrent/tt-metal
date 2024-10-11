@@ -18,7 +18,7 @@ struct Inputs {
 
 struct Expected {
     tt::tt_metal::Size physical_size;
-    tt::tt_metal::Size tile_alignment_padding;
+    ttnn::SimpleShape strides;
 };
 
 struct TensorLayoutTestParams {
@@ -35,10 +35,10 @@ TEST_P(TensorLayoutTests, Tensor_PhysicalSize) {
     const auto& params = GetParam();
     TensorLayout layout(params.inputs.data_type, params.inputs.layout, DefaultMemoryConfig);
     Size physical_size = layout.get_physical_size(params.inputs.shape);
-    Size tile_alignment_padding = layout.get_tile_alignment_padding(params.inputs.shape);
+    ttnn::SimpleShape strides = layout.get_strides(params.inputs.shape);
 
     EXPECT_EQ(physical_size, params.expected.physical_size);
-    EXPECT_EQ(tile_alignment_padding, params.expected.tile_alignment_padding);
+    EXPECT_EQ(strides, params.expected.strides);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -53,7 +53,7 @@ INSTANTIATE_TEST_SUITE_P(
             },
             Expected{
                 .physical_size = {32, 32},
-                .tile_alignment_padding = {31, 31}
+                .strides = ttnn::SimpleShape({1, 1, 32, 32})
             }
         },
 
@@ -65,7 +65,7 @@ INSTANTIATE_TEST_SUITE_P(
             },
             Expected{
                 .physical_size = {1, 1},
-                .tile_alignment_padding = {0, 0}
+                .strides = ttnn::SimpleShape({1, 1, 1, 2})
             }
         }
     )
