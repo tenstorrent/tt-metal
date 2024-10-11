@@ -26,8 +26,8 @@ std::vector<PackType> pack_vector(const std::vector<ValueType>& values) {
         std::is_integral<PackType>::value,
         "Packed Type must be an integral type we are packing to -- uint8_t/uint16_t/uint32_t...");
     TT_FATAL(
-        sizeof(PackType) > ValueType::SIZEOF,
-        "sizeof(PackType)={} > ValueType::SIZEOF)={}",
+        sizeof(PackType) >= ValueType::SIZEOF,
+        "sizeof(PackType)={} >= ValueType::SIZEOF)={}",
         sizeof(PackType),
         ValueType::SIZEOF);
     TT_FATAL(
