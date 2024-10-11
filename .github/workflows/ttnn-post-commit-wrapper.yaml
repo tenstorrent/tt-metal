@@ -25,4 +25,4 @@ jobs:
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
+      runner-label: ${{ matrix.test-group.runner-label }}

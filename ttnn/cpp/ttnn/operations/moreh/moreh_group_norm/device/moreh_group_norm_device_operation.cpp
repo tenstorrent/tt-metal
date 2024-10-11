@@ -4,7 +4,7 @@
 
 #include "moreh_group_norm_device_operation.hpp"
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm {
@@ -84,20 +84,16 @@ MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_o
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     // mean, rstd (1, 1, N, num_groups)
-    const auto output_shape = tensor_args.input.get_shape();
-    const auto N = output_shape.value[0];
+    const auto output_shape = tensor_args.input.get_logical_shape();
+    const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    const std::vector<uint32_t> mean_rstd_origin_shape{
+    std::vector<uint32_t> mean_rstd_origin_shape{
         1,
         1,
-        TILE_HEIGHT * ((N + TILE_HEIGHT - 1) / TILE_HEIGHT),
-        TILE_WIDTH * ((num_groups + TILE_WIDTH - 1) / TILE_WIDTH)};
+        N,
+        num_groups};
 
-    auto mean_rstd_padding = output_shape.value.padding();
-    mean_rstd_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - (N % TILE_HEIGHT)};
-    mean_rstd_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (num_groups % TILE_WIDTH)};
-
-    Shape mean_rstd_shape = Shape(tt::tt_metal::LegacyShape(mean_rstd_origin_shape, mean_rstd_padding));
+    SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
 }
 

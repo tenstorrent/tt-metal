@@ -33,7 +33,7 @@ void MAIN {
         cb_reserve_back(cb_out0, ublock_size_tiles);
         cb_reserve_back(cb_out1, ublock_size_tiles);
 
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
 
         // ------------------------- Copy to DEST -----------------------------
 
@@ -97,7 +97,7 @@ void MAIN {
         pack_reconfig_l1_acc(false);
 
         matmul_pack_tile(START_DST_TILE_ID, cb_out1, ublock_size_tiles);
-        release_dst(tt::DstMode::Half);
+        release_dst();
 
         cb_pop_front(cb_in0, ublock_size_tiles);
         cb_pop_front(cb_in1, ublock_size_tiles);

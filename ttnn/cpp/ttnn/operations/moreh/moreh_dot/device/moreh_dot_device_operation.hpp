@@ -23,7 +23,7 @@ struct MorehDotOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = Shape;
+    using shape_return_value_t = SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct SingleCore {
@@ -67,4 +67,4 @@ struct MorehDotOperation {
 namespace ttnn::prim {
 constexpr auto moreh_dot =
     ttnn::register_operation<"ttnn::prim::moreh_dot", ttnn::operations::moreh::moreh_dot::MorehDotOperation>();
-}
+}  // namespace ttnn::prim

@@ -60,7 +60,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 
 add_custom_target(metal_tests DEPENDS
-    programming_examples
     ${METAL_TEST_TARGETS}
     unit_tests
     unit_tests_fast_dispatch

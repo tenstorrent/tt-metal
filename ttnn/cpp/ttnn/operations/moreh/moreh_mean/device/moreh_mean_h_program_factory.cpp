@@ -7,7 +7,7 @@
 #include "common/bfloat16.hpp"
 #include "moreh_mean_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -62,7 +62,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
@@ -112,21 +111,22 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
     std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
+        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                      // Ht
         units_per_core_group_1,  // Wt
         1,                       // NC
         origin_H};
-    vector<uint32_t> compute_kernel_args_group_2 = {
+    std::vector<uint32_t> compute_kernel_args_group_2 = {
         Ht,                      // Ht
         units_per_core_group_2,  // Wt
         1,                       // NC
         origin_H};
 
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

@@ -45,6 +45,7 @@ def run_conv(
     deallocate_activation=True,
     debug=False,
     groups=1,
+    auto_shard=False,
 ):
     # has_bias = False
     has_bias = False
@@ -78,13 +79,17 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
+    shard_layout = (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    if auto_shard:
+        shard_layout = None
+
     conv_config = ttnn.Conv1dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=math_fidelity,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if use_1d_systolic_array
-        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_layout=shard_layout,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -214,6 +219,7 @@ def test_conv1d_mamba(
         padded_input_channels=None,
         output_layout=output_layout,
         groups=groups,
+        auto_shard=True,
     )
 
 

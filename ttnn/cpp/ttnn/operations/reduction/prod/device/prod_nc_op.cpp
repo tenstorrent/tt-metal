@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
@@ -44,7 +44,7 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
     return {};
 }
 
-std::vector<tt::tt_metal::LegacyShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<ttnn::SimpleShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
 

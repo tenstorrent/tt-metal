@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/common/constants.hpp"
@@ -10,7 +10,7 @@
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_sum/moreh_sum_op.hpp"
+#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -1403,12 +1403,13 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
         const ttnn::Shape required = ttnn::Shape(intended_shape_array);
-        Tensor result = tt::operations::primary::moreh_sum(
+        Tensor result = ttnn::moreh_sum(
             grad,
             dim,
             true,
             ttnn::zeros(required, input.get_dtype(), input.get_layout(), std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device), output_memory_config),
-            output_memory_config);
+            output_memory_config,
+            std::nullopt);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     } else if (shape[1] > 1) {
@@ -1416,12 +1417,13 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
         const ttnn::Shape required = ttnn::Shape(intended_shape_array);
-        Tensor result = tt::operations::primary::moreh_sum(
+        Tensor result = ttnn::moreh_sum(
             grad,
             dim,
             true,
             ttnn::zeros(required, input.get_dtype(), input.get_layout(), std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device), output_memory_config),
-            output_memory_config);
+            output_memory_config,
+            std::nullopt);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }

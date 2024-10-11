@@ -81,3 +81,26 @@ inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     _llk_math_reconfig_data_format_srcb_();
 }
+
+inline std::uint32_t llk_math_get_compute_special_value_flags() {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline std::uint32_t llk_math_get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline std::uint32_t llk_math_get_compute_special_value_flags_sfpu(std::uint32_t special_value_flags_reg) {
+    // API not supported in Grayskull
+    return 0xFFFFFFFF;
+}
+
+inline void llk_math_clear_compute_special_value_flags() {
+    // API not supported in Grayskull
+}
+
+inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
+    // API not supported in Grayskull
+}

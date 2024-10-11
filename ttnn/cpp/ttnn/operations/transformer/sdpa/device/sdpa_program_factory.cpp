@@ -11,7 +11,7 @@
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
 using namespace tt::constants;
@@ -78,30 +78,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     Device* device = input_tensor_q.device();
 
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == tt::ARCH::GRAYSKULL, "kernel config is not for graykull");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = false;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(
-                    ttnn::device::is_wormhole_or_blackhole(device->arch()),
-                    "kernel config is not for wormhole_b0 or blackhole");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();

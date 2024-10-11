@@ -11,6 +11,7 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/program/program_device_map.hpp"
 #include "dev_msgs.h"
 
@@ -140,8 +141,6 @@ class Program {
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
-    void invalidate_compile();
-
     void invalidate_circular_buffer_allocation();
 
     void allocate_circular_buffers(const Device *device);
@@ -212,7 +211,7 @@ class Program {
     std::vector<Semaphore> semaphores_;
 
     CoreRangeSet worker_crs_;
-    std::unordered_map<chip_id_t, bool> compile_needed_;
+    std::unordered_set<chip_id_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
@@ -224,6 +223,9 @@ class Program {
 
     std::vector<ProgramConfig> program_configs_;
     std::vector<uint32_t> program_config_sizes_;
+
+    std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
+
     friend CBHandle CreateCircularBuffer(Program &program, const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec, const CircularBufferConfig &config);
     friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program &program, CBHandle id);
     friend void detail::ValidateCircularBufferRegion(const Program &program, const Device *device);

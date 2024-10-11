@@ -35,8 +35,8 @@ struct MorehSoftmaxOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor;
-        const std::optional<Tensor>& output_tensor;
+        const Tensor& input;
+        const std::optional<Tensor>& output;
     };
 
     using shape_return_value_t = Shape;

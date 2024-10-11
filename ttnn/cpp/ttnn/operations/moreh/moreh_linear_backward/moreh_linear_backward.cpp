@@ -4,7 +4,7 @@
 
 #include "moreh_linear_backward.hpp"
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
