@@ -934,7 +934,9 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             } else {
                 uint32_t base_address = this->program.kernels_buffer->address();
                 uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+
+                // TODO: pack all these writes into 1 linear write
+                uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
@@ -955,13 +957,13 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                     }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
-                        .addr = dst_addr,
+                        .addr = kernel_config_buffer_offset,
                         .length = (uint16_t)write_length,
                         .num_mcast_dests = (uint8_t)num_mcast_dests,
                         .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                     RecordDispatchData(
                         program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
-                    dst_addr += write_length;
+                    kernel_config_buffer_offset += write_length;
 
                     kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
                         .start_page = (uint16_t)page_offset,
@@ -1176,7 +1178,11 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
-            dram_alignment, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+            dram_alignment,
+            kernel_bins_dispatch_subcmds[i].size(),
+            kernel_bins_dispatch_subcmds[i],
+            0,
+            DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
         device_command_sequence.add_prefetch_relay_paged_packed(
             kernel_bins_write_packed_large_data_aligned_sizeB[i],
             kernel_bins_prefetch_subcmds[i],
@@ -1457,11 +1463,6 @@ void EnqueueProgramCommand::write_program_command_sequence(const ProgramCommandS
 
 void EnqueueProgramCommand::process() {
 
-    bool is_finalized = program.is_finalized();
-    if (not is_finalized) {
-        program.finalize(device);
-    }
-
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reservation =
         this->manager.get_config_buffer_mgr().reserve(program.program_config_sizes_);
     bool stall_first = reservation.first.need_sync;
@@ -1486,7 +1487,7 @@ void EnqueueProgramCommand::process() {
     // Currently this is mapped by device, but will be mapped by multiple values in the future
     uint64_t command_hash = this->device->id();
     auto cached_cmd_iter = this->program.cached_program_command_sequences_.find(command_hash);
-    bool is_cached = is_finalized && cached_cmd_iter != this->program.cached_program_command_sequences_.end();
+    bool is_cached = program.is_cached() && cached_cmd_iter != this->program.cached_program_command_sequences_.end();
 
     // Calculate all commands size and determine how many fetch q entries to use
     // Preamble, some waits and stalls
@@ -1507,6 +1508,7 @@ void EnqueueProgramCommand::process() {
         this->write_program_command_sequence(program_command_sequence, stall_first);
         this->assemble_stall_commands(program_command_sequence, false);
         this->program.cached_program_command_sequences_.insert({command_hash, std::move(program_command_sequence)});
+        program.set_cached();
     } else {
         static constexpr uint32_t wait_count_offset = (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, wait.count));
         static constexpr uint32_t tensix_l1_write_offset_offset =
@@ -2229,12 +2231,14 @@ void HWCommandQueue::enqueue_write_buffer(Buffer& buffer, const void* src, bool 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     if (not program.is_finalized()) {
+        program.finalize(device);
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing should only be used when programs have been cached");
         if (program.kernels_buffer != nullptr) {
             this->enqueue_write_buffer(
                 *program.kernels_buffer, program.program_transfer_info.binary_data.data(), false);
         }
     }
+
 #ifdef DEBUG
     if (tt::llrt::OptionsG.get_validate_kernel_binaries()) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
