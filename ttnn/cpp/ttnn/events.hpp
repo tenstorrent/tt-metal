@@ -5,8 +5,7 @@
 #pragma once
 
 #include <memory>
-
-#include "tt_metal/distributed/mesh_device.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::events {
 
