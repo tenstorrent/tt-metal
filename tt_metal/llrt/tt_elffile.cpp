@@ -419,8 +419,6 @@ void ElfFile::Impl::XIPify() {
             log_debug(tt::LogLLRuntime, "{}: Relocation at {x} is not relaxed", path_, reloc.r_offset);
     };
 
-    // TODO:We'll eventually place at zero, but this allows the null transformation
-    const address_t text_placement = GetSegments().front().address;
     unsigned num_reloc_sections = 0;
     for (auto const &relocHdr : GetShdrs()) {
         if (relocHdr.sh_type != SHT_RELA)
@@ -519,7 +517,7 @@ void ElfFile::Impl::XIPify() {
                     log_debug(
                         tt::LogLLRuntime, "{}: emitting dynamic R_RISCV_32 relocation at {x}", path_, reloc.r_offset);
                     address_t value =
-                        (symbol->st_value + reloc.r_addend - GetSegments().front().address + text_placement);
+                        (symbol->st_value + reloc.r_addend - GetSegments().front().address);
                     Write32(section, reloc.r_offset, value);
                     auto &seg = GetSegments()[segment_ix];
                     seg.relocs.push_back(reloc.r_offset - seg.address);
@@ -672,5 +670,5 @@ void ElfFile::Impl::XIPify() {
         TT_THROW("{}: there are no relocation sections", path_);
 
     // The text segment is now XIP
-    GetSegments().front().address = text_placement;
+    GetSegments().front().address = 0;
 }

@@ -26,7 +26,8 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
+    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
 
     static const uint32_t processor_to_fw_base_addr[] = {
         MEM_BRISC_FIRMWARE_BASE,
@@ -49,13 +50,15 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path);
+      auto *ptr = new ll_api::memory(path, relo_type);
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
-      if (pack_spans == PackSpans::PACK) {
+      if (span_type == ll_api::memory::PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
-          uint64_t text_start = processor_to_fw_base_addr[riscv_id];
+          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
+              0 :
+              processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);
       }
 
@@ -201,6 +204,14 @@ bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, c
 
     assert(triscv_id >= 0 and triscv_id <= 2);
     return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
+}
+
+void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
+
+    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+    });
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {

@@ -91,13 +91,23 @@ int main(int argc, char *argv[]) {
         notify_brisc_and_wait();
         DeviceZoneScopedMainN("NCRISC-FW");
 
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+
         uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
         uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.max_cb_index, true, true, false);
-
+            launch_msg->kernel_config.cb_offset);
+        setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg->kernel_config.max_cb_index, true, true, false);
         WAYPOINT("R");
-        kernel_init();
+
+        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
+        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+#ifdef ARCH_BLACKHOLE
+        (*kernel_address)((uint32_t)kernel_address);
+#else
+        kernel_init((uint32_t)kernel_address);
+#endif
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 
