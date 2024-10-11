@@ -136,6 +136,7 @@ on:
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
