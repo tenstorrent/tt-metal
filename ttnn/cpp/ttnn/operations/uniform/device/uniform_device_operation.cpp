@@ -14,17 +14,16 @@ UniformDeviceOperation::program_factory_t UniformDeviceOperation::select_program
 void UniformDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
-        tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
-        "ttnn.uniform: Input tensor need to be on device");
+        tensor_args.input_tensor.storage_type() == StorageType::DEVICE, "Uniform: Input tensor need to be on device");
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,
-        "ttnn.uniform: Input tensor need to be allocated in buffers on device");
-    TT_FATAL((tensor_args.input_tensor.get_layout() == Layout::TILE), "ttnn.uniform: Input tensor must be tilized");
+        "Uniform: Input tensor need to be allocated in buffers on device");
+    TT_FATAL((tensor_args.input_tensor.get_layout() == Layout::TILE), "Uniform: Input tensor must be tilized");
     TT_FATAL(
         tensor_args.input_tensor.get_dtype() == DataType::BFLOAT16 ||
             tensor_args.input_tensor.get_dtype() == DataType::FLOAT32,
-        "ttnn.uniform: Input tensor must be Float32 or Bfloat16");
-    TT_FATAL(operation_attributes.from <= operation_attributes.to, "ttnn.uniform: from param must be <= to");
+        "Uniform: Input tensor must be Float32 or Bfloat16");
+    TT_FATAL(operation_attributes.from <= operation_attributes.to, "Uniform: from param must be <= to");
 }
 
 void UniformDeviceOperation::validate_on_program_cache_miss(

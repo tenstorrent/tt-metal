@@ -11,17 +11,17 @@
 namespace NAMESPACE {
 
 void MAIN {
+    constexpr uint32_t intermed_cb_index = get_compile_time_arg_val(0);
+
     const uint32_t seed = get_arg_val<uint32_t>(0);
     const uint32_t start_id = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
     const uint32_t end_id = start_id + num_tiles;
 
-    constexpr auto cb_intermed0_id = tt::CB::c_intermed0;
-
-    unary_op_init_common(cb_intermed0_id);
+    unary_op_init_common(intermed_cb_index);
 
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(cb_intermed0_id, 1);
+        cb_reserve_back(intermed_cb_index, 1);
         rand_uint_tile_init(i * seed);
 
         tile_regs_acquire();
@@ -29,10 +29,10 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_intermed0_id);
+        pack_tile(0, intermed_cb_index);
         tile_regs_release();
 
-        cb_push_back(cb_intermed0_id, 1);
+        cb_push_back(intermed_cb_index, 1);
     }
 }
 }  // namespace NAMESPACE

@@ -34,7 +34,7 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     Program program = Program();
 
     DataType output_dtype = output.dtype();
-    tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_dtype);
+    auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
     const uint32_t uint32_tile_size = tile_size(tt::DataFormat::UInt32);
 
@@ -61,9 +61,10 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
-    const std::vector<uint32_t> writer_compile_time_args{};
+    const uint32_t output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_index, output_cb_index, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{};
+    const std::vector<uint32_t> compute_compile_time_args{intermed_cb_index};
     const std::string compute_file_path = kernels_dir_path + "uniform.cpp";
 
     std::map<string, string> writer_defines;
