@@ -139,7 +139,7 @@ on:
           - data_movement.stack.stack_pytorch_2
           - data_movement.repeat.repeat_pytorch_2
           - data_movement.split.split_pytorch_2
-          - data_movement.unsqueeze.unsqueeze_pytorch_2
+          - data_movement.squeeze.unsqueeze_pytorch_2
           - data_movement.embedding.embedding_pytorch_2
           - data_movement.view.view_pytorch_2
           - data_movement.stack.stack_pytorch2
