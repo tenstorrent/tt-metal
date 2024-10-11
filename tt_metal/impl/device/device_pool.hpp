@@ -8,11 +8,21 @@
 #include "impl/debug/noc_logging.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/device/device_key.hpp"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 namespace tt {
+namespace tt_metal::detail {
+
+void CloseDevices(std::map<chip_id_t, Device *> devices);
+
+}  // namespace tt_metal::detail
 
 using Device = tt_metal::Device;
 class DevicePool {
+    friend Device;
+    friend v1::DeviceKey;
+    friend void tt_metal::detail::CloseDevices(std::map<chip_id_t, Device *> devices);
+
    public:
     DevicePool &operator=(const DevicePool &) = delete;
     DevicePool &operator=(DevicePool &&other) noexcept = delete;
@@ -32,12 +42,12 @@ class DevicePool {
         DispatchCoreType dispatch_core_type,
         const std::vector<uint32_t> &l1_bank_remap = {}) noexcept;
 
-    Device *get_active_device(chip_id_t device_id) const;
-    std::vector<Device *> get_all_active_devices() const;
+    v1::DeviceKey get_active_device(chip_id_t device_id) const;
+    std::vector<v1::DeviceKey> get_all_active_devices() const;
     bool close_device(chip_id_t device_id);
     bool is_device_active(chip_id_t id) const;
-    void register_worker_thread_for_device(Device* device, std::thread::id worker_thread_id);
-    void unregister_worker_thread_for_device(Device* device);
+    void register_worker_thread_for_device(v1::DeviceKey device, std::thread::id worker_thread_id);
+    void unregister_worker_thread_for_device(v1::DeviceKey device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
    private:
     ~DevicePool();
@@ -67,10 +77,12 @@ class DevicePool {
 
     void init_firmware_on_active_devices() const;
     void activate_device(chip_id_t id);
-    void initialize_device(Device *dev) const;
-    void deactivate_device(chip_id_t id);
+    void initialize_device(v1::DeviceKey dev) const;
     void add_devices_to_pool(std::vector<chip_id_t> device_ids);
     static DevicePool *_inst;
+
+    // TODO remove with v0
+    v1::DeviceKey get_handle(Device* device) const;
 };
 
 }  // namespace tt
