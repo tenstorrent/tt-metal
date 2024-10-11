@@ -107,6 +107,12 @@ on:
           - eltwise.unary_backward.exp_bw.exp_bw
           - eltwise.unary_backward.tanh_bw.tanh_bw
           - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.assign_bw.assign_bw
+          - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
