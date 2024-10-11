@@ -171,23 +171,7 @@ def run_full(
 
 def run_short(
     input_specs,
-    transpose_mcast,
-    output_layout,
-    enable_act_double_buffer,
-    enable_split_reader,
-    enable_subblock_padding,
-    activations_dtype,
-    weights_dtype,
-    math_fidelity,
-    fp32_accum,
-    packer_l1_acc,
-    override_sharding_config,
-    core_grid,
-    use_shallow_conv_variant,
-    deallocate_activation,
-    enable_auto_formatting,
     device,
-    padded_input_channels=None,
 ) -> list:
     [
         batch_size,
@@ -205,6 +189,8 @@ def run_short(
         has_bias,
         dilation,
     ] = input_specs
+    print(input_specs)
+
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel_height, kernel_width]
     conv_bias_shape = [1, 1, 1, output_channels]
@@ -226,39 +212,13 @@ def run_short(
         groups=groups,
     )
 
-    tt_weight_tensor = ttnn.from_torch(
-        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-    )
+    tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
     tt_bias_tensor = None
     if has_bias:
-        tt_bias_tensor = ttnn.from_torch(
-            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-        )
+        tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
-        weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
-        shard_layout=None,
-        deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
-        override_sharding_config=override_sharding_config,
-        output_layout=output_layout,
-        enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
-        enable_subblock_padding=enable_subblock_padding,
-    )
-
-    if override_sharding_config:
-        if len(core_grid) == 2:
-            conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core_grid[0], core_grid[1])})
-        elif len(core_grid) == 4:
-            conv_config.core_grid = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(core_grid[0], core_grid[1]), ttnn.CoreRange(core_grid[2], core_grid[3])}
-            )
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -274,7 +234,6 @@ def run_short(
         batch_size=batch_size,
         input_height=input_height,
         input_width=input_width,
-        conv_config=conv_config,
         groups=groups,
     )
 
