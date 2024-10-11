@@ -98,7 +98,9 @@ def get_dispatch_core_type():
 
     # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+    if (("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml") or (
+        "TT_METAL_ETH_DISPATCH" in os.environ
+    ):
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
     return dispatch_core_type
 
@@ -167,7 +169,7 @@ def all_devices(request, device_params):
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -407,12 +409,7 @@ def tracy_profile():
 ###############################
 # Modifying pytest hooks
 ###############################
-ALL_ARCHS = set(
-    [
-        "grayskull",
-        "wormhole_b0",
-    ]
-)
+ALL_ARCHS = set(["grayskull", "wormhole_b0", "blackhole"])
 
 
 def pytest_addoption(parser):
@@ -420,7 +417,7 @@ def pytest_addoption(parser):
         "--tt-arch",
         choices=[*ALL_ARCHS],
         default=os.environ.get("ARCH_NAME", "grayskull"),
-        help="Target arch, ex. grayskull, wormhole_b0",
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
     )
     parser.addoption(
         "--pipeline-type",
@@ -556,6 +553,11 @@ def pytest_generate_tests(metafunc):
                 "wormhole_b0",
             ]
         ),
+        "silicon_arch_blackhole": set(
+            [
+                "blackhole",
+            ]
+        ),
     }
 
     check_uses_silicon_arch_specific_fixture = partial(contains, silicon_arch_specific_fixture_name_to_avail_archs)
@@ -576,6 +578,7 @@ def pytest_generate_tests(metafunc):
     available_archs = tuple(filter(matches_user_requested_silicon_arch, available_archs))
 
     uses_silicon_arch = "silicon_arch_name" in metafunc.fixturenames
+    print(f"use silicon arch {uses_silicon_arch}")
 
     # sanity
     if is_test_requesting_specific_silicon_archs and not uses_silicon_arch:
@@ -588,6 +591,7 @@ def pytest_generate_tests(metafunc):
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
+            print(f"test_requested_silicon_arch_fixture {test_requested_silicon_arch_fixture}")
             metafunc.parametrize(test_requested_silicon_arch_fixture, [True], scope="session")
 
     input_method = metafunc.config.getoption("--input-method")

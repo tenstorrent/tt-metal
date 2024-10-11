@@ -4,8 +4,9 @@
 
 from loguru import logger
 import torch
+import os
 
-from models.utility_functions import comp_pcc
+from models.utility_functions import comp_pcc, is_blackhole
 import ttnn
 
 
@@ -204,3 +205,13 @@ class MatmulTestBase:
                 logger.info(
                     f"Number of non-deterministic outputs on device {device_idx} is {num_nd_outputs[nd_output_id]}"
                 )
+
+
+def get_blackhole_grid_size(simulate_2col_harvesting):
+    assert is_blackhole()
+
+    if simulate_2col_harvesting:
+        assert "TT_METAL_ETH_DISPATCH" not in os.environ
+        return ttnn.CoreCoord(11, 10)
+    else:
+        return ttnn.CoreCoord(14, 10) if ("TT_METAL_ETH_DISPATCH" in os.environ) else ttnn.CoreCoord(13, 10)

@@ -6,8 +6,9 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import MatmulTestBase
+from tests.didt.matmul_test_base import MatmulTestBase, get_blackhole_grid_size
 import ttnn
+from models.utility_functions import skip_for_blackhole, is_blackhole
 
 
 class LMHeadTest(MatmulTestBase):
@@ -61,15 +62,21 @@ class LMHeadTest(MatmulTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, use_program_cache):
+@pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
+@skip_for_blackhole("Not functional on Blackhole")
+def test_lm_head_matmul(
+    mesh_device, iterations, determinism_check_iterations, use_program_cache, simulate_bh_harvesting
+):
     # Initialize input configurations
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
+    compute_grid = get_blackhole_grid_size(simulate_bh_harvesting) if is_blackhole() else ttnn.CoreCoord(8, 8)
+
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
         in0_block_w=2,
         per_core_M=1,
         per_core_N=32,
@@ -79,7 +86,8 @@ def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, u
         fused_activation=None,
         mcast_in0=True,
     )
-    compute_config = ttnn.WormholeComputeKernelConfig(
+    ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
+    compute_config = ComputeConfigClass(
         math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -108,6 +116,7 @@ def test_lm_head_matmul(mesh_device, iterations, determinism_check_iterations, u
     lm_head_test.run_matmul()
 
 
+@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"logical_chip_{i}_" for i in range(32)])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -129,6 +138,7 @@ def test_specific_chip_lm_head_matmul(
     )
 
 
+@skip_for_blackhole("Multi-board Blackhole has not been tested")
 @pytest.mark.parametrize(
     "board_mesh_device",
     range(4),

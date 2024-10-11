@@ -6,8 +6,9 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import MatmulTestBase
+from tests.didt.matmul_test_base import MatmulTestBase, get_blackhole_grid_size
 import ttnn
+from models.utility_functions import skip_for_blackhole, is_blackhole
 
 GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
 GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
@@ -28,15 +29,30 @@ GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
     ],
     indirect=["mesh_device"],
 )
-def test_ff1_matmul(mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache):
+@pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
+def test_ff1_matmul(
+    mesh_device,
+    gelu,
+    math_fidelity,
+    iterations,
+    determinism_check_iterations,
+    use_program_cache,
+    simulate_bh_harvesting,
+):
+    if is_blackhole() and mesh_device.get_num_devices() > 1:
+        pytest.skip("Multi-chip Blackhole has not been tested")
+
     # Initialize input configurations
+    compute_grid = get_blackhole_grid_size(simulate_bh_harvesting) if is_blackhole() else ttnn.CoreCoord(8, 8)
+
+    start_core = ttnn.CoreCoord(0, 0)
+    end_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
+    core_range = ttnn.CoreRange(start_core, end_core)
+
     in0_block_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 7),
-                ),
+                core_range,
             }
         ),
         [
@@ -52,7 +68,7 @@ def test_ff1_matmul(mesh_device, gelu, math_fidelity, iterations, determinism_ch
 
     # Initialize matmul configurations
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
         in0_block_w=3,
         out_subblock_h=1,
         out_subblock_w=8,
@@ -61,7 +77,9 @@ def test_ff1_matmul(mesh_device, gelu, math_fidelity, iterations, determinism_ch
         transpose_mcast=False,
         fused_activation=[ttnn.UnaryOpType.GELU, True] if gelu else None,
     )
-    compute_config = ttnn.WormholeComputeKernelConfig(
+
+    ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
+    compute_config = ComputeConfigClass(
         math_fidelity=math_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
@@ -70,9 +88,9 @@ def test_ff1_matmul(mesh_device, gelu, math_fidelity, iterations, determinism_ch
 
     ff1_test = MatmulTestBase(
         mesh_device,
-        seq_len=1024,
-        inner_dim=4608,
-        weights_n=18432,
+        seq_len=128 * compute_grid.y,
+        inner_dim=576 * compute_grid.x,
+        weights_n=(72 * 32) * compute_grid.x,
         in0_mem_config=in0_mem_config,
         in1_mem_config=in1_mem_config,
         out_mem_config=out_mem_config,
@@ -90,6 +108,7 @@ def test_ff1_matmul(mesh_device, gelu, math_fidelity, iterations, determinism_ch
     ff1_test.run_matmul()
 
 
+@skip_for_blackhole("Multi-chip Blackhole has not been tested")
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
@@ -118,9 +137,11 @@ def test_specific_chip_ff1_matmul(
         iterations,
         determinism_check_iterations,
         use_program_cache,
+        False,
     )
 
 
+@skip_for_blackhole("Multi-board Blackhole has not been tested")
 @pytest.mark.parametrize(
     "gelu, math_fidelity",
     GELU_FIDELITY_PARAMETRIZATION,
@@ -135,4 +156,6 @@ def test_specific_chip_ff1_matmul(
 def test_specific_board_ff1_matmul(
     board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache
 ):
-    test_ff1_matmul(board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache)
+    test_ff1_matmul(
+        board_mesh_device, gelu, math_fidelity, iterations, determinism_check_iterations, use_program_cache, False
+    )

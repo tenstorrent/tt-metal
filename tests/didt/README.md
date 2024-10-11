@@ -12,7 +12,7 @@ LM head: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/t
 
 ### Supported systems
 
-We support N150, N300, T3000 and Galaxy (TG) systems. To choose the system, pass in the following parametrization ids (as shown in the example commands):
+We support N150, N300, T3000, Galaxy (TG) systems, and single chip Blackhole. To choose the system, pass in the following parametrization ids (as shown in the example commands):
 - 1chips
 - 2chips
 - 8chips
@@ -43,6 +43,14 @@ By default, we run 100000 iterations of the loop, but you can override that beha
 If you wish to check if the output is deterministic, simply pass in the --determinism-check-iteration option - the option tells on how many iterations we do the determinism check. Example:
 
 `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --determinism-check-iterations 50`
+
+## Blackhole
+
+Tests are only supported with `1chips` ID because multi-chip/board BH has not been brought up yet.
+
+By default the Blackhole workload compute grid is 13x10 (1 column is reserved for fast-dispatch). Adding `-k "sim-bh-2col-harvested"` will simulate 2 column harvesting on Blackhole by reducing the compute grid to 11x10.
+
+`WH_ARCH_YAML` is not supported  but setting env var `TT_METAL_ETH_DISPATCH=1` will enable the unharvested workload to run on 14x10 compute grid. Running with `-k "sim-bh-2col-harvested"` is not supported with `TT_METAL_ETH_DISPATCH`
 
 
 ## Legacy commands

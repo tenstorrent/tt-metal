@@ -277,8 +277,11 @@ void kernel_main() {
             noc_async_write_multicast(
                 in1_start_address, in1_multicast_data_addr, in1_block_size_bytes, in1_mcast_num_cores, true, true);
 
-            // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
-            // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
+                // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+            noc_async_writes_flushed();
+#endif
 
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
@@ -358,8 +361,12 @@ void kernel_main() {
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_async_write_multicast(
                 in3_start_address, in3_multicast_data_addr, in3_block_size_bytes, in1_mcast_num_cores, true, true);
-            // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
-            // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+
+            // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
+            // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+#ifdef ARCH_BLACKHOLE
+            noc_async_writes_flushed();
+#endif
 
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
