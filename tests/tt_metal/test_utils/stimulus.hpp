@@ -42,6 +42,30 @@ std::vector<ValueType> generate_constant_vector(
 }
 
 template <typename ValueType>
+std::vector<ValueType> generate_increment_vector(
+    const ValueType& init,
+    const size_t& numel,
+    const float increment = 1.0,
+    const float start = 0.0,
+    const int count = 16,
+    const bool slide = true) {
+    std::vector<ValueType> results(numel, init);
+    float start_value = start;
+    float value = start_value;
+    for (unsigned int index = 0; index < numel; ++index) {
+        if (index % count == 0 && index > 0) {
+            if (slide) {
+                start_value += increment;
+            }
+            value = start_value;
+        }
+        results.at(index) = value;
+        value += increment;
+    }
+    return results;
+}
+
+template <typename ValueType>
 std::vector<ValueType> generate_uniform_random_vector(
     ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
     std::mt19937 gen(seed);
@@ -114,6 +138,18 @@ template <typename PackType, typename ValueType>
 std::vector<PackType> generate_packed_constant_vector(
     const ValueType& constant, const size_t& numel) {
     return pack_vector<PackType, ValueType>(generate_constant_vector(constant, numel));
+}
+
+template <typename PackType, typename ValueType>
+std::vector<PackType> generate_packed_increment_vector(
+    const ValueType& init,
+    const size_t& numel,
+    float increment = 1.0,
+    float start = 0.0,
+    int count = 16,
+    bool slide = true) {
+
+    return pack_vector<PackType, ValueType>(generate_increment_vector(init, numel, increment, start, count, slide));
 }
 
 }  // namespace test_utils
