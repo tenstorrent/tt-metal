@@ -239,6 +239,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .dram_bank_offsets = {},
          .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
                                  hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
@@ -250,14 +251,14 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
+         .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.alignment == 0,
-        "Reserved size must be aligned to allocator alignment {}",
-        config.alignment);
+        config.l1_small_size % config.l1_alignment == 0,
+        "Reserved size must be aligned to L1 allocator alignment {}",
+        config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -3289,14 +3290,14 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
     return allocator::get_statistics(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment() const {
+uint32_t Device::get_allocator_alignment(const BufferType &buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.alignment;
+    return (buffer_type == BufferType::DRAM) ? this->allocator_->config.dram_alignment : this->allocator_->config.l1_alignment;
 }
 
-uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
+uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id, const BufferType &buffer_type) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.alignment;
+    return (buffer_type == BufferType::DRAM) ? this->allocator_->config.dram_alignment : this->allocator_->config.l1_alignment;
 }
 
 size_t Device::get_l1_small_size() const {
@@ -3578,8 +3579,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->get_allocator_alignment()
+        l1_offset_per_bank
     );
 }
 

@@ -17,5 +17,5 @@ constexpr uint8_t MaxProcessorsPerCoreType = 5;
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t noc_size_x = 13;
 constexpr uint8_t noc_size_y = 12;
-#define ALLOCATOR_ALIGNMENT 32
-#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT 5
+#define LOG_BASE_2_OF_DRAM_ALIGNMENT 5
+#define LOG_BASE_2_OF_L1_ALIGNMENT 4

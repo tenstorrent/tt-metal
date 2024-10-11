@@ -133,6 +133,25 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
     }
 }
 
+template <bool DRAM>
+FORCE_INLINE
+constexpr uint32_t get_allocator_alignment() {
+    if constexpr (DRAM) {
+        return DRAM_ALIGNMENT;
+    } else {
+        return L1_ALIGNMENT;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE
+constexpr uint32_t get_log_base2_of_allocator_alignment() {
+    if constexpr (DRAM) {
+        return LOG_BASE_2_OF_DRAM_ALIGNMENT;
+    } else {
+        return LOG_BASE_2_OF_L1_ALIGNMENT;
+    }
+}
 }  // namespace interleaved_addr_gen
 
 /**
@@ -660,7 +679,7 @@ uint64_t get_dram_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
+    uint32_t addr = (bank_offset_index * align(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) + bank_base_address + offset +
                     bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
@@ -675,7 +694,7 @@ uint64_t get_l1_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<false>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<false>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
+    uint32_t addr = (bank_offset_index * align(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) + bank_base_address + offset +
                     bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
@@ -1028,7 +1047,7 @@ template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size = align(page_size, ALLOCATOR_ALIGNMENT);
+    const uint32_t aligned_page_size = align(page_size, interleaved_addr_gen::get_allocator_alignment<DRAM>());
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1063,9 +1082,10 @@ struct InterleavedPow2AddrGen {
     const uint32_t bank_base_address;
     const uint32_t log_base_2_of_page_size;  // WARNING: This struct is used for optimized get_noc_addr in which case
                                              // you know that bank_unit_size is a power of 2
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT
+    const uint32_t log_base_2_of_allocator_alignment = interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
-                                                         : LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT;
+                                                         : log_base_2_of_allocator_alignment;
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1174,9 +1194,10 @@ template <bool DRAM>
 struct InterleavedPow2AddrGenFast {
     uint32_t bank_base_address;              // Base address for the whole tensor.
     const uint32_t log_base_2_of_page_size;  // Num bytes in bank unit.
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT
+    const uint32_t log_base_2_of_allocator_alignment = interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
-                                                         : LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT;
+                                                         : log_base_2_of_allocator_alignment;
 
     FORCE_INLINE
     uint32_t get_addr(
