@@ -153,7 +153,13 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
-
+    // Create and Enqueue a Program with a live trace to ensure that a warning is generated
+    Buffer input_temp(this->device_, 2048, 2048, BufferType::DRAM);
+    Buffer output_temp(this->device_, 2048, 2048, BufferType::DRAM);
+    Program simple_program_temp = create_simple_unary_program(input_temp, output_temp);
+    EnqueueProgram(command_queue, simple_program_temp, true);
+    // Run trace that can clobber the temporary buffers created above
+    EnqueueProgram(command_queue, simple_program, false);
     EnqueueTrace(command_queue, tid, true);
     EnqueueReadBuffer(command_queue, output, trace_output_data.data(), true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
