@@ -155,10 +155,10 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_channels,
            const CoreCoord& compute_grid_size,
            ShardOrientation block_shard_orientation,
-           bool enable_channels_padding,
-           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
+           bool is_out_tiled,
+           bool is_non_tile_mul_width) -> ttnn::operations::sliding_window::ParallelConfig {
             return ttnn::operations::conv::conv2d::determine_parallel_config(
-                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, is_out_tiled, is_non_tile_mul_width);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
@@ -168,8 +168,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_channels"),
         py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
-        py::arg("enable_channels_padding"),
-        py::arg("is_out_tiled") = true);
+        py::arg("is_out_tiled") = true,
+        py::arg("is_non_tile_mul_width") = false);
 
     module.def(
         "create_sharded_memory_config_from_parallel_config",
@@ -236,16 +236,16 @@ void py_bind_conv2d(py::module& module) {
             py::arg("grid_size"),
             py::arg("num_cores_nhw") = 1,
             py::arg("num_cores_c") = 1,
-            py::arg("per_core_out_matrix_height_ntiles").noconvert() = 1,
-            py::arg("per_core_out_matrix_width_ntiles").noconvert() = 1)
+            py::arg("per_core_out_matrix_height").noconvert(),
+            py::arg("per_core_out_matrix_width").noconvert())
         .def_property_readonly("grid_size", [](OptimizedConvParallelizationConfig const& c) { return c.grid_size; })
         .def_property_readonly(
             "num_cores_nhw", [](OptimizedConvParallelizationConfig const& c) { return c.num_cores_nhw; })
         .def_property_readonly(
-            "per_core_out_matrix_height_ntiles",
-            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height_ntiles; })
-        .def_property_readonly("per_core_out_matrix_width_ntiles", [](OptimizedConvParallelizationConfig const& c) {
-            return c.per_core_out_matrix_width_ntiles;
+            "per_core_out_matrix_height",
+            [](OptimizedConvParallelizationConfig const& c) { return c.per_core_out_matrix_height; })
+        .def_property_readonly("per_core_out_matrix_width", [](OptimizedConvParallelizationConfig const& c) {
+            return c.per_core_out_matrix_width;
         });
 
     py::class_<OptimizedConvBlockConfig>(module, "OptimizedConvBlockConfig")

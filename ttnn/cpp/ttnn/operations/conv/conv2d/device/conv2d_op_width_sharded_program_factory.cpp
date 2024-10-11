@@ -62,8 +62,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
-    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
+    uint32_t weight_block_w_ntiles = div_up(parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
+    uint32_t out_block_h_ntiles = div_up(parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
@@ -168,9 +168,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_cores_y = p_config.grid_size.y;
     TT_FATAL(num_cores_x < 13, "Error");
     TT_FATAL(num_cores_y < 10, "Error");
-    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
-
+    uint32_t per_core_out_matrix_height_ntiles = div_up(p_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
+    uint32_t per_core_out_matrix_width_ntiles = div_up(p_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     // uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
@@ -666,6 +665,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
         bias_ntiles_per_core,
 
+        out0_cb,
         num_output_tiles,
         use_non_tile_height,
 

@@ -92,34 +92,34 @@ void MAIN {
         get_compile_time_arg_val(6);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
-    constexpr uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
-    constexpr uint32_t in0_num_blocks_w = get_compile_time_arg_val(9);
-    constexpr uint32_t in1_num_blocks_w = get_compile_time_arg_val(10);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(11);          // inner row block size in tiles
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);          // inner column block size in tiles
-    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13);  // out_subblock_h * out_subblock_w;
-    constexpr bool tilize_in0 = get_compile_time_arg_val(14);
-    constexpr bool untilize_out = get_compile_time_arg_val(15);
-    uint32_t output_rows_h = get_compile_time_arg_val(17);
-    constexpr bool is_non_tile_height = get_compile_time_arg_val(18);
+    constexpr uint32_t in0_num_blocks_h       = get_compile_time_arg_val(8);
+    constexpr uint32_t in0_num_blocks_w       = get_compile_time_arg_val(9);
+    constexpr uint32_t in1_num_blocks_w       = get_compile_time_arg_val(10);
+    constexpr uint32_t out_subblock_h         = get_compile_time_arg_val(11); // inner row block size in tiles
+    constexpr uint32_t out_subblock_w         = get_compile_time_arg_val(12); // inner column block size in tiles
+    constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
+    constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
+    constexpr bool untilize_out               = get_compile_time_arg_val(15);
+    constexpr uint32_t out_cb_id               = get_compile_time_arg_val(17);
+    uint32_t output_rows_h                    = get_compile_time_arg_val(18);
+    constexpr bool is_non_tile_height         = get_compile_time_arg_val(19);
 
-#ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(19);
-#endif
+    #ifdef WIDTH_SHARDED
+    constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(20);
+    #endif
 
-    constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+    constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
 
     // CB indices
-    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t in0_pretilize_cb_id = tt::CBIndex::c_6;
-    constexpr uint32_t in0_cb_second_reader_id = tt::CBIndex::c_7;
-    constexpr uint32_t matmul_partials_cb = tt::CBIndex::c_24;
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    // constexpr uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_26;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    constexpr uint32_t in0_cb_id                                = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id                                = tt::CBIndex::c_1;
+    constexpr uint32_t in0_pretilize_cb_id                      = tt::CBIndex::c_6;
+    constexpr uint32_t in0_cb_second_reader_id                  = tt::CBIndex::c_7;
+    constexpr uint32_t matmul_partials_cb                       = tt::CBIndex::c_24;
+    constexpr uint32_t tilized_in0_cb_id                        = tt::CBIndex::c_25;
+    //constexpr uint32_t untilize_mode_reblock_cb                 = tt::CBIndex::c_26;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 

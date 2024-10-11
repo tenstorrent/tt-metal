@@ -99,8 +99,8 @@ ParallelConfig determine_parallel_config(
     uint32_t output_channels,
     const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
-    bool enable_channels_padding,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    bool is_non_tile_mul_width) {
 
     uint32_t effective_tile_height = is_out_tiled ? tt::constants::TILE_HEIGHT : 1;
     uint32_t effective_tile_width = is_out_tiled ? tt::constants::TILE_WIDTH : 1;
@@ -117,14 +117,14 @@ ParallelConfig determine_parallel_config(
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
-        uint32_t num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, start_divisor);
-        uint32_t start_divisor_c =
-            block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
-        uint32_t num_cores_c =
-            enable_channels_padding
-                ? find_closest_largest_divisor_with_num_padding(
-                      out_channels_ntiles, input_channles_ntiles, start_divisor_c)
-                : find_closest_largest_divisor(out_channels_ntiles, input_channles_ntiles, start_divisor_c);
+        auto channels_per_core = std::ceil((float)input_channels / effective_tile_width);
+        if(is_non_tile_mul_width) {
+            out_c_ntiles = tt::round_up(output_channels, effective_tile_width);
+            channels_per_core = input_channels;
+        }
+        num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, start_divisor);
+
+        uint32_t num_cores_c = find_closest_common_largest_divisor(out_c_ntiles, channels_per_core, block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x);
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
         CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
@@ -247,14 +247,11 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
     TT_ASSERT(conv_output_mem_config.shard_spec.has_value());
     const auto& shard_spec = conv_output_mem_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
-    TT_ASSERT(shard_shape[1] % 32 == 0);
     uint32_t per_core_out_matrix_height_ntiles = div_up(shard_shape[0], 32);
     return {
         .grid_size = shard_spec.grid.bounding_box().grid_size(),
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
-        .per_core_out_matrix_height_ntiles = per_core_out_matrix_height_ntiles,
-        .per_core_out_matrix_width_ntiles = shard_shape[1] / 32,
         .per_core_out_matrix_height = shard_shape[0],
         .per_core_out_matrix_width = shard_shape[1],
     };
@@ -303,48 +300,30 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled) {
 
-    if (act_block_h_override > 0) {
-        TT_ASSERT(
-            act_block_h_override % 32 == 0,
-            "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
-    }
-
-    uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
-
+    uint32_t act_block_h_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     if (act_block_h_override > 0) {
         if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
             log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
         } else {
-            uint32_t act_block_h_override_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-            if (padded_output_height_ntiles % act_block_h_override_ntiles == 0) {
-                act_block_h_ntiles = act_block_h_override_ntiles;
-            } else {
-                log_info(
-                    LogOp,
-                    "act_block_h_override {} is not a valid override for padded_output_height_ntiles {}, override will "
-                    "be ignored",
-                    act_block_h_override_ntiles,
-                    padded_output_height_ntiles);
-            }
+            act_block_h_ntiles = act_block_h_override / tt::constants::TILE_HEIGHT;
         }
     }
-
+    auto grid_size = parallel_config.grid.bounding_box().grid_size();
+    uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
+                                : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
+                                                                                                   : grid_size.x;
+    TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
-                               ? round_up(padded_in_channels * window_w, 32)
-                               : padded_in_channels;
+                            ? round_up(padded_in_channels * window_w, 32)
+                            : round_up((padded_in_channels / act_c_num_blocks) * window_h * window_w, tt::constants::TILE_WIDTH);
     if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_ASSERT(padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0);
         act_block_w = (padded_in_channels * window_h * window_w)/(parallel_config.grid.num_cores() * act_block_w_div);
     }
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
-    auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
-                                : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
-                                                                                                   : grid_size.x;
-    uint32_t out_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
-    uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntiles;
-
+    uint32_t out_block_h_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
+    uint32_t weight_block_w_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
     auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
         determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, split_reader_enabled);
     return {
@@ -515,17 +494,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
     if (conv_config.reshard_if_not_optimal || needs_shard_or_reshard) {
         auto block_shard_orientation =
             conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+        auto num_cores_c = block_shard_orientation == ShardOrientation::COL_MAJOR ? device->compute_with_storage_grid_size().y : device->compute_with_storage_grid_size().x;
+        auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
+        bool is_non_tile_mul_width = (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
+        conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size*in_channels) % (16 * num_cores_c)) == 0;
         ParallelConfig optimal_parallel_config = determine_parallel_config(
-            shard_layout,
-            batch_size,
-            in_channels,
-            height,
-            width,
-            out_channels,
-            device->compute_with_storage_grid_size(),
-            block_shard_orientation,
-            !is_mm_conv,
-            !use_non_tile_height);
+            shard_layout, batch_size, in_channels, height, width, out_channels, device->compute_with_storage_grid_size(), block_shard_orientation, !use_non_tile_height, is_non_tile_mul_width);
 
         if (conv_config.override_sharding_config) {
             TT_FATAL(conv_config.core_grid.has_value(), "Error");
@@ -758,10 +732,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
     weight_tensor_ = ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
+    uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
     // for conv op, pad the weights to block shape
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
+    } else if(parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+            weight_tensor_, num_cores_c, weights_bias_dtype);
     } else {
         weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
@@ -770,27 +748,48 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
     int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0," Matrix Height Padding can't be negative");
+    if(parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        weight_matrix_height = weight_tensor_.shape()[2];
+        weight_matrix_height_padding = 0;
+        /* For non-tile multiple of input channel case, Padding for each weight matrix shard is needed to accomodate
+         * right amount of channels in each shard. For example, If we have 320 input and output channels, each
+         * activation matrix shard would have 40 channels for 8 cores. Similarly, each weight matrix shard also needs to
+         * have 40 output channels each to match number of cores for each shard. Current implementation of
+         * convert_conv_weight_tensor_to_tiled_layout_block_sharded takes care of that and increases number of columns
+         * in weight matrix. so for such cases, out_channels need to be
+         * initialized with weight_tensor_.shape()[3].
+         * However, there are cases like output channels are 255 with input as tile multiple, For such cases, padding is
+         * added at last and output_channels for each shard would be of multiple of 32.
+         * */
+        out_channels = ((out_channels % 16 != 0) && (in_channels / num_cores_c) % 32 == 0) ? out_channels : weight_tensor_.shape()[3];
+    }
 
     auto target_shape = ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
-        std::array<std::array<uint32_t, 2>, 4>{
+            std::array<std::array<uint32_t, 2>, 4>{
             std::array<uint32_t, 2>{0, 0},
             std::array<uint32_t, 2>{0, 0},
             std::array<uint32_t, 2>{0, weight_matrix_height_padding},
             std::array<uint32_t, 2>{0, out_channel_padding}
-    });
+            });
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
+
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
     if (bias_tensor.has_value()) {
-        bias_tensor_ = bias_tensor.value();
-        auto bias_shape = bias_tensor_.get_shape();
-        TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
-        tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
-            std::array<uint32_t, 4>({1, 1, 32, tt::round_up(out_channels, weight_block_w_ntiles * 32)}));
-        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-        bias_tensor_ = ttnn::to_layout(
-            bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
-        if (bias_tensor_.get_dtype() != weights_bias_dtype) {
-            bias_tensor_ = ttnn::to_dtype(bias_tensor_, weights_bias_dtype);
+        if (parallel_config.shard_scheme != TensorMemoryLayout::BLOCK_SHARDED) {
+            bias_tensor_ = bias_tensor.value();
+            auto bias_shape = bias_tensor_.get_shape();
+            TT_ASSERT(bias_shape[3] == out_channels && bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1);
+            tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
+                std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
+            bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
+            bias_tensor_ = ttnn::to_layout(
+                bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
+            if (bias_tensor_.get_dtype() != weights_bias_dtype) {
+                bias_tensor_ = ttnn::to_dtype(bias_tensor_, weights_bias_dtype);
+            }
+        } else {
+            bias_tensor_ = convert_conv_bias_tensor_to_tiled_layout_block_sharded(
+                bias_tensor.value(), num_cores_c, weights_bias_dtype);
         }
         bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
@@ -811,8 +810,8 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
             .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntiles,
-            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
+            .per_core_M = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
+            .per_core_N = div_up(conv_parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH),
             .fuse_batch = true,
             .mcast_in0 = false};
         if (activation != "") {
@@ -820,16 +819,15 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
         }
         return matmul_config;
     } else {
-        TT_ASSERT(conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0);
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-            .in0_block_w = conv_blocking_config.act_block_w_ntiles / grid_size_along_c,
+            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
-            .out_block_h = conv_parallelization_config.per_core_out_matrix_height_ntiles,
-            .out_block_w = conv_parallelization_config.per_core_out_matrix_width_ntiles,
-            .per_core_M = conv_parallelization_config.per_core_out_matrix_height_ntiles,
-            .per_core_N = conv_parallelization_config.per_core_out_matrix_width_ntiles,
+            .out_block_h = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
+            .out_block_w = div_up(conv_parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH),
+            .per_core_M = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
+            .per_core_N = div_up(conv_parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH),
             .transpose_mcast = transpose_mcast};
         if (activation != "") {
             matmul_config.fused_activation = ttnn::operations::unary::utils::string_to_unary_with_param(activation);

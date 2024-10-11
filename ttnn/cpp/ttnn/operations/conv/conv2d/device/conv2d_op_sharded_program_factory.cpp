@@ -33,8 +33,10 @@ const uint32_t tilize_mode_tilized_act_cb = CBIndex::c_25;
 const uint32_t untilize_mode_reblock_cb = CBIndex::c_26;
 const uint32_t out0_cb = CBIndex::c_16;
 const uint32_t temp_sum_cb = CBIndex::c_27;
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
+const uint32_t untilized_padded_out_cb = CBIndex::c_28;
+}
+}
+
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
@@ -184,6 +186,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
 
     CBHandle cb_output = 0;
     if (untilize_out) {
+        auto output_shard_shape = output.shard_spec().value().shape;
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                 .set_page_size(matmul_partials_cb, interm0_single_tile_size);
@@ -195,31 +198,31 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             num_output_tiles,
             interm0_single_tile_size);
 
-        // Supposed to be a small CB only responsible for reorganizing
-        // the output blocks to fill the whole "per core output block width"
-        CircularBufferConfig cb_reblock_config =
-            CircularBufferConfig(num_reblock_cb_tiles * out_tile_size, {{untilize_mode_reblock_cb, out_df}})
-                .set_page_size(untilize_mode_reblock_cb, out_tile_size);
-        auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
-        log_debug(
-            LogOp,
-            "Reblock CB: {}, npages: {}, pagesize: {}",
-            untilize_mode_reblock_cb,
-            num_reblock_cb_tiles,
-            out_tile_size);
-
-        auto shard_shape = output.shard_spec().value().shape;
-        uint32_t aligned_output_stick_nbytes =
-            use_non_tile_height ? shard_shape[1] * output.element_size() : out_tile_size;
-        uint32_t aligned_output_num_pages = use_non_tile_height ? shard_shape[0] : num_writer_output_tiles;
-        CircularBufferConfig cb_output_config =
-            CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{out0_cb, out_df}})
-                .set_page_size(out0_cb, aligned_output_stick_nbytes);
-
-        if (output.is_sharded()) {
+        bool need_unpad_after_untilize = output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
+        // If only width is non-tile multiple
+        if (need_unpad_after_untilize && !use_non_tile_height && weight_width_sliced) {
+            uint32_t num_bytes_for_df = datum_size(out_df);
+            CircularBufferConfig compute_cb_output_config =
+            CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{untilized_padded_out_cb, out_df}})
+                .set_page_size(untilized_padded_out_cb, out_tile_size);
+            auto compute_cb_output = tt_metal::CreateCircularBuffer(program, core, compute_cb_output_config);
+            log_debug(LogOp, "untilized padded out CB(shard widht non-tile multiple): {}, npages: {}, pagesize: {}", untilized_padded_out_cb, num_writer_output_tiles, out_tile_size * num_bytes_for_df);
+            CircularBufferConfig cb_output_config =
+            CircularBufferConfig(num_bytes_for_df * output_shard_shape[0] * output_shard_shape[1], {{out0_cb, out_df}})
+                .set_page_size(out0_cb, output_shard_shape[1] * num_bytes_for_df);
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            log_debug(LogOp, "output CB(shard widht non-tile multiple): {}, npages: {}, pagesize: {}", out0_cb, output_shard_shape[0], output_shard_shape[1] * num_bytes_for_df);
+        } else {
+            auto shard_shape = output.shard_spec().value().shape;
+            uint32_t aligned_output_stick_nbytes = use_non_tile_height ? shard_shape[1] * output.element_size() : out_tile_size;
+            uint32_t aligned_output_num_pages = use_non_tile_height ? shard_shape[0] : num_writer_output_tiles;
+            CircularBufferConfig cb_output_config = CircularBufferConfig(aligned_output_num_pages * aligned_output_stick_nbytes, {{out0_cb, out_df}})
+                .set_page_size(out0_cb, aligned_output_stick_nbytes);
+            cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+            cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            log_debug(LogOp, "output CB: {}, npages: {}, pagesize: {}", out0_cb, aligned_output_num_pages, aligned_output_stick_nbytes);
         }
-        cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
     } else {
         // Share buffer if same data format
         if (interm0_df == out_df) {
@@ -406,8 +409,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
-    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
+    uint32_t weight_block_w_ntiles = div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
+    uint32_t out_block_h_ntiles = div_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
@@ -495,6 +498,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // TODO: Only updated variables which is affected, but there may be more that needs to account for this
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
+    auto a_shard_spec = a.shard_spec().value();
     auto shard_shape = a.shard_spec().value().shape;
 
     // parallelization config
@@ -503,14 +507,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_cores_y = p_config.grid_size.y;
     uint32_t total_num_cores = num_cores_x * num_cores_y;
 
-    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
+    uint32_t per_core_out_matrix_width_ntiles = div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
+    uint32_t per_core_out_matrix_height_ntiles = div_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
+    bool block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     uint32_t input_channels_padded = 0;
     if (weight_width_sliced) {
+        conv_act_c_blocks = a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y;
         if (transpose_mcast) {
             TT_FATAL(conv_act_c_blocks == num_cores_y, "Expected conv_act_c_blocks to be equal to height of grid");
             input_channels_padded = shard_shape[1] * num_cores_y;
@@ -574,6 +580,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
+    if(block_sharded)
+        act_matrix_width = round_up((input_channels_padded / conv_act_c_blocks) * filter_w * filter_h, TILE_WIDTH) * conv_act_c_blocks;
     uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
 
@@ -629,7 +637,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
-    uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
+    uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? 1 : filter_h;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -657,10 +665,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     log_debug(LogOp, "act_block_num_tiles_split: {}", act_block_num_tiles_split);
     log_debug(LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
 
-    TT_FATAL(
-        (act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)) ||
-            ((act_block_w_datums <= conv_act_size_c) && (conv_act_size_c % act_block_w_datums == 0)),
-        "Error");
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -681,9 +685,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                                            ? weight_block_w_datums
                                            : (output_channels_padded_to_tile_width % weight_block_w_datums);
     assert(last_block_width_datums % TILE_WIDTH == 0);
-
-    // sanity check
-    assert(num_blocks_output_w == num_blocks_weight_w);
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
@@ -906,7 +907,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
 
     if (has_bias) {
-        TT_FATAL(bias_ntiles % num_weight_slices_width == 0, "Error");
         TT_FATAL(bias_ntiles == weight_matrix_width_ntiles, "Error");
     }
     uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
@@ -998,6 +998,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
+
+    if(block_sharded) {
+        num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
+        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
+    }
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
     if (weight_width_sliced) {
@@ -1005,8 +1010,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // window before pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
-        num_weight_cb_tiles *= filter_h * filter_w;
-        num_act_cb_tiles *= filter_h * filter_w;
+        if(!block_sharded) {
+            num_weight_cb_tiles *= filter_h * filter_w;
+            num_act_cb_tiles *= filter_h * filter_w;
+        }
     } else if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
     }
@@ -1047,8 +1054,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     std::vector<uint32_t> writer_compile_time_args;
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
-    uint32_t act_block_w_extra_align_bytes =
-        (round_up(conv_act_size_c * filter_w, TILE_WIDTH) - (conv_act_size_c * filter_w)) * a.element_size();
+    uint32_t act_block_w_extra_align_bytes = block_sharded ? (round_up(a_shard_spec.shape[1] * filter_h *filter_w, TILE_WIDTH) - (a_shard_spec.shape[1] * filter_h*filter_w)) * a.element_size() :
+         (round_up(a_shard_spec.shape[1] *filter_w, TILE_WIDTH) - (a_shard_spec.shape[1] * filter_w)) * a.element_size();
 
     uint32_t in0_block_w = act_block_w_ntiles / conv_act_c_blocks;
     uint32_t in0_block_num_tiles = act_block_num_tiles / conv_act_c_blocks;
@@ -1226,7 +1233,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
     uint32_t reader_arg_act_block_h_datums = (split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
-
+    if(block_sharded) {
+        in0_block_num_tiles = act_block_num_tiles;
+        in1_block_num_tiles = weight_block_num_tiles;
+        in0_block_w = act_block_w_ntiles;
+        in0_num_blocks_w = 1 * conv_act_c_blocks;
+    }
     reader_compile_time_args = {
         (uint32_t)(src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         (uint32_t)stride_h,
@@ -1299,7 +1311,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         num_blocks_act_w,  // = number of blocks of weight in height dim
         in1_block_num_tiles,
         conv_act_c_blocks,
-        weight_block_h_ntiles / conv_act_c_blocks,
+        weight_block_h_ntiles,
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,                          // weight_stride_h
         weight_matrix_width_ntiles * weight_block_h_ntiles,  // weight_next_block_stride_h,
@@ -1345,12 +1357,24 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
+    bool need_unpad_after_untilize = parallelization_config.per_core_out_matrix_width < per_core_out_matrix_width_ntiles * TILE_WIDTH;
+    if (need_unpad_after_untilize) {
+        TT_FATAL(block_sharded, "Need to handle this case for non-sliced weights");
+        TT_FATAL(untilize_out, "Cannot support non-tile multiple shard width with tilized output");
+        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles);
+        writer_compile_time_args.push_back(per_core_out_matrix_width_ntiles * TILE_WIDTH * 2);
+        writer_compile_time_args.push_back(parallelization_config.per_core_out_matrix_width * 2);
+        writer_compile_time_args.push_back(untilized_padded_out_cb);
+        writer_defines["UNPAD_UNTILIZE_OUT"] = 1;
+        writer_mcast_sender_defines["UNPAD_UNTILIZE_OUT"] = 1;
+    }
 
+    uint32_t compute_output_cb = need_unpad_after_untilize ? untilized_padded_out_cb : out0_cb;
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,
         act_num_subblocks,
-        in0_block_num_tiles,
-        in0_subblock_num_tiles,
+        act_block_num_tiles,
+        act_subblock_num_tiles,
         act_subblock_h_ntiles,
 
         weight_num_subblocks,
@@ -1369,6 +1393,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         untilize_out,
 
         bias_ntiles_per_core,
+        compute_output_cb,
         aligned_output_num_pages,
         use_non_tile_height};
 
@@ -1573,6 +1598,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                     writer_rt_args.push_back(num_cores_x - 1);  // weights_mcast_num_cores
                     writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
                     writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                    writer_rt_args.push_back(output.buffer()->aligned_page_size());
 
                     SetRuntimeArgs(program, writer_mcast_sender_id, core, writer_rt_args);
                 } else {
@@ -1581,6 +1607,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                     writer_rt_args.push_back(right_core_physical.y);     // weights_mcast_sender_noc_y
                     writer_rt_args.push_back(weights_mcast_sender_semaphore_id);
                     writer_rt_args.push_back(weights_mcast_receiver_semaphore_id);
+                    writer_rt_args.push_back(output.buffer()->aligned_page_size());
 
                     SetRuntimeArgs(program, writer_mcast_receiver_id, core, writer_rt_args);
                 }
