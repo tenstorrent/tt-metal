@@ -152,16 +152,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
     # model_args.n_layers = 1
 
     logger.info("Loading weights...")
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-        )
-    }
-    logger.info("Loading weights finished!")
+    state_dict = model_args.load_state_dict()
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
