@@ -2864,7 +2864,7 @@ bool Device::close() {
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
-    this->EnableAllocs();
+    this->MarkAllocationsSafe();
 
     this->deallocate_buffers();
 
@@ -3276,7 +3276,7 @@ bool Device::using_slow_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
-    this->EnableAllocs();
+    this->MarkAllocationsSafe();
     // Create an empty trace buffer here. This will get initialized in end_trace
     this->trace_buffer_pool_.insert({tid, Trace::create_empty_trace_buffer()});
     this->hw_command_queues_[cq_id]->record_begin(tid, this->trace_buffer_pool_[tid]->desc);
@@ -3295,7 +3295,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
     Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
-    this->DisableAllocs();
+    this->MarkAllocationsUnsafe();
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
@@ -3315,7 +3315,7 @@ void Device::release_trace(const uint32_t tid) {
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {
-        this->EnableAllocs();
+        this->MarkAllocationsSafe();
     }
 }
 
@@ -3327,12 +3327,12 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     }
 }
 
-void Device::DisableAllocs() {
-    tt::tt_metal::allocator::disable_allocs(*(this->allocator_));
+void Device::MarkAllocationsUnsafe() {
+    tt::tt_metal::allocator::mark_allocations_unsafe(*(this->allocator_));
 }
 
-void Device::EnableAllocs() {
-    tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
+void Device::MarkAllocationsSafe() {
+    tt::tt_metal::allocator::mark_allocations_safe(*(this->allocator_));
 }
 
 void Device::generate_device_headers(const std::string &path) const
