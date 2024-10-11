@@ -45,16 +45,15 @@ input_shapes = [
     (17, 17, 17, 17),
 ]
 
-rands = [0, 13, 97, 37]
+rands = [0, 3, 7, 13, 97, 37]
 
 for w in rands:
     for z in rands:
         for y in rands:
             for x in rands:
-                if w != 0 and z != 0:
-                    input_shapes.append((w, z, y * TILE_HEIGHT + 17, x * TILE_WIDTH + 19))
+                input_shapes.append((w, z, y * TILE_HEIGHT + 17, x * TILE_WIDTH + 19))
 
-rands = [1, 13, 97, 37]
+rands = [1, 5, 13, 17, 97, 37]
 
 for w in rands:
     for z in rands:
@@ -125,34 +124,34 @@ parameters = {
         "enable_async": [True],
         "num_iters": [1],
     },
-    # "all_gather_n300_focused_large": {
-    #     "num_devices": [2],
-    #     "num_links": [1],
-    #     "input_shape": input_shapes_large,
-    #     "dim": [0, 1, 2, 3],
-    #     "layout": [ttnn.TILE_LAYOUT],
-    #     "input_dtype": [ttnn.bfloat16],
-    #     "mem_config": [
-    #         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-    #     ],
-    #     "enable_async": [True],
-    #     "num_iters": [1],
-    # },
+    "all_gather_n300_focused_large": {
+        "num_devices": [2],
+        "num_links": [1],
+        "input_shape": input_shapes_large,
+        "dim": [0, 1, 2, 3],
+        "layout": [ttnn.TILE_LAYOUT],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ],
+        "enable_async": [True],
+        "num_iters": [1],
+    },
 }
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    # (is_known_failure, message) = is_unsupported_case_n300(
-    #     test_vector["input_shape"],
-    #     test_vector["dim"],
-    #     test_vector["mem_config"],
-    #     test_vector["num_devices"],
-    #     test_vector["num_links"],
-    #     test_vector["input_dtype"],
-    #     test_vector["layout"],
-    # )
-    # if is_known_failure:
-    #     return True, f"Skipping unsupported case {message}."
+    n_chips = 2
+    max_tensor_size = int(1024 * 1024 * 1024 * 11 * (1 / (n_chips + 1)) / 2)
+    input_tensor_size = (
+        test_vector["input_shape"][0]
+        * test_vector["input_shape"][1]
+        * test_vector["input_shape"][2]
+        * test_vector["input_shape"][3]
+    )
+
+    if input_tensor_size > max_tensor_size:
+        return True, f"Not enough memory to allocate."
     return False, None
 
 
