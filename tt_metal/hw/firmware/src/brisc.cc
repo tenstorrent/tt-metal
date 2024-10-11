@@ -433,7 +433,9 @@ int main() {
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, launch_msg_address->kernel_config.max_cb_index, true, true, false);
-                kernel_init();
+                int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::BRISC);
+                void (*kernel_address)() = (void (*)())launch_msg_address->kernel_config.kernel_text_offset[index];
+                (*kernel_address)();
                 RECORD_STACK_USAGE();
             } else {
                 // This was not initialized in kernel_init

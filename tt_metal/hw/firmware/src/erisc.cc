@@ -78,7 +78,10 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
             enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-                kernel_init();
+                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                void (*kernel_address)() = (void (*)())
+                    mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                (*kernel_address)();
             }
             mailboxes->go_message.signal = RUN_MSG_DONE;
 

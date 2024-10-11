@@ -108,7 +108,10 @@ int main(int argc, char *argv[]) {
             mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
-        kernel_init();
+        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::TRISC0);
+        void (*kernel_address)() = (void (*)())
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index + thread_id];
+        (*kernel_address)();
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 

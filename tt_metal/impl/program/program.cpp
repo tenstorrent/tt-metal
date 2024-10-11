@@ -1009,18 +1009,19 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
             auto& optional_id = kg.kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = this->get_kernel(optional_id.value());
+                std::vector<ll_api::memory> const &binaries = kernel->binaries(device->build_key());
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                         kg.kernel_bin_sizes[0] = binary_packed_size;
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                         kg.kernel_bin_sizes[1] = binary_packed_size;
-                        kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
+                        kg.launch_msg.kernel_config.kernel_text_offset[1] = binaries[0].get_text_addr();
                         offset += binary_packed_size;
 
                         uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
@@ -1032,7 +1033,8 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
                             uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
                             kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
+                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] =
+                                binaries[proc_type_index].get_text_addr();
                             offset += binary_packed_size;
                             offset = align(offset, l1_alignment);
                         }
@@ -1040,7 +1042,7 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                 } else {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
                     kg.kernel_bin_sizes[0] = binary_packed_size;
-                    kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                    kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
                     offset += binary_packed_size;
                     offset = align(offset, l1_alignment);
                 }

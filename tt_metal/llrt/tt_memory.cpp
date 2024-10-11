@@ -145,6 +145,7 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span;
     this->data_ = new_data;
+    this->text_addr_ = new_span.addr;
 }
 
 }  // namespace ll_api

@@ -37,6 +37,7 @@ class memory {
   std::vector<struct span> link_spans_;
   uint32_t text_size_;
   uint32_t packed_size_;
+  uint32_t text_addr_;
 
  public:
   memory();
@@ -52,6 +53,7 @@ class memory {
   void set_packed_size(uint32_t size) { this->packed_size_ = size; }
   uint32_t get_text_size() const { return this->text_size_; }
   uint32_t get_packed_size() const { return this->packed_size_; }
+  uint32_t get_text_addr() const { return this->text_addr_; }
 
   size_t size() const { return data_.size(); }
 

@@ -75,6 +75,7 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
     auto cb = CreateCircularBuffer(program, cr_set, config);
 
     for (unsigned int id = 0; id < num_devices_; id++) {
+        detail::CompileProgram(devices_.at(id), program);
         program.finalize(devices_.at(id));
         EXPECT_TRUE(test_cb_config_written_to_core(program, this->devices_.at(id), cr_set, golden_cb_config));
     }
