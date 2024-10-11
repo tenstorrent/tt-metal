@@ -698,7 +698,7 @@ Tensor create_device_tensor(
 
 Tensor create_device_tensor(
     const ttnn::SimpleShape& logical_shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    return create_device_tensor(logical_shape, get_physical_shape(logical_shape, layout, tile), data_type, layout, device, memory_config, tile);
+    return create_device_tensor(logical_shape, get_physical_shape(logical_shape, data_type, layout, tile), data_type, layout, device, memory_config, tile);
 }
 
 Tensor create_device_tensor(
