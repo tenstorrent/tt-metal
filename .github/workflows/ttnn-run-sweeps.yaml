@@ -101,6 +101,11 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.abs_bw.abs_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.square_bw.square_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
