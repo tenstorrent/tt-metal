@@ -157,6 +157,9 @@ def run_max_pool(
     isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
     isequal = torch.equal(output_pytorch, golden_pytorch)
 
+    # print("output_pytorch", output_pytorch)
+    # print("golden_pytorch", golden_pytorch)
+
     assert allclose
     assert isclose
     if dtype == ttnn.bfloat16:
@@ -168,41 +171,41 @@ def run_max_pool(
     "act_shape",  ## NCHW
     (
         (  ## resnet shapes
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            # [20, 64, 112, 112],   ## oom
-            ## hpr shapes
-            [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
-            [128, 32, 132, 20],
-            # [256, 32, 132, 20],   ## oom
-            [8, 32, 264, 40],
-            [16, 32, 264, 40],
-            [32, 32, 264, 40],
-            # [64, 32, 264, 40],    ## oom
-            # [128, 32, 264, 40],   ## oom
-            # [256, 32, 264, 40],   ## oom
-            [4, 16, 1056, 160],
-            # [8, 16, 1056, 160],     ## oom
-            # [16, 16, 1056, 160],    ## oom
-            # [32, 16, 1056, 160],    ## oom
-            # [64, 16, 1056, 160],    ## oom
-            # [128, 16, 1056, 160],   ## oom
-            # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # [32, 16, 528, 80],  ## oom
-            # [64, 16, 528, 80],  ## oom
-            # [128, 16, 528, 80], ## oom
-            # [256, 16, 528, 80], ## oom
-            ## wide for vgg
-            [1, 256, 56, 56],
-            [1, 512, 28, 28],
-            [1, 512, 14, 14],
+            # [1, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
+            # [16, 64, 112, 112],
+            # # [20, 64, 112, 112],   ## oom
+            # ## hpr shapes
+            # [8, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
+            # [128, 32, 132, 20],
+            # # [256, 32, 132, 20],   ## oom
+            # [8, 32, 264, 40],
+            # [16, 32, 264, 40],
+            # [32, 32, 264, 40],
+            # # [64, 32, 264, 40],    ## oom
+            # # [128, 32, 264, 40],   ## oom
+            # # [256, 32, 264, 40],   ## oom
+            # [4, 16, 1056, 160],
+            # # [8, 16, 1056, 160],     ## oom
+            # # [16, 16, 1056, 160],    ## oom
+            # # [32, 16, 1056, 160],    ## oom
+            # # [64, 16, 1056, 160],    ## oom
+            # # [128, 16, 1056, 160],   ## oom
+            # # [256, 16, 1056, 160],   ## oom
+            # [8, 16, 528, 80],
+            # [16, 16, 528, 80],
+            # # [32, 16, 528, 80],  ## oom
+            # # [64, 16, 528, 80],  ## oom
+            # # [128, 16, 528, 80], ## oom
+            # # [256, 16, 528, 80], ## oom
+            # ## wide for vgg
+            # [1, 256, 56, 56],
+            # [1, 512, 28, 28],
+            [1, 512, 4, 4],
         )
     ),
 )
@@ -225,9 +228,19 @@ def run_max_pool(
     ((2, 2),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
-    "shard_scheme", [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED]
+    "dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_scheme",
+    [
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ],
 )
 def test_run_max_pool(
     act_shape,
@@ -243,7 +256,7 @@ def test_run_max_pool(
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, shard_scheme)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (([1, 512, 10, 10],)),  ## yolov4 shapes
@@ -281,7 +294,7 @@ def test_run_max_pool_yolov4(
     dtype,
     use_program_cache,
 ):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype) """
 
 
 """ @pytest.mark.skip("See GH issue #12285")

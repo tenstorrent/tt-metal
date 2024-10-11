@@ -78,7 +78,14 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     constexpr uint32_t MAX_SMALL_KERNEL_SIZE_HW = 16;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+    const bool is_wide_reduction = in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ?
+        in_ntiles_c > MAX_TILES_PER_REDUCTION :
+        (in_ntiles_c / num_shards) > MAX_TILES_PER_REDUCTION;
+
+    printf("is wide reduction: %d\n", is_wide_reduction);
+    printf("in_ntiles_c: %d\n", in_ntiles_c);
+    printf("num_shards: %d\n", num_shards);
+    printf("MAX_TILES_PER_REDUCTION: %d\n", MAX_TILES_PER_REDUCTION);
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
@@ -429,7 +436,7 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     auto pad_w = sliding_window_config.pad_hw.second;
     auto dilation_h = sliding_window_config.dilation_hw.first;
     auto dilation_w = sliding_window_config.dilation_hw.second;
-    auto num_shards = sliding_window_config.core_range_set.size();
+    auto num_shards = sliding_window_config.core_range_set.num_cores();
 
     return max_pool_2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
