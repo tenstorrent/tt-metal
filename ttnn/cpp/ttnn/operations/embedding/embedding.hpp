@@ -30,31 +30,38 @@ struct EmbeddingOperation {
         if (pad_token.has_value()) {
             embeddings_type = EmbeddingsType::PADDED;
         }
+        Tensor mutable_input_tensor = input_tensor_arg;
+        Tensor mutable_weight = weight_arg;
+        if (mutable_input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
+            mutable_input_tensor = ttnn::to_layout(mutable_input_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+        }
+        if (mutable_weight.get_layout() == ttnn::TILE_LAYOUT) {
+            mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+        }
+        auto hidden_embedding_dim = mutable_weight.get_shape()[-1];
+        auto padded_hidden_embedding_dim = mutable_weight.get_shape().with_tile_padding()[-1];
+        auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
-        auto hidden_embedding_dim = weight_arg.get_shape()[-1];
-        auto padded_hidden_embedding_dim = weight_arg.get_shape().with_tile_padding()[-1];
-        auto weight = ttnn::unsqueeze_to_4D(weight_arg);
-
-        auto batch_size = input_tensor_arg.get_shape()[0];
-        auto sentence_size = input_tensor_arg.get_shape()[-1];
+        auto batch_size = mutable_input_tensor.get_shape()[0];
+        auto sentence_size = mutable_input_tensor.get_shape()[-1];
         auto input_tensor =
-            ttnn::reshape(input_tensor_arg, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+            ttnn::reshape(mutable_input_tensor, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
 
-        bool tilized = layout == ttnn::TILE_LAYOUT;
+        bool tilized = false;
         auto embeddings = operation::run(
-                              Embeddings{
-                                  .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                                  .tilized = tilized,
-                                  .embeddings_type = embeddings_type,
-                                  .pad_token = pad_token,
-                                  .output_dtype = dtype.value_or(weight.get_dtype())},
-                              {input_tensor, weight})
-                              .at(0);
+                                Embeddings{
+                                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                                    .tilized = tilized,
+                                    .embeddings_type = embeddings_type,
+                                    .pad_token = pad_token,
+                                    .output_dtype = dtype.value_or(weight.get_dtype())},
+                                {input_tensor, weight})
+                                .at(0);
         embeddings = ttnn::reshape(
             embeddings, ttnn::Shape{std::array<uint32_t, 3>{batch_size, sentence_size, hidden_embedding_dim}});
+        embeddings = ttnn::to_layout(embeddings, layout, std::nullopt, std::nullopt, (Device*)nullptr);
         return embeddings;
     }
-
     static inline auto invoke(
         const Tensor& input_tensor_arg,
         const Tensor& weight_arg,
