@@ -1,5 +1,5 @@
 CreateBuffer
 =================
 
-.. doxygenfunction:: CreateBuffer(const InterleavedBufferConfig & config);
-.. doxygenfunction:: CreateBuffer(const ShardedBufferConfig & config);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const InterleavedBufferConfig & config);
+.. doxygenfunction:: tt::tt_metal::v0::CreateBuffer(const ShardedBufferConfig & config);

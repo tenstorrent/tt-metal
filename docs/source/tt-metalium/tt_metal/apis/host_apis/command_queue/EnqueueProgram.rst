@@ -1,4 +1,4 @@
 EnqueueProgram
 ==============
 
-.. doxygenfunction:: EnqueueProgram(CommandQueue& cq, Program& program, bool blocking)
+.. doxygenfunction:: tt::tt_metal::v0::EnqueueProgram(CommandQueue& cq, Program& program, bool blocking)
