@@ -210,9 +210,9 @@ bool test_compile_program_after_clean_kernel_binary_directory(Device *device) {
     std::unordered_map<std::string, std::string> kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
 
     ClearKernelCache(device->build_key());
-    program.invalidate_compile();
-    auto second_kernel_cache_status = CompileProgramTestWrapper(device, program);
-    assert_program_cache_hit_status(program, /*hit_expected=*/false, second_kernel_cache_status);
+    auto second_program = create_program(device, default_attributes);
+    auto second_kernel_cache_status = CompileProgramTestWrapper(device, second_program);
+    assert_program_cache_hit_status(second_program, /*hit_expected=*/false, second_kernel_cache_status);
     assert_kernel_hash_matches(kernel_name_to_hash, second_kernel_cache_status);
 
     return pass;

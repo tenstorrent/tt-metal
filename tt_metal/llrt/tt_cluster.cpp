@@ -37,6 +37,8 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
+    tt_metal::hal.initialize(arch_);
+
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
@@ -284,7 +286,8 @@ void Cluster::open_driver(
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
-    device_driver->set_device_dram_address_params(dram_address_params);
+    std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+    device_driver->set_device_dram_address_params(tt_device_dram_address_params{dram_barrier_base});
     device_driver->set_device_l1_address_params(l1_address_params);
 
     this->get_metal_desc_from_tt_desc(
