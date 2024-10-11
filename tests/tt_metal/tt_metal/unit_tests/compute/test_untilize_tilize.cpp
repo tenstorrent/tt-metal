@@ -360,7 +360,7 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .input_single_tile_size = 2 * 1024,
-                .output_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 1024 * (fp32_dest_acc_en ? 4 : 2),
                 .num_tiles_r = num_tile[0],
                 .num_tiles_c = num_tile[1],
                 .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
