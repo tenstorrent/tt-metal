@@ -75,7 +75,7 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
 
     KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args, writer_defines));
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
     KernelHandle compute_kernel_id = CreateKernel(
         program,
@@ -83,7 +83,8 @@ UniformDeviceOperation::Factory::cached_program_t UniformDeviceOperation::Factor
         all_cores,
         ComputeConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .fp32_dest_acc_en =
+                true,  // must always be true otherwise, generated float number are always in range of [0.4, 0.5]
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
         });

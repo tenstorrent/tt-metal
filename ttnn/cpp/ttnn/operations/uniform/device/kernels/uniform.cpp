@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/common.h"
+#include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/rand_uint.h"
 
