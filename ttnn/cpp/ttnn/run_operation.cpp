@@ -303,7 +303,7 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     uint8_t cq_id);
 
 std::vector<LegacyShape> extract_legacy_shapes(
-    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>>&& shapes, const std::function<Layout(size_t idx)>& layout_provider) {
+    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>>&& shapes, const std::function<std::pair<DataType, Layout>(size_t idx)>& layout_provider) {
     if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(shapes)) {
         return std::get<std::vector<tt::tt_metal::LegacyShape>>(std::move(shapes));
     }
@@ -311,8 +311,8 @@ std::vector<LegacyShape> extract_legacy_shapes(
     std::vector<LegacyShape> legacy_shapes;
     legacy_shapes.reserve(simple_shapes.size());
     for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
-        auto layout = layout_provider(idx);
-        legacy_shapes.emplace_back(simple_shapes[idx].as_vector(), get_physical_shape(simple_shapes[idx], layout).as_vector());
+        auto [data_type, layout] = layout_provider(idx);
+        legacy_shapes.emplace_back(simple_shapes[idx].as_vector(), get_physical_shape(simple_shapes[idx], data_type, layout).as_vector());
     }
     return legacy_shapes;
 }
@@ -329,9 +329,6 @@ Tensors run_with_autoformat(
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [](size_t) {
-        return Layout::TILE;
-    });
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
@@ -366,6 +363,10 @@ Tensors run_with_autoformat(
 
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
+    auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
+        return std::pair{output_tensors[idx].get_dtype(), Layout::TILE};
+    });
+
     TT_ASSERT(output_tensors.size() == output_shapes.size());
 
     formatted_input_tensors.clear();
@@ -389,9 +390,6 @@ Tensors run_with_autoformat(
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     Device* device = detail::get_device(input_tensors, optional_input_tensors);
-    auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
-        return output_layouts[idx];
-    });
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
     TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());
@@ -426,6 +424,10 @@ Tensors run_with_autoformat(
     }
 
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
+
+    auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
+        return std::pair{output_tensors[idx].get_dtype(), output_layouts[idx]};
+    });
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());
