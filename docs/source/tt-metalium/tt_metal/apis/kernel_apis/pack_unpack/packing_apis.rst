@@ -5,4 +5,4 @@ Packing and Unpacking APIs allow reinterpreting or construct/reading of buffers 
 
 .. toctree::
     pack_tile
-    unpack
+    reconfig_data_format
