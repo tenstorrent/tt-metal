@@ -50,17 +50,7 @@ public:
 
 };
 
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value) {
-    os << "Alignment([";
-    for (size_t i = 0; i < value.size(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << value[i];
-    }
-    os << "])";
-    return os;
-}
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value);
 
 
 // Alignment is a physical row alignment for each dimension of the tensor (except innermost dimension - there its a column alignment).
@@ -103,7 +93,7 @@ public:
 
     // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
-    static TensorLayout fromLegacyPaddeShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+    static TensorLayout fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
 
     Layout get_layout() const { return mLayout; }
     DataType get_data_type() const { return mDataType; }

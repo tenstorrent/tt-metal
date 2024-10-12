@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor_layout.hpp"
+#include <vector>
 #include "ttnn/tensor/enum_types.hpp"
 #include "types.hpp"
 
@@ -61,6 +62,18 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)
     return os;
 }
 
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value) {
+    os << "Alignment([";
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << value[i];
+    }
+    os << "])";
+    return os;
+}
+
 TensorLayout::TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig, const Alignment& alignment)
     : mDataType(dataType),
       mTileSize(tileSize),
@@ -91,30 +104,9 @@ TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig&
 
 namespace {
 
-// This function is used to convert the legacy padded shape to Alignment
-// This is a temporary solution until we get rid of the LegacyPaddedShape
-// Keep in mind:
-//    The benefit of Alignment compared to LegacyPaddedShape is that it allows
-//    to pad between Channels and Batches with a row granularity.
-// Examples:
-// 1. Given LegacyPaddedShape (1, 1, 16, 20), alignment is (1, 1, 16, 20)
-//    means Shape (1, 1, 16, 16) which in theory takes physical space (1 * 1 * 16, 16)
-//    will take (1 * 1 * 16, 20)
-//
-// 2. Given LegacyPaddedShape (1, 1, 32, 32), alignment is (1, 1, 32, 32)
-//    Shape (1, 1, 16, 16)
-//      which in theory takes physical space (1 * 1 * 16, 16)
-//      will take (1 * 1 * 32, 32)
-//
-// 3. Given LegacyPaddedShape (2, 3, 32, 32), alignment is (2*3*32, 3*32, 32, 32).
-//    Shape (2, 2, 16, 16)
-//      which in theory takes physical space (2 * 2 * 16, 16)
-//      will take (2 * 3 * 32, 32)
-
 Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShape) {
-    std::vector<uint32_t> values;
     const auto rank = legacyPaddedShape.rank();
-    values.resize(rank);
+    std::vector<uint32_t> values(rank);
 
     if(rank >= 1) {
         values[rank - 1] = legacyPaddedShape[rank - 1];
@@ -129,6 +121,27 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShap
     Alignment result(values);
     return result;
 }
+
+// 2, 3, 16, 16
+// 2, 3, 32, 32
+// 2*3*32, 3*32, 32, 32
+// Create a method to convert from Alignment to LegacyPaddedShape
+// ttnn::SimpleShape alignmentToLegacyPaddedShape(const Alignment& alignment, const ttnn::SimpleShape& shape) {
+//     const auto rank = alignment.size();
+//     std::vector<uint32_t> values(rank);
+//     if(rank >= 1) {
+//         values[rank - 1] = alignment[rank - 1];
+//     }
+//     if(rank >= 2) {
+//         values[rank - 2] = alignment[rank - 2];
+//     }
+
+//     for(int i = rank - 3; i >= 0; i--) {
+//         values[i] = alignment[i] / values[i + 1];
+//     }
+
+//     return ttnn::SimpleShape(values);
+//}
 }
 
 // Private constructor to create TensorLayout from LegacyPaddedShape
@@ -137,7 +150,7 @@ TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig&
     mLegacyPaddedShape = legacyPaddedShape;
 }
 
-TensorLayout TensorLayout::fromLegacyPaddeShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
+TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
     return TensorLayout(dataType, layout, memoryConfig, legacyPaddedShape);
 }
 
@@ -335,19 +348,16 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
 }
 
 Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
-    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
+    const int rank = static_cast<int>(shape.rank());
+    const int alignmentRank = static_cast<int>(mAlignment.size());
 
-    std::vector<uint32_t> strides;
-    strides.resize(shape.rank());
+    std::vector<uint32_t> strides(rank, 1);
+    for (int i = rank - 2; i >= 0; i--) {
+        strides[i] = strides[i + 1] * shape[i + 1];
 
-    for (int i = shape.rank() - 1; i >= 0; i--) {
-        if (i == shape.rank() - 1) {
-            strides[i] = 1;
-        } else {
-            strides[i] = strides[i + 1] * shape[i + 1];
-            if(mAlignment.size() > i) {
-                strides[i] = round_up(strides[i], mAlignment[i]);
-            }
+        const int alignment_index = i - (rank - alignmentRank) + 1;
+        if(alignment_index >= 0) {
+            strides[i] = round_up(strides[i], mAlignment[alignment_index]);
         }
     }
 
@@ -358,6 +368,7 @@ Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
 ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
 {
     TT_FATAL(mLegacyPaddedShape.has_value(), "Use get_physical_size() or get_strides(). Calling get_padded_shape() is not allowed for TensorLayout created w/o LegacyPaddedShape. ");
+    auto strides = get_strides(shape);
     return mLegacyPaddedShape.value();
 }
 
