@@ -138,7 +138,7 @@ void MAIN {
             #ifndef RMSNORM
             // calculate var = E(x^2) - E(x)^2
             // E(x)^2
-            unpack_reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
+            reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
             cb_reserve_back(cb_ex_sqr, 1);
             cb_wait_front(cb_stats_reduced, 1);
             tile_regs_acquire();
@@ -152,8 +152,8 @@ void MAIN {
 
 
             // E(x^2) - E(x)^2
-            unpack_reconfig_data_format_srca(cb_stats_reduced, cb_ex2);
-            unpack_reconfig_data_format_srcb(cb_stats_reduced, cb_ex_sqr);
+            reconfig_data_format_srca(cb_stats_reduced, cb_ex2);
+            reconfig_data_format_srcb(cb_stats_reduced, cb_ex_sqr);
             pack_reconfig_data_format(cb_var);
             cb_wait_front(cb_ex2, 1);
             cb_wait_front(cb_ex_sqr, 1);
@@ -172,7 +172,7 @@ void MAIN {
 
 
             // 1/[sqrt(Var + eps)],
-            unpack_reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
+            reconfig_data_format(cb_var, cb_eps);    // cb_var is cb_stats in case of RMS norm
             pack_reconfig_data_format(cb_stats_reduced);
             cb_wait_front(cb_var, 1);
             cb_wait_front(cb_eps, 1);
@@ -198,7 +198,7 @@ void MAIN {
 
     #ifndef RMSNORM
     // x - E[x]
-    unpack_reconfig_data_format(cb_in0, cb_ex_global);
+    reconfig_data_format(cb_in0, cb_ex_global);
     pack_reconfig_data_format(cb_xmm);
     index_h_offset = 0;
     sub_bcast_cols_init_short();
@@ -234,7 +234,7 @@ void MAIN {
     }
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
-    unpack_reconfig_data_format(cb_xmm, cb_ex_global);
+    reconfig_data_format(cb_xmm, cb_ex_global);
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
@@ -269,7 +269,7 @@ void MAIN {
     cb_wait_front(cb_im, num_tiles_per_block);
 
     if constexpr(do_gamma) {
-        unpack_reconfig_data_format(cb_im, cb_gamma);
+        reconfig_data_format(cb_im, cb_gamma);
         if constexpr(do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
@@ -301,7 +301,7 @@ void MAIN {
     }
 
     if constexpr(do_beta) {
-        unpack_reconfig_data_format(cb_fusion, cb_beta);
+        reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
         cb_wait_front(cb_beta, block_w);

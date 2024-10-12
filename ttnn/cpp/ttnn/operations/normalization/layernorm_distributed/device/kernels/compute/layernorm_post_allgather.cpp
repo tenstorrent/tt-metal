@@ -84,7 +84,7 @@ void MAIN {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        unpack_reconfig_data_format(cb_stats, cb_reduce);
+        reconfig_data_format(cb_stats, cb_reduce);
         pack_reconfig_data_format(cb_stats_reduced);
 
         /*
@@ -127,7 +127,7 @@ void MAIN {
         /*
          * E[x]**2
          */
-        unpack_reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
+        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
         pack_reconfig_data_format(cb_mean_squared);
         mul_tiles_init();
         cb_reserve_back(cb_mean_squared, onetile);
@@ -142,7 +142,7 @@ void MAIN {
         /*
          * E[x**2] - E[x]**2
          */
-        unpack_reconfig_data_format(cb_stats_reduced, cb_mean_squared);
+        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
         pack_reconfig_data_format(cb_var);
         sub_tiles_init();
 
@@ -158,7 +158,7 @@ void MAIN {
         /*
          * x - E[x]
          */
-        unpack_reconfig_data_format(cb_inp, cb_stats_reduced);
+        reconfig_data_format(cb_inp, cb_stats_reduced);
         pack_reconfig_data_format(cb_x_minus_mean);
         sub_bcast_cols_init_short();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -183,7 +183,7 @@ void MAIN {
          */
         cb_wait_front(cb_var, 1);
         cb_reserve_back(cb_recip_sqrt_var, 1);
-        unpack_reconfig_data_format(cb_var, cb_eps);
+        reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
         add_tiles_init();
@@ -204,7 +204,7 @@ void MAIN {
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
 
-        unpack_reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
+        reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
         pack_reconfig_data_format(cb_x_normed);
         mul_bcast_cols_init_short();
         cb_wait_front(cb_recip_sqrt_var, 1);
@@ -226,7 +226,7 @@ void MAIN {
         /*
          * x_normed * gamma
          */
-        unpack_reconfig_data_format(cb_x_normed, cb_gamma);
+        reconfig_data_format(cb_x_normed, cb_gamma);
         pack_reconfig_data_format(cb_times_gamma_out);
         cb_wait_front(cb_gamma, Wt);
         mul_bcast_rows_init_short();
@@ -247,7 +247,7 @@ void MAIN {
             /*
             * x_normed * gamma + beta
             */
-            unpack_reconfig_data_format(cb_times_gamma_out, cb_beta);
+            reconfig_data_format(cb_times_gamma_out, cb_beta);
             pack_reconfig_data_format(cb_out);
             cb_wait_front(cb_beta, Wt);
             add_bcast_rows_init_short();
