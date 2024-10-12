@@ -146,9 +146,9 @@ if(WITH_PYTHON_BINDINGS)
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
-if (NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
-endif()
+#if (NOT NUMA_LIBRARY)
+#    message(FATAL_ERROR "NUMA library not found")
+#endif()
 
 # Bring in UMD and all it's dependencies
 add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
