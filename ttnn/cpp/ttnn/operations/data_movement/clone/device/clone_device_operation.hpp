@@ -16,13 +16,13 @@ struct CloneOperation {
         const Tensor& input;
     };
 
-    using shape_return_value_t = ttnn::SimpleShape;
+    using shape_return_value_t = SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            KernelHandle read_kernel_id;
+            KernelHandle write_kernel_id;
             std::vector<CoreCoord> cores;
         };
 
