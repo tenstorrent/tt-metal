@@ -21,9 +21,11 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-template <bool untilize_en = false>
-inline void llk_math_hw_configure_disaggregated() {
-   _llk_math_hw_configure<untilize_en>();
+template <bool untilize_en = false, bool skip_inputs = false>
+inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+    std::uint32_t srca_operand_id = get_operand_id(srca_operand);
+    std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
+    _llk_math_hw_configure_<untilize_en, skip_inputs>(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
 inline void llk_math_wait_for_dest_available() {
@@ -56,23 +58,27 @@ inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) { _
 
 inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump_seek_(offset); }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
-    _llk_math_reconfig_data_format_srca_(unpack_dst_format[new_srca_operand_id]);
+    _llk_math_reconfig_data_format_srca_<to_from_int8, is_fp32_dest_acc_en>(unpack_dst_format[new_srca_operand_id]);
 }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
-    _llk_math_reconfig_data_format_srcb_(unpack_dst_format[new_srcb_operand_id]);
+    _llk_math_reconfig_data_format_srcb_<to_from_int8, is_fp32_dest_acc_en>(unpack_dst_format[new_srcb_operand_id]);
 }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-    _llk_math_reconfig_data_format_(unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
+    _llk_math_reconfig_data_format_<to_from_int8, is_fp32_dest_acc_en>(unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
 }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
@@ -85,31 +91,33 @@ inline void llk_math_reconfig_data_format(
 
     if ((unpack_dst_format[old_srca_operand_id] != unpack_dst_format[new_srca_operand_id]) &&
         (unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])) {
-        llk_math_reconfig_data_format(srca_new_operand, srcb_new_operand);
+        llk_math_reconfig_data_format<to_from_int8, is_fp32_dest_acc_en>(srca_new_operand, srcb_new_operand);
     } else if ((unpack_dst_format[old_srca_operand_id] != unpack_dst_format[new_srca_operand_id])) {
-        llk_math_reconfig_data_format_srca(srca_new_operand);
+        llk_math_reconfig_data_format_srca<to_from_int8, is_fp32_dest_acc_en>(srca_new_operand);
     } else if ((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])) {
-        llk_math_reconfig_data_format_srcb(srcb_new_operand);
+        llk_math_reconfig_data_format_srcb<to_from_int8, is_fp32_dest_acc_en>(srcb_new_operand);
     }
 }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t srca_old_operand, const std::uint32_t srca_new_operand) {
     std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
 
     if ((unpack_dst_format[old_srca_operand_id] != unpack_dst_format[new_srca_operand_id])) {
-        llk_math_reconfig_data_format_srca(srca_new_operand);
+        llk_math_reconfig_data_format_srca<to_from_int8, is_fp32_dest_acc_en>(srca_new_operand);
     }
 }
 
+template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t srcb_old_operand, const std::uint32_t srcb_new_operand) {
     std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
     if ((unpack_dst_format[old_srcb_operand_id] != unpack_dst_format[new_srcb_operand_id])) {
-        llk_math_reconfig_data_format_srcb(srcb_new_operand);
+        llk_math_reconfig_data_format_srcb<to_from_int8, is_fp32_dest_acc_en>(srcb_new_operand);
     }
 }
 
