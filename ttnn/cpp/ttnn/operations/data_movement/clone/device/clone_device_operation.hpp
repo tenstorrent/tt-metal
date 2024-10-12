@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 
@@ -10,6 +11,7 @@ struct CloneOperation {
     struct operation_attributes_t {
         const DataType dtype;
         const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
@@ -50,7 +52,10 @@ struct CloneOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input, const std::optional<DataType>& dtype, const std::optional<MemoryConfig>& memory_config);
+        const Tensor& input,
+        const std::optional<DataType>& dtype,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::data_movement::clone
