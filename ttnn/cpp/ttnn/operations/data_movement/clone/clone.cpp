@@ -8,7 +8,10 @@
 
 namespace ttnn::operations::data_movement::clone {
 Tensor Clone::invoke(
-    const Tensor& input, const std::optional<DataType>& dtype, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prim::clone(input, dtype, memory_config);
+    const Tensor& input,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return ttnn::prim::clone(input, dtype, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::data_movement::clone

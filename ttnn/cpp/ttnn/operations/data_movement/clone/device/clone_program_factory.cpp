@@ -98,6 +98,8 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         WriterDataMovementConfig(writer_compile_time_args, {}));
 
     if (convert_dtype) {
+        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+            get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
         auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
             if (!core_group.ranges().empty()) {
                 vector<uint32_t> compute_kernel_args = {
@@ -109,7 +111,13 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                     program,
                     "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
                     core_group,
-                    ComputeConfig{.compile_args = compute_kernel_args});
+                    ComputeConfig{
+                        .math_fidelity = math_fidelity,
+                        .fp32_dest_acc_en = fp32_dest_acc_en,
+                        .dst_full_sync_en = dst_full_sync_en,
+                        .math_approx_mode = math_approx_mode,
+                        .compile_args = compute_kernel_args,
+                    });
             }
         };
         create_compute_kernel(core_group_1, num_units_per_core_group_1);
