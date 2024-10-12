@@ -138,6 +138,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     printf("raw_in_cb_npages: %d\n", raw_in_cb_npages);
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
+    printf("raw_in_cb_pagesize: %d\n", raw_in_cb_pagesize);
     CircularBufferConfig raw_in_cb_config =
         CircularBufferConfig(raw_in_cb_npages * raw_in_cb_pagesize, {{raw_in_cb_id, in_df}})
             .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
@@ -150,6 +151,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
+    printf("--\n");
     printf("indices_nbytes: %d\n", indices_nbytes);
     printf("out_nhw_per_core: %d\n", out_nhw_per_core);
     printf("in_reader_indices_cb_pagesize: %d\n", in_reader_indices_cb_pagesize);
@@ -189,6 +191,11 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor * nblocks;
+    printf("--\n");
+    printf("in_cb_sz: %d\n", in_cb_sz);
+    printf("in_cb_page_padded: %d\n", in_cb_page_padded);
+    printf("in_cb_pagesize: %d\n", in_cb_pagesize);
+    printf("in_cb_npages: %d\n", in_cb_npages);
 
     CircularBufferConfig in_cb_config_0 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_0, in_df}})
                                               .set_page_size(in_cb_id_0, in_cb_pagesize);

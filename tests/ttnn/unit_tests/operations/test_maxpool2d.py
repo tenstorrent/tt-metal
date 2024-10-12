@@ -205,7 +205,7 @@ def run_max_pool(
             # ## wide for vgg
             # [1, 256, 56, 56],
             # [1, 512, 28, 28],
-            [1, 512, 6, 6],
+            [1, 1024, 6, 6],
         )
     ),
 )
@@ -213,14 +213,14 @@ def run_max_pool(
     "kernel_size",
     (
         (2, 2),
-        (3, 3),
+        # (3, 3),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
+        # (1, 1),
     ),
 )
 @pytest.mark.parametrize(
