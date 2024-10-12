@@ -52,11 +52,15 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
 }
 
 std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t> CloneOperation::invoke(
-    const Tensor& input, const std::optional<DataType>& dtype, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
             dtype.value_or(input.get_dtype()),
             memory_config.value_or(input.memory_config()),
+            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
         tensor_args_t{input},
     };

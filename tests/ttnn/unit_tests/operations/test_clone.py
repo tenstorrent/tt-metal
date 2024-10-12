@@ -10,6 +10,12 @@ import ttnn
 from models.utility_functions import comp_allclose_and_pcc
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.test_utils import (
+    get_compute_kernel_options,
+    compute_kernel_options,
+    compute_kernel_ids,
+)
+
 
 def to_ttnn(
     torch_tensor,
@@ -116,6 +122,7 @@ def run_clone(
     input_dtype,
     output_dtype,
     tilized,
+    compute_kernel_options,
     device,
 ):
     """
@@ -135,6 +142,8 @@ def run_clone(
         Data type of the output tensor (must be None or match input_dtype when not tilized).
     tilized: bool
         Whether to use TILE_LAYOUT or ROW_MAJOR_LAYOUT for NPU tensor.
+    compute_kernel_options:
+        Configuration options for the compute kernel.
     device: ttnn.device
         Device where the operation is performed (e.g., NPU device).
 
@@ -166,6 +175,7 @@ def run_clone(
         ttnn_input,
         dtype=get_lib_dtype(ttnn, output_dtype),
         memory_config=output_memory_config,
+        compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
     )
 
     torch_output = to_torch(ttnn_output, shape)
@@ -218,6 +228,7 @@ def test_clone_shape(
         "bfloat16",
         None,
         tilized,
+        None,
         device,
     )
 
@@ -252,6 +263,7 @@ def test_clone_memory_config(
         "bfloat16",
         None,
         tilized,
+        None,
         device,
     )
 
@@ -277,14 +289,16 @@ def test_clone_memory_config(
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_clone_dtype_conversion(
     input_dtype,
     output_dtype,
     tilized,
+    compute_kernel_options,
     device,
 ):
     """
-    Test case to verify the clone operation with various input/output dtype combinations.
+    Test case to verify the clone operation with various input/output dtype combinations and compute kernel configs.
     """
     torch.manual_seed(2024)
     run_clone(
@@ -294,6 +308,7 @@ def test_clone_dtype_conversion(
         input_dtype,
         output_dtype,
         tilized,
+        compute_kernel_options,
         device,
     )
 
@@ -320,6 +335,7 @@ def test_clone_callback(
             "bfloat16",
             None,
             tilized,
+            None,
             device,
         )
         torch_dummy = torch.randn([32, 32])
