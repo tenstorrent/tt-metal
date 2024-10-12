@@ -21,6 +21,7 @@ void bind_clone_operation(py::module& module) {
         * :attr:`input`: The tensor to be cloned.
         * :attr:`dtype`: The target data type of the cloned tensor.
         * :attr:`memory_config`: The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
+        * :attr:`compute_kernel_config`: The configuration for the compute kernel.
     )doc";
 
     bind_registered_operation(
@@ -32,6 +33,7 @@ void bind_clone_operation(py::module& module) {
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
         });
 }
 }  // namespace ttnn::operations::data_movement::clone

@@ -30,7 +30,7 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
     if (input.storage_type() != StorageType::DEVICE) {
         return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
-        return ttnn::clone(input, std::nullopt, mem_config);
+        return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
     } else {
         return input;
     }
