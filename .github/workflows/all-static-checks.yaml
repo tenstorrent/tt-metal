@@ -82,11 +82,11 @@ jobs:
     - name: Install clang-tidy
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang-tidy
+        sudo apt-get install -y clang-tidy libhwloc-dev
       continue-on-error: true
     - name: Prepare compile_commands.json
       run: |
-        cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
       continue-on-error: true
     - name: Create results directory
       run: |
