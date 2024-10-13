@@ -73,7 +73,7 @@ ttnn::Tensor RepeatOperation::invoke(
             auto rm_output = ttnn::untilize(output_tensors[0]);
             auto sliced_output = ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
 
-            if (sliced_output.get_padded_shape().volume() % tt::constants::TILE_HW != 0) {
+            if (sliced_output.get_padded_shape().volume() % tt::constants::TILE_HW == 0) {
                 // slice preserved tile padding for us, so we can just tilize now.
                 return ttnn::tilize(sliced_output, input_tensor.memory_config());
             }
