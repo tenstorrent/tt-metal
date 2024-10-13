@@ -100,7 +100,7 @@ jobs:
         git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | clang-tidy-diff -p1 -path build -export-fixes clang-tidy-result/fixes.yml
       continue-on-error: true
     - name: Run clang-tidy-pr-comments action
-      uses: platisd/clang-tidy-pr-comments@v1
+      uses: platisd/clang-tidy-pr-comments@v1.5.0
       with:
         # The GitHub token (or a personal access token)
         github_token: ${{ secrets.GITHUB_TOKEN }}
