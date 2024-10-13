@@ -64,7 +64,7 @@ jobs:
     name: Static analysis
   clang-tidy:
     runs-on: ubuntu-latest
-    container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:v0.53.0-rc14-dev
+    container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
     permissions:
       pull-requests: write
       # OPTIONAL: auto-closing conversations requires the `contents` permission
@@ -95,10 +95,6 @@ jobs:
       run: |
         mkdir clang-tidy-result
       continue-on-error: true
-    - name: Setup Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
     - name: Analyze
       run: |
         git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | clang-tidy-diff -p1 -path build -export-fixes clang-tidy-result/fixes.yml
