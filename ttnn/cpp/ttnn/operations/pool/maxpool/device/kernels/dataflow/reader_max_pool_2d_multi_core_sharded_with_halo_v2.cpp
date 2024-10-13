@@ -94,7 +94,7 @@ void kernel_main() {
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
 
-    uint32_t print_id = 0;
+    uint32_t print_id = 1;
 
     if (reader_id == print_id) {
         DPRINT << "reader_id: " << reader_id << " reader_nindices: " << reader_nindices << ENDL();
