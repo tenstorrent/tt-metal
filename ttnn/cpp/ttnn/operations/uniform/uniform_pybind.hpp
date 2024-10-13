@@ -4,13 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include "pybind11/pybind_fwd.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn::operations::uniform {
-
 void bind_uniform_operation(py::module &module);
-
 }  // namespace ttnn::operations::uniform
