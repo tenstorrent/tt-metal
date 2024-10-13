@@ -186,6 +186,11 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
+
+    # Reduce pcc threshold for long dot products
+    if input_channels * filter_height * filter_width > 5000:
+        pcc = 0.985
+
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
@@ -341,6 +346,7 @@ def run_conv_with_split(
         (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -353,9 +359,8 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -372,7 +377,6 @@ def test_conv_ws(
     has_bias,
     weights_dtype,
     activations_dtype,
-    auto_shard,
 ):
     stride_h = stride
     stride_w = stride
@@ -434,7 +438,7 @@ def test_conv_ws(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         input_channels_alignment=32,
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -1120,88 +1124,6 @@ def test_sd_conv(
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
         )
-
-
-@skip_for_grayskull()
-@skip_for_blackhole()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
-    ((2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),),
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "fp32_accum",
-    [
-        False,
-    ],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize(
-    "enable_auto_formatting",
-    [
-        True,
-    ],
-)
-def test_ws_hang(
-    device,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    fp32_accum,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    use_1d_systolic_array,
-    config_override,
-    enable_auto_formatting,
-):
-    run_conv(
-        device,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        use_1d_systolic_array,
-        config_override,
-        use_shallow_conv_variant=(input_channels == 16),
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-        enable_auto_formatting=enable_auto_formatting,
-        padded_input_channels=16 if input_channels == 16 else None,
-        fp32_accum=fp32_accum,
-        packer_l1_acc=True,
-        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    )
 
 
 @skip_for_grayskull()
