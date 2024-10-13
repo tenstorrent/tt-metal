@@ -739,3 +739,59 @@ def test_transpose_4d_wh_tile(shape, device):
     tt_output = ttnn.transpose(tt_input, -1, -2)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [[1, 8, 4096, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
+        [[1, 9, 8, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
+        [[64, 4, 49, 32], [-2, -1], ttnn.ROW_MAJOR_LAYOUT],  # Page size must be divisible by sizeof(uint32_t)
+        [
+            [1, 16, 6, 64],
+            [-1, -2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
+        [[1, 1370, 1, 3, 1280], [0, -2], ttnn.ROW_MAJOR_LAYOUT],  # greater than 4D
+        [[12, 3], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # need tensor for this one
+    ],
+)
+def test_transpose_failures(config, device):
+    pytest.skip("Failures after #13217 and #13005 fixed")
+    torch_input = torch.randn(config[0], dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(config[1][0], config[1][1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=config[2], device=device)
+    tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [
+            [1, 16, 6, 64],
+            [-1, -2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
+        [
+            [1, 16, 64, 6],
+            [-1, -2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
+        [
+            [1, 16, 64, 6],
+            [1, 2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 for HC as well...
+    ],
+)
+def test_transpose_unaligned(config, device):
+    # this will convert to tiled for now
+    torch_input = torch.randn(config[0], dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(config[1][0], config[1][1])
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=config[2], device=device)
+    tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)

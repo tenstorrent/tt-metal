@@ -32,14 +32,6 @@ inline bool has_tile_padding(const Tensor& t) {
     }
     return false;
 }
-uint32_t pround_up(uint32_t value, uint32_t multiple) {
-    if (multiple == 0) {
-        return value;
-    } else if (value == 0) {
-        return multiple;
-    }
-    return (value % multiple == 0) ? value : ((value + multiple - 1) / multiple) * multiple;
-}
 
 ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
@@ -67,8 +59,8 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
 
     uint32_t input_rank = a.get_shape().rank();
     if (a.layout() == Layout::TILE) {
-        padded_output_shape[input_rank - 1] = detail::pround_up(padded_output_shape[input_rank - 1], 32);
-        padded_output_shape[input_rank - 2] = detail::pround_up(padded_output_shape[input_rank - 2], 32);
+        padded_output_shape[input_rank - 1] = detail::round_up(padded_output_shape[input_rank - 1], 32);
+        padded_output_shape[input_rank - 2] = detail::round_up(padded_output_shape[input_rank - 2], 32);
     }
 
     ttnn::Shape final_shape = ttnn::Shape(output_shape, padded_output_shape);

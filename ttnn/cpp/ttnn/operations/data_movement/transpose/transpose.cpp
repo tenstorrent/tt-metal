@@ -30,10 +30,15 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     bool pad_c = false;
     bool tiled_only = false;
     bool pad_n = false;
-
+    uint32_t ROW_MAJOR_STICK_WIDTH = 16; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
+    uint32_t W = a.get_shape().with_tile_padding()[-1], H = a.get_shape().with_tile_padding()[-2];
     switch (transpose_dim) {
         case TransposeOpDim::HC:
-            pad_c = a.get_layout() == Layout::TILE && a.get_shape().with_tile_padding()[1] % 32 != 0;
+            tiled_only = a.get_layout() == Layout::TILE;
+            if ((!tiled_only) && ((W * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0)) { // for some reason this is a constraint on the RM transpose_hw kernel
+                tiled_only = true;
+            }
+            pad_c = tiled_only && a.get_shape().with_tile_padding()[1] % 32 != 0;
             break;
         // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
@@ -46,33 +51,54 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             tiled_only = true; // CN only has a tiled implementation at the moment
             break;
         case TransposeOpDim::WH: // THIS NEEDS TO BE FIXED
-            if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
+            if (((W * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0) || ((H * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0)) {
+                tiled_only = true;
+            }
+            else if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
                 tiled_only = a.shape()[-2] > 256; // horrible hack because PCC on transpose HW row major is terrible on GS in this code path - kernel spits out garbage and has some demuxing for greater than this size that doesn't work
             }
             else if (a.device()->arch() == tt::ARCH::WORMHOLE_B0) {
                 tiled_only = !a.is_sharded() && (a.shape()[-2]*a.shape()[-1] >= 400000); // CB blows up on large sizes, hack until transpose_wh_rm is optimized
             }
+            break;
         default:
             break;
     }
 
     if (a.get_layout() == Layout::ROW_MAJOR) {
+        // the assorted cases where only tiled works right now (HC with stick width constraint, WH with stick width constraint, CN)
         if (tiled_only) {
-            Tensor b = a;
-            b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (Device *)nullptr);
+            // convert to tiled
+            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (Device *)nullptr);
+            // pad c if needed
+            if (pad_c) {
+                ttnn::Shape padded_shape = b.get_shape().with_tile_padding();
+                ttnn::Shape shape = b.get_shape();
+                uint32_t C_rounded = round_up(padded_shape[1], 32);
+                b = ttnn::pad(b, std::array<uint32_t, 4>({padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}),
+                            std::array<uint32_t, 4>({0, 0, 0, 0}), 0);
+                b = ttnn::reshape(b, ttnn::Shape({shape[0], shape[1], shape[2], shape[3]}, {padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}));
+            }
+            // run the transpose
             b = operation::run(Transpose{transpose_dim, output_mem_config}, {b}).at(0);
-            b = ttnn::to_layout(b, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
+            // slice back to original shape
+            if (b.get_shape()[1] != b.get_shape().with_tile_padding()[1] || b.get_shape()[0] != b.get_shape().with_tile_padding()[0]) {
+                std::array<uint32_t, 4> begins = {0, 0, 0, 0};
+                std::array<uint32_t, 4> ends = {b.get_shape()[0], b.get_shape()[1], b.get_shape().with_tile_padding()[2], b.get_shape().with_tile_padding()[3]};
+                std::array<uint32_t, 4> step = {1, 1, 1, 1};
+                return ttnn::slice(b, begins, ends, step);
+            }
+            // back to original layout
+            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
             return b;
         }
         return operation::run(Transpose{transpose_dim, output_mem_config}, {a}).at(0);
     } else {
-        // TODO: Add pad_n to run_with_autoformat when needed
-
         if (TransposeOpDim::HC == transpose_dim) {
-            tt::tt_metal::LegacyShape padded_shape = a.get_legacy_shape();
-            ttnn::Shape shape = a.get_shape();
             Tensor b = a;
             if (pad_c) {
+                tt::tt_metal::LegacyShape padded_shape = a.get_legacy_shape();
+                ttnn::Shape shape = a.get_shape();
                 uint32_t C_rounded = round_up(padded_shape[1], 32);
                 b = ttnn::pad(a, std::array<uint32_t, 4>({padded_shape[0], C_rounded, padded_shape[2], padded_shape[3]}),
                             std::array<uint32_t, 4>({0, 0, 0, 0}), 0);

@@ -26,6 +26,9 @@ struct ExecuteTranspose {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const int64_t& dim1, const int64_t& dim2);
 };
 
+namespace detail {
+    uint32_t round_up(uint32_t value, uint32_t multiple);
+}
 
 }  // namespace operations::data_movement
 
