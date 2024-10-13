@@ -64,6 +64,7 @@ jobs:
     name: Static analysis
   clang-tidy:
     runs-on: ubuntu-latest
+    container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:v0.53.0-rc14-dev
     permissions:
       pull-requests: write
       # OPTIONAL: auto-closing conversations requires the `contents` permission
@@ -82,7 +83,7 @@ jobs:
     - name: Install clang-tidy
       run: |
         sudo apt-get update
-        sudo apt-get install -y clang-tidy libhwloc-dev libc++-17-dev libc++abi-17-dev
+        sudo apt-get install -y clang-tidy
       continue-on-error: true
     - name: Prepare compile_commands.json
       run: |
