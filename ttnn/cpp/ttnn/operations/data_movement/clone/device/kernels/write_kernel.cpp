@@ -5,15 +5,14 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool output_is_dram = get_compile_time_arg_val(1) == 1;
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
+    const InterleavedAddrGenFast<output_is_dram> s = {
+        .bank_base_address = get_arg_val<uint32_t>(0),
         .page_size = get_tile_size(dst_cb_id),
         .data_format = get_dataformat(dst_cb_id),
     };

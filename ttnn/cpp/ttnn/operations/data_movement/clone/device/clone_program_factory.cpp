@@ -19,15 +19,15 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     Program program;
 
     const auto& input = tensor_args.input;
-    auto src_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
-    auto dst_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    bool convert_dtype = src_cb_data_format != dst_cb_data_format;
+    auto input_data_format = datatype_to_dataformat_converter(input.get_dtype());
+    auto output_data_format = datatype_to_dataformat_converter(output.get_dtype());
+    bool convert_dtype = input_data_format != output_data_format;
     bool tilized = output.get_layout() == Layout::TILE;
     auto compute_unit_size = [&](const auto& tensor, const auto& data_format) {
         return tilized ? TileSize(data_format) : tensor.get_logical_shape()[-1] * tensor.element_size();
     };
-    uint32_t input_unit_size = compute_unit_size(input, src_cb_data_format);
-    uint32_t output_unit_size = compute_unit_size(output, dst_cb_data_format);
+    uint32_t input_unit_size = compute_unit_size(input, input_data_format);
+    uint32_t output_unit_size = compute_unit_size(output, output_data_format);
     uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_logical_shape()[-1];
 
     auto compute_with_storage_grid_size = output.device()->compute_with_storage_grid_size();
@@ -38,47 +38,47 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     uint32_t src_cb_id = CB::c_in4;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
-    auto cb_src_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, src_cb_data_format}})
+    auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
                              .set_page_size(src_cb_id, aligned_input_unit_size);
-    auto cb_src = CreateCircularBuffer(program, all_cores, cb_src_config);
+    auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
         dst_cb_id = CB::c_out4;
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
-        auto cb_dst_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, dst_cb_data_format}})
+        auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
                                  .set_page_size(dst_cb_id, aligned_output_unit_size);
-        auto cb_dst = CreateCircularBuffer(program, all_cores, cb_dst_config);
+        auto dst_cb = CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
-    auto src_buffer = input.buffer();
-    auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    auto input_buffer = input.buffer();
+    auto output_buffer = output.buffer();
+    bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
     vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
         reader_compile_time_args = {
             (uint32_t)src_cb_id,
-            (uint32_t)src_is_dram,
+            (uint32_t)input_is_dram,
         };
         writer_compile_time_args = {
             (uint32_t)dst_cb_id,
-            (uint32_t)dst_is_dram,
+            (uint32_t)output_is_dram,
         };
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)log2(input_unit_size) : 0;
         reader_compile_time_args = {
             (uint32_t)src_cb_id,
-            (uint32_t)src_is_dram,
+            (uint32_t)input_is_dram,
             (uint32_t)src_stick_size_is_power_of_two,
             (uint32_t)src_log2_stick_size};
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
         uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)log2(output_unit_size) : 0;
         writer_compile_time_args = {
             (uint32_t)dst_cb_id,
-            (uint32_t)dst_is_dram,
+            (uint32_t)output_is_dram,
             (uint32_t)dst_stick_size_is_power_of_two,
             (uint32_t)dst_log2_stick_size};
     }
@@ -125,19 +125,19 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     }
 
     uint32_t start_id = 0;
-    uint32_t num_cores_group1 = core_group_1.num_cores();
+    uint32_t num_cores_group_1 = core_group_1.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
 
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
-        uint32_t num_units_per_core = i < num_cores_group1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
+        uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
         if (tilized) {
             SetRuntimeArgs(
                 program,
                 read_kernel_id,
                 core,
                 {
-                    (uint32_t)src_buffer->address(),
+                    (uint32_t)input_buffer->address(),
                     (uint32_t)num_units_per_core,
                     (uint32_t)start_id,
                 });
@@ -146,7 +146,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 write_kernel_id,
                 core,
                 {
-                    (uint32_t)dst_buffer->address(),
+                    (uint32_t)output_buffer->address(),
                     (uint32_t)num_units_per_core,
                     (uint32_t)start_id,
                 });
@@ -156,7 +156,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 read_kernel_id,
                 core,
                 {
-                    (uint32_t)src_buffer->address(),
+                    (uint32_t)input_buffer->address(),
                     (uint32_t)input_unit_size,
                     (uint32_t)num_units_per_core,
                     (uint32_t)start_id,
@@ -166,7 +166,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                 write_kernel_id,
                 core,
                 {
-                    (uint32_t)dst_buffer->address(),
+                    (uint32_t)output_buffer->address(),
                     (uint32_t)output_unit_size,
                     (uint32_t)num_units_per_core,
                     (uint32_t)start_id,
@@ -187,11 +187,11 @@ void CloneOperation::ProgramFactory::override_runtime_arguments(
     const auto& write_kernel_id = cached_program.shared_variables.write_kernel_id;
     const auto& cores = cached_program.shared_variables.cores;
 
-    auto src_buffer_address = tensor_args.input.buffer()->address();
-    auto dst_buffer_address = output.buffer()->address();
+    auto input_buffer_address = tensor_args.input.buffer()->address();
+    auto output_buffer_address = output.buffer()->address();
     for (const auto& core : cores) {
-        GetRuntimeArgs(program, read_kernel_id, core)[0] = src_buffer_address;
-        GetRuntimeArgs(program, write_kernel_id, core)[0] = dst_buffer_address;
+        GetRuntimeArgs(program, read_kernel_id, core)[0] = input_buffer_address;
+        GetRuntimeArgs(program, write_kernel_id, core)[0] = output_buffer_address;
     }
 }
 }  // namespace ttnn::operations::data_movement::clone
