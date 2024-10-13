@@ -55,7 +55,7 @@ inline void reduce_h_fused(
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; ++ c_i) {
-        //cb_reserve_back(out_cb_id, 1);
+        cb_reserve_back(out_cb_id, 1);
         const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
         cb_wait_front(curr_in_cb_id, 1);
         tile_regs_acquire();
@@ -68,7 +68,7 @@ inline void reduce_h_fused(
         tile_regs_commit();
         //pack_untilize_dst<num_output_tiles>(out_cb_id, 1/*out_subblock_h*/, 0, num_out_rows, num_faces_in_tile);  /* pack 1 row (1x16 or 1x32) */
         tile_regs_release();
-        //cb_push_back(out_cb_id, 1);
+        cb_push_back(out_cb_id, 1);
     }
 }
 
