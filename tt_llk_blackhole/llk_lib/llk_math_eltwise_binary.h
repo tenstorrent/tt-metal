@@ -27,7 +27,7 @@ inline void eltwise_binary_reuse_dest_as_src() {
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
-    DstSync Dst = DstSync::SyncFull,
+    DstSync Dst,
     int NUM_FIDELITY_PHASES = 0,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool is_fp32_dest_acc_en = false>
