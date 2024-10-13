@@ -101,7 +101,7 @@ void kernel_main() {
         DPRINT << "window_h: " << window_h << " window_w: " << window_w << ENDL();
         DPRINT << "in_nbytes_c: " << in_nbytes_c << " in_nbytes_c_log2: " << in_nbytes_c_log2 << ENDL();
 
-        print_pages(in_l1_read_base_addr, 8, 36);
+        print_pages(in_l1_read_base_addr, 32, 36);
 
         DPRINT << ENDL();
     }
@@ -126,7 +126,7 @@ void kernel_main() {
         if (split_reader) counter++; // interleave the indices
         noc_async_read_barrier();
         if (reader_id == print_id) {
-            print_pages(out_l1_write_addr_base, 8, 4);
+            print_pages(out_l1_write_addr_base, 32, 4);
             DPRINT << ENDL();
         }
         cb_push_back(in_cb_id, npages_to_reserve);
