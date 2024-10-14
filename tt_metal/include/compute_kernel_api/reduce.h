@@ -25,7 +25,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb = 16)
 
     MATH(( llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>() ));
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated() ));
+    MATH(( llk_math_hw_configure_disaggregated(icb, icb_scaler) ));
 
     PACK(( llk_pack_init() ));
     PACK(( llk_pack_reduce_config_v2<reduce_dim, at_start, false, DST_ACCUM_MODE>(ocb) ));

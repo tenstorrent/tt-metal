@@ -51,6 +51,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
     UNPACK(( llk_unpack_reconfig_data_format_srca(old_cbid, new_cbid) ));
+    MATH(( llk_math_reconfig_data_format_srca(old_cbid, new_cbid) ));
     copy_tile_to_dst_init_short(new_cbid, transpose);
 }
 

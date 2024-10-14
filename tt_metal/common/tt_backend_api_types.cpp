@@ -27,6 +27,16 @@ std::string tt::get_string_lowercase(tt::ARCH arch) {
     }
 }
 
+std::string tt::get_alias(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::GRAYSKULL: return "grayskull"; break;
+        case tt::ARCH::WORMHOLE: return "wormhole"; break;
+        case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
+        case tt::ARCH::BLACKHOLE: return "blackhole"; break;
+        default: return "invalid"; break;
+    }
+}
+
 tt::ARCH tt::get_arch_from_string(const std::string &arch_str) {
     tt::ARCH arch;
     if ((arch_str == "grayskull") || (arch_str == "GRAYSKULL")) {

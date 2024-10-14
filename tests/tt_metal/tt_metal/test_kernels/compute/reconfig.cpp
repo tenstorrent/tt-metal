@@ -2,15 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary.h"
 #include <cstdint>
+
+#include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/pack.h"
-#include "compute_kernel_api/unpack.h"
-
-#define START_IN_TILE_ID              (0)
-#define START_DST_TILE_ID             (0)
+#include "compute_kernel_api/reconfig_data_format.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -20,7 +18,7 @@ void MAIN {
     constexpr auto cb_in0 = tt::CB::c_in0; // Bfp8_b
     constexpr auto cb_in1 = tt::CB::c_in1; // Bfp16_b
     constexpr auto cb_in2 = tt::CB::c_in2; // Bfp16_b
-    constexpr auto cb_out0 = tt::CB::c_out0; // Bfp16_b
+    constexpr auto cb_out0 = tt::CB::c_out0; // Fp32
     constexpr auto cb_out1 = tt::CB::c_out1; // Bfp8_b
 
 
@@ -41,10 +39,17 @@ void MAIN {
         // data inside CB_0, 2nd one inits it to Bfp16_b
         // which is inside CB_2
         copy_tile_init();
+        // This call will test copy_tile_to_dst_init_short as well
         copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in2);
 
         cb_wait_front(cb_in2, ublock_size_tiles);
-        copy_block_matmul_partials(cb_in2, START_IN_TILE_ID, START_DST_TILE_ID, ublock_size_tiles);
+#if (BLOCK_COPY == 1)
+        for (uint32_t u_cnt = 0; u_cnt < ublock_size_tiles; u_cnt++) {
+            copy_tile(cb_in2, 0, 0);
+        }
+#elif (BLOCK_COPY == 0)
+        copy_block_matmul_partials(cb_in2, 0, 0, ublock_size_tiles);
+#endif
         cb_pop_front(cb_in2, ublock_size_tiles);
 
         // -------------------- Addition with acc -----------------------------
@@ -56,20 +61,20 @@ void MAIN {
 #if (EXPLICIT_RECONFIG == 1)
 #if (SPLIT_SRC_RECONFIG == 1)
         // Indices for old_operand, new_operand
-        unpack_reconfig_data_format_srca(cb_in0, cb_in1);
-        unpack_reconfig_data_format_srcb(cb_in1, cb_in0);
+        reconfig_data_format_srca(cb_in0, cb_in1);
+        reconfig_data_format_srcb(cb_in1, cb_in0);
 #elif (SPLIT_SRC_RECONFIG == 0)
         // Indices for old_A, new_A, old_B, new_B
-        unpack_reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
+        reconfig_data_format(cb_in0, cb_in1, cb_in1, cb_in0);
 #endif // SPLIT_SRC_RECONFIG
 #elif (EXPLICIT_RECONFIG == 0)
 #if (SPLIT_SRC_RECONFIG == 1)
         // Indices for new_operand
-        unpack_reconfig_data_format_srca(cb_in1);
-        unpack_reconfig_data_format_srcb(cb_in0);
+        reconfig_data_format_srca(cb_in1);
+        reconfig_data_format_srcb(cb_in0);
 #elif (SPLIT_SRC_RECONFIG == 0)
         // Indices for new_A, new_B
-        unpack_reconfig_data_format(cb_in1, cb_in0);
+        reconfig_data_format(cb_in1, cb_in0);
 #endif // SPLIT_SRC_RECONFIG
 #endif // EXPLICIT_RECONFIG
 
@@ -84,7 +89,7 @@ void MAIN {
         pack_reconfig_l1_acc(true);
 #endif
         // Configured already for CB_16, Bfp16_b
-        matmul_pack_tile(START_DST_TILE_ID, cb_out0, ublock_size_tiles);
+        matmul_pack_tile(0, cb_out0, ublock_size_tiles);
         // Reconfig for CB_17, Bfp8_b, then pack to CB_17
 #if (EXPLICIT_RECONFIG == 1)
         // Indices for old_output, new_output
@@ -96,7 +101,7 @@ void MAIN {
         // Not testing for L1 accumulation
         pack_reconfig_l1_acc(false);
 
-        matmul_pack_tile(START_DST_TILE_ID, cb_out1, ublock_size_tiles);
+        matmul_pack_tile(0, cb_out1, ublock_size_tiles);
         release_dst();
 
         cb_pop_front(cb_in0, ublock_size_tiles);

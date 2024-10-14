@@ -29,12 +29,13 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
 endif()
 
-project(tt-metal
-        VERSION 1.0
-        DESCRIPTION "Tenstorrent Metallium"
+project(Metalium
+        VERSION 0.50.0
+        DESCRIPTION "Tenstorrent Metalium"
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
+include(CTest)
 
 CHECK_COMPILERS()
 
@@ -292,3 +293,6 @@ add_custom_target(clean-built
    COMMAND ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
    COMMENT "Cleaning `built` directory"
 )
+
+# Debian Package
+include(cmake/packaging.cmake)
