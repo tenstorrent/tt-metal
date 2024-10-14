@@ -507,7 +507,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py::test_llama_decoder_inference[wormhole_b0-True-mesh_device0-4096]",
         "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-4096]",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -599,16 +599,6 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
         log_file.close()
 
         screen_needs_update.set()  # Ensure screen is updated after process termination
-
-    # Start the next waiting entry
-    for next_entry in output_entries:
-        if next_entry["index"] > entry["index"]:
-            with next_entry["lock"]:
-                if next_entry["status"] == "Waiting" and not any(
-                    e["process"] and e["process"].poll() is None for e in output_entries
-                ):
-                    run_entry_command(next_entry, screen_lock, output_entries, screen_needs_update)
-                    break
 
 
 def parse_output_line(line, previous_line, current_status):
