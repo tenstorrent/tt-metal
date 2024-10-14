@@ -86,6 +86,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-17 python3.11 python3.11-venv python3.11-dev
+        sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
       continue-on-error: true
     - name: Prepare compile_commands.json
       run: |
