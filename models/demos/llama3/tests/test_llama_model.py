@@ -79,7 +79,6 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     else:
         assert "Unsupported number of devices"
 
-    breakpoint()
     if layers is not None:
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
