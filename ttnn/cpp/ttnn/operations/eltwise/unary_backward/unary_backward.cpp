@@ -24,48 +24,6 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-using namespace std;
-
-namespace {
-
-#include <iostream>
-#include <vector>
-#include <string>
-
-// Function that triggers clang-tidy warnings
-void ProcessData(const vector<int>& data) {
-    // Unused variable (triggers readability-unused-variable)
-    int unusedVariable = 42;
-    
-    // Raw loop, prefer range-based for loops (triggers modernize-loop-convert)
-    for (int i = 0; i < data.size(); ++i) {
-        cout << data[i] << " ";
-    }
-    
-    cout << endl;
-
-    // String literal in function (triggers performance-inefficient-string-concatenation)
-    string message = "Hello, " + string("World!");
-    cout << message << endl;
-    
-    // Use of raw pointer instead of smart pointer (triggers modernize-use-auto and modernize-use-std-smart-ptr)
-    int* rawPointer = new int(10);
-    cout << *rawPointer << endl;
-    delete rawPointer; // Manual memory management (modernize-use-smart-ptr)
-
-    // Use NULL instead of nullptr (triggers modernize-use-nullptr)
-    int* anotherPointer = NULL;
-    if (anotherPointer == NULL) {
-        cout << "Pointer is null" << endl;
-    }
-
-    // Use of auto can be suggested (triggers modernize-use-auto)
-    vector<int>::const_iterator it = data.begin();
-    cout << *it << endl;
-}
-
-}
-
 namespace ttnn::operations::unary_backward {
 
 std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
