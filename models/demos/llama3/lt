@@ -508,6 +508,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py::test_llama_decoder_inference[wormhole_b0-True-mesh_device0-4096]",
         "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
         "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-4096]",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -751,7 +752,7 @@ def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
 
 def get_help_text(current_line, num_input_fields, num_output_entries):
     if current_line == 0:
-        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill, model-quick | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:

@@ -145,13 +145,7 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-        if (
-            dummy_weights
-        ):  # TODO Choose the correct dummy weights for the correct model specified (take model as arg input?)
-            logger.info(f"Note: Using dummy weights, weight caching disabled")
-            self._set_llama_params_from_dict(DEFAULT_LLAMA3_2_3B_PARAMS)
-        else:
-            self._set_llama_params(self.DEFAULT_CKPT_DIR)
+        self._set_llama_params(self.DEFAULT_CKPT_DIR)
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -593,7 +587,6 @@ class TtModelArgs:
             state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
         else:
             state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
-            # state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
