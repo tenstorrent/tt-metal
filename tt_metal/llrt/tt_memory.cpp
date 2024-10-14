@@ -24,11 +24,13 @@ memory::memory() {
     packed_size_ = 0;
 }
 
-memory::memory(std::string const &path) : memory() {
+memory::memory(std::string const &path, Relocate relo_type) : memory() {
     ElfFile elf;
 
     elf.ReadImage(path);
-    elf.MakeExecuteInPlace();
+    if (relo_type == Relocate::XIP) {
+        elf.MakeExecuteInPlace();
+    }
 
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.

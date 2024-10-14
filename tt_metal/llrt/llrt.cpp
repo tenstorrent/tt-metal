@@ -26,7 +26,8 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
+    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
 
     static const uint32_t processor_to_fw_base_addr[] = {
         MEM_BRISC_FIRMWARE_BASE,
@@ -49,11 +50,11 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path);
+      auto *ptr = new ll_api::memory(path, relo_type);
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
-      if (pack_spans == PackSpans::PACK) {
+      if (span_type == ll_api::memory::PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);

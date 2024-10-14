@@ -53,8 +53,10 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-enum class PackSpans { PACK, NO_PACK };
-ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0, PackSpans pack_spans = PackSpans::NO_PACK);
+ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id = 0,
+    ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
+    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
+
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 

@@ -20,6 +20,8 @@ class memory {
  public:
   typedef std::uint64_t address_t;
   typedef std::uint32_t word_t;
+  enum class PackSpans { PACK, NO_PACK };
+  enum class Relocate { XIP, NONE };
 
  private:
   static constexpr uint32_t initial_data_space_ = 0x400;
@@ -41,7 +43,7 @@ class memory {
 
  public:
   memory();
-  memory(std::string const &path);
+  memory(std::string const &path, Relocate relo_type);
 
  public:
   const std::vector<word_t>& data() const { return this->data_; }
