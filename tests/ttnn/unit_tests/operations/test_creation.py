@@ -259,15 +259,9 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
     [1, 2, 3, 4, 5],
 )
 def test_arange(device, start, end, step):
-    torch_input_tensor = torch.rand((start, end, step), dtype=torch.bfloat16)
-    torch_output_tensor = torch.arange(start, end, step)
+    torch_output_tensor = torch.arange(start, end, step, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
-
-    output_tensor = ttnn.arange(
-        input_tensor.shape[0], input_tensor.shape[1], input_tensor.shape[2], ttnn.bfloat16, device
-    )
+    output_tensor = ttnn.arange(start, end, step, ttnn.bfloat16, device)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -276,6 +270,33 @@ def test_arange(device, start, end, step):
         output_tensor = output_tensor[:-1]
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "start",
+    [6],
+)
+@pytest.mark.parametrize(
+    "end",
+    [0, -4],
+)
+@pytest.mark.parametrize(
+    "step",
+    [-1],
+)
+def test_arange_negative_step(device, start, end, step):
+    torch_output_tensor = torch.arange(start, end, step, dtype=torch.bfloat16)
+
+    output_tensor = ttnn.arange(start, end, step, ttnn.bfloat16, device)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = output_tensor[-1, -1, -1, :]
+    if divup((start - end), step) % 2 != 0:
+        output_tensor = output_tensor[:-1]
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    print(output_tensor)
 
 
 @pytest.mark.parametrize(

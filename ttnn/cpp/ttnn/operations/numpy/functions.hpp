@@ -218,30 +218,44 @@ static Tensor ones_like(
 template <typename T>
 static Tensor arange(
     const int64_t start,
-    const int64_t stop,
+    const int64_t end,
     const int64_t step,
     const Layout layout = Layout::ROW_MAJOR,
     Device* device = nullptr,
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     constexpr DataType data_type = detail::get_data_type<T>();
-    // Current implementation restrictions
-    TT_ASSERT(step > 0, "Step must be greater than 0");
-    TT_ASSERT(start < stop, "Start must be less than step");
-    auto size = tt::div_up((stop - start), step);
+
+    if (start > end) {
+        TT_ASSERT(step < 0, "Step must be less than 0");
+    }
+    else if (start < end) {
+        TT_ASSERT(step > 0, "Step must be greater than 0");
+    }
+    else {
+        TT_ASSERT(step != 0, "Step must be non-zero");
+    }
+
+    auto size = tt::div_up(std::abs(end - start), std::abs(step));
     if (size % 2 != 0) {
         size++;
     }
     auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(size);
 
     auto index = 0;
-    for (auto value = start; value < stop; value += step) {
+    auto value = start;
+    while(true) {
+        if((start < end && !(value < end)) || (start > end && !(value > end))) {
+            break;
+        }
         if constexpr (std::is_same_v<T, ::bfloat16>) {
             owned_buffer[index++] = T(static_cast<float>(value));
         } else {
             owned_buffer[index++] = static_cast<T>(value);
         }
+        value += step;
     }
+
     auto output = Tensor(OwnedStorage{owned_buffer}, {1, 1, 1, static_cast<uint32_t>(size)}, data_type, layout);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
