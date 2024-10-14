@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import copy
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
@@ -62,11 +61,7 @@ def to_torch(
     """
     Converts a TTNN tensor back to a PyTorch tensor with the specified shape.
 
-    This function handles tensors with 0 or 1 dimensions by adjusting the unpadding shape:
-    - If the specified shape is empty (`len(shape) == 0`), `unpad_shape` is set to `[1, 1]`.
-    - If the specified shape is 1-dimensional, `unpad_shape` is set to `[1, shape[0]]`.
-
-    The TTNN tensor is converted to `ROW_MAJOR_LAYOUT` and unpadded using `unpad_shape`.
+    The TTNN tensor is converted to `ROW_MAJOR_LAYOUT` and unpadded.
     It is then converted to a PyTorch tensor and reshaped to the specified shape.
 
     Parameters:
@@ -81,14 +76,9 @@ def to_torch(
     """
     if ttnn_tensor is None:
         return None
-    unpad_shape = copy.deepcopy(shape)
-    if len(shape) == 0:
-        unpad_shape = [1, 1]
-    if len(shape) == 1:
-        unpad_shape = [1, shape[0]]
     ttnn_tensor = ttnn_tensor.cpu()
     if ttnn_tensor.layout == ttnn.TILE_LAYOUT:
-        ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(unpad_shape)
+        ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor = ttnn.to_torch(ttnn_tensor)
     torch_tensor = torch.reshape(torch_tensor, shape=shape)
     return torch_tensor
