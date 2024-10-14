@@ -307,7 +307,7 @@ template <typename T>
 Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

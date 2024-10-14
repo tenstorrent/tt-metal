@@ -279,7 +279,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
     return output;
 }
 
-Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
+Tensor tensor_unpad(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
@@ -320,7 +320,7 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     return output;
 }
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape) {
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
@@ -342,7 +342,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Le
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
     }
-    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
+    auto output = input_tensor.unpad(ttnn::SimpleShape(std::move(output_tensor_start)), ttnn::SimpleShape(std::move(output_tensor_end)));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

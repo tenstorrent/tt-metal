@@ -160,11 +160,11 @@ struct Tensor {
 
     Tensor cpu_sharded() const;
 
-    Tensor unpad(const tt::tt_metal::LegacyShape &output_tensor_start, const tt::tt_metal::LegacyShape &output_tensor_end) const;
+    Tensor unpad(const ttnn::SimpleShape &output_tensor_start, const ttnn::SimpleShape &output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const tt::tt_metal::LegacyShape &output_tensor_shape) const;
+    Tensor unpad_from_tile(const ttnn::SimpleShape &output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;

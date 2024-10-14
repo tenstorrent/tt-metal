@@ -189,7 +189,7 @@ Tensor to_layout_impl(
             return device ? tensor.to(layout, device) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
+            tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
