@@ -113,13 +113,11 @@ auto preprocess_inputs(
 
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
-            tt::log_warning(tt::LogOp, "Using repeat op to broadcast batch dim");
             Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[1] > second_shape[1]) {
-            tt::log_warning(tt::LogOp, "Using repeat op to broadcast channel dim");
             Shape repeats(std::array<uint32_t, 4>{1, first_shape[1], 1, 1});
             second = ttnn::repeat(second, repeats);
         }
