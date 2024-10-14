@@ -50,12 +50,19 @@ run_t3000_llama3_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_tests"
 
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.1-8B
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-1B
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+
+  # Run all Llama3 tests for 8B, 1B, and 3B weights
+  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  done
 
   # Record the end time
   end_time=$(date +%s)
