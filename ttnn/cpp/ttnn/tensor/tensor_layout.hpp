@@ -137,8 +137,6 @@ private:
     Size mTileSize = {32, 32};
     MemoryConfig mMemoryConfig;
     Alignment mAlignment;
-
-    std::optional<ttnn::SimpleShape> mLegacyPaddedShape;
 };
 
 } // tt::tt_metal
