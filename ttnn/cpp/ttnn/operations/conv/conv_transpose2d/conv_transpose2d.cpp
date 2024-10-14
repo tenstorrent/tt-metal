@@ -46,7 +46,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             .pad_hw = padding,
             .output_pad_hw = output_padding,
             .dilation_hw = {dilation[0], dilation[1]},
-            .is_transpose = false
+            .is_transpose = true
         };
 
         uint32_t output_height = (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
