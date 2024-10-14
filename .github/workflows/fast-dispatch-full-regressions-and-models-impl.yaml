@@ -158,13 +158,15 @@ jobs:
       - name: Set up llama3 weight/cache dir (required due to single codebase)
         if: ${{ matrix.model == 'llama31_8b' }}
         run: |
-          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/ >> $GITHUB_ENV
-        if: ${{ matrix.model == 'llama32_1b' }}
-        run: |
-          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/ >> $GITHUB_ENV
-        if: ${{ matrix.model == 'llama32_3b' }}
-        run: |
-          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/ >> $GITHUB_ENV
+          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/" >> $GITHUB_ENV
+        else:
+          if: ${{ matrix.model == 'llama32_1b' }}
+          run: |
+            echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/" >> $GITHUB_ENV
+          else:
+            if: ${{ matrix.model == 'llama32_3b' }}
+            run: |
+              echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_wormhole_b0
