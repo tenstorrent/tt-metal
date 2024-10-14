@@ -43,6 +43,29 @@ run_t3000_llama3_70b_tests() {
   fi
 }
 
+run_t3000_llama3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_tests"
+
+  # Llama3.1-8B
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+  # Llama3.2-1B
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+  # Llama3.2-3B
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_falcon7b_tests(){
   # Record the start time
   fail=0
