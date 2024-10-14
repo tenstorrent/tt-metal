@@ -93,6 +93,18 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.acos_bw
+          - eltwise.unary_backward.acosh_bw
+          - eltwise.unary_backward.atan_bw
+          - eltwise.unary_backward.cos_bw
+          - eltwise.unary_backward.frac_bw
+          - eltwise.unary_backward.i0_bw
+          - eltwise.unary_backward.rad2deg_bw
+          - eltwise.unary_backward.relu_bw
+          - eltwise.unary_backward.rsqrt_bw
+          - eltwise.unary_backward.sigmoid_bw
+          - eltwise.unary_backward.tan_bw
+          - eltwise.unary_backward.trunc_bw
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
