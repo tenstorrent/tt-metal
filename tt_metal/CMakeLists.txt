@@ -7,18 +7,18 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llrt)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tools)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/impl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/detail)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
 
 set(TT_METAL_OBJECTS
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/graph/graph_tracking.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/distributed/mesh_device.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/distributed/mesh_device_view.cpp
     $<TARGET_OBJECTS:profiler>
     $<TARGET_OBJECTS:common>
     $<TARGET_OBJECTS:jit_build>
     $<TARGET_OBJECTS:llrt>
     $<TARGET_OBJECTS:impl>
     $<TARGET_OBJECTS:detail>
+    $<TARGET_OBJECTS:distributed>
 )
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
@@ -53,4 +53,3 @@ set_target_properties(tt_metal PROPERTIES
 if(BUILD_PROGRAMMING_EXAMPLES)
     add_subdirectory(programming_examples)
 endif(BUILD_PROGRAMMING_EXAMPLES)
-
