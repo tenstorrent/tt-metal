@@ -169,7 +169,7 @@ def all_devices(request, device_params):
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -578,7 +578,6 @@ def pytest_generate_tests(metafunc):
     available_archs = tuple(filter(matches_user_requested_silicon_arch, available_archs))
 
     uses_silicon_arch = "silicon_arch_name" in metafunc.fixturenames
-    print(f"use silicon arch {uses_silicon_arch}")
 
     # sanity
     if is_test_requesting_specific_silicon_archs and not uses_silicon_arch:
@@ -591,7 +590,6 @@ def pytest_generate_tests(metafunc):
         for test_requested_silicon_arch_fixture in test_requested_silicon_arch_fixtures:
             # The values of these arch-specific fixtures should not be used in
             # the test function, so use any parameters, like [True]
-            print(f"test_requested_silicon_arch_fixture {test_requested_silicon_arch_fixture}")
             metafunc.parametrize(test_requested_silicon_arch_fixture, [True], scope="session")
 
     input_method = metafunc.config.getoption("--input-method")
