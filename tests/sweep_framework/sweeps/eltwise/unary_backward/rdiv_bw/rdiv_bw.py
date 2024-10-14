@@ -30,7 +30,6 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "exclude_range": [[-1, 1]],
-        "round_mode": ["None", "trunc", "floor"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -43,7 +42,6 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "exclude_range": [[-0.001, 0.001]],
-        "round_mode": ["None", "trunc", "floor"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -60,10 +58,6 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["round_mode"] in ["floor", "trunc"] and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, f"bfloat8_b is not supported when using round_mode {test_vector['round_mode']}"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
     ):
@@ -78,7 +72,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     exclude_range,
-    round_mode,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -98,18 +91,11 @@ def run(
         partial(gen_rand_exclude_range, excluderange=exclude_range, low=-100, high=100), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
-    torch_input_tensor_a.retain_grad()
 
     factor = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    # Don't use rdiv_bw golden function here, it caues low pcc in some cases.
-    intermediate_result = factor / torch_input_tensor_a
-    if round_mode == "trunc":
-        intermediate_result = torch.trunc(intermediate_result)
-    elif round_mode == "floor":
-        intermediate_result = torch.floor(intermediate_result)
-    intermediate_result.backward(gradient=torch_grad_tensor)
-    torch_output_tensor = torch_input_tensor_a.grad
+    golden_function = ttnn.get_golden_function(ttnn.rdiv_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, factor)[0]
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
@@ -128,9 +114,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rdiv_bw(
-        grad_tensor, input_tensor_a, scalar=factor, round_mode=round_mode, memory_config=output_memory_config
-    )[0]
+    output_tensor = ttnn.rdiv_bw(grad_tensor, input_tensor_a, scalar=factor, memory_config=output_memory_config)[0]
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

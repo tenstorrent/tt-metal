@@ -91,12 +91,14 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
-    torch_input_tensor_a.retain_grad()
 
     scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
-    intermediate_result = torch.nn.functional.gelu(torch.add(torch_input_tensor_a, scalar), approximate=approximate)
-    intermediate_result.backward(gradient=torch_grad_tensor)
-    torch_output_tensor = torch_input_tensor_a.grad
+
+    golden_function = ttnn.get_golden_function(ttnn.bias_gelu_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, scalar, value=approximate)[0]
+    # intermediate_result = torch.nn.functional.gelu(torch.add(torch_input_tensor_a, scalar), approximate=approximate)
+    # intermediate_result.backward(gradient=torch_grad_tensor)
+    # torch_output_tensor = torch_input_tensor_a.grad
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
