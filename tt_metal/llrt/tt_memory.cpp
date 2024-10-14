@@ -32,10 +32,12 @@ memory::memory(std::string const &path) : memory() {
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.
     // FIXME: Perhaps we can relax that?
+    uint32_t total_size = 0;
     auto emit_segment = [&](ElfFile::Segment const& segment) {
         link_spans_.emplace_back(
             segment.address, segment.contents.size());
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+        total_size += segment.contents.size();
     };
     auto* text = &elf.GetSegments()[0];
     for (auto& segment : std::span(elf.GetSegments()).subspan(1)) {
@@ -47,6 +49,9 @@ memory::memory(std::string const &path) : memory() {
     }
     if (text)
         emit_segment(*text);
+
+    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(uint32_t));
+    set_packed_size(total_size * sizeof(uint32_t));
 }
 
 bool memory::operator==(const memory& other) const {
