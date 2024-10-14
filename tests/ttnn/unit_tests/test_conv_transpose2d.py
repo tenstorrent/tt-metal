@@ -14,6 +14,15 @@ from models.utility_functions import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
+import readline  # optional, will allow Up/Down/History in the console
+import code
+
+
+def drop_to_interpreter():
+    variables = globals().copy()
+    variables.update(locals())
+    shell = code.InteractiveConsole(variables)
+    shell.interact()
 
 
 def run_conv_transpose2d(
@@ -56,13 +65,17 @@ def run_conv_transpose2d(
     conv_weight_shape = [input_channels, output_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
     # torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.tensor(range(input_height * input_width)).reshape([1,1,input_height,input_width]).float()
-    # torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
+    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = (
+        torch.tensor(range(input_height * input_width)).reshape([1, 1, input_height, input_width]).float()
+    )
+    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    # torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = (
+        torch.randn((1, output_channels, 1, 1), dtype=torch.bfloat16).broadcast_to(conv_weight_shape).float()
+    )
+    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv_transpose2d(
@@ -149,14 +162,14 @@ def run_conv_transpose2d(
         groups=groups,
     )
 
-    torch_output_tensor = ttnn.to_torch(ttnn.untilize(tt_output_tensor_on_device).cpu())
+    torch_output_tensor = ttnn.to_torch((tt_output_tensor_on_device).cpu())
 
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
     torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
 
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+    out = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
     if not fp32_accum:
@@ -165,19 +178,20 @@ def run_conv_transpose2d(
         pcc = 0.9969
     else:
         pcc = 0.998
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+
+    ref = torch_out_golden_tensor
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w",
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
     (
-        (1, 128, 128, 32, 64, 3, 3, 1, 1, 1, 1, 0, 0),
-        # (1,  506,   58, 128,  64, 4, 4, 1, 1, 0, 0, 0, 0),
-        # (1, 1010,  114, 128,  64, 4, 4, 1, 1, 0, 0, 0, 0),
-        # (1, 2018,  226, 128,   2, 4, 4, 1, 1, 0, 0, 0, 0),
+        (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # (1,   8,  8,   256,  256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
     ),
 )
 @pytest.mark.parametrize(
@@ -210,6 +224,8 @@ def test_model_net_ct2d(
     pad_w,
     out_pad_h,
     out_pad_w,
+    config,
+    shard_layout,
 ):
     run_conv_transpose2d(
         device,
@@ -229,6 +245,7 @@ def test_model_net_ct2d(
         pad_w=pad_w,
         out_pad_h=out_pad_h,
         out_pad_w=out_pad_w,
-        shard_layout=None,
+        config_override=config,
+        shard_layout=shard_layout,
         auto_shard=True,
     )

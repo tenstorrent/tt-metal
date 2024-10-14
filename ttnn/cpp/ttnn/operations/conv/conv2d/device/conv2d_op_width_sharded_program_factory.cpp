@@ -190,6 +190,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
 
+
+
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
@@ -202,7 +204,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t input_size_h = conv_act_size_h + (pad_h*2);
     uint32_t input_size_w = conv_act_size_w + (pad_w*2);
-
+    if(sliding_window_config.is_transpose)
+    {
+        auto input_shape = sliding_window_config.get_transposed_full_input_shape();
+        input_size_h = input_shape[1];
+        input_size_w = input_shape[2];
+    }
 
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
