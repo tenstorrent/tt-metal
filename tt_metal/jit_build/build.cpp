@@ -119,6 +119,8 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
 
     if (tt::llrt::OptionsG.get_watcher_debug_delay()) {
         this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::OptionsG.get_watcher_debug_delay()) + " ";
+        vector<string> strs;
+        strs.push_back("lalalala");
     }
 
     // Includes

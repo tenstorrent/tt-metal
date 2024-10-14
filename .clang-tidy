@@ -1,18 +1,2 @@
-Checks: >
-  bugprone-*,                  # Enable checks that detect common bugs
-  modernize-*,                 # Enable modern C++ best practices checks
-  performance-*,               # Enable performance-related checks
-  readability-*,               # Enable readability improvement checks
-  cppcoreguidelines-*,         # Enable C++ Core Guidelines checks
-  clang-analyzer-*             # Enable static analysis checks
-  
-WarningsAsErrors: ''           # Treat no warnings as errors (you can customize this)
+Checks: 'bugprone-*,performance-*,modernize-*,readability-*,cppcoreguidelines-*'
 
-HeaderFilterRegex: '.*'        # Analyze all project headers
-AnalyzeTemporaryDtors: false   # Disable analysis of destructors for temporary objects
-FormatStyle: none              # Disable formatting enforcement
-
-# Optional: You can add suppression comments if necessary for files or directories
-# Suppress certain checks for specific paths
-# Suppress:
-#   - cppcoreguidelines-pro-type-reinterpret-cast: my_project/legacy_code/
