@@ -13,6 +13,7 @@ on:
           - add
           - ccl.line_all_gather
           - ccl.all_gather_n300
+          - ccl.all_gather_n300_focused
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
