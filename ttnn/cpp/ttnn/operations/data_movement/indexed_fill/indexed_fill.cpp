@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "ttnn/distributed/mesh_device.hpp"
 #include "ttnn/common/constants.hpp"
 
 namespace ttnn::operations::data_movement{
