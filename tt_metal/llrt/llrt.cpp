@@ -26,9 +26,6 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-// TODO: remove after using tt_memory elf loader info to calculate this
-static uint32_t get_binary_code_size(const ll_api::memory &mem, int riscv_id);
-
 ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
 
     static const uint32_t processor_to_fw_base_addr[] = {
@@ -56,13 +53,10 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
 
       // TODO: pass pack_spans into reader, generate text/data sizes
       // from segment sizes and pack there
-      ptr->set_text_size(get_binary_code_size(*ptr, riscv_id));
-
       if (pack_spans == PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);
-          ptr->set_packed_size(get_binary_code_size(*ptr, riscv_id));
       }
 
       lock.lock();
@@ -77,62 +71,6 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     }
 
     return *slot->second.get();
-}
-
-// Return the code size
-static uint32_t get_binary_code_size(const ll_api::memory& mem, int riscv_id) {
-
-    uint64_t range_min, range_max;
-    switch (riscv_id) {
-        case 0:
-            range_min = MEM_BRISC_FIRMWARE_BASE;
-            range_max = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
-            break;
-        case 1:
-            range_min = MEM_NCRISC_FIRMWARE_BASE;
-            range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
-            break;
-        case 2:
-            range_min = MEM_TRISC0_FIRMWARE_BASE;
-            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
-            break;
-        case 3:
-            range_min = MEM_TRISC1_FIRMWARE_BASE;
-            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
-            break;
-        case 4:
-            range_min = MEM_TRISC2_FIRMWARE_BASE;
-            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
-            break;
-        case 5:
-            range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::FIRMWARE_BASE + eth_l1_mem::address_map::FIRMWARE_SIZE;
-            break;
-        case 6:
-            range_min = MEM_IERISC_FIRMWARE_BASE;
-            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
-            break;
-        default: TT_THROW("Bad riscv_id: {}", riscv_id);
-    }
-
-    uint64_t min = std::numeric_limits<decltype(min)>::max();
-    uint64_t max = 0;
-    bool found_one = false;
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint32_t len_bytes = len_words * sizeof(uint32_t);
-        // Only use the addresses within the firmware code range
-        if (addr >= range_min && addr + len_bytes <= range_max) {
-            found_one = true;
-            if (addr < min) {
-                min = addr;
-            }
-            if (addr + len_bytes > max) {
-                max = addr + len_bytes;
-            }
-        }
-    });
-
-    return found_one ? (max - min) : 0;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
