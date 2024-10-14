@@ -429,13 +429,13 @@ void MAIN {
                     if constexpr (is_causal) {
                         if (!(q_low_idx >= k_high_idx)) {
                             /* QK += MASK */
-                            unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
                     } else {
                         if constexpr (use_provided_mask) {
                             /* QK += MASK */
-                            unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
                     }
