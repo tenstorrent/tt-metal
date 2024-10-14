@@ -18,6 +18,8 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 
 
@@ -195,11 +197,11 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worke
     return output;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* mesh_device) {
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, mesh_device);
     if (mesh_device) {
-        auto workers = distribute_tensor_to_mesh(input_tensor, *mesh_device);
+        auto workers = ttnn::distributed::distribute_tensor_to_mesh(input_tensor, *mesh_device);
         TT_FATAL(
             validate_worker_modes(workers),
             "All device threads/workers must be running in the same mode (ASYNC or SYNC)");

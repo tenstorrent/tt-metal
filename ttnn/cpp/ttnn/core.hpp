@@ -20,10 +20,8 @@ using tt::tt_metal::operation::OptionalConstTensors;
 using tt::tt_metal::operation::OptionalTensors;
 using tt::tt_metal::operation::Tensors;
 
-using tt::tt_metal::any_tensor_on_multi_device;
 using tt::tt_metal::is_tensor_on_device;
 using tt::tt_metal::is_tensor_on_device_or_multidevice;
-using tt::tt_metal::is_tensor_on_multi_device;
 }  // namespace ttnn
 
 namespace ttnn {

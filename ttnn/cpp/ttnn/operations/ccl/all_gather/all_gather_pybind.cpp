@@ -10,7 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::ccl {
 

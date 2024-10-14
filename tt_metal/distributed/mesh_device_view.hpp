@@ -13,7 +13,7 @@
 
 #include "tt_metal/impl/device/device.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::distributed {
 
 // Forward declaration of MeshDevice
 class MeshDevice;
@@ -128,19 +128,19 @@ inline MeshDeviceView make_mesh_device_view(std::vector<Device*> devices, MeshDe
     return MeshDeviceView(std::move(devices), std::move(mapper));
 }
 
-} // namespace tt::tt_metal
+} // namespace tt::tt_metal::distributed
 
 namespace std {
     // Specializations to enable structured bindings
-    template<> struct tuple_size<tt::tt_metal::Coordinate> : std::integral_constant<size_t, 2> {};
-    template<size_t I> struct tuple_element<I, tt::tt_metal::Coordinate> {
+    template<> struct tuple_size<tt::tt_metal::distributed::Coordinate> : std::integral_constant<size_t, 2> {};
+    template<size_t I> struct tuple_element<I, tt::tt_metal::distributed::Coordinate> {
         using type = size_t;
     };
 
     // Specialization to enable hashing of Coordinate
     template <>
-    struct hash<tt::tt_metal::Coordinate> {
-        size_t operator()(const tt::tt_metal::Coordinate& coord) const noexcept {
+    struct hash<tt::tt_metal::distributed::Coordinate> {
+        size_t operator()(const tt::tt_metal::distributed::Coordinate& coord) const noexcept {
             size_t seed = 0;
             tt::utils::hash_combine(seed, coord.row);
             tt::utils::hash_combine(seed, coord.col);

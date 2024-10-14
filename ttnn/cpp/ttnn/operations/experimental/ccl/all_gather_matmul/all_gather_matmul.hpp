@@ -7,7 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "common/core_coord.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "ttnn/cpp/ttnn/distributed/mesh_device.hpp"
+#include "ttnn/cpp/ttnn/distributed/api.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

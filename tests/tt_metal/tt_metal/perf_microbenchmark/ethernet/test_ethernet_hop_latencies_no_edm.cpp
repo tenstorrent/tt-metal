@@ -30,6 +30,10 @@
 #include "tt_metal/distributed/mesh_device.hpp"
 
 using tt::tt_metal::Device;
+using tt::tt_metal::distributed::MeshShape;
+using tt::tt_metal::distributed::MeshDevice;
+using tt::tt_metal::distributed::MeshDeviceView;
+using tt::tt_metal::distributed::MeshDeviceConfig;
 
 class T3000TestDevice {
    public:
@@ -43,7 +47,7 @@ class T3000TestDevice {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            mesh_device_ = tt::tt_metal::MeshDevice::create(tt::tt_metal::MeshDeviceConfig(tt::tt_metal::MeshShape{2, 4}));
+            mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
 
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
@@ -63,7 +67,7 @@ class T3000TestDevice {
 
     tt::ARCH arch_;
     size_t num_devices_;
-    std::shared_ptr<tt::tt_metal::MeshDevice> mesh_device_;
+    std::shared_ptr<MeshDevice> mesh_device_;
 
    private:
     bool device_open;

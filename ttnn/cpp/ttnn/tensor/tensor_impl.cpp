@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace tt {
 
@@ -1164,7 +1165,7 @@ Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
 
 template <typename T>
 Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
-    if (is_multi_device_tensor(tensor)) {
+    if (ttnn::distributed::is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
             return pad<T>(device_tensor, output_shape, input_tensor_start, pad_value);
         });

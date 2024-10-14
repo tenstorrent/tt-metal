@@ -13,10 +13,13 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+using MeshDevice = distributed::MeshDevice;
 
 namespace detail {
 
@@ -254,7 +257,7 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::
 }
 
 template<typename T>
-Tensor load_tensor(const std::string& file_name, T device) {
+Tensor load_tensor_helper(const std::string& file_name, T device) {
     std::ifstream input_stream(file_name, std::ios::in | std::ios::binary);
     if (not input_stream) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
@@ -320,8 +323,12 @@ Tensor load_tensor(const std::string& file_name, T device) {
 }
 
 // Explicit instantiations
-template Tensor load_tensor<Device*>(const std::string&, Device*);
-template Tensor load_tensor<MeshDevice*>(const std::string&, MeshDevice*);
+Tensor load_tensor(const std::string& file_name, Device* device) {
+    return load_tensor_helper<Device*>(file_name, device);
+}
+Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
+    return load_tensor_helper<MeshDevice*>(file_name, device);
+}
 
 }  // namespace tt_metal
 

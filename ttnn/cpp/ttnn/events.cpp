@@ -6,6 +6,7 @@
 
 #include <memory>
 #include "tt_metal/impl/event/event.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::events {
 

@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace ttnn {
 
@@ -181,7 +182,7 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
             default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
         }
     };
-    return is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);
+    return distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_dtype) : convert_dtype(input_tensor);
 }
 
 }  // namespace detail
@@ -197,7 +198,7 @@ struct ToDtype {
         }
 
         auto row_major_input_tensor = input_tensor.to(ttnn::ROW_MAJOR_LAYOUT);
-        auto intermediate_tensor = is_multi_device_tensor(row_major_input_tensor) ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype) : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
+        auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor) ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype) : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);
         return detail::convert_to_dtype(intermediate_tensor, input_layout, dtype);
     };
 };

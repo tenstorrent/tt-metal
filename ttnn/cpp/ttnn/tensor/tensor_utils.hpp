@@ -105,20 +105,6 @@ bool is_arch_whb0(const tt::ARCH& arch);
 bool is_cpu_tensor(const Tensor& tensor);
 bool is_device_tensor(const Tensor& tensor);
 
-// Given a multi-device tensor and a device, returns the tensor on the given device.
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device);
-Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
-
-// Returns true has MultiDeviceHost/MultiDevice Storage
-bool is_multi_device_tensor(const Tensor& tensor);
-
-// Given a multi-device tensor and a device, returns a list of per-device tensors.
-std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
-
-// Given a list of per-device shards, return a multi-device tensor
-Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy);
-
 // Given a multi-device tensor, and a function that transforms a tensor, apply the function to all per-device
 // tensors.
 Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> transform_func);
@@ -186,15 +172,6 @@ inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
     return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
 }
 
-inline bool any_tensor_on_multi_device(const std::vector<ttnn::Tensor>& tensors) {
-    for (const auto& tensor : tensors) {
-        if (is_tensor_on_multi_device(tensor)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 template<class T>
 inline uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
@@ -203,8 +180,6 @@ inline uint32_t get_batch_size(const T& shape) {
     }
     return result;
 }
-
-DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& tensor);
 
 }  // namespace tt_metal
 
