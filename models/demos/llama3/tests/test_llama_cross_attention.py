@@ -112,8 +112,7 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
         passing, pcc_message = comp_pcc(pt, tt, pcc)
 
         logger.info(comp_allclose(pt, tt))
-        logger.info(pcc_message)
-
+        logger.info(f'PCC: {pcc_message}')
         if passing:
             logger.info(f"compute_xattn_kv_cache Passed!")
         else:
@@ -195,7 +194,7 @@ def test_llama_cross_attention_inference(vision_seq_len, text_seq_len, mesh_devi
 
         passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc)
         logger.info(comp_allclose(pt_out, tt_output_torch))
-        logger.info(pcc_message)
+        logger.info(f'PCC: {pcc_message}')
         all_tests_pass = all_tests_pass and passing
 
     if all_tests_pass:

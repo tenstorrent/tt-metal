@@ -1,5 +1,11 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 import sys
 import os
+import subprocess
+import shutil
 
 os.environ["TERM"] = "xterm-256color"
 
@@ -11,6 +17,42 @@ import re
 import time
 import signal
 import psutil
+
+
+def ensure_less_installed():
+    if shutil.which("less") is None:
+        print("'less' command not found. Installing...")
+        try:
+            subprocess.run(["sudo", "apt", "update"], check=True)
+            subprocess.run(["sudo", "apt", "install", "-y", "less"], check=True)
+            print("'less' has been successfully installed.")
+        except subprocess.CalledProcessError as e:
+            print(f"Error installing 'less': {e}")
+            sys.exit(1)
+
+
+def ensure_ttsmi_installed():
+    if shutil.which("tt-smi") is None:
+        print("'tt-smi' command not found. Installing...")
+        try:
+            subprocess.run(["pip", "install", "git+https://github.com/tenstorrent/tt-smi.git"], check=True)
+            print("'tt-smi' has been successfully installed.")
+        except subprocess.CalledProcessError as e:
+            print(f"Error installing 'tt-smi': {e}")
+            sys.exit(1)
+
+    # Run tt-smi to generate the reset config file
+    hostname = os.environ.get("HOSTNAME", "unknown")
+    config_dir = os.path.expanduser("~/.config/tenstorrent")
+    os.makedirs(config_dir, exist_ok=True)
+    config_file = os.path.join(config_dir, f"reset_config_{hostname}.json")
+
+    try:
+        subprocess.run(["tt-smi", "-g", config_file], check=True)
+        print(f"Generated reset config file: {config_file}")
+    except subprocess.CalledProcessError as e:
+        print(f"Error generating reset config file: {e}")
+        sys.exit(1)
 
 
 def main(stdscr):
@@ -74,6 +116,7 @@ def main(stdscr):
             with screen_lock:
                 # Draw everything
                 draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_state)
+                draw_help_bar(stdscr, current_line, len(input_fields), len(output_entries))  # Add this line
                 stdscr.refresh()
             screen_needs_update.clear()
 
@@ -138,16 +181,17 @@ def main(stdscr):
                         model_input = input_fields[1]["value"] or "1b,3b,8b"
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
-                        # Parse models and devices
+                        # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
+                        commands = parse_list(command_input, allow_space=False)
 
                         # Generate combinations (reordered)
-                        combinations = [(m, d) for m in models for d in devices]
+                        combinations = [(c, m, d) for c in commands for m in models for d in devices]
 
                         # Create output entries
-                        for model, device in combinations:
-                            command_name = get_command_name(command_input)
+                        for command, model, device in combinations:
+                            command_name = get_command_name(command)
                             entry = {
                                 "command_name": command_name,
                                 "model": model,
@@ -159,7 +203,7 @@ def main(stdscr):
                                 "index": len(output_entries),
                                 "stop_event": threading.Event(),
                                 "lock": threading.Lock(),
-                                "command_input": command_input,  # Save the command input
+                                "command_input": command,  # Save the individual command
                             }
                             output_entries.append(entry)
                         # Update total_lines
@@ -240,15 +284,24 @@ def define_color_pairs():
     COLOR_WHITE = 15  # Bright white
     COLOR_BLACK = 16  # Black
 
+    COLOR_DARK_BLUE = 17  # Dark blue for help bar background
+    COLOR_LIGHT_YELLOW = 229  # Light yellow for help bar text
+
     # Initialize color pairs
     curses.init_pair(1, COLOR_BLACK, COLOR_GRAY)  # Selected field/background
     curses.init_pair(2, COLOR_LIGHT_CYAN, -1)  # Labels
     curses.init_pair(3, COLOR_WHITE, -1)  # Input values
-    curses.init_pair(4, COLOR_LIGHT_GREEN, -1)  # Header text
+    curses.init_pair(4, COLOR_WHITE, -1)  # Header text
     curses.init_pair(5, COLOR_GRAY, -1)  # 'Waiting' status
     curses.init_pair(6, COLOR_LIGHT_YELLOW, -1)  # 'Running' status
     curses.init_pair(7, COLOR_LIGHT_GREEN, -1)  # 'Finished' status
     curses.init_pair(8, COLOR_LIGHT_RED, -1)  # 'Error' status
+    curses.init_pair(9, COLOR_LIGHT_GREEN, -1)  # PCC > 0.99
+    curses.init_pair(10, COLOR_LIGHT_YELLOW, -1)  # PCC 0.98-0.99
+    curses.init_pair(11, COLOR_LIGHT_RED, -1)  # PCC < 0.98
+
+    # Add a new color pair for the help bar
+    curses.init_pair(12, COLOR_LIGHT_CYAN, -1)
 
     # Store the color pair numbers for use in the rest of the program
     global COLOR_PAIR_SELECTED
@@ -260,6 +313,10 @@ def define_color_pairs():
     global COLOR_PAIR_FINISHED
     global COLOR_PAIR_ERROR
     global COLOR_PAIR_SPEED
+    global COLOR_PAIR_PCC_GREEN
+    global COLOR_PAIR_PCC_YELLOW
+    global COLOR_PAIR_PCC_RED
+    global COLOR_PAIR_HELP_BAR
 
     COLOR_PAIR_SELECTED = curses.color_pair(1)
     COLOR_PAIR_LABEL = curses.color_pair(2)
@@ -270,6 +327,10 @@ def define_color_pairs():
     COLOR_PAIR_FINISHED = curses.color_pair(7)
     COLOR_PAIR_ERROR = curses.color_pair(8)
     COLOR_PAIR_SPEED = curses.color_pair(6)  # Use the same color as RUNNING
+    COLOR_PAIR_PCC_GREEN = curses.color_pair(9)
+    COLOR_PAIR_PCC_YELLOW = curses.color_pair(10)
+    COLOR_PAIR_PCC_RED = curses.color_pair(11)
+    COLOR_PAIR_HELP_BAR = curses.color_pair(12)
 
 
 def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_state):
@@ -302,7 +363,7 @@ def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_
     output_start_y = header_y + 1
     for idx, entry in enumerate(output_entries):
         y = output_start_y + idx
-        if y >= max_y - 2:
+        if y >= max_y - 3:  # Change this line from max_y - 2 to max_y - 3
             break
         if (
             idx >= len(last_drawn_state["output_entries"])
@@ -313,7 +374,10 @@ def draw_changes(stdscr, input_fields, output_entries, current_line, last_drawn_
 
     # Clear any extra lines if output entries were removed
     for y in range(
-        output_start_y + len(output_entries), min(output_start_y + len(last_drawn_state["output_entries"]), max_y - 2)
+        output_start_y + len(output_entries),
+        min(
+            output_start_y + len(last_drawn_state["output_entries"]), max_y - 3
+        ),  # Change this line from max_y - 2 to max_y - 3
     ):
         stdscr.move(y, 0)
         stdscr.clrtoeol()
@@ -342,9 +406,10 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         entry["device"],
         entry["status"],
         entry.get("speed", ""),
+        entry.get("pcc", ""),
         entry["output"],
     ]
-    col_widths = [15, 10, 10, 20, 10, max_x - 70]  # Adjusted widths to accommodate the speed column
+    col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
 
     x = 0
     for i, (col, width) in enumerate(zip(cols, col_widths)):
@@ -369,6 +434,15 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
                     color = COLOR_PAIR_WAITING
             elif i == 4:  # Speed column
                 color = COLOR_PAIR_SPEED
+            elif i == 5:  # PCC column
+                if col:
+                    pcc_value = float(col)
+                    if pcc_value > 0.99:
+                        color = COLOR_PAIR_PCC_GREEN
+                    elif 0.98 < pcc_value <= 0.99:
+                        color = COLOR_PAIR_PCC_YELLOW
+                    else:
+                        color = COLOR_PAIR_PCC_RED
             else:
                 color = curses.color_pair(0)
             stdscr.addstr(y, x, col_text, color)
@@ -377,19 +451,22 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
 
 
 def format_header(max_x):
-    cols = ["Command", "Model", "Device", "Status", "Speed", "Output"]
-    col_widths = [15, 10, 10, 20, 10, max_x - 70]  # Adjusted widths to accommodate the speed column
+    cols = ["Command", "Model", "Device", "Status", "Speed", "PCC", "Output"]
+    col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
     formatted_cols = []
     for col, width in zip(cols, col_widths):
         formatted_cols.append(col[:width].ljust(width))
     return "".join(formatted_cols)
 
 
-def parse_list(input_str):
+def parse_list(input_str, allow_space=True):
     if not input_str.strip():
         return [""]
     else:
-        items = [item.strip() for item in re.split(r"[,\s]+", input_str.strip()) if item.strip()]
+        if allow_space:
+            items = [item.strip() for item in re.split(r"[,\s]+", input_str.strip()) if item.strip()]
+        else:
+            items = [item.strip() for item in input_str.strip().split(",") if item.strip()]
         return items
 
 
@@ -422,11 +499,27 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     env["FAKE_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_llama_dir(entry["model"])
 
+    # Define command shortcuts
+    command_shortcuts = {
+        "demo": "pytest models/demos/llama3/demo/demo.py::test_llama_demo[wormhole_b0-True-mesh_device0-device_params0-instruct_weights-1_batch]",
+        "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
+        "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py::test_llama_mlp_inference[wormhole_b0-True-mesh_device0-32]",
+        "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
+        "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py::test_llama_decoder_inference[wormhole_b0-True-mesh_device0-4096]",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
+    }
+
+    # Check if the command is a shortcut and replace it if necessary
+    command_input = entry["command_input"]
+    if command_input in command_shortcuts:
+        command_input = command_shortcuts[command_input]
+
     # Prepare the command
-    cmd_list = shlex.split(entry["command_input"])
+    cmd_list = shlex.split(command_input)
 
     # Open log file
-    log_filename = get_log_filename(entry["device"], entry["model"], entry["command_input"])
+    log_filename = get_log_filename(entry["device"], entry["model"], command_input)
     os.makedirs("logs", exist_ok=True)
     entry["log_file"] = open(os.path.join("logs", log_filename), "w")
 
@@ -456,19 +549,23 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
             log_file.flush()
 
             # Update status and output based on output
-            status, output, speed = parse_output_line(line, previous_line, entry["status"])
+            status, output, speed, pcc = parse_output_line(line, previous_line, entry["status"])
             # Append input and output of parse_output_line to a log file
             with open("parse_output_log.txt", "a") as parse_log:
                 parse_log.write(f"Input: {line.strip()}, Previous status: {entry['status']}\n")
-                parse_log.write(f"Output: Status: {status}, Output: {output}, Speed: {speed}\n\n")
+                parse_log.write(f"Output: Status: {status}, Output: {output}, Speed: {speed}, PCC: {pcc}\n\n")
             previous_line = line.strip()
             with entry["lock"]:
-                if status != entry["status"] or output or speed is not None:
+                if status != entry["status"] or output or speed is not None or pcc is not None:
                     entry["status"] = status
                     if output:
                         entry["output"] = output
                     if speed is not None:
                         entry["speed"] = f"{speed:.1f}"
+                    if pcc is not None:
+                        current_pcc = entry.get("pcc")
+                        if current_pcc is None or float(pcc) < float(current_pcc):
+                            entry["pcc"] = pcc
                     screen_needs_update.set()
 
             with screen_lock:
@@ -516,42 +613,54 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
 def parse_output_line(line, previous_line, current_status):
     line = line.strip()
+
+    # Check for speed information
+    speed = None
+    speed_match = re.search(r"@ (\d+\.\d+) tok/s/user", line)
+    if speed_match:
+        speed = float(speed_match.group(1))
+
+    # Check for PCC information
+    pcc = None
+    pcc_match = re.search(r"PCC: (\d+\.\d+)", line)
+    if pcc_match:
+        pcc = f"{float(pcc_match.group(1)):.5f}"
+
     if "Initializing device" in line:
-        return "Initializing device", None, None
+        return "Initializing device", None, speed, pcc
     elif "Loading weights" in line:
-        return "Loading weights", None, None
+        return "Loading weights", None, speed, pcc
     elif re.search(r"layers\.\d+\.", line):
         match = re.search(r"layers\.(\d+)\.", line)
         if match:
             layer_number = match.group(1)
-            return f"Loading layer {layer_number}", None, None
+            return f"Loading layer {layer_number}", None, speed, pcc
     elif "Starting inference..." in line:
-        return "Starting", None, None
+        return "Starting", None, speed, pcc
     elif "Starting prefill..." in line:
-        return "Prefill", None, None
+        return "Prefill", None, speed, pcc
     elif "Starting decode..." in line:
-        return "Decode", None, None
+        return "Decode", None, speed, pcc
     elif line == "output:":
-        return "Waiting for output", None, None
+        return "Waiting for output", None, speed, pcc
     elif current_status == "Waiting for output" and previous_line == "output:":
         if "<|start_header_id|>assistant<|end_header_id|>" in line:
             output = line.split("<|start_header_id|>assistant<|end_header_id|>", 1)[1].strip()
             if output:
-                return "Running", output, None
+                return "Running", output, speed, pcc
             else:
-                return "Assistant output", None, None  # wait for a non-blank line
+                return "Assistant output", None, speed, pcc  # wait for a non-blank line
         else:
-            return "Running", line, None
+            return "Running", line, speed, pcc
     elif current_status == "Assistant output" and line:  # skip blank lines
-        return "Running", line, None
+        return "Running", line, speed, pcc
 
-    # Check for speed information
-    speed_match = re.search(r"@ (\d+\.\d+) tok/s/user", line)
-    if speed_match:
-        speed = float(speed_match.group(1))
-        return current_status, None, speed
+    # Check for test output
+    test_match = re.search(r"\| models\.demos\.llama3\.tests\..+ - (.+)", line)
+    if test_match:
+        return current_status, test_match.group(1), speed, pcc
 
-    return current_status, None, None
+    return current_status, None, speed, pcc
 
 
 def get_llama_dir(model):
@@ -634,12 +743,32 @@ def terminate_process_tree(pid):
 
 
 def reset_device(entry):
-    reset_cmd = ["tt-smi", "-wr", "all"]
+    hostname = os.environ.get("HOSTNAME", "unknown")
+    config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
+    reset_cmd = ["tt-smi", "-r", config_file]
     try:
         subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except subprocess.CalledProcessError as e:
         entry["output"] = f"Reset failed: {e.stderr.strip()}"
 
 
+def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
+    max_y, max_x = stdscr.getmaxyx()
+    help_text = get_help_text(current_line, num_input_fields, num_output_entries)
+    stdscr.addstr(max_y - 1, 0, help_text[: max_x - 1], COLOR_PAIR_HELP_BAR)
+    stdscr.clrtoeol()
+
+
+def get_help_text(current_line, num_input_fields, num_output_entries):
+    if current_line == 0:
+        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+    elif current_line <= num_input_fields - 1:
+        return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
+    else:
+        return "Enter: View log | Backspace/x: Cancel/remove entry | ↑↓: Navigate entries | Esc: Exit"
+
+
 if __name__ == "__main__":
+    ensure_less_installed()
+    ensure_ttsmi_installed()
     curses.wrapper(main)

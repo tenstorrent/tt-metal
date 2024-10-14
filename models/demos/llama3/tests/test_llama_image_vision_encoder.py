@@ -97,7 +97,7 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
         passing, pcc_message = comp_pcc(reference_output, tt_output_shuffled, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_shuffled))
-        logger.info(pcc_message)
+        logger.info(f"PCC: {pcc_message}")
     else:
         logger.info(f"Reference output shape: {reference_output.shape}")
         logger.info(f"TT output shape: {tt_output_torch.shape}")
@@ -105,8 +105,7 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(pcc_message)
-
+        logger.info(f"PCC: {pcc_message}")
     # reference_output = reference_model(images, ars)
     # tt_out = tt_model(images, ars)
     # tt_output_torch = [ttnn.to_torch(tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)) for tt in tt_out]
@@ -119,15 +118,15 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
     #     logger.info(f"TT output shape: {tt_output_torch[i].shape}")
     #     passing, pcc_message = comp_pcc(reference_output[i], tt_output_torch[i], pcc)
     #     logger.info(comp_allclose(reference_output[i], tt_output_torch[i]))
-    #     logger.info(pcc_message)
-    # return
+    #     logger.info(f'PCC: {pcc_message}')
+    #     # return
     # logger.info(f"Reference output shape: {reference_output.shape}")
     # logger.info(f"TT output shape: {tt_output_torch.shape}")
 
     # passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     # logger.info(comp_allclose(reference_output, tt_output_torch))
-    # logger.info(pcc_message)
+    # logger.info(f'PCC: {pcc_message}')
 
     if passing:
         logger.info(f"Llama_Attention Passed!")

@@ -110,8 +110,7 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(pcc_message)
-
+        logger.info(f"PCC: {pcc_message}")
         if passing:
             logger.info("Llama Decoder Block Passed!")
         else:

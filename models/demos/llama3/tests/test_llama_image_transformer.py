@@ -194,8 +194,7 @@ def test_llama_image_transformer_inference(
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(pcc_message)
-
+    logger.info(f"PCC: {pcc_message}")
     if return_intermediate:
         for idx, (pt_interm, tt_interm) in enumerate(zip(intermediates, tt_intermed_torch)):
             passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc)
