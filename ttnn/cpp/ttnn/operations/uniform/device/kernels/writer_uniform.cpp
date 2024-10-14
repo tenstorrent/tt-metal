@@ -29,10 +29,12 @@ void kernel_main() {
     uint32_t max_uint = 4294967295;
     float random_range = f2u_to.f - f2u_from.f;
 
+    cb_reserve_back(dst_cb_id, 1);
+    uint8_t *dst_cb_addr = reinterpret_cast<uint8_t *>(get_write_ptr(dst_cb_id));
+
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(intermed_cb_id, 1);
         uint32_t *intermed_cb_addr = reinterpret_cast<uint32_t *>(get_read_ptr(intermed_cb_id));
-        uint8_t *dst_cb_addr = reinterpret_cast<uint8_t *>(get_write_ptr(dst_cb_id));
         for (uint32_t k = 0; k < tt::constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < tt::constants::TILE_HEIGHT; j++) {
                 uint32_t rand_uint32 = *intermed_cb_addr;
