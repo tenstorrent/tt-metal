@@ -15,6 +15,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "tt_metal/host_api.hpp"
 
 
@@ -294,13 +295,13 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     m_tensor.def(
         "load_tensor",
-        static_cast<Tensor (*)(const std::string&, Device*)>(&load_tensor<Device*>),
+        py::overload_cast<const std::string&, Device*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
     m_tensor.def(
         "load_tensor",
-        static_cast<Tensor (*)(const std::string&, MeshDevice*)>(&load_tensor<MeshDevice*>),
+        py::overload_cast<const std::string&, MeshDevice*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");
