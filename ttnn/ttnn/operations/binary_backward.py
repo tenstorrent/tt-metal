@@ -5,7 +5,7 @@
 import sys
 
 import ttnn
-from ttnn.operations.eltwise.complex_binary_backward import (
+from ttnn.operations.complex_binary_backward import (
     _golden_function_complex_add,
     _golden_function_complex_sub,
     _golden_function_complex_mul,
