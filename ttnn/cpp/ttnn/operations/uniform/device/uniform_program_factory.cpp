@@ -45,30 +45,23 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     constexpr uint32_t in_out_num_tiles = 1;
     constexpr uint32_t intermed_num_tiles = 2;
 
-    // CB in 0 is not used anywhere in kernels but required to trigger hardware prng.
-    constexpr uint32_t src0_cb_index = CB::c_in0;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{src0_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(src0_cb_index, dtype_tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
-    constexpr uint32_t intermed_cb_index = CB::c_intermed0;
+    constexpr uint32_t intermed_cb_id = CB::c_intermed0;
     CircularBufferConfig cb_intermed_config =
-        CircularBufferConfig(intermed_num_tiles * uint32_tile_size, {{intermed_cb_index, tt::DataFormat::UInt32}})
-            .set_page_size(intermed_cb_index, uint32_tile_size);
+        CircularBufferConfig(intermed_num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::UInt32}})
+            .set_page_size(intermed_cb_id, uint32_tile_size);
     CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
-    constexpr uint32_t output_cb_index = CB::c_out0;
+    constexpr uint32_t dst_cb_id = CB::c_in0;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{output_cb_index, out_data_format}})
-            .set_page_size(output_cb_index, dtype_tile_size);
+        CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
+            .set_page_size(dst_cb_id, dtype_tile_size);
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
     const uint32_t output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_index, output_cb_index, output_is_dram};
+    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{intermed_cb_index};
+    const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";
 
     std::map<string, string> writer_defines;

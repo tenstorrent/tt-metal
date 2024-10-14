@@ -17,6 +17,11 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from models.utility_functions import skip_for_grayskull
 
 
+def test_torch_uniform_bfloat16():
+    input = torch.zeros(10, 10, dtype=torch.bfloat16).uniform_(2.1, 2.11)
+    print(input)
+
+
 def get_lib_dtype(lib, dtype):
     """Maps dtype to corresponding library dtype."""
     dtype_map = {
@@ -48,7 +53,16 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None):
     logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
     logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
 
-    assert rand_from <= min_val and max_val < rand_to
+    bfloat16_ep = 0.015
+
+    """
+    Random bfloat16 is converted from random float. As 16 bits are truncated, the generated number might be smaller/bigger than from/to.
+    (even torch can't handle that case, check test_torch_uniform_bfloat16() function). I use bfloat16_ep is used to avoid asserting fail.
+    """
+    if dtype == "bfloat16":
+        assert rand_from - bfloat16_ep <= min_val and max_val < rand_to + bfloat16_ep
+    else:
+        assert rand_from <= min_val and max_val < rand_to
     assert np.allclose(npu_mean, expected_mean, rtol=0.5)
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 
@@ -59,12 +73,12 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None):
     [
         [100, 100],
         [1, 512, 2, 256],
-        [1000, 120],
+        [400, 400],
     ],
 )
 @pytest.mark.parametrize("rand_range",
     [
-        [2, 9],
+        [2.1, 9],
         [-5.1, 1.2] # negative float range
     ]
 )
