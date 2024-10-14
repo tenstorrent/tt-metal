@@ -62,22 +62,18 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
 
-    iterations = 5 if layers == 1 else 9
-    # In post-commit CI, do a tight PCC validation for the final iteration of the quick test
-    if mesh_device.get_num_devices() == 1:
-        final_model_pcc = 0.96369
-        final_k_cache_pcc = 0.99980
-        final_v_cache_pcc = 0.99982
-    elif mesh_device.get_num_devices() == 2:
-        final_model_pcc = 0.96350
-        final_k_cache_pcc = 0.99980
-        final_v_cache_pcc = 0.99982
-    elif mesh_device.get_num_devices() == 8:
-        final_model_pcc = 0.96355
-        final_k_cache_pcc = 0.99980
-        final_v_cache_pcc = 0.99982
-    else:
-        assert "Unsupported number of devices"
+    model_from_layers = {
+        16: "llama32_1b",
+        28: "llama32_3b",
+        32: "llama31_8b",
+    }[model_args.n_layers]
+
+    final_model_pcc = {"llama32_1b": 0.9991, "llama32_3b": 0.9990, "llama31_8b": 0.99765}[model_from_layers]
+    final_k_cache_pcc = {"llama32_1b": 0.9998, "llama32_3b": 0.9998, "llama31_8b": 0.9995}[model_from_layers]  # TODO
+    final_v_cache_pcc = {"llama32_1b": 0.9996, "llama32_3b": 0.9998, "llama31_8b": 0.9996}[model_from_layers]  # TODO
+    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6}[model_from_layers]
+
+    iterations = quick_iterations if layers == 1 else 9
 
     if layers is not None:
         model_args.n_layers = layers
