@@ -2155,6 +2155,8 @@ def test_conv_for_vanilla_unet(
         (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
         (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
         (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, True, None),
+        (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, True, None),
+        (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, True, None),
     ),
 )
 @pytest.mark.parametrize(
