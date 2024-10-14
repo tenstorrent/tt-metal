@@ -53,7 +53,7 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
         global_model=True,
         return_intermediate=return_intermediate,
     )
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict, strict=True)
 
     all_tests_pass = True
 
@@ -73,14 +73,61 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
 
     reference_output = reference_model(images, ars)
     tt_out = tt_model(images, ars)
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :].view(
-        reference_output.shape
-    )  # [ batch, seq, hidden_dim]
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    tt_output_torch = tt_output_torch[0, :, :, :].view(reference_output.shape)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    INTERM_OUT = True
+    if INTERM_OUT:
+        # reference_output is [x] + [shuffled_int_x]
+        # tt_output is [x] + [int_x]
+        # To compare, we will shuffle tt_output. NOTE! This requires that the vision model shuffle its projection weights
+        tt_output_shuffled = torch.zeros_like(tt_output_torch)
+        tt_output_shuffled[..., : model_args.vision_dim] = tt_output_torch[..., : model_args.vision_dim]
+        tt_int_x = tt_output_torch[..., model_args.vision_dim :]
+        tt_int_x = (
+            tt_int_x.reshape(reference_output.shape[:-1] + (5, model_args.vision_dim))
+            .transpose(-1, -2)
+            .reshape(reference_output.shape[:-1] + (model_args.vision_dim * 5,))
+        )
+        tt_output_shuffled[..., model_args.vision_dim :] = tt_int_x
 
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(pcc_message)
+        logger.info(f"Reference output shape: {reference_output.shape}")
+        logger.info(f"TT output shape: {tt_output_shuffled.shape}")
+
+        passing, pcc_message = comp_pcc(reference_output, tt_output_shuffled, pcc)
+
+        logger.info(comp_allclose(reference_output, tt_output_shuffled))
+        logger.info(pcc_message)
+    else:
+        logger.info(f"Reference output shape: {reference_output.shape}")
+        logger.info(f"TT output shape: {tt_output_torch.shape}")
+
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(pcc_message)
+
+    # reference_output = reference_model(images, ars)
+    # tt_out = tt_model(images, ars)
+    # tt_output_torch = [ttnn.to_torch(tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)) for tt in tt_out]
+    # tt_output_torch = [tt[0, :, :, :].view(
+    #     reference_output[0].shape
+    # ) for tt in tt_output_torch] # [ batch, seq, hidden_dim]
+
+    # for i in range(len(tt_output_torch)):
+    #     logger.info(f"Reference output shape: {reference_output[i].shape}")
+    #     logger.info(f"TT output shape: {tt_output_torch[i].shape}")
+    #     passing, pcc_message = comp_pcc(reference_output[i], tt_output_torch[i], pcc)
+    #     logger.info(comp_allclose(reference_output[i], tt_output_torch[i]))
+    #     logger.info(pcc_message)
+    # return
+    # logger.info(f"Reference output shape: {reference_output.shape}")
+    # logger.info(f"TT output shape: {tt_output_torch.shape}")
+
+    # passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+
+    # logger.info(comp_allclose(reference_output, tt_output_torch))
+    # logger.info(pcc_message)
 
     if passing:
         logger.info(f"Llama_Attention Passed!")

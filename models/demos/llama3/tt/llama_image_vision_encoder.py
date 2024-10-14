@@ -29,6 +29,34 @@ def to_2tuple(x):
     return (x, x)
 
 
+def pad_seq_one_tile(x, mesh_device):
+    num_pad_tokens = 32
+
+    pad_tensor = ttnn.as_tensor(
+        torch.zeros(x.shape[0], x.shape[1], num_pad_tokens, x.shape[-1]),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    return (
+        ttnn.concat([x, pad_tensor], dim=2),
+        num_pad_tokens,
+    )
+
+
+def mask_tile_padding(attn_mask, ntok, npad, num_chunks):
+    npad8 = 8 - (ntok % 8)
+    n_extra_pad = npad - npad8
+    for i in range(1, num_chunks + 1):
+        attn_mask[:, :, i * (ntok + npad) - n_extra_pad : i * (ntok + npad), :] = torch.finfo(attn_mask.dtype).min
+        attn_mask[:, :, :, i * (ntok + npad) - n_extra_pad : i * (ntok + npad)] = torch.finfo(attn_mask.dtype).min
+
+    return attn_mask
+
+
 class TtLlamaVisionEncoder(LightweightModule):
     def __init__(
         self,
@@ -167,11 +195,11 @@ class TtLlamaVisionEncoder(LightweightModule):
         # NOTE: at this point, x is a ttnn Tensor!
         # _, ntok, dim = x.shape
         ntok, dim = x.shape[2], x.shape[3]
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok, dim)
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         # tile embeddings
         x = self.pre_tile_pos_embed(x, ar)
-        x = x.reshape(1, bsz * num_concurrent_media * num_chunks, ntok, dim)
+        x = ttnn.reshape(x, (1, bsz * num_concurrent_media * num_chunks, ntok, dim))
 
         # apply cls token
         if not SKIP_EMBED:
@@ -179,49 +207,63 @@ class TtLlamaVisionEncoder(LightweightModule):
             ntok += 1
 
         # apply position embeddings
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok, dim)
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
         if not SKIP_EMBED:
             x = self.apply_positional_embedding(x, ar)
 
         # BUG: layernorm takes 4d tensor -> 3d??
         x = self.ln_pre(x)
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok, dim)  # BUG: required for above note
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))  # BUG: required for above note
         npad, attn_mask = 0, None
-        # x, npad = expand_num_tokens_to_mult8(x)
-        # TODO: See if we need to do this padding (expand/contract)
-        npad = 0
+
+        # NOTE: We need to do this padding because it creates a funky attention mask
+        # return x
+        print(f"TT VisionEncoder: before tile padding x.shape: {x.shape}")
+        x, npad = pad_seq_one_tile(x, self.mesh_device)
+        print(f"TT VisionEncoder: after tile padding x.shape: {x.shape}")
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
         attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+        attn_mask = mask_tile_padding(attn_mask, ntok, 32, num_chunks)
+        print(f"TT VisionEncoder: attn_mask.shape: {attn_mask.shape}")
+        torch.save(attn_mask, "vision_encoder_attn_mask.pt")
         attn_mask = ttnn.as_tensor(
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # TODO: Should it replicate or shard?
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        x = x.reshape(1, bsz * num_concurrent_media, -1, dim)
-        # breakpoint()
+        x = ttnn.reshape(x, (1, bsz * num_concurrent_media, -1, dim))
+        print(f"TT VisionEncoder: input to self.transformer x.shape: {x.shape}")
         x, int_x = self.transformer(x, return_intermediate=self.return_intermediate, mask=attn_mask)
-        # TODO: int_x is a list of tensors, what do we do about that on TTNN side?
-        # breakpoint()
+
+        # # DEBUG transformer output
+        # x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok + 32, dim)
+        # x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         x = self.ln_post(x)
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok + npad, dim)
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
         x = self.post_tile_pos_embed(x, ar)
-        x = x.reshape(1, bsz * num_concurrent_media, num_chunks * (ntok + npad), dim)
+        x = ttnn.reshape(x, (1, bsz * num_concurrent_media, num_chunks * (ntok + npad), dim))
         x = self.global_transformer(x, mask=attn_mask)
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok + npad, dim)
-        # x = contract_num_tokens_from_mult8(x, npad)
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
+        x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         # adding back intermediate layer outputs
         # NOTE: We cannot do 5-dim tensors. It should be find to send back 4-dim as long as calling code knows.
-        # x = x.reshape(bsz, num_concurrent_media, num_chunks, ntok, dim)
-        x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok, dim)
-        int_x = int_x.reshape(bsz * num_concurrent_media, num_chunks, ntok + npad, -1)
-        # int_x = contract_num_tokens_from_mult8(int_x, npad)
-        # int_x = int_x.reshape(bsz, num_concurrent_media, num_chunks, ntok, -1)
-        x = ttnn.concat([x, int_x], dim=-1)
-        breakpoint()
+        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
+
+        # NOTE: I can't correctly stack and reshape int_x because of ttnn page size limitations.
+        # NOTE: this means I will have to modify calling code to know that int_x is not shuffled
+
+        int_x = [ttnn.reshape(ix, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim)) for ix in int_x]
+        int_x = [ttnn.slice(ix, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim)) for ix in int_x]
+        x = ttnn.concat(
+            [
+                x,
+            ]
+            + int_x,
+            dim=-1,
+        )
         return x
