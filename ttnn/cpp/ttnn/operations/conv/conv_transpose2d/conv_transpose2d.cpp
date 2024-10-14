@@ -191,8 +191,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_act_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
-        ttnn::operations::core::deallocate(halo_output);
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        // ttnn::operations::core::deallocate(halo_output);
+        return {conv_output, output_height, output_width, halo_output, bias_tensor_on_device};
 
 
     }
