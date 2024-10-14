@@ -29,7 +29,6 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS];
 extern uint32_t __kernel_init_local_l1_base[];
 
 void kernel_launch() {
-
   DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME

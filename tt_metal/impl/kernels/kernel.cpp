@@ -416,41 +416,29 @@ RISCV EthernetKernel::processor() const { return RISCV::ERISC; }
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core) const {
-    bool pass = true;
+bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
+    int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
-    int riscv_id;
-    switch (this->config_.processor) {
-        case (DataMovementProcessor::RISCV_0): {
-            riscv_id = 0;
-        } break;
-        case (DataMovementProcessor::RISCV_1): {
-            riscv_id = 1;
-        } break;
-        default: TT_THROW("Unsupported data movement processor!");
-    }
-
-    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, worker_core, riscv_id);
-    return pass;
+    return true;
 }
 
-bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core) const {
-    bool pass = true;
+bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
-    int riscv_id = this->config_.eth_mode == Eth::IDLE ? 6 : 5;
-    pass &= tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
-    return pass;
+    llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[0]);
+
+    return true;
 }
 
-bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) const {
+bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
@@ -460,7 +448,7 @@ bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core) con
     std::vector<ll_api::memory> binaries = this->binaries(device->build_key());
 
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        pass &= tt::llrt::test_load_write_read_trisc_binary(binaries.at(trisc_id), device_id, worker_core, trisc_id);
+        llrt::write_binary_to_address(binaries.at(trisc_id), device_id, worker_core, base_address + offsets[2 + trisc_id]);
     }
 
     return pass;

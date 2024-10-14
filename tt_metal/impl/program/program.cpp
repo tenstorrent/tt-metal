@@ -739,23 +739,17 @@ void Program::populate_dispatch_data(Device *device) {
                 // Spans are now packed into one
                 // TODO: code below can be simplified w/ a single span
                 uint32_t num_spans = kernel_bin.num_spans();
-                dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
+                // TODO: with the kernel config buffer the dst_base_addrs isn't used
+                // TODO: gut all this code and create a single transfer info for a linear write
+                dst_base_addrs.resize(dst_base_addrs.size() + num_spans); // TODO: this is now unused, gut
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
                 TT_ASSERT(kernel_bin.num_spans() == 1);
 
-                uint32_t max_kernel_bin_size = processor_to_firmware_size[sub_kernels[sub_kernel_index]];
-
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
-                    max_kernel_bin_size -= dst - processor_to_firmware_base[sub_kernels[sub_kernel_index]];
-
-                    uint64_t relo_addr =
-                        tt::llrt::relocate_dev_addr(dst);
-
-                    dst_base_addrs[transfer_info_index] = (uint32_t)relo_addr;
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
@@ -766,12 +760,6 @@ void Program::populate_dispatch_data(Device *device) {
                         align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
-
-                uint32_t bin_size = kernel_bin.size() * sizeof(uint32_t);
-                // TODO: remove this check when the ring buffer is in place (checked there)
-                TT_FATAL(bin_size <= max_kernel_bin_size,
-                    "Kernel binary size, {}, overflowed kernel binary storage size, {}",
-                     bin_size, max_kernel_bin_size);
             }
 
             kernel_bins_transfer_info kb_transfer_info = {
@@ -1016,25 +1004,24 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                         kg.kernel_bin_sizes[0] = binary_packed_size;
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                         kg.kernel_bin_sizes[1] = binary_packed_size;
-                        kg.launch_msg.kernel_config.kernel_text_offset[1] = binaries[0].get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
                         offset += binary_packed_size;
+                        offset = align(offset, l1_alignment);
 
                         uint32_t binary_text_size = kernel->get_binary_text_size(device, 0);
                         TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
                         kg.launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
-                        offset = align(offset, l1_alignment);
                     } else {
                         constexpr uint32_t max_math_processors_count = 3;
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
                             uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
                             kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
-                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] =
-                                binaries[proc_type_index].get_text_addr();
+                            kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                             offset += binary_packed_size;
                             offset = align(offset, l1_alignment);
                         }
@@ -1042,7 +1029,7 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                 } else {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
                     kg.kernel_bin_sizes[0] = binary_packed_size;
-                    kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
+                    kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
                     offset += binary_packed_size;
                     offset = align(offset, l1_alignment);
                 }
@@ -1077,6 +1064,7 @@ void Program::finalize(Device *device) {
     }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        HalProgrammableCoreType programmable_core_type = static_cast<HalProgrammableCoreType>(index);
         uint32_t offset = 0;
 
         offset = finalize_rt_args(index, offset);
@@ -1088,11 +1076,15 @@ void Program::finalize(Device *device) {
         offset = finalize_cbs(index, offset);
         TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
 
-        // TODO: update the offset when kernel bins are moved into the kernel config buffer
-        (void)finalize_kernel_bins(device, index, offset);
+        offset = finalize_kernel_bins(device, index, offset);
         TT_ASSERT(offset == align(offset, hal.get_alignment(HalMemType::L1)));
 
         this->get_program_config_size(index) = offset;
+
+        auto max_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+        TT_FATAL(offset < max_size,
+                 "Program size {} too large for kernel config buffer {} on {}",
+                 offset, max_size, hal.get_name(programmable_core_type));
     }
 
     // The sem offsets cross programmable_core_types so must be set after the loop above

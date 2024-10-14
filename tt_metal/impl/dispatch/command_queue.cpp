@@ -932,7 +932,10 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             } else {
                 uint32_t base_address = this->program.kernels_buffer->address();
                 uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+
+                // TODO: the 0 below assumes tensix, this code should be all programm_core_type major
+                uint32_t dst_addr = this->program.get_program_config(0).kernel_text_offset;
+
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
@@ -1176,7 +1179,11 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
-            dram_alignment, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+            dram_alignment,
+            kernel_bins_dispatch_subcmds[i].size(),
+            kernel_bins_dispatch_subcmds[i],
+            0,
+            DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
         device_command_sequence.add_prefetch_relay_paged_packed(
             kernel_bins_write_packed_large_data_aligned_sizeB[i],
             kernel_bins_prefetch_subcmds[i],

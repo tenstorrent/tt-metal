@@ -169,13 +169,13 @@ void set_deassert_addresses() {
 #endif
 }
 
-void l1_to_ncrisc_iram_copy(uint16_t size, uint32_t address_offset = 0) {
+void l1_to_ncrisc_iram_copy(uint32_t src_addr, uint16_t size, uint32_t address_offset = 0) {
 #ifdef NCRISC_HAS_IRAM
     // Always copy ncrisc even if its size is 0 (save branch)...
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
         TDMA_MOVER0,
-        (MEM_NCRISC_INIT_IRAM_L1_BASE >> 4) + address_offset,
+        src_addr,
         MEM_MOVER_VIEW_IRAM_BASE_ADDR + address_offset,
         size,
         XMOV_L1_TO_L0);
@@ -275,7 +275,7 @@ inline void deassert_ncrisc_trisc() {
     ncrisc_kernel_start_offset16 = fw_size16;
 
     // Copies from L1 to IRAM on chips where NCRISC has IRAM
-    l1_to_ncrisc_iram_copy(fw_size16);
+    l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, fw_size16);
     l1_to_ncrisc_iram_copy_wait();
 
     // Bring ncrisc/triscs out of reset
@@ -400,8 +400,13 @@ int main() {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
-            l1_to_ncrisc_iram_copy(launch_msg_address->kernel_config.ncrisc_kernel_size16, ncrisc_kernel_start_offset16);
-
+            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
+            int ncrisc_index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::NCRISC);
+            uint32_t ncrisc_kernel_src_address =
+                kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[ncrisc_index];
+            l1_to_ncrisc_iram_copy(ncrisc_kernel_src_address >> 4,
+                launch_msg_address->kernel_config.ncrisc_kernel_size16,
+                ncrisc_kernel_start_offset16);
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
@@ -423,7 +428,6 @@ int main() {
             }
             prev_noc_mode = noc_mode;
 
-            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 launch_msg_address->kernel_config.cb_offset);
             setup_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
@@ -434,7 +438,8 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 setup_cb_read_write_interfaces(cb_l1_base, num_cbs_to_early_init, launch_msg_address->kernel_config.max_cb_index, true, true, false);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::BRISC);
-                void (*kernel_address)() = (void (*)())launch_msg_address->kernel_config.kernel_text_offset[index];
+                void (*kernel_address)() =
+                    (void (*)())(kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 (*kernel_address)();
                 RECORD_STACK_USAGE();
             } else {

@@ -203,6 +203,14 @@ bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, c
     return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
 }
 
+void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
+
+    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+    });
+}
+
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
     return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
 }
