@@ -89,7 +89,7 @@ jobs:
       continue-on-error: true
     - name: Prepare compile_commands.json
       run: |
-        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
       continue-on-error: true
     - name: Create results directory
       run: |
