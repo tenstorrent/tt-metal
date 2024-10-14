@@ -11,7 +11,11 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
+encoder_utils = importlib.import_module(
+    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.encoder_utils"
+)
 from models.demos.llama3.tt.llama_image_attention import TtLlamaImageAttention
+from models.demos.llama3.tt.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
@@ -25,8 +29,8 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (5120,),
+    "batch, num_chunks, ntok",
+    ((1, 4, 1024),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -37,7 +41,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, reset_seeds):
+def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
     pcc = 0.99
 
@@ -57,8 +61,6 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
     reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = 1
-
     all_tests_pass = True
 
     tt_model = TtLlamaImageAttention(
@@ -70,37 +72,35 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
         configuration=model_args,
     )
 
-    # pt_attention_input = (torch.rand(batch, seq_len, dim) * 2) - 1
-    pt_block_input = torch.load(
-        "/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_8L_x.pt"
-    )
-    # pt_block_input1 = torch.load("/home/cglagovich/tt-metal/layer_31_intermediate.pt")
-    # pt_block_input = pt_block_input[..., :seq_len, :].bfloat16().float()
-    pt_block_input = pt_block_input.bfloat16().float()
-    pt_block_input = torch.nn.functional.pad(pt_block_input, (0, 0, 0, seq_len - pt_block_input.shape[-2]))
-    mask = torch.load("/home/cglagovich/tt-metal/mask.pt")  # mask = mask[..., :seq_len, :seq_len]
-    mask = torch.nn.functional.pad(mask, (0, seq_len - mask.shape[-1], 0, seq_len - mask.shape[-2]), value=-1e9)
+    # Create PT input
+    ar = torch.tensor([[1, 2]])
+    pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
     tt_attention_input = pt_block_input.clone()
+    # Do PT padding
+    pt_block_input, npad = encoder_utils.expand_num_tokens_to_mult8(pt_block_input)
+    # Create PT attention mask
+    mask = encoder_utils.build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
+    pt_block_input = pt_block_input.reshape(batch, -1, dim)
+
     attention_input = prepare_inputs_ttnn_prefill(
-        tt_attention_input,
+        tt_attention_input.view(num_chunks, ntok, dim),
         mesh_device,
     )
+    # Pad TT input to multipple of 32
+    attention_input, npadtt = pad_seq_one_tile(attention_input, mesh_device)
+    # Create attention mask, assuming padding of 32
+    fake_x = torch.zeros(
+        attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
+    )
+    tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+    # Make striped attention mask to mask out our padding between 8 and 32
+    # Striped mask doesn't affect PCC
+    # tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
 
-    # mask = torch.bernoulli(
-    #     torch.full(
-    #         (
-    #             batch,
-    #             seq_len,
-    #             seq_len,
-    #         ),
-    #         0.25,
-    #     )
-    # )
-    # mask = mask.unsqueeze(1)
-    # mask = mask * -1e9
+    attention_input = attention_input.reshape(1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
-        mask,
+        tt_attn_mask,
         device=mesh_device,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
@@ -109,11 +109,15 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
-        batch, seq_len, -1
-    )  # [ batch, seq, hidden_dim]
 
-    reference_output = reference_model(pt_block_input, mask=mask).view(batch, seq_len, -1)
+    # Doing contract in tt is correct!!
+    tt_out = tt_out.reshape(batch, num_chunks, ntok + 32, dim)
+    tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+
+    reference_output = reference_model(pt_block_input, mask=mask)
+    reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
+    reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

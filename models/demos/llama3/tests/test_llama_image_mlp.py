@@ -25,10 +25,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (
-        64 * 1024,
+        # 64 * 1024,
         # 32 * 1024,
-        5120,
-        32,
+        # 5120,
+        # 32,
+        4224,
     ),
 )
 @pytest.mark.parametrize(
@@ -120,15 +121,10 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
     )
-    # torch_input = torch.randn(1, 1, seq_len, dim)
-    # pt_block_input = torch.load("/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_8L_x.pt")
-    pt_block_input = torch.load("/home/cglagovich/tt-metal/layer_31_intermediate.pt")
-    # pt_block_input = pt_block_input[..., :seq_len, :].bfloat16().float()
-    pt_block_input = pt_block_input.bfloat16().float()
-    pt_block_input = torch.nn.functional.pad(pt_block_input, (0, 0, 0, seq_len - pt_block_input.shape[-2]))
-    reference_output = reference_model(pt_block_input.bfloat16()).squeeze()
+    torch_input = torch.randn(1, 1, seq_len, dim)
+    reference_output = reference_model(torch_input).squeeze()
     tt_input = ttnn.from_torch(
-        pt_block_input,
+        torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,

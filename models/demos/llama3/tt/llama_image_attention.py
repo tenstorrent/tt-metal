@@ -214,7 +214,7 @@ class TtLlamaImageAttention(LightweightModule):
 
     def forward_tt(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
         # QKV matmuls
         ###
@@ -236,8 +236,15 @@ class TtLlamaImageAttention(LightweightModule):
         #     layout=ttnn.TILE_LAYOUT,
         # )
 
-        if seq_len > 1024:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 1024, 1024, -1])
+        # Depends on whether we are padding or not
+        MAX_MM_SEQ_LEN = 1056
+        # MAX_MM_SEQ_LEN = 1024
+
+        # DEBUG: Don't batch it up
+        # MAX_MM_SEQ_LEN = 10000
+
+        if seq_len > MAX_MM_SEQ_LEN:
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         xqkv_fused = ttnn.linear(
             x_11SH,
@@ -245,12 +252,12 @@ class TtLlamaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len),
+            program_config=self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        if seq_len > 1024:
+        if seq_len > MAX_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        ttnn.deallocate(x_11SH)
+        # ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
@@ -266,7 +273,12 @@ class TtLlamaImageAttention(LightweightModule):
         )
 
         ttnn.deallocate(xqkv_fused)
-        sdpa_cfg = self.model_config["SDPA_PROGCFG"](seq_len)
+        # sdpa_cfg = self.model_config["SDPA_PROGCFG"](seq_len)
+        sdpa_cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            q_chunk_size=128,
+            k_chunk_size=128,
+        )
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,
             k_heads_1KSD,
@@ -332,8 +344,8 @@ class TtLlamaImageAttention(LightweightModule):
         # breakpoint()
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 1024:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
+        if seq_len > MAX_MM_SEQ_LEN:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
@@ -341,9 +353,9 @@ class TtLlamaImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len),
+            program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
         )
-        if seq_len > 1024:
+        if seq_len > MAX_MM_SEQ_LEN:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 

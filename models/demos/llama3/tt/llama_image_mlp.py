@@ -113,12 +113,15 @@ class TtLlamaImageFeedForward(LightweightModule):
         compute_kernel_config_hifi2 = self.model_config["MLP_KERNEL_CONFIG_HIFI2"]
         compute_kernel_config_hifi4 = self.model_config["MLP_KERNEL_CONFIG_HIFI4"]
 
+        # Depends on whether we are padding or not
+        MAX_MM_SEQ_LEN = 1056
+        # MAX_MM_SEQ_LEN = 1024
         x_in = x
-        if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
+        if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
-            x_in = ttnn.reshape(x_in, [1, seq_len // 1024, 1024, -1])
-        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len)
-        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len)
+            x_in = ttnn.reshape(x_in, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
+        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         c_fc_out = ttnn.linear(
@@ -143,8 +146,9 @@ class TtLlamaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if seq_len >= 1024:  # Reshape back to intended shape
-            c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
+        # if seq_len >= 1024:  # Reshape back to intended shape
+        # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
+        c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
         # All reduce
         if self.args.num_devices > 1:

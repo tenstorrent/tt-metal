@@ -436,38 +436,38 @@ class TtModelArgs:
             )
 
             # Vision model configs
-            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=self.vision_dim,
                 n=self.vision_hidden_dim // self.num_devices,
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
-            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=self.vision_hidden_dim // self.num_devices,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
-            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=self.vision_dim,
                 n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
                 // self.num_devices,  # Head dim was padded to nearest 32
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
-            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
             self.model_config["VISION_XATTN_Q_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
