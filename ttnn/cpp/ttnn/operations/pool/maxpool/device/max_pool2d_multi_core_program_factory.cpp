@@ -70,8 +70,12 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / tt::constants::TILE_WIDTH);
+    uint32_t in_ntiles_c = in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ?
+        (uint32_t)std::ceil((float)input_shape[3] / tt::constants::TILE_WIDTH) :
+        (uint32_t)std::ceil((float)input_shape[3] / num_shards / tt::constants::TILE_WIDTH);
+    uint32_t out_ntiles_c = in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ?
+        (uint32_t)std::ceil((float)output_shape[3] / tt::constants::TILE_WIDTH) :
+        (uint32_t)std::ceil((float)output_shape[3] / num_shards / tt::constants::TILE_WIDTH);
 
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
