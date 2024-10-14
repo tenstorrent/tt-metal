@@ -116,12 +116,14 @@ class TtModelArgs:
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, device_name)
         else:
-            self.DEFAULT_CKPT_DIR = os.getenv("LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/")
+            self.DEFAULT_CKPT_DIR = os.getenv(
+                "LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
+            )
             self.DEFAULT_TOKENIZER_PATH = os.getenv(
-                "LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/"
+                "LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
             )
             self.DEFAULT_CACHE_PATH = os.getenv(
-                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B/{device_name}/"
+                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/{device_name}/"
             )
 
         if not dummy_weights:
