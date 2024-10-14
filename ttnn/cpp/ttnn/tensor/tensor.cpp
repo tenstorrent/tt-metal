@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "common/bfloat16.hpp"
+#include "impl/buffers/buffer_constants.hpp"
 #include "tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -656,12 +657,12 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 }
 
 Tensor create_device_tensor(
-    const ttnn::SimpleShape& shape, const TensorLayout& layout, Device* device) {
+    const ttnn::SimpleShape& shape, const TensorLayout& tensor_layout, Device* device) {
     ZoneScoped;
-    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, layout.get_data_type(), layout.get_layout(), device, layout.get_memory_config());
+    GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, tensor_layout.get_data_type(), tensor_layout.get_layout(), device, tensor_layout.get_memory_config());
 
-    auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, layout);
-    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.as_vector(), layout.get_padded_shape(shape).as_vector()), layout.get_data_type(), layout.get_layout());
+    auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
+    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.as_vector(), tensor_layout.get_padded_shape(shape).as_vector()), tensor_layout.get_data_type(), tensor_layout.get_layout());
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -672,7 +673,16 @@ Tensor create_device_tensor(
 Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
     TT_FATAL(!tile.has_value(), "Current implementation does not support tile for create_device_tensor");
 
-    return create_device_tensor(shape, TensorLayout(data_type, layout, memory_config), device);
+    TensorLayout tensor_layout = [&](){
+        if(tile.has_value()){
+            return TensorLayout(data_type, tile.value(), memory_config);
+        } else {
+            return TensorLayout(data_type, layout, memory_config);
+        }
+    }();
+
+    return create_device_tensor(shape, tensor_layout, device);
+
 }
 
 Tensor create_device_tensor(

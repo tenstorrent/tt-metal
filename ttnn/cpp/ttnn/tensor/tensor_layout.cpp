@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor_layout.hpp"
+#include <variant>
 #include <vector>
 #include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "types.hpp"
 
 namespace tt::tt_metal {
@@ -15,6 +18,43 @@ size_t round_up(size_t value, size_t multiple) {
     // return (value + multiple - 1) & ~(multiple - 1);
     return ((value + multiple - 1) / multiple) * multiple;
 };
+
+Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShape) {
+    const auto rank = legacyPaddedShape.rank();
+    std::vector<uint32_t> values(rank);
+
+    if(rank >= 1) {
+        values[rank - 1] = legacyPaddedShape[rank - 1];
+    }
+    if(rank >= 2) {
+        values[rank - 2] = legacyPaddedShape[rank - 2];
+    }
+    for (int i = rank - 3; i >= 0; i--) {
+        values[i] = legacyPaddedShape[i] * values[i + 1];
+    }
+
+    Alignment result(values);
+    return result;
+}
+}
+
+namespace utils {
+size_t element_size_bytes(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            TT_THROW("element_size_bytes() should not be used for BFLOAT8_B and BFLOAT4_B types becaues of how they are packed");
+
+        default:
+            TT_THROW("Unsupported data type!");
+    }
+}
 }
 
 Size::Size(size_t height, size_t width) : mHeight(height), mWidth(width) {}
@@ -28,6 +68,10 @@ Size Size::operator/(const Size& rhs) const {
 
 Size Size::operator*(size_t scalar) const {
     return Size(mHeight * scalar, mWidth * scalar);
+}
+
+Size Size::operator%(const Size& rhs) const {
+    return Size(mHeight % rhs.mHeight,  mWidth % rhs.mWidth);
 }
 
 Size::operator std::pair<size_t, size_t>() const {
@@ -49,13 +93,6 @@ bool Size::operator==(const Size& rhs) const {
     return mHeight == rhs.mHeight && mWidth == rhs.mWidth;
 }
 
-// does not have to be a member, but it is easier to find if it is
-Size Size::aligned_to_tile(const Size& tile) {
-    size_t height = round_up(mHeight, tile.height());
-    size_t width = round_up(mWidth, tile.width());
-    return Size(height, width);
-}
-
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)
 {
     os << "(" << size.height() << ", " << size.width() << ")";
@@ -74,79 +111,94 @@ std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value)
     return os;
 }
 
-TensorLayout::TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig, const Alignment& alignment)
-    : mDataType(dataType),
-      mTileSize(tileSize),
-      mMemoryConfig(memoryConfig),
-      mAlignment(alignment) {
 
-    mLayout = mTileSize.height() == 1 ? Layout::ROW_MAJOR : Layout::TILE;
-    initializeAlignment();
-    validateCustomAlignment();
+Alignment RowMajorPageConfig::createDefaultAlignment(DataType dataType) const {
+{
+    TT_FATAL(dataType != DataType::BFLOAT4_B && dataType != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
+    return Alignment({sizeof(uint32_t) / utils::element_size_bytes(dataType)});}
 }
 
-TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const Alignment& alignment)
-    : mLayout(layout),
-      mDataType(dataType),
-      mMemoryConfig(memoryConfig),
-      mAlignment(alignment) {
+Alignment TilePageConfig::createDefaultAlignment(DataType dataType) const {
+    return Alignment({tile.get_height(), tile.get_width()});
+}
 
-    if (mLayout == Layout::TILE) {
-        mTileSize = Size(32, 32);
+void RowMajorPageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
+    TT_FATAL(alignment.size() > 0, "Alignment should have at least 1 dimension for Row Major layout");
+    uint32_t widthAlignment = alignment[-1];
+    uint32_t element_size = utils::element_size_bytes(dataType);
+    uint32_t page_alignment = sizeof(uint32_t) / element_size;
+    TT_FATAL((widthAlignment % page_alignment) == 0,
+        "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packed as uint32_t (4 bytes).",
+        alignment, element_size, page_alignment);
+}
+
+void TilePageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
+    TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
+    const auto widthAlignment = alignment[-1];
+    TT_FATAL(widthAlignment % tile.get_width() == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, config.tile.get_width());
+    auto heightAlignment = alignment[-2];
+    TT_FATAL((heightAlignment % tile.get_height()) == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, config.tile.get_height());
+}
+
+Size RowMajorPageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
+    if (memoryConfig.shard_spec.has_value()) {
+        const auto& shard_spec = memoryConfig.shard_spec.value();
+        const auto& shard_shape = shard_spec.shape;
+        return Size(1, shard_shape[1]);
+    }
+    return Size(1, physical_size.width());
+}
+
+Size TilePageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
+    return Size(tile.get_height(), tile.get_width());
+}
+
+
+PageConfig::PageConfig(const Config& config)
+    : mConfig(config) {
+}
+
+PageConfig::PageConfig(Layout layout) {
+    if(layout == Layout::ROW_MAJOR) {
+        mConfig = RowMajorPageConfig();
     }
     else {
-        mTileSize = Size(1, 1); // width 1 makes no sense? need juggestions
+        mConfig =  TilePageConfig();
     }
+}
+
+Alignment PageConfig::createDefaultAlignment(DataType dataType) const {
+    return std::visit([&](const auto& config) constexpr { return config.createDefaultAlignment(dataType); }, mConfig);
+}
+
+void PageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
+    std::visit([&](const auto& config) constexpr { config.validateAlignment(alignment, dataType); }, mConfig);
+}
+
+Size PageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
+    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memoryConfig); }, mConfig);
+}
+
+bool PageConfig::isRowMajor() const {
+    return std::holds_alternative<RowMajorPageConfig>(mConfig);
+}
+
+
+TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const Alignment& alignment)
+    : mDataType(dataType),
+      mPageConfig(pageConfig),
+      mMemoryConfig(memoryConfig),
+      mAlignment(alignment) {
 
     initializeAlignment();
-    validateCustomAlignment();
-}
-
-namespace {
-
-Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShape) {
-    const auto rank = legacyPaddedShape.rank();
-    std::vector<uint32_t> values(rank);
-
-    if(rank >= 1) {
-        values[rank - 1] = legacyPaddedShape[rank - 1];
-    }
-    if(rank >= 2) {
-        values[rank - 2] = legacyPaddedShape[rank - 2];
-    }
-    for (int i = rank - 3; i >= 0; i--) {
-        values[i] = legacyPaddedShape[i] * values[i + 1];
-    }
-
-    Alignment result(values);
-    return result;
-}
-
-// 2, 3, 16, 16
-// 2, 3, 32, 32
-// 2*3*32, 3*32, 32, 32
-// Create a method to convert from Alignment to LegacyPaddedShape
-// ttnn::SimpleShape alignmentToLegacyPaddedShape(const Alignment& alignment, const ttnn::SimpleShape& shape) {
-//     const auto rank = alignment.size();
-//     std::vector<uint32_t> values(rank);
-//     if(rank >= 1) {
-//         values[rank - 1] = alignment[rank - 1];
-//     }
-//     if(rank >= 2) {
-//         values[rank - 2] = alignment[rank - 2];
-//     }
-
-//     for(int i = rank - 3; i >= 0; i--) {
-//         values[i] = alignment[i] / values[i + 1];
-//     }
-
-//     return ttnn::SimpleShape(values);
-//}
+    validateAlignment();
 }
 
 // Private constructor to create TensorLayout from LegacyPaddedShape
 TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
-    : TensorLayout(dataType, layout, memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
+    : TensorLayout(dataType, PageConfig(layout), memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
     mLegacyPaddedShape = legacyPaddedShape;
 }
 
@@ -158,92 +210,12 @@ void TensorLayout::initializeAlignment() {
     if(mAlignment.size() != 0)
         return;
 
-    switch(mLayout) {
-        case Layout::ROW_MAJOR: {
-            TT_FATAL(mDataType != DataType::BFLOAT4_B && mDataType != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-            mAlignment = Alignment({sizeof(uint32_t) / element_size_bytes()});
-            break;
-        }
-        case Layout::TILE: {
-            mAlignment = Alignment({mTileSize.height(), mTileSize.width()});
-            break;
-        }
-        case Layout::INVALID:
-            TT_THROW("Invalid Layout");
-    }
+    mAlignment = mPageConfig.createDefaultAlignment(mDataType);
 }
 
-void TensorLayout::validateCustomAlignment() const
+void TensorLayout::validateAlignment() const
 {
-    if(mAlignment.size() == 0)
-        return;
-
-    switch(mLayout) {
-        case Layout::ROW_MAJOR: {
-            if(mAlignment.size() > 0) {
-                uint32_t widthAlignment = mAlignment[-1];
-                uint32_t element_size = element_size_bytes();
-                uint32_t page_alignment = sizeof(uint32_t) / element_size;
-                TT_FATAL((widthAlignment % page_alignment) == 0,
-                "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packes as uint32_t (4 bytes).",
-                    mAlignment,
-                    element_size,
-                    page_alignment);
-            }
-            break;
-        }
-        case Layout::TILE: {
-            TT_FATAL(mAlignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
-
-            auto widthAlignment = mAlignment[-1];
-            TT_FATAL(widthAlignment % mTileSize.width() == 0,
-            "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", mAlignment, mTileSize.width());
-
-            auto heightAlignment = mAlignment[-2];
-            TT_FATAL((heightAlignment % mTileSize.height()) == 0,
-            "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", mAlignment, mTileSize.height());
-
-            break;
-        }
-        case Layout::INVALID:
-            TT_THROW("Invalid Layout");
-    }
-}
-
-// Assume shape rank 4
-// Assume mAlignment rank 2
-// align mAlignment to the right of shape
-Size TensorLayout::get_physical_size(const ttnn::SimpleShape& shape) const {
-    TT_FATAL(shape.rank() > 2, "Shape should have at least 2 dimensions");
-    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
-
-    const int rank = static_cast<int>(shape.rank());
-    const size_t width = round_up(shape[-1], mAlignment[-1]);
-    size_t height = 1;
-    for (int i = -2; i >= -rank; --i) {
-        height *= shape[i];
-        if (mAlignment.size() >= static_cast<size_t>(-i)) {
-            height = round_up(height, mAlignment[i]);
-        }
-    }
-
-    Size size{height, width};
-    return size;
-}
-
-Size TensorLayout::get_sharded_page_size() const {
-    TT_FATAL(mMemoryConfig.shard_spec.has_value(), "MemoryConfig should have Shard Spec");
-    const auto& shard_spec = mMemoryConfig.shard_spec.value();
-    const auto& shard_shape = shard_spec.shape;
-
-    switch (mLayout) {
-        case Layout::ROW_MAJOR:
-            return Size(1, shard_shape[1]);
-        case Layout::TILE: {
-            return mTileSize;
-        }
-        default: TT_THROW("Unsupported layout to write to device");
-    }
+    return mPageConfig.validateAlignment(mAlignment, mDataType);
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
@@ -253,70 +225,38 @@ std::optional<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::S
     TT_FATAL(mMemoryConfig.shard_spec.has_value(), "MemoryConfig should have Shard Spec specified for sharded memory layout");
 
     auto& shard_spec = mMemoryConfig.shard_spec.value();
-    Size physical_size = get_physical_size(shape);
-    Size page_shape = get_sharded_page_size();
-    Size tensor2d_size = physical_size / page_shape;
+    Size physical_shape = get_physical_shape(shape);
+    Size page_shape = get_page_shape(physical_shape);
+    Size tensor2d_size = physical_shape / page_shape; // looks like shard grid
     ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), std::array<uint32_t, 2>(tensor2d_size));
 
     return shard_spec_buffer;
 }
 
-size_t TensorLayout::get_packed_buffer_size(const ttnn::SimpleShape& shape) const {
-    Size physical_size = get_physical_size(shape);
-    return physical_size.height() * physical_size.width() * element_size_bytes();
-}
+size_t TensorLayout::get_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
+    const Size physical_size = get_physical_shape(shape);
+    const Size page_shape = get_page_shape(physical_size);
+    const Size size_modulo = physical_size % page_shape;
+    TT_FATAL(size_modulo.height() == 0 && size_modulo.width() == 0, "Physical size {} should be multiple of page size {}", physical_size, page_size);
 
-uint32_t TensorLayout::get_page_elements_count(const ttnn::SimpleShape& shape) const {
-    if(mMemoryConfig.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        auto physical_size = get_physical_size(shape);
-        return physical_size.height() * physical_size.width();
-    }
+    const size_t physical_area = physical_size.height() * physical_size.width();
+    const size_t page_area = page_shape.height() * page_shape.width();
 
-    uint32_t elements_in_page = 0;
-    switch(mLayout) {
-        case Layout::ROW_MAJOR:
-            elements_in_page = shape[-1];
-            break;
-        case Layout::TILE:
-            elements_in_page = mTileSize.height() * mTileSize.width();
-            break;
-        default:
-            TT_THROW("Unsupported layout");
-    }
+    size_t page_count = physical_area / page_area;
+    size_t page_size_bytes = get_page_size_bytes(page_shape);
 
-    return elements_in_page;
-}
-
-uint32_t TensorLayout::get_header_size_bytes() const {
-    switch (mDataType) {
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-            return 64;
-        default:
-            return 0;
-    }
-}
-
-uint32_t TensorLayout::element_size_bytes() const {
-    switch (mDataType) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B:
-            TT_THROW("element_size_bytes() should not be used for BFLOAT8_B and BFLOAT4_B types becaues of how they are packed");
-
-        default:
-            TT_THROW("Unsupported data type!");
-    }
+    return page_count * page_size_bytes;
 }
 
 size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
+    auto physical_size = get_physical_shape(shape);
+    auto page_shape = get_page_shape(physical_size);
+    return get_page_size_bytes(page_shape);
+}
+
+size_t TensorLayout::get_page_size_bytes(const Size& page_size) const {
+    const size_t elements_in_page = page_size.height() * page_size.width();
     uint32_t page_size_bytes = get_header_size_bytes();
-    uint32_t elements_in_page = get_page_elements_count(shape);
 
     switch (mDataType) {
         case DataType::BFLOAT16:
@@ -325,7 +265,7 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
         case DataType::INT32:
         case DataType::UINT16:
         case DataType::UINT8:
-            page_size_bytes += elements_in_page * element_size_bytes();
+            page_size_bytes += elements_in_page * utils::element_size_bytes(mDataType);
             break;
 
         case DataType::BFLOAT8_B:
@@ -341,17 +281,60 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
             TT_THROW("Unsupported data type!");
     }
 
-    //TT_FATAL(total_size_bytes % page_size_bytes == 0);
     TT_FATAL(page_size_bytes != 0, "Page size should not be zero");
 
     return page_size_bytes;
 }
 
-Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
+Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
+    TT_FATAL(shape.rank() > 2, "Shape should have at least 2 dimensions");
+    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
+
+    const int rank = static_cast<int>(shape.rank());
+    size_t width = round_up(shape[-1], mAlignment[-1]);
+    size_t height = 1;
+    for (int i = -2; i >= -rank; --i) {
+        height *= shape[i];
+        if (mAlignment.size() >= static_cast<size_t>(-i)) {
+            height = round_up(height, mAlignment[i]);
+        }
+    }
+
+    if(mMemoryConfig.shard_spec.has_value())
+    {
+        auto& shard_spec = mMemoryConfig.shard_spec.value();
+        height = round_up(height, shard_spec.shape[0]);
+        width = round_up(width, shard_spec.shape[1]);
+    }
+
+    Size size{height, width};
+
+    return size;
+}
+
+Size TensorLayout::get_page_shape(const Size& physical_size) const {
+    if(mMemoryConfig.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+        return physical_size;
+    }
+
+    return mPageConfig.get_page_shape(physical_size, mMemoryConfig);
+}
+
+uint32_t TensorLayout::get_header_size_bytes() const {
+    switch (mDataType) {
+        case DataType::BFLOAT4_B:
+        case DataType::BFLOAT8_B:
+            return 64;
+        default:
+            return 0;
+    }
+}
+
+Strides TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignmentRank = static_cast<int>(mAlignment.size());
 
-    std::vector<uint32_t> strides(rank, 1);
+    Strides strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
         strides[i] = strides[i + 1] * shape[i + 1];
 
@@ -361,14 +344,12 @@ Alignment TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
         }
     }
 
-    Alignment result(strides);
-    return result;
+    return strides;
 }
 
 ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
 {
     TT_FATAL(mLegacyPaddedShape.has_value(), "Use get_physical_size() or get_strides(). Calling get_padded_shape() is not allowed for TensorLayout created w/o LegacyPaddedShape. ");
-    auto strides = get_strides(shape);
     return mLegacyPaddedShape.value();
 }
 

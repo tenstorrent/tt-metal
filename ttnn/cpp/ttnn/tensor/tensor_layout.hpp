@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <ostream>
+#include <variant>
 
 namespace tt::tt_metal {
 
@@ -24,6 +25,7 @@ public:
 
     Size operator/(const Size& rhs) const;
     Size operator*(size_t scalar) const;
+    Size operator%(const Size& rhs) const;
 
     // comparison operator
     bool operator==(const Size& rhs) const;
@@ -31,15 +33,10 @@ public:
     size_t height() const;
     size_t width() const;
 
-    // does not have to be a member, but it is easier to find if it is
-    Size aligned_to_tile(const Size& tile);
-
 private:
     size_t mHeight = 0;
     size_t mWidth = 0;
 };
-
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size);
 
 // Creating as a class to differentiate the use between LegacyPadding represented as SimpleShape and Alignment.
 // This class has to eventually become its own class
@@ -47,11 +44,38 @@ class Alignment : public ttnn::SimpleShape {
 public:
     using ttnn::SimpleShape::SimpleShape;
     size_t size() const { return rank(); }
-
 };
 
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value);
+using Strides = std::vector<size_t>;
 
+struct RowMajorPageConfig {
+    Alignment createDefaultAlignment(DataType dataType) const;
+    void validateAlignment(const Alignment& alignment, DataType dataType) const;
+    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+};
+struct TilePageConfig {
+    Tile tile;
+
+    Alignment createDefaultAlignment(DataType dataType) const;
+    void validateAlignment(const Alignment& alignment, DataType dataType) const;
+    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+};
+
+class PageConfig {
+public:
+    using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
+
+    PageConfig(const Config& config);
+    explicit PageConfig(Layout layout);
+
+    Alignment createDefaultAlignment(DataType dataType) const;
+    void validateAlignment(const Alignment& alignment, DataType dataType) const;
+    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+    bool isRowMajor() const;
+
+private:
+    Config mConfig;
+};
 
 // Alignment is a physical row alignment for each dimension of the tensor (except innermost dimension - there its a column alignment).
 // Example:
@@ -85,60 +109,64 @@ std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value)
 //
 // Note:
 //   This class is a work in progress. Many of its public methods have to be moved to private or even pImpl.
-
 class TensorLayout {
 public:
-    TensorLayout(DataType dataType, const Size& tileSize, const MemoryConfig& memoryConfig, const Alignment& alignment = {});
-    TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const Alignment& alignment = {});
+    TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const Alignment& alignment = {});
 
     // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
     static TensorLayout fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
 
-    Layout get_layout() const { return mLayout; }
+    Layout get_layout() const { return mPageConfig.isRowMajor() ? Layout::ROW_MAJOR : Layout::TILE; }
+    PageConfig get_page_config() const { return mPageConfig; }
     DataType get_data_type() const { return mDataType; }
-    const Size& get_tile_size() const { return mTileSize; }
     const MemoryConfig& get_memory_config() const { return mMemoryConfig; }
     const Alignment& get_alignment() const { return mAlignment; }
 
     std::optional<ShardSpecBuffer> get_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
 
-    Size get_page_size() const;
+    size_t get_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const;
     size_t get_page_size_bytes(const ttnn::SimpleShape& shape) const;
-
-    // This method returns H, W of the Physically laid out data
-    // Values here are number of elements and not bytes
-    Size get_physical_size(const ttnn::SimpleShape& shape) const;
-
-    size_t get_packed_buffer_size(const ttnn::SimpleShape& shape) const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
     ttnn::SimpleShape get_padded_shape(const ttnn::SimpleShape& shape) const;
 
-    Alignment get_strides(const ttnn::SimpleShape& shape) const;
+    Strides get_strides(const ttnn::SimpleShape& shape) const;
 
 private:
+    // Private constructor to create TensorLayout from LegacyPaddedShape
     TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+
     // For the case when Aligmnet is not provided or is empty
     // This method will initialize Alignment to reflect requirements of Layout/DType/Sharding(currently not supported)
     void initializeAlignment();
-    void validateCustomAlignment() const;
+    void validateAlignment() const;
 
-    Size get_sharded_page_size() const;
-
-    uint32_t get_page_elements_count(const ttnn::SimpleShape& shape) const;
     uint32_t get_header_size_bytes() const;
-    uint32_t element_size_bytes() const;
+    uint32_t get_page_elements_count(const ttnn::SimpleShape& shape) const;
 
-    Layout mLayout = Layout::ROW_MAJOR;
+    // Returns number of elements laid out in physically memory across H:W dimensions
+    //  W is row width aligned to page width and shard width, depends on data type
+    //  H is all dimensions except W multiplied and aligned to tile and shard height
+    Size get_physical_shape(const ttnn::SimpleShape& shape) const;
+
+    // Returns number of elements in a page
+    // For SINGLE_BANK layout returns physical size
+    // For ROW_MAJOR width is equal to physical width
+    Size get_page_shape(const Size& physical_size) const;
+    size_t get_page_size_bytes(const Size& page_size) const;
+
     DataType mDataType = DataType::BFLOAT16;
-    Size mTileSize = {32, 32};
+    PageConfig mPageConfig;
     MemoryConfig mMemoryConfig;
     Alignment mAlignment;
 
     std::optional<ttnn::SimpleShape> mLegacyPaddedShape;
 };
+
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size);
 
 } // tt::tt_metal

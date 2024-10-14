@@ -20,7 +20,7 @@ struct Inputs {
 struct Expected {
     tt::tt_metal::Size physical_size;
     Alignment alignment;
-    ttnn::SimpleShape strides;
+    Strides strides;
 };
 
 struct TensorLayoutTestParams {
@@ -56,7 +56,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {5*4*32, 32},
                 .alignment = Alignment({32, 32}),
-                .strides = ttnn::SimpleShape({32*3*4, 32*3, 32, 1})
+                .strides = Strides({32*3*4, 32*3, 32, 1})
             }
         },
 
@@ -70,7 +70,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {6*5*4, 4},
                 .alignment = Alignment({2}),
-                .strides = ttnn::SimpleShape({5*4*4, 4*4, 4, 1})
+                .strides = Strides({5*4*4, 4*4, 4, 1})
             }
         },
 
@@ -84,7 +84,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {6*5*4, 3},
                 .alignment = Alignment({1}),
-                .strides = ttnn::SimpleShape({5*4*3, 4*3, 3, 1})
+                .strides = Strides({5*4*3, 4*3, 3, 1})
             }
         },
 
@@ -98,7 +98,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {6*5*4, 8},
                 .alignment = Alignment({2}),
-                .strides = ttnn::SimpleShape({5*4*8, 4*8, 8, 1})
+                .strides = Strides({5*4*8, 4*8, 8, 1})
             }
         },
 
@@ -112,7 +112,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {32, 32},
                 .alignment = Alignment({32, 32}),
-                .strides = ttnn::SimpleShape({32, 32, 32, 1})
+                .strides = Strides({32, 32, 32, 1})
             }
         },
 
@@ -126,7 +126,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {1, 2},
                 .alignment = Alignment({2}),
-                .strides = ttnn::SimpleShape({2, 2, 2, 1})
+                .strides = Strides({2, 2, 2, 1})
             }
         },
 
@@ -140,7 +140,7 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
-                .strides = ttnn::SimpleShape({1, 1, 1, 1})
+                .strides = Strides({1, 1, 1, 1})
             }
         }
     )
