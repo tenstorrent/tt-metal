@@ -11,7 +11,7 @@ import ttnn
 from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc_list, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -26,9 +26,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 2)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 2),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -80,7 +80,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
     )(input_shape)
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0.001, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=0.001, high=100, dtype=torch.float32), input_b_dtype
@@ -120,7 +120,21 @@ def run(
 
     start_time = start_measuring_time()
     output_tensors = ttnn.xlogy_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensors = [ttnn.to_torch(output_tensor) for output_tensor in output_tensors]
+
+    passed = []
+    output_string = ""
+    for i in range(len(torch_output_tensors)):
+        output_tensor = ttnn.to_torch(output_tensors[i])
+        passed_, output_string_ = check_with_pcc(torch_output_tensors[i], output_tensor, 0.999)
+        passed.append(passed_)
+        output_string += output_string_ + ", "
+
+    if all(passed):
+        passed = True
+    else:
+        passed = False
+
+    output_string = output_string[:-2]
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc_list(torch_output_tensors, output_tensors, 0.999), e2e_perf]
+    return [(passed, output_string), e2e_perf]

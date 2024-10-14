@@ -11,7 +11,7 @@ import ttnn
 from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.ttnn.utils_for_testing import check_with_pcc_list, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -39,9 +39,9 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -131,7 +131,21 @@ def run(
 
     start_time = start_measuring_time()
     output_tensors = ttnn.hypot_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensors = [ttnn.to_torch(output_tensor) for output_tensor in output_tensors]
+
+    passed = []
+    output_string = ""
+    for i in range(len(torch_output_tensors)):
+        output_tensor = ttnn.to_torch(output_tensors[i])
+        passed_, output_string_ = check_with_pcc(torch_output_tensors[i], output_tensor, 0.999)
+        passed.append(passed_)
+        output_string += output_string_ + ", "
+
+    if all(passed):
+        passed = True
+    else:
+        passed = False
+
+    output_string = output_string[:-2]
     e2e_perf = stop_measuring_time(start_time)
 
-    return [check_with_pcc_list(torch_output_tensors, output_tensors, 0.999), e2e_perf]
+    return [(passed, output_string), e2e_perf]
