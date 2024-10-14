@@ -12,6 +12,7 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 #include <type_traits>
 #include <optional>
 

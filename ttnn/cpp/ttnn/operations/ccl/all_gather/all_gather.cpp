@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/distributed/mesh_device.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::ccl {
 

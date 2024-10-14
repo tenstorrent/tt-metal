@@ -35,6 +35,7 @@ project(Metalium
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
+include(CTest)
 
 CHECK_COMPILERS()
 
@@ -295,4 +296,3 @@ add_custom_target(clean-built
 
 # Debian Package
 include(cmake/packaging.cmake)
-

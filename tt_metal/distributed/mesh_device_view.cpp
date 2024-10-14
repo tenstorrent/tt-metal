@@ -9,9 +9,7 @@
 
 #include "tt_metal/distributed/mesh_device.hpp"
 
-namespace tt::tt_metal {
-
-using MeshDevice = tt::tt_metal::MeshDevice;
+namespace tt::tt_metal::distributed {
 
 static std::vector<MeshDeviceView::device_pointer> get_devices_from_coordinates(MeshDeviceView& mesh, const std::vector<Coordinate>& coords) {
     std::vector<MeshDeviceView::device_pointer> devices;
@@ -287,4 +285,4 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices(MeshType type) {
     }
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed

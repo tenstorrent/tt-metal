@@ -14,7 +14,7 @@
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::distributed {
 
 using LogicalCoordinate = Coordinate;
 using PhysicalCoordinate = eth_coord_t;
@@ -295,7 +295,7 @@ void MeshDevice::initialize(
     auto& instance = SystemMesh::instance();
     this->devices = instance.map_mesh_device(
         shared_from_this(), num_command_queues, l1_small_size, trace_region_size, dispatch_core_type, config);
-    this->primary_view = std::make_shared<tt::tt_metal::MeshDeviceView>(*this);
+    this->primary_view = std::make_shared<MeshDeviceView>(*this);
 }
 
 MeshDevice::~MeshDevice() {
@@ -393,15 +393,6 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
-bool validate_worker_modes(const std::vector<Device*>& workers) {
-    bool worker_modes_match = true;
-    auto first_worker_mode = workers.at(0)->get_worker_mode();
-    for (auto worker : workers) {
-        worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
-    }
-    return worker_modes_match;
-}
-
 void MeshDevice::enable_async(bool enable) {
     for (auto device : this->devices) {
         device->enable_async(enable);
@@ -420,14 +411,4 @@ void MeshDevice::disable_and_clear_program_cache() {
     }
 }
 
-std::vector<int> get_t3k_physical_device_ids_ring() {
-    auto& instance = SystemMesh::instance();
-    auto num_devices = instance.get_num_devices();
-    TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
-
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(
-        MeshDeviceConfig(MeshShape{1, 8}, MeshOffset{0, 0}));
-    return physical_device_ids;
-}
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed

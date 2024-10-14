@@ -8,7 +8,9 @@
 namespace tt::tt_metal {
 struct Tensor;
 struct MemoryConfig;
+namespace distributed {
 class MeshDevice;
+}  // namespace distributed
 
 inline namespace v0 {
 class CommandQueue;
@@ -24,7 +26,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
 
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* mesh_device);
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id);
 
