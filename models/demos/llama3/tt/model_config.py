@@ -200,11 +200,11 @@ class TtModelArgs:
                 }
             )
 
-            # Compute kernels. FP32 acc is needed for accuracy.
+            # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
@@ -325,20 +325,6 @@ class TtModelArgs:
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-
-            self.model_config["MLP_KERNEL_CONFIG_HIFI2"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,  # full precision for bfp8 @ bfp8
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-            self.model_config["MLP_KERNEL_CONFIG_HIFI4"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,  # full precision for bf16 @ bfp8
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
             )
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
@@ -620,15 +606,14 @@ class TtModelArgs:
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = 12
-        tile_size = 32
-        padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
+        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
-    @staticmethod
     def matmul_config(
+        self,
         m: int,
         k: int,
         n: int,
@@ -637,8 +622,8 @@ class TtModelArgs:
         fuse_batch: bool = False,
         fused_activation=None,
     ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-        per_core_M = math.ceil(m / (32 * grid_size[1]))
-        per_core_N = math.ceil(n / (32 * grid_size[0]))
+        per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
+        per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
         out_subblock_w = 4
@@ -647,9 +632,12 @@ class TtModelArgs:
                 break
             out_subblock_w -= 1
 
+        if in0_block_w is None:
+            in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
-            in0_block_w=1,  # in0_block_w if in0_block_w is not None else max(1, k // (32 * grid_size[0])), # FIXME
+            in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_M,
