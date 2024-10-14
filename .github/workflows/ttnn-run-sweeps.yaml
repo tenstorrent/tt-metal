@@ -188,6 +188,7 @@ on:
           - data_movement.fill.fill_pytorch2
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
+          - data_movement.repeat.repeat
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
