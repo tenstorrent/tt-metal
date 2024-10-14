@@ -77,4 +77,4 @@ struct MorehLayerNormOperation {
 namespace ttnn::prim {
 constexpr auto moreh_layer_norm = ttnn::
     register_operation<"ttnn::prim::moreh_layer_norm", operations::moreh::moreh_layer_norm::MorehLayerNormOperation>();
-}
+}  // namespace ttnn::prim

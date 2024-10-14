@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
@@ -13,7 +13,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     log_info(tt::LogTest, "Large tensor algorithm selected");
-    const auto& input = tensor_args.input_tensor;
+    const auto& input = tensor_args.input;
     const auto op = operation_attributes.op;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
@@ -157,12 +157,11 @@ void MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::override_runtime_argument
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
-
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = tensor_args.input_tensor.buffer()->address();
+            runtime_args[0] = tensor_args.input.buffer()->address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

@@ -11,8 +11,8 @@
 
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 
@@ -103,20 +103,7 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     uint32_t batch_size = get_batch_size(out_shape);
     int64_t num_mul_adds = num_mul_adds_per_elem * out_shape[-2] * out_shape[-1] * batch_size;
 
-    MathFidelity math_fidelity = MathFidelity::Invalid;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, ttnn::GrayskullComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else if constexpr (std::is_same_v<T, ttnn::WormholeComputeKernelConfig>) {
-                math_fidelity = compute_kernel_config.math_fidelity;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
 
     int ideal_dev_clock_cycles = std::ceil(
         ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
@@ -824,6 +811,23 @@ inline MatmulProgramConfig get_program_config(
     return config;
 }
 
+tt::tt_metal::Tile get_output_tile(const MemoryConfig& output_mem_config, const std::array<uint32_t, 2>& in0_tile_shape, const std::array<uint32_t, 2>& in1_tile_shape, const std::optional<const tt::tt_metal::Tile> output_tile) {
+    if (output_tile.has_value()) {
+        const auto& out_tile_shape = output_tile->get_tile_shape();
+        TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
+        TT_FATAL(out_tile_shape[1] % in1_tile_shape[1] == 0, "the override output tile width be multiple of in1 tile width");
+        TT_FATAL(out_tile_shape[0] > 0, "the override output tile height needs to be greater than zero");
+        TT_FATAL(out_tile_shape[0] == in0_tile_shape[0], "the override output tile height must equal to the in0 tile height");
+        if (out_tile_shape[1] != in1_tile_shape[1]) {
+            TT_FATAL(out_tile_shape[0] <= constants::FACE_HEIGHT, "the override output tile height must equal or less to face height");
+        }
+        if (!output_mem_config.is_sharded()) {
+            TT_FATAL(out_tile_shape[1] == in1_tile_shape[1], "the override output tile width must equal to the in0 tile width");
+        }
+    }
+    return output_tile.value_or(tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]}));
+}
+
 }  // namespace
 
 namespace bmm_op_utils {
@@ -900,6 +904,10 @@ Matmul create_matmul_struct(
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
+    const auto& in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
+    const auto& in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
+    tt::tt_metal::Tile output_tile = get_output_tile(
+            parameters.output_mem_config, in0_tile_shape, in1_tile_shape, parameters.output_tile);
 
     return Matmul{
         parameters.program_config,
@@ -913,7 +921,7 @@ Matmul create_matmul_struct(
         parameters.user_run_batched,
         parameters.transpose_a,
         parameters.transpose_b,
-        parameters.output_tile};
+        output_tile};
 }
 
 Tensor matmul(
@@ -987,7 +995,8 @@ void Matmul::validate(
         a_shape[-1],
         b_shape[-2]);
 
-    TT_FATAL(this->bcast_batch.has_value(), "Error");
+    TT_FATAL(this->bcast_batch.has_value(), "Error: bcast_batch field should have been automatically populated");
+    TT_FATAL(this->output_tile.has_value(), "Error: output_tile field should have been automatically populated");
     if (this->bcast_batch.value()) {
         TT_FATAL(
             get_batch_size(b_shape) == 1,
@@ -1293,6 +1302,14 @@ void Matmul::validate(
                 TT_FATAL(
                     program_config.per_core_N % program_config.out_subblock_w == 0,
                     "per_core_N must be divisible by out_subblock_w");
+                uint32_t available_reg_count = ttnn::get_dest_reg_count(
+                        this->compute_kernel_config.value(), this->output_tile.value().get_tile_shape());
+                TT_FATAL(
+                    (program_config.out_subblock_w * program_config.out_subblock_h) <= available_reg_count,
+                    "out_subblock_w {} times out_subblock_h {} needs to be at most {} to fit in hardware",
+                    program_config.out_subblock_w,
+                    program_config.out_subblock_h,
+                    available_reg_count);
             }
         },
         chosen_program_config);
@@ -1328,17 +1345,7 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor_b = input_tensors.at(1);
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
-    if (this->output_tile.has_value()) {
-        TT_FATAL(this->output_tile->get_tile_shape()[1] % in1_tile_shape[1] == 0, "the override output tile width be multiple of in1 tile width");
-        TT_FATAL(this->output_tile->get_tile_shape()[0] == in0_tile_shape[0], "the override output tile height must equal to the in0 tile height");
-        if (this->output_tile->get_tile_shape()[1] != in1_tile_shape[1]) {
-            TT_FATAL(this->output_tile->get_tile_shape()[0] <= constants::FACE_HEIGHT, "the override output tile height must equal or less to face height");
-        }
-        if (!this->output_mem_config.is_sharded()) {
-            TT_FATAL(this->output_tile->get_tile_shape()[1] == in1_tile_shape[1], "the override output tile width must equal to the in0 tile width");
-        }
-    }
-    auto output_tile = this->output_tile.value_or(tt::tt_metal::Tile({in0_tile_shape[0], in1_tile_shape[1]}));
+    auto output_tile = this->output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     TT_FATAL(this->output_dtype.has_value(), "Error");

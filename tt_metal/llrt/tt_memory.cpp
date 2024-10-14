@@ -20,19 +20,21 @@ namespace ll_api {
 memory::memory() {
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
+    text_size_ = 0;
+    packed_size_ = 0;
 }
 
 memory::memory(std::string const &path) : memory() {
-    ElfFile elf(path);
+    ElfFile elf;
+
+    elf.ReadImage(path);
 
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.
     // FIXME: Perhaps we can relax that?
     auto emit_segment = [&](ElfFile::Segment const& segment) {
         link_spans_.emplace_back(
-            // We want the byte address, not the word address
-            segment.address * sizeof(decltype(data_)::value_type),
-            segment.contents.size());
+            segment.address, segment.contents.size());
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
     };
     auto* text = &elf.GetSegments()[0];

@@ -4,8 +4,11 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device.hpp"
+#include <variant>
+#include <tuple>
+#include <optional>
+#include "tt_arch_types.h"
+#include "tt_metal/common/base_types.hpp"
 
 namespace ttnn {
 
@@ -37,7 +40,10 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_dst_full_sync_en = false);
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);
+
+uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape=std::nullopt);
 
 }  // namespace ttnn

@@ -26,6 +26,9 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
+// TODO: remove after using tt_memory elf loader info to calculate this
+static uint32_t get_binary_code_size(const ll_api::memory &mem, int riscv_id);
+
 ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans pack_spans) {
 
     static const uint32_t processor_to_fw_base_addr[] = {
@@ -51,10 +54,15 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
       lock.unlock();
       auto *ptr = new ll_api::memory(path);
 
+      // TODO: pass pack_spans into reader, generate text/data sizes
+      // from segment sizes and pack there
+      ptr->set_text_size(get_binary_code_size(*ptr, riscv_id));
+
       if (pack_spans == PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);
+          ptr->set_packed_size(get_binary_code_size(*ptr, riscv_id));
       }
 
       lock.lock();
@@ -71,10 +79,8 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     return *slot->second.get();
 }
 
-// Return the code size in 16 byte units
-// This matches what the fw needs for datamovement
-// and...squeezes more data into the launch message (2^20=1M)
-uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
+// Return the code size
+static uint32_t get_binary_code_size(const ll_api::memory& mem, int riscv_id) {
 
     uint64_t range_min, range_max;
     switch (riscv_id) {
@@ -111,11 +117,12 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
 
     uint64_t min = std::numeric_limits<decltype(min)>::max();
     uint64_t max = 0;
+    bool found_one = false;
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-
         uint32_t len_bytes = len_words * sizeof(uint32_t);
         // Only use the addresses within the firmware code range
         if (addr >= range_min && addr + len_bytes <= range_max) {
+            found_one = true;
             if (addr < min) {
                 min = addr;
             }
@@ -125,7 +132,7 @@ uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
         }
     });
 
-    return (uint16_t)((max - min + 15) >> 4);
+    return found_one ? (max - min) : 0;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -311,6 +318,7 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
+    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();

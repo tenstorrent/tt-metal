@@ -103,9 +103,9 @@ int main(int argc, char *argv[]) {
 #endif
 
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.mem_map[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+            mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
 
         WAYPOINT("R");
         kernel_init();

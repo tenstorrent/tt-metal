@@ -4,6 +4,39 @@
 
 #include <cstdint>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+
+namespace ttnn {
+
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
+    SimpleShape physical_shape = logical_shape;
+    auto rank = physical_shape.rank();
+    if (layout == Layout::TILE) {
+        auto tile_height = tt::constants::TILE_HEIGHT;
+        auto tile_width = tt::constants::TILE_WIDTH;
+        if (tile.has_value()) {
+            auto tile_shape = tile.value().get_tile_shape();
+            tile_height = tile_shape[0];
+            tile_width = tile_shape[1];
+        }
+        if (rank >= 1) {
+            physical_shape[rank - 1] = (physical_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
+            if (rank >= 2) {
+                physical_shape[rank - 2] = (physical_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
+            }
+        }
+    }
+    if (layout == Layout::ROW_MAJOR) {
+        auto element_size = tt::tt_metal::tensor_impl::element_size_bytes(data_type);
+        auto row_alignment = sizeof(uint32_t) / element_size;
+        if (rank >= 1) {
+            physical_shape[rank - 1] = (physical_shape[rank - 1] + row_alignment - 1) / row_alignment * row_alignment;
+        }
+    }
+    return physical_shape;
+}
+
+}
 
 namespace tt {
 

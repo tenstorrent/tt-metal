@@ -13,10 +13,16 @@ on:
           - add
           - ccl.line_all_gather
           - ccl.all_gather_n300
+          - ccl.all_gather_n300_focused
+          - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
           - eltwise.unary.gelu.gelu
+          - eltwise.unary.gelu.gelu_pytorch2
+          - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.cos.cos
+          - eltwise.unary.cos.cos_pytorch2
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
           - eltwise.unary.tril.tril_pytorch2
@@ -29,12 +35,16 @@ on:
           - eltwise.unary.rdiv.rdiv
           - eltwise.unary.frac.frac
           - eltwise.unary.ceil.ceil
+          - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
           - eltwise.unary.floor.floor
+          - eltwise.unary.floor.floor_pytorch2
           - eltwise.unary.clone.clone
           - eltwise.unary.elu.elu
+          - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
@@ -44,12 +54,14 @@ on:
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
+          - eltwise.unary.log.log_pytorch2
           - eltwise.unary.log1p.log1p
           - eltwise.unary.log2.log2
           - eltwise.unary.log10.log10
           - eltwise.unary.bitwise.bitwise_and
           - eltwise.unary.bitwise.bitwise_left_shift
           - eltwise.unary.bitwise.bitwise_not
+          - eltwise.unary.bitwise.bitwise_not_pytorch2
           - eltwise.unary.bitwise.bitwise_or
           - eltwise.unary.bitwise.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_xor
@@ -82,6 +94,18 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.acos_bw
+          - eltwise.unary_backward.acosh_bw
+          - eltwise.unary_backward.atan_bw
+          - eltwise.unary_backward.cos_bw
+          - eltwise.unary_backward.frac_bw
+          - eltwise.unary_backward.i0_bw
+          - eltwise.unary_backward.rad2deg_bw
+          - eltwise.unary_backward.relu_bw
+          - eltwise.unary_backward.rsqrt_bw
+          - eltwise.unary_backward.sigmoid_bw
+          - eltwise.unary_backward.tan_bw
+          - eltwise.unary_backward.trunc_bw
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
@@ -90,6 +114,11 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.abs_bw.abs_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.square_bw.square_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
@@ -99,8 +128,10 @@ on:
           - eltwise.unary.isnan
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
+          - eltwise.binary.add.add_all_pytorch2
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
+          - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.div.div
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
@@ -115,13 +146,23 @@ on:
           - eltwise.binary.remainder.remainder
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
+          - eltwise.binary.eq.eq_scalar_pytorch2
+          - eltwise.binary.gt.gt_scalar_pytorch2
+          - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
+          - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.embedding_bw.embedding_bw
+          - eltwise.binary_backward.addalpha_bw.addalpha_bw
+          - eltwise.binary_backward.subalpha_bw.subalpha_bw
+          - eltwise.binary_backward.xlogy_bw.xlogy_bw
+          - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -165,6 +206,7 @@ on:
           - data_movement.fill.fill_pytorch2
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
+          - data_movement.repeat.repeat
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 

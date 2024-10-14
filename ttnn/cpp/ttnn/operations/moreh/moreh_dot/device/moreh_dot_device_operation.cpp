@@ -4,7 +4,7 @@
 
 #include "moreh_dot_device_operation.hpp"
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot {
@@ -50,14 +50,12 @@ void MorehDotOperation::validate_on_program_cache_hit(
 MorehDotOperation::shape_return_value_t MorehDotOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output.value().get_shape();
+        return tensor_args.output.value().get_logical_shape();
     }
     const auto& input = tensor_args.input_a;
-    auto output_shape = input.get_shape().value;
-    auto padding = output_shape.padding();
-    output_shape[3] = tt::constants::TILE_WIDTH;
-    padding[3] = Padding::PadDimension{0, 31};
-    return ttnn::Shape{tt::tt_metal::LegacyShape(output_shape, padding)};
+    auto output_shape = input.get_logical_shape();
+    output_shape[3] = 1;
+    return ttnn::SimpleShape{std::move(output_shape)};
 }
 
 MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensors(

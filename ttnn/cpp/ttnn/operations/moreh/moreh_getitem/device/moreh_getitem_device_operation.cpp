@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {
@@ -34,8 +34,8 @@ void MorehGetItemOperation::validate_inputs(
         auto index_layout = index_tensor.get_layout();
         if (index_layout == Layout::ROW_MAJOR) {
             TT_FATAL(index_shape.rank() == 1, "Index tensor must be 1D for ROW_MAJOR layout!");
-        } else if (index_layout == Layout::TILE) {
-            TT_FATAL(index_shape.rank() == 5, "Index tensor must be 5D for TILE layout!");
+        } else {
+            // nothing
         }
         TT_FATAL(
             !(input_layout == Layout::ROW_MAJOR && index_layout == Layout::TILE),

@@ -27,7 +27,7 @@ struct MorehGroupNormOperation {
         const std::optional<const Tensor> rstd;
     };
 
-    using shape_return_value_t = std::vector<std::optional<Shape>>;
+    using shape_return_value_t = std::vector<std::optional<SimpleShape>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct MorehGroupNormFactory {
