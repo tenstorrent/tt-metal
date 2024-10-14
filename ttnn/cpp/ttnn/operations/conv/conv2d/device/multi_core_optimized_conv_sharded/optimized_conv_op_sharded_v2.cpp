@@ -1215,11 +1215,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
-    if(use_non_tile_height){
-        writer_defines["USE_NON_TILE_HEIGHT"] = "1";
-        writer_mcast_sender_defines["USE_NON_TILE_HEIGHT"] = "1";
-    }
-
     writer_compile_time_args = {
         (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
@@ -1259,6 +1254,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         weight_dram_addr,
         bias_dram_addr,
         output_rows_h,
+        use_non_tile_height,
     };
     if (split_reader) {
         std::vector<uint32_t> split_reader_args = {

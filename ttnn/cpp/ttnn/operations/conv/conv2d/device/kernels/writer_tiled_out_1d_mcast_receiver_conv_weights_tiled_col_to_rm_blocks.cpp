@@ -43,6 +43,7 @@ void kernel_main() {
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
     constexpr uint32_t output_rows_h          = get_compile_time_arg_val(32);
+    constexpr bool use_non_tiled_height = get_compile_time_arg_val(33);
 
     constexpr uint32_t total_weight_num_tiles = weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
