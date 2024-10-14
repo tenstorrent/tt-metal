@@ -4,6 +4,7 @@
 import os
 import torch
 import pytest
+import re
 from loguru import logger
 import os
 import ttnn
@@ -115,8 +116,16 @@ def test_llama_model_perf(
 
     comment = f"kv_cache_len={kv_cache_len}_num_layers={model_args.n_layers}"
 
+    # Extract the version, number of weights and device name from the cache folder
+    if "3.1" in model_args.DEFAULT_CACHE_PATH:
+        llama_version = "3.1"
+    else:
+        llama_version = "3.2"
+    llama_weight = re.search(r"(\d+)B", model_args.DEFAULT_CACHE_PATH).group(1)
+    llama_device = model_args.device_name
+
     prep_perf_report(
-        model_name=f"Llama_31_8B_N300_{comment}",
+        model_name=f"Llama{llama_version}_{llama_weight}B_{llama_device}_{comment}",
         batch_size=model_args.max_batch_size,
         inference_and_compile_time=compile_and_iter_time,
         inference_time=iter_time,

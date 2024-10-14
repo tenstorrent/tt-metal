@@ -97,7 +97,7 @@ class TtModelArgs:
         # Add this near the top of the class, with other class attributes
         self.num_devices = mesh_device.get_num_devices()
         device = mesh_device.get_devices()[0]
-        device_name = {1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = {1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
         # A single device cannot fit the full 128k context length
         if self.num_devices == 1:
@@ -114,7 +114,7 @@ class TtModelArgs:
                 )
             self.DEFAULT_CKPT_DIR = LLAMA_DIR
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
-            self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, device_name)
+            self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
         else:
             self.DEFAULT_CKPT_DIR = os.getenv(
                 "LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
@@ -123,7 +123,7 @@ class TtModelArgs:
                 "LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
             )
             self.DEFAULT_CACHE_PATH = os.getenv(
-                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/{device_name}/"
+                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/{self.device_name}/"
             )
 
         if not dummy_weights:
