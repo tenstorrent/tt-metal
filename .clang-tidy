@@ -1,5 +1,4 @@
 Checks: >
-  -*,                         # Disable all checks by default
   bugprone-*,                  # Enable checks that detect common bugs
   modernize-*,                 # Enable modern C++ best practices checks
   performance-*,               # Enable performance-related checks
