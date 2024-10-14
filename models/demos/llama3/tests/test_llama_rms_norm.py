@@ -70,7 +70,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(pcc_message)
+    logger.info(f"PCC: {pcc_message}")
 
     if passing:
         logger.info("Llama_rms_norm Passed!")

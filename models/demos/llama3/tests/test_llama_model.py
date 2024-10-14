@@ -206,7 +206,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
                 passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
             logger.info(comp_allclose(ref_output, tt_output_torch))
-            logger.info(f"Model output: {pcc_message}")
+            logger.info(f"PCC: {pcc_message}")
 
             if passing:
                 logger.info("Llama Model Passed!")

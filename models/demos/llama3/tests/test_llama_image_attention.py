@@ -122,8 +122,7 @@ def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_pro
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(pcc_message)
-
+    logger.info(f"PCC: {pcc_message}")
     if passing:
         logger.info(f"Llama_Attention Passed!")
     else:
