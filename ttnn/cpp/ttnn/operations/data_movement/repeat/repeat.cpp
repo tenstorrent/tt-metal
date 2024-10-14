@@ -73,13 +73,14 @@ ttnn::Tensor RepeatOperation::invoke(
             auto rm_output = ttnn::untilize(output_tensors[0]);
             auto sliced_output = ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
 
-            if (sliced_output.get_padded_shape().volume() % tt::constants::TILE_HW == 0) {
-                // slice preserved tile padding for us, so we can just tilize now.
-                return ttnn::tilize(sliced_output, input_tensor.memory_config());
-            }
-
             auto sliced_logical_shape = sliced_output.get_logical_shape();
             auto sliced_padded_shape = sliced_output.get_padded_shape();
+
+            if (sliced_padded_shape.volume() % tt::constants::TILE_HW == 0) {
+                // slice preserved tile padding for us, so we can just tilize now.
+                auto tiled_output = ttnn::tilize(sliced_output, input_tensor.memory_config());
+                return tiled_output;
+            }
 
             auto padded_height = tt::round_up(sliced_padded_shape[-2], tt::constants::TILE_HEIGHT);
             auto padded_width = tt::round_up(sliced_padded_shape[-1], tt::constants::TILE_WIDTH);
