@@ -164,6 +164,9 @@ class TtModelArgs:
         self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
+        # If the weights file contain the keyword `instruct` also set self.instruct to true
+        if "instruct" in self.DEFAULT_CACHE_PATH.lower():
+            self.instruct = True
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
