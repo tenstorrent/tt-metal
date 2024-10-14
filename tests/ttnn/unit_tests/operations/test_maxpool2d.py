@@ -53,31 +53,14 @@ def run_max_pool(
         pytest.skip("Width shareding requires channles >= cores")
 
     data_size = 2 if dtype == ttnn.bfloat16 else 1
-    if (data_size * in_c / max_cores < 16) and (shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED):
-        pytest.skip("Width shareding requires large enough channels to shard")
+    if (in_c / max_cores < 16) and (shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED):
+        pytest.skip("Width shareding requires large enough channels to shard (at least 16 per core)")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.empty(act_shape, dtype=torch.bfloat16)
-    for n in range(act_shape[0]):
-        for c in range(act_shape[1]):
-            for h in range(act_shape[2]):
-                for w in range(act_shape[3]):
-                    act[n, c, h, w] = h * act_shape[3] + w
-
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # act = torch.ones(act_shape, dtype=torch.bfloat16)
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
-    # torch.save(act, "act.pt")
-    # act = torch.load("act.pt")
-
+    act = torch.randn(act_shape, dtype=torch.bfloat16)
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
     act_shape = (1, 1, in_n * in_h * in_w, in_c)
@@ -177,41 +160,45 @@ def run_max_pool(
     "act_shape",  ## NCHW
     (
         (  ## resnet shapes
-            # [1, 64, 112, 112],
-            # [4, 64, 112, 112],
-            # [8, 64, 112, 112],
-            # [16, 64, 112, 112],
-            # # [20, 64, 112, 112],   ## oom
-            # ## hpr shapes
-            # [8, 32, 132, 20],
-            # [16, 32, 132, 20],
-            # [32, 32, 132, 20],
-            # [64, 32, 132, 20],
-            # [128, 32, 132, 20],
-            # # [256, 32, 132, 20],   ## oom
-            # [8, 32, 264, 40],
-            # [16, 32, 264, 40],
-            # [32, 32, 264, 40],
-            # # [64, 32, 264, 40],    ## oom
-            # # [128, 32, 264, 40],   ## oom
-            # # [256, 32, 264, 40],   ## oom
-            # [4, 16, 1056, 160],
-            # # [8, 16, 1056, 160],     ## oom
-            # # [16, 16, 1056, 160],    ## oom
-            # # [32, 16, 1056, 160],    ## oom
-            # # [64, 16, 1056, 160],    ## oom
-            # # [128, 16, 1056, 160],   ## oom
-            # # [256, 16, 1056, 160],   ## oom
-            # [8, 16, 528, 80],
-            # [16, 16, 528, 80],
-            # # [32, 16, 528, 80],  ## oom
-            # # [64, 16, 528, 80],  ## oom
-            # # [128, 16, 528, 80], ## oom
-            # # [256, 16, 528, 80], ## oom
-            # ## wide for vgg
-            # [1, 256, 56, 56],
-            # [1, 512, 28, 28],
+            [1, 64, 112, 112],
+            [4, 64, 112, 112],
+            [8, 64, 112, 112],
+            [16, 64, 112, 112],
+            # [20, 64, 112, 112],   ## oom
+            ## hpr shapes
+            [8, 32, 132, 20],
+            [16, 32, 132, 20],
+            [32, 32, 132, 20],
+            [64, 32, 132, 20],
+            [128, 32, 132, 20],
+            # [256, 32, 132, 20],   ## oom
+            [8, 32, 264, 40],
+            [16, 32, 264, 40],
+            [32, 32, 264, 40],
+            # [64, 32, 264, 40],    ## oom
+            # [128, 32, 264, 40],   ## oom
+            # [256, 32, 264, 40],   ## oom
+            [4, 16, 1056, 160],
+            # [8, 16, 1056, 160],     ## oom
+            # [16, 16, 1056, 160],    ## oom
+            # [32, 16, 1056, 160],    ## oom
+            # [64, 16, 1056, 160],    ## oom
+            # [128, 16, 1056, 160],   ## oom
+            # [256, 16, 1056, 160],   ## oom
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
+            # [32, 16, 528, 80],  ## oom
+            # [64, 16, 528, 80],  ## oom
+            # [128, 16, 528, 80], ## oom
+            # [256, 16, 528, 80], ## oom
+            ## wide for vgg
+            [1, 256, 56, 56],
+            [1, 512, 28, 28],
+            [1, 512, 14, 14],
+            [1, 1024, 6, 6],
             [1, 2048, 6, 6],
+            [1, 4096, 6, 6],
+            [4, 1024, 40, 40],
         )
     ),
 )
@@ -219,14 +206,14 @@ def run_max_pool(
     "kernel_size",
     (
         (2, 2),
-        # (3, 3),
+        (3, 3),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        # (1, 1),
+        (1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -238,14 +225,14 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
 def test_run_max_pool(
