@@ -78,6 +78,14 @@ static std::string GetRiscName(CoreType core_type, int hart_id) {
     return fmt::format("UNKNOWN_RISC_ID({})", hart_id);
 }
 
+static void AssertSize(uint8_t sz, uint8_t expected_sz) {
+    TT_ASSERT(
+        sz == expected_sz,
+        "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
+        sz,
+        expected_sz);
+}
+
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
@@ -799,7 +807,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
                     else
                         stream << cptr;
-                    TT_ASSERT(sz == strlen(cptr)+1);
+                    AssertSize(sz, strlen(cptr)+1);
                 break;
                 case DPrintTILESLICE:
                     PrintTileSlice(stream, ptr, hart_id);
@@ -807,49 +815,49 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
 
                 case DPrintENDL:
                     stream << endl;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
                     most_recent_setw = val;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintSETPRECISION:
                     stream << std::setprecision(*ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintFIXED:
                     stream << std::fixed;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintDEFAULTFLOAT:
                     stream << std::defaultfloat;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintHEX:
                     stream << std::hex;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintOCT:
                     stream << std::oct;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintDEC:
                     stream << std::dec;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintUINT8:
                     // iostream default uint8_t printing is as char, not an int
                     stream << *reinterpret_cast<uint8_t*>(ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintUINT16:
                     {
                         uint16_t value;
                         memcpy(&value, ptr, sizeof(uint16_t));
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintUINT32:
@@ -857,7 +865,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         uint32_t value;
                         memcpy(&value, ptr, sizeof(uint32_t));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintUINT64:
@@ -865,7 +873,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         uint64_t value;
                         memcpy(&value, ptr, sizeof(uint64_t));
                         stream << value;
-                        TT_ASSERT(sz == 8);
+                        AssertSize(sz, 8);
                     }
                     break;
                 case DPrintINT8:
@@ -873,7 +881,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int8_t value;
                         memcpy(&value, ptr, sizeof(int8_t));
                         stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
-                        TT_ASSERT(sz == 1);
+                        AssertSize(sz, 1);
                     }
                     break;
                 case DPrintINT16:
@@ -881,7 +889,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int16_t value;
                         memcpy(&value, ptr, sizeof(int16_t));
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintINT32:
@@ -889,7 +897,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int32_t value;
                         memcpy(&value, ptr, sizeof(int32_t));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintINT64:
@@ -897,7 +905,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int64_t value;
                         memcpy(&value, ptr, sizeof(int64_t));
                         stream << value;
-                        TT_ASSERT(sz == 8);
+                        AssertSize(sz, 8);
                     }
                     break;
                 case DPrintFLOAT32:
@@ -905,7 +913,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         float value;
                         memcpy(&value, ptr, sizeof(float));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintBFLOAT16:
@@ -914,12 +922,12 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         memcpy(&rawValue, ptr, sizeof(uint16_t));
                         float value = bfloat16_to_float(rawValue);
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintU32_ARRAY:
                     PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
@@ -934,7 +942,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     raised_signals_.insert(sigval);
                     raise_wait_lock_.unlock();
                     //stream << "\nRaised signal=" << sigval << endl;
-                    TT_ASSERT(sz == 4);
+                    AssertSize(sz, 4);
                 break;
                 case DPrintWAIT:
                     {
@@ -949,7 +957,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     raise_wait_lock_.unlock();
                     break_due_to_wait = true;
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
-                    TT_ASSERT(sz == 4);
+                    AssertSize(sz, 4);
                     }
                 break;
                 default:
