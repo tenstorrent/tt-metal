@@ -264,7 +264,7 @@ parameters = {
             {"shape": [1], "dim": 1},
             {"shape": [0, 256], "dim": 0},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }

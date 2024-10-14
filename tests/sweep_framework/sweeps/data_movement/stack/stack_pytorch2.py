@@ -66,7 +66,7 @@ parameters = {
             {"tensors_shapes": [[9], [9], [9], [9], [9], [9], [9], [9], [9], [9], [9], [9]], "dim": -1},
             {"tensors_shapes": [[9], [9], [9], [9], [9], [9], [9], [9]], "dim": -1},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }

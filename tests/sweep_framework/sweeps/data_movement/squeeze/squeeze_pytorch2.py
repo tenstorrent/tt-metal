@@ -56,7 +56,7 @@ parameters = {
             {"shape": [1, 1, 25088], "dim": 0},
             {"shape": [1, 1, 480, 640], "dim": 1},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }

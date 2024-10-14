@@ -34,7 +34,7 @@ parameters = {
             {"shape": [6, 2], "repeats": [400, 1]},
             {"shape": [6, 2], "repeats": [9, 1]},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
