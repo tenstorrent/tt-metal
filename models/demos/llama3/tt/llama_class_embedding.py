@@ -17,15 +17,19 @@ class TtLlamaClassEmbedding(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        class_embedding: torch.Tensor,
+        state_dict,
+        state_dict_prefix,
+        weight_cache_path,
         dtype,
+        configuration,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
 
         # Add batch and ntoks dimensions
-        class_embedding = class_embedding.reshape(1, 1, *class_embedding.shape)
+        class_embedding = state_dict[f"{state_dict_prefix}class_embedding"]
+        class_embedding = class_embedding.reshape(1, 1, 1, *class_embedding.shape)
 
         self.class_embedding = ttnn.as_tensor(
             class_embedding,
@@ -36,14 +40,13 @@ class TtLlamaClassEmbedding(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
-    def forward(self, x: ttnn.Tensor):
-        bsz = x.shape[0]
-
+    def forward(self, x):
+        bsz = x.shape[1]
         # Broadcast class embedding to match input batch size
-        class_embedding = ttnn.concat([self.class_embedding] * bsz, dim=0)  # Broadcast batch size
-
+        class_embedding = ttnn.concat([self.class_embedding] * bsz, dim=1)  # Broadcast batch size
+        # breakpoint()
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.concat([class_embedding, x], dim=1)
+        x = ttnn.concat([class_embedding, x], dim=2)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         return x

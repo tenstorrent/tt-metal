@@ -90,7 +90,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         hidden = torch.nn.functional.gelu(hidden).bfloat16().float()
         hidden = torch.nn.functional.linear(hidden, c_proj_weight.T).bfloat16().float()
         hidden += c_proj_bias
-        hidden = hidden.view(1, 1, 5120, -1)
+        hidden = hidden.view(1, 1, 4224, -1)
 
         hidden = ttnn.from_torch(
             hidden,

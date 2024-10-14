@@ -495,6 +495,15 @@ class TtModelArgs:
                 fuse_batch=False,
             )
 
+            self.model_config["VISION_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=seq_len,
+                k=self.vision_dim * 6,
+                n=self.dim // self.num_devices,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=False,
+            )
+
     def _set_llama_params_from_dict(self, params):
         # Text params
         self.dim = params["dim"]

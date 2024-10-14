@@ -27,14 +27,19 @@ class TtLlamaPositionalEmbedding(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        positional_embedding: torch.Tensor,
-        gated_positional_embedding: torch.Tensor,
-        gated_positional_embedding_gate: torch.Tensor,
+        state_dict,
+        state_dict_prefix,
+        weight_cache_path,
         dtype,
+        configuration,
     ):
         super().__init__()
 
         self.mesh_device = mesh_device
+
+        positional_embedding = state_dict[f"{state_dict_prefix}positional_embedding"]
+        gated_positional_embedding = state_dict[f"{state_dict_prefix}gated_positional_embedding"]
+        gated_positional_embedding_gate = state_dict[f"{state_dict_prefix}gated_positional_embedding_gate"]
 
         positional_embedding = positional_embedding.reshape(1, *positional_embedding.shape)  # Add batch dimensions
         self.positional_embedding = ttnn.as_tensor(
@@ -45,7 +50,6 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-
         padded_gated_embeddings, self.ar_mapping = self.generate_padded_gated_embeddings(
             gated_positional_embedding, gated_positional_embedding_gate
         )
@@ -112,6 +116,8 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         # Get the correct embeddings for the given aspect ratios
         gated_pos_embed_ = []
         for [h, w] in ar:
+            if isinstance(h, torch.Tensor):
+                h, w = h.item(), w.item()
             idx = self.ar_mapping[(h, w)]
             gated_pos_embed_.append(
                 self.padded_gated_positional_embedding[idx : idx + 1],  # Select the correct embedding

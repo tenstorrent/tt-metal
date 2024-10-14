@@ -118,8 +118,14 @@ def test_llama_positional_embedding_inference(
     dtype = ttnn.bfloat16
     pcc = 0.9999
 
-    devices = mesh_device.get_devices()
-    num_devices = len(devices)
+    mesh_device.enable_async(True)
+
+    model_args = TtModelArgs(mesh_device)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    first_layer_prefix = "vision_model.vision_encoder."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     (
         bsz,
@@ -144,6 +150,10 @@ def test_llama_positional_embedding_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
+
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    tt_input_tensor = ttnn.reshape(tt_input_tensor, (bsz * num_concurrent_media, num_chunks, ntok, dim))
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
 
     # Generate all possible aspect ratios (H * W must be less than or equal to max_num_tiles)
@@ -166,15 +176,17 @@ def test_llama_positional_embedding_inference(
         max_num_tiles=max_num_tiles,
         width=dim,
     )
+    reference_model.load_state_dict(partial_state_dict, strict=False)
     reference_output = reference_model(input_tensor, aspect_ratios)
 
     ##### Perform the TT ops #####
     tt_model = TtLlamaPositionalEmbedding(
         mesh_device,
-        positional_embedding=reference_model.positional_embedding,
-        gated_positional_embedding=reference_model.gated_positional_embedding,
-        gated_positional_embedding_gate=reference_model.gated_positional_embedding_gate,
-        dtype=dtype,
+        state_dict,
+        first_layer_prefix,
+        None,
+        dtype,
+        model_args,
     )
     tt_output = tt_model(tt_input_tensor, tt_aspect_ratios)
 

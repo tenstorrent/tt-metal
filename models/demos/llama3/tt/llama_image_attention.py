@@ -201,7 +201,7 @@ class TtLlamaImageAttention(LightweightModule):
 
         out = torch.nn.functional.linear(attn_output, wo.T).bfloat16().float()
         # out = torch.sum(out, dim=0).unsqueeze(0).unsqueeze(0).bfloat16().float()
-        out = out.view(1, 1, 5120, -1)
+        out = out.view(1, 1, 4224, -1)
 
         # breakpoint()
 
