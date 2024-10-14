@@ -133,7 +133,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama31_8b, mamba, mistral7b, mistral7b_eth, resnet50]
+        model: [common_models, functional_unet, llama31_8b, llama32_1b, llama32_3b, mamba, mistral7b, mistral7b_eth, resnet50]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     env:
       ARCH_NAME: wormhole_b0
@@ -155,6 +155,16 @@ jobs:
         if: ${{ matrix.model != 'mistral7b' }}
         run: |
           echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
+      - name: Set up llama3 weight/cache dir (required due to single codebase)
+        if: ${{ matrix.model == 'llama31_8b' }}
+        run: |
+          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/ >> $GITHUB_ENV
+        if: ${{ matrix.model == 'llama32_1b' }}
+        run: |
+          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/ >> $GITHUB_ENV
+        if: ${{ matrix.model == 'llama32_3b' }}
+        run: |
+          echo "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/ >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_wormhole_b0

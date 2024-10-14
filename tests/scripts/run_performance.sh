@@ -30,7 +30,7 @@ run_perf_models_other() {
     env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
     env pytest -n auto models/demos/vgg/tests/test_perf_vgg.py -m $test_marker
-    
+
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
     ## Merge all the generated reports
@@ -46,14 +46,25 @@ run_perf_models_llm_javelin() {
     fi
 
     env pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
+    env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
+    env pytest -n auto models/demos/wormhole/llama31_8b/tests -m $test_marker
+
+    # Llama3.1-8B
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+    # Llama3.2-1B
+    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+    # Llama3.2-3B
+    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+
+    # Run all Llama3 tests for 8B, 1B, and 3B weights
+    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+        LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests -m $test_marker
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    done
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
     fi
-
-    env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
-    env pytest -n auto models/demos/wormhole/llama31_8b/tests -m $test_marker
-
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
