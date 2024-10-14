@@ -202,7 +202,7 @@ Tensor to_layout_impl(
                 }
                 padded_input_start.push_back(0);
             }
-            tensor = tensor.pad(padded_output_shape, padded_input_start, 0);
+            tensor = tensor.pad(padded_output_shape, ttnn::SimpleShape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
 

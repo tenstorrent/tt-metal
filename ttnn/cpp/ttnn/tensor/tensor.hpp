@@ -154,7 +154,7 @@ struct Tensor {
 
     Tensor to(Layout target_layout, distributed::MeshDevice *mesh_device) const;
 
-    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, float pad_value) const;
+    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const ttnn::SimpleShape &input_tensor_start, float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 

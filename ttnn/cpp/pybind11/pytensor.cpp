@@ -1132,7 +1132,7 @@ void pytensor_module(py::module &m_tensor) {
             [](const Tensor &self,
                 const std::array<uint32_t, 4> &output_tensor_shape,
                 const std::array<uint32_t, 4> &input_tensor_start,
-                float pad_value) { return self.pad(output_tensor_shape, input_tensor_start, pad_value); },
+                float pad_value) { return self.pad(output_tensor_shape, ttnn::SimpleShape(input_tensor_start), pad_value); },
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 

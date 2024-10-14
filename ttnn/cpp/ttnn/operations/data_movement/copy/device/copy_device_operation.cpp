@@ -32,9 +32,9 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     }
     DataType output_dtype = this->output_dtype;
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
-        const auto output_shape_required = this->compute_output_shapes(input_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required.at(0), "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        const auto output_shape_required = input_tensors.size() == 2 ? input_tensors[1].get_legacy_shape() : input_tensor_a.legacy_shape();
+        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
         output_dtype = out_tensor.get_dtype();
     }
     if (output_dtype != input_tensor_a.get_dtype()) {
@@ -44,12 +44,12 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::LegacyShape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::SimpleShape> CopyDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     if (input_tensors.size() == 2) {
-        return {input_tensors[1].get_legacy_shape()};
+        return {input_tensors[1].get_logical_shape()};
     } else {
         const auto& input_tensor = input_tensors.at(0);
-        return {input_tensor.get_legacy_shape()};
+        return {input_tensor.get_logical_shape()};
     }
 }
 
@@ -61,17 +61,13 @@ std::vector<Tensor> CopyDeviceOperation::create_output_tensors(const std::vector
         return {input_tensors[1]};
     } else {
         const auto& input_tensor = input_tensors.at(0);
-        const auto& output_shapes = this->compute_output_shapes(input_tensors);
         std::vector<Tensor> output_tensors;
-        output_tensors.reserve(output_shapes.size());
-        for (const auto& output_shape : output_shapes) {
-            output_tensors.emplace_back(create_device_tensor(
-                output_shape,
-                output_dtype,
-                input_tensors.at(0).get_layout(),
-                input_tensor.device(),
-                output_mem_config));
-        }
+        output_tensors.emplace_back(create_device_tensor(
+            input_tensor.get_legacy_shape(),
+            output_dtype,
+            input_tensors.at(0).get_layout(),
+            input_tensor.device(),
+            output_mem_config));
         return output_tensors;
     }
 }

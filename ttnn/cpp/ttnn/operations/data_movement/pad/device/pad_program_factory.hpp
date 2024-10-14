@@ -10,24 +10,24 @@ namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                                      Tensor &output,
                                                      const tt::tt_metal::LegacyShape &output_tensor_shape,
-                                                     const tt::tt_metal::LegacyShape &input_tensor_start,
+                                                     const ttnn::SimpleShape &input_tensor_start,
                                                      const float pad_value);
 
 
 operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                                            Tensor &output,
                                            const Shape &output_tensor_shape,
-                                           const Shape &input_tensor_start,
+                                           const ttnn::SimpleShape &input_tensor_start,
                                            const float pad_value);
 
-operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const Shape &input_tensor_start, const float pad_value);
+operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Shape &output_tensor_shape, const ttnn::SimpleShape &input_tensor_start, const float pad_value);
 
-operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, const float pad_value);
+operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const tt::tt_metal::LegacyShape &output_tensor_shape, const ttnn::SimpleShape &input_tensor_start, const float pad_value);
 
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                                                                 Tensor &output,
                                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
-                                                                const tt::tt_metal::LegacyShape &input_tensor_start,
+                                                                const ttnn::SimpleShape &input_tensor_start,
                                                                 const float pad_value);
 
 
@@ -35,14 +35,14 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(const Tensor &a,
                                                                 Tensor &output,
                                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
-                                                                const tt::tt_metal::LegacyShape &input_tensor_start,
+                                                                const ttnn::SimpleShape &input_tensor_start,
                                                                 const float pad_value);
 
 
 operation::ProgramWithCallbacks pad_rm_sharded(const Tensor &a,
                                                 Tensor &output,
                                                 const tt::tt_metal::LegacyShape &output_tensor_shape,
-                                                const tt::tt_metal::LegacyShape &input_tensor_start,
+                                                const ttnn::SimpleShape &input_tensor_start,
                                                 const float pad_value);
 
 
