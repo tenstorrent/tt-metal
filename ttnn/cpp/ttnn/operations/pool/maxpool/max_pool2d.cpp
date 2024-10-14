@@ -13,7 +13,7 @@ namespace ttnn {
 namespace operations::pool {
 
 Tensor MaxPool2DOp::invoke(uint8_t queue_id,
-                           const Tensor& input_tensor, 
+                           const Tensor& input_tensor,
                            uint32_t batch_size,
                            uint32_t input_h, uint32_t input_w,
                            uint32_t channels,
@@ -30,7 +30,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
             .pad_hw = {padding.at(0), padding.at(1)},
             .dilation_hw = {dilation.at(0), dilation.at(1)}
     };
-    auto output_shape = sliding_window_config.get_output_shape();
+    auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
 
     // maxpool output is row major
@@ -82,7 +82,12 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
 
     // update the shard spec to match the output shape
     auto shard_spec = memory_config.shard_spec.value();
-    uint32_t output_shard_width_padded = input_tensor.dtype() == DataType::BFLOAT8_B ? tt::round_up(output_shape[3], tt::constants::TILE_WIDTH) : tt::round_up(output_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())), tt::constants::TILE_WIDTH);
+    uint32_t ncores_c = 1;
+    if (applied_shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+        ncores_c = shard_spec.num_cores();
+        TT_FATAL(channels % ncores_c == 0, "For width sharding, input channels should be divisible by num_shards");
+    }
+    uint32_t output_shard_width_padded = input_tensor.dtype() == DataType::BFLOAT8_B ? tt::round_up(channels / ncores_c, tt::constants::TILE_WIDTH) : tt::round_up(channels / ncores_c * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())), tt::constants::TILE_WIDTH);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded = tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
