@@ -36,6 +36,20 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacyPaddedShap
     Alignment result(values);
     return result;
 }
+
+// Euclidean algorithm for greatest common divisor
+size_t gcd(size_t a, size_t b) {
+    while (b != 0) {
+        a %= b;
+        std::swap(a, b);
+    }
+    return a;
+}
+
+// Least common multiple
+size_t lcm(size_t a, size_t b) {
+    return a * b / gcd(a, b);
+}
 }
 
 namespace utils {
@@ -199,7 +213,6 @@ TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, cons
 // Private constructor to create TensorLayout from LegacyPaddedShape
 TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
     : TensorLayout(dataType, PageConfig(layout), memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
-    mLegacyPaddedShape = legacyPaddedShape;
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
@@ -349,8 +362,35 @@ Strides TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
 
 ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
 {
-    TT_FATAL(mLegacyPaddedShape.has_value(), "Use get_physical_size() or get_strides(). Calling get_padded_shape() is not allowed for TensorLayout created w/o LegacyPaddedShape. ");
-    return mLegacyPaddedShape.value();
+    std::vector<uint32_t> padded_shape(shape.rank());
+    int rankIdx = static_cast<int>(shape.rank()) - 1;
+    int alignmentIdx = static_cast<int>(mAlignment.size()) - 1;
+    size_t accum_alignment = 1;
+
+    for (;rankIdx >= 0 && alignmentIdx >= 0; rankIdx--, alignmentIdx--) {
+        // The last 2 dimensions of a shape are special
+        if (rankIdx >= static_cast<int>(shape.rank()) - 2) {
+            padded_shape[rankIdx] = round_up(shape[rankIdx], mAlignment[alignmentIdx]);
+        } else {
+            if (accum_alignment % mAlignment[alignmentIdx] == 0) {
+                // Alignment for this dimension is redundant, ignoring
+                padded_shape[rankIdx] = shape[rankIdx];
+            } else if (mAlignment[alignmentIdx] % accum_alignment == 0) {
+                padded_shape[rankIdx] = round_up(shape[rankIdx], mAlignment[alignmentIdx] / accum_alignment);
+            } else {
+                TT_THROW("Padded shape can't be deducted from TensorLayout parameters {} and Shape {}", mAlignment, shape);
+            }
+        }
+
+        // Alignment doesn't accumulate on the last dimension of a shape
+        if (rankIdx != static_cast<int>(shape.rank()) - 1) {
+            accum_alignment *= padded_shape[rankIdx];
+        }
+    }
+    for(; rankIdx >= 0; rankIdx--) {
+        padded_shape[rankIdx] = shape[rankIdx];
+    }
+    return ttnn::SimpleShape(std::move(padded_shape));
 }
 
 } // namespace tt::tt_metal

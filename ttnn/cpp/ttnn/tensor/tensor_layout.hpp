@@ -162,8 +162,6 @@ private:
     PageConfig mPageConfig;
     MemoryConfig mMemoryConfig;
     Alignment mAlignment;
-
-    std::optional<ttnn::SimpleShape> mLegacyPaddedShape;
 };
 
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value);

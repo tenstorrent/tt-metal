@@ -149,6 +149,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 struct LegacyPaddingRoundtripTestParams {
     ttnn::SimpleShape shape;
+    ttnn::SimpleShape padded_shape;
 };
 
 class TensorLayoutLegacyPaddingRoundtipTests : public ::testing::TestWithParam<LegacyPaddingRoundtripTestParams> {};
@@ -157,14 +158,8 @@ TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     using namespace tt::tt_metal;
 
     const auto& params = GetParam();
-    ttnn::SimpleShape shape = params.shape;
-    ttnn::SimpleShape legacyPaddedShape = ttnn::SimpleShape{2, 3, 32, 32};
-    TensorLayout layout = TensorLayout::fromLegacyPaddedShape(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, legacyPaddedShape);
-
-    // EXPECT_EQ(layout.get_alignment(), params.expected.alignment);
-    // EXPECT_EQ(layout.get_physical_size(shape), params.expected.physical_size);
-    // EXPECT_EQ(layout.get_strides(shape), params.expected.strides);
-    EXPECT_EQ(layout.get_padded_shape(shape), legacyPaddedShape);
+    TensorLayout layout = TensorLayout::fromLegacyPaddedShape(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.padded_shape);
+    EXPECT_EQ(layout.get_padded_shape(params.shape), params.padded_shape);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -172,23 +167,208 @@ INSTANTIATE_TEST_SUITE_P(
     TensorLayoutLegacyPaddingRoundtipTests,
     ::testing::Values(
         LegacyPaddingRoundtripTestParams{
-            .shape = ttnn::SimpleShape{10}
+            .shape = ttnn::SimpleShape{10},
+            .padded_shape = ttnn::SimpleShape{32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{10},
+            .padded_shape = ttnn::SimpleShape{20},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = ttnn::SimpleShape{40, 30}
+            .shape = ttnn::SimpleShape{40, 30},
+            .padded_shape = ttnn::SimpleShape{64, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{40, 30},
+            .padded_shape = ttnn::SimpleShape{40, 32},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = ttnn::SimpleShape{30, 20, 10}
+            .shape = ttnn::SimpleShape{30, 20, 10},
+            .padded_shape = ttnn::SimpleShape{32, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{30, 20, 10},
+            .padded_shape = ttnn::SimpleShape{30, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{30, 20, 10},
+            .padded_shape = ttnn::SimpleShape{30, 20, 12},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{30, 20, 10},
+            .padded_shape = ttnn::SimpleShape{30, 20, 10},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = ttnn::SimpleShape{2, 3, 16, 16}
+            .shape = ttnn::SimpleShape{2, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{16, 16, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{2, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{2, 16, 16, 16},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{2, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{2, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{2, 3, 16, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{2, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{2, 3, 16, 16},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = ttnn::SimpleShape{5, 4, 3, 16, 16}
+            .shape = ttnn::SimpleShape{5, 4, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{16, 16, 16, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{5, 4, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{5, 4, 4, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{5, 4, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{5, 4, 3, 16, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = ttnn::SimpleShape{5, 4, 3, 16, 16},
+            .padded_shape = ttnn::SimpleShape{5, 4, 3, 16, 16},
+        }
+    )
+);
+
+struct LegacyPaddingFromAlignmentTestParams {
+    tt::tt_metal::Alignment alignment;
+    ttnn::SimpleShape shape;
+    ttnn::SimpleShape padded_shape;
+};
+
+class TensorLayoutLegacyPaddingFromAlignmentTests : public ::testing::TestWithParam<LegacyPaddingFromAlignmentTestParams> {};
+
+TEST_P(TensorLayoutLegacyPaddingFromAlignmentTests, Tensor_LagacyPaddingFromAlignment) {
+    using namespace tt::tt_metal;
+
+    const auto& params = GetParam();
+    TensorLayout layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.alignment);
+    EXPECT_EQ(layout.get_padded_shape(params.shape), params.padded_shape);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorLayoutTests,
+    TensorLayoutLegacyPaddingFromAlignmentTests,
+    ::testing::Values(
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{64, 64},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 64, 64}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{2 * 32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 4, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{3 * 32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{6 * 32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 6, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{8 * 32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 8, 32, 32}
+        },
+
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{2, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{4, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{16, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{1, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{2, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{4, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{32, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{3, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{12, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{32 * 3, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{2, 3, 32, 32}
+        },
+
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{4 * 3 * 32, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{4, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{3 * 3 * 32, 1, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{3, 3, 32, 32}
+        },
+        LegacyPaddingFromAlignmentTestParams{
+            .alignment = tt::tt_metal::Alignment{6 * 3 * 32, 3 * 32, 32, 32},
+            .shape = ttnn::SimpleShape{2, 3, 12, 13},
+            .padded_shape = ttnn::SimpleShape{6, 3, 32, 32}
         }
     )
 );
