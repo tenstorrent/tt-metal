@@ -7,12 +7,11 @@
 #include "llrt/hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
-#if defined (ARCH_GRAYSKULL)
-
 #include "hw/inc/grayskull/dev_mem_map.h"
-#include "hw/inc/grayskull/eth_l1_address_map.h" // TODO remove when commonruntimeaddressmap is gone
-#include "hw/inc/dev_msgs.h"
+#include "hw/inc/grayskull/eth_l1_address_map.h"
 
+#ifdef ARCH_GRAYSKULL
+#include "hw/inc/dev_msgs.h" // This file is not common, it depends on ARCH_NAME include paths
 #endif
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
@@ -34,7 +33,7 @@ namespace tt {
 namespace tt_metal {
 
 void Hal::initialize_gs() {
-#if defined (ARCH_GRAYSKULL)
+#ifdef ARCH_GRAYSKULL
 
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
 
