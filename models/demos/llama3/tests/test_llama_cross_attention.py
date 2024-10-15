@@ -164,13 +164,14 @@ def test_llama_cross_attention_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        tt_xattn_mask = ttnn.reshape(
-            tt_xattn_mask,
-            shape=ttnn.Shape(
-                [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
-                [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
-            ),
-        )
+        if mode == "decode":
+            tt_xattn_mask = ttnn.reshape(
+                tt_xattn_mask,
+                shape=ttnn.Shape(
+                    [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
+                    [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
+                ),
+            )
 
         full_text_mask = torch.bernoulli(
             torch.full(
@@ -191,13 +192,14 @@ def test_llama_cross_attention_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        tt_full_text_mask = ttnn.reshape(
-            tt_full_text_mask,
-            shape=ttnn.Shape(
-                [batch, n_heads // model_args.num_devices, seq_len, head_dim],
-                [batch, n_heads // model_args.num_devices, 32, head_dim],
-            ),
-        )
+        if mode == "decode":
+            tt_full_text_mask = ttnn.reshape(
+                tt_full_text_mask,
+                shape=ttnn.Shape(
+                    [batch, n_heads // model_args.num_devices, seq_len, head_dim],
+                    [batch, n_heads // model_args.num_devices, 32, head_dim],
+                ),
+            )
 
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
