@@ -207,7 +207,12 @@ jobs:
           context: .
           file: dockerfile/ubuntu-20.04-amd64.Dockerfile
   release-docs:
-    needs: create-and-upload-draft-release
+    needs: [
+      get-params,
+      create-tag,
+      create-and-upload-draft-release
+    ]
+    if: ${{ needs.get-params.outputs.is-release-candidate && needs.get-params.outputs.should-create-release }}
     uses: ./.github/workflows/docs-release.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
