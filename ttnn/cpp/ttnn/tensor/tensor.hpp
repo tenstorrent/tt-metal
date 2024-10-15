@@ -20,7 +20,6 @@
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 #include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "types.hpp"
 
@@ -28,6 +27,10 @@ namespace tt {
 
 namespace tt_metal {
 
+
+namespace distributed {
+    class MeshDevice;
+}
 struct Tensor {
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
@@ -136,7 +139,7 @@ struct Tensor {
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(
-        MeshDevice *mesh_device,
+        distributed::MeshDevice *mesh_device,
         const MemoryConfig &mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
 
     Tensor to(
@@ -149,7 +152,7 @@ struct Tensor {
 
     Tensor to(Layout target_layout, Device *worker = nullptr) const;
 
-    Tensor to(Layout target_layout, MeshDevice *mesh_device) const;
+    Tensor to(Layout target_layout, distributed::MeshDevice *mesh_device) const;
 
     Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, float pad_value) const;
 
@@ -350,15 +353,14 @@ Tensor allocate_tensor_on_device(
     const ttnn::Shape &shape,
     DataType data_type,
     Layout layout,
-    MeshDevice *mesh_device,
+    distributed::MeshDevice *mesh_device,
     const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
-// Maps a tensor to the set of devices in the device-mesh that the shards will be distributed across.
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device);
-
 Tensor set_tensor_id(const Tensor &tensor);
+
+bool validate_worker_modes(const std::vector<Device *> &workers);
 
 }  // namespace tt_metal
 

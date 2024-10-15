@@ -12,7 +12,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
 using MeshDeviceID = size_t;
@@ -185,7 +185,6 @@ class MeshDevice : public std::enable_shared_from_this<MeshDevice> {
 };
 
 std::ostream &operator<<(std::ostream &os, const MeshDevice &mesh_device);
-bool validate_worker_modes(const std::vector<Device *> &workers);
-std::vector<int> get_t3k_physical_device_ids_ring();
 
-}  // namespace tt::tt_metal
+
+}  // namespace tt::tt_metal::distributed

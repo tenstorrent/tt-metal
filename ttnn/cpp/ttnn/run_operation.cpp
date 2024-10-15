@@ -21,12 +21,6 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-inline bool any_tensor_on_multi_device(const Tensors& tensors) {
-    return std::any_of(tensors.begin(), tensors.end(), [](const Tensor& tensor) {
-        return tensor.storage_type() == StorageType::MULTI_DEVICE;
-    });
-}
-
 Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->storage)) {
