@@ -15,6 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, divup
     "input_shape",
     [
         [32, 32],
+        [20, 24],
         [5, 96, 64],
     ],
 )
@@ -36,6 +37,7 @@ def test_zeros_like(device, input_shape):
     "input_shape",
     [
         [32, 32],
+        [20, 24],
         [5, 96, 64],
     ],
 )
