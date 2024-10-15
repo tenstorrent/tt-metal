@@ -30,7 +30,7 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 
 - `$LLAMA_DIR` sets the path for the Llama3 model weights and caches.
 
-- `$WH_ARCH_YAML` sets the dispatch over ethernet cores, enabling a full 8x8 grid of cores. This is required since our Llama3 model configuration makes use of the full grid size for maximum performance.
+- `$WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and T3000, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models.
 
 On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
 These cache files only need to be created once for each model and each weight (i.e. new finetuned weights will need to be cached) and will be stored accordingly to the machine you are running the models:
