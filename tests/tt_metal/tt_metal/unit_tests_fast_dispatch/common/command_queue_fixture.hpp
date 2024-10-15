@@ -6,6 +6,7 @@
 #include <variant>
 #include <vector>
 #include "common/core_coord.h"
+#include "common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/host_api.hpp"
@@ -145,33 +146,50 @@ protected:
 
 class RandomProgramFixture : public CommandQueueFixture {
     protected:
-     const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-     const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
-     const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
-     const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
-     const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
-     const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
-     const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
-     const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
-     const uint32_t MIN_NUM_SEMS = 0;
-     const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
-     const uint32_t SEM_VAL = 1;
-     const uint32_t NUM_PROGRAMS = 1;
+     uint32_t seed_;
 
-     vector<uint32_t> generate_semaphores(Program& program, const std::variant<CoreRange, CoreRangeSet>& cores) {
-        const uint32_t num_sems = this->generate_random_num(MIN_NUM_SEMS, MAX_NUM_SEMS);
-        vector<uint32_t> sem_ids;
-        for (uint32_t i = 0; i < num_sems; i++) {
-            const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL);
-            sem_ids.push_back(sem_id);
-        }
-        return sem_ids;
+     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
+     static const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
+     static const uint32_t MIN_KERNEL_RUNTIME_CYCLES = 100;
+     static const uint32_t MAX_KERNEL_RUNTIME_CYCLES = 20000;
+     static const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
+     static const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
+     static const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
+     static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
+     static const uint32_t MIN_NUM_SEMS = 0;
+     static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+     static const uint32_t SEM_VAL = 1;
+     static const uint32_t NUM_PROGRAMS = 100;
+
+     void SetUp() override {
+        CommandQueueFixture::SetUp();
+
+        this->seed_ = tt::parse_env("SEED", 0);
+        srand(this->seed_);
+        log_info(tt::LogTest, "Using seed: {}", this->seed_);
      }
 
-     pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(const vector<uint32_t> &sem_ids) {
+     vector<uint32_t> generate_semaphores(
+         Program &program,
+         const std::variant<CoreRange, CoreRangeSet> &cores,
+         const uint32_t min = MIN_NUM_SEMS,
+         const uint32_t max = MAX_NUM_SEMS) {
+         const uint32_t num_sems = this->generate_random_num(min, max);
+         vector<uint32_t> sem_ids;
+         for (uint32_t i = 0; i < num_sems; i++) {
+             const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL);
+             sem_ids.push_back(sem_id);
+         }
+         return sem_ids;
+     }
+
+     pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
+         const vector<uint32_t> &sem_ids,
+         const uint32_t min = MIN_NUM_RUNTIME_ARGS,
+         const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
          const uint32_t num_sems = sem_ids.size();
-         const uint32_t max_num_unique_rt_args = MAX_NUM_RUNTIME_ARGS - num_sems;
-         const uint32_t num_unique_rt_args = this->generate_random_num(MIN_NUM_RUNTIME_ARGS, max_num_unique_rt_args);
+         const uint32_t max_num_unique_rt_args = max - num_sems;
+         const uint32_t num_unique_rt_args = this->generate_random_num(min, max_num_unique_rt_args);
 
          const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
          const uint32_t num_common_rt_args = this->generate_random_num(0, max_num_common_rt_args);
@@ -190,7 +208,11 @@ class RandomProgramFixture : public CommandQueueFixture {
          const uint32_t num_sems,
          const uint32_t num_unique_rt_args,
          const uint32_t num_common_rt_args,
-         const bool create_eth_config) {
+         const bool create_eth_config,
+         const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
+         const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
+         const uint32_t min_kernel_runtime_cycles = MIN_KERNEL_RUNTIME_CYCLES,
+         const uint32_t max_kernel_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES) {
          const std::vector<uint32_t> compile_args = {
              num_unique_rt_args,
              num_common_rt_args,
@@ -200,9 +222,9 @@ class RandomProgramFixture : public CommandQueueFixture {
              SEM_VAL};
 
          const uint32_t kernel_size_bytes =
-             this->generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES);
+             this->generate_random_num(min_kernel_size_bytes, max_kernel_size_bytes);
          const uint32_t kernel_runtime_cycles =
-             this->generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
+             this->generate_random_num(min_kernel_runtime_cycles, max_kernel_runtime_cycles);
 
          const std::map<string, string> defines = {
              {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
