@@ -122,7 +122,7 @@ ttnn::Tensor SliceOperation::invoke(
             return input_tensor;
         } else {
             auto input_4d_rm = ttnn::to_layout(input_4d, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
-            auto output_4d =  input_4d_rm.unpad(tt::tt_metal::LegacyShape(modified_begins), tt::tt_metal::LegacyShape(modified_ends));
+            auto output_4d =  input_4d_rm.unpad(ttnn::SimpleShape(modified_begins), ttnn::SimpleShape(modified_ends));
             auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
             return ttnn::reshape(output_4d_rm, output_shape);
         }
@@ -269,7 +269,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         return input_tensor;
     } else {
         auto input_4d_rm = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
-        auto output_4d =  input_4d_rm.unpad(tt::tt_metal::LegacyShape(begins), tt::tt_metal::LegacyShape(ends));
+        auto output_4d =  input_4d_rm.unpad(ttnn::SimpleShape(begins), ttnn::SimpleShape(ends));
         auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
         return ttnn::reshape(output_4d_rm, output_shape);
     }

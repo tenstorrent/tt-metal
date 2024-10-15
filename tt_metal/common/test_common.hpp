@@ -37,7 +37,7 @@ inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevi
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
             case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported");
-            case tt::ARCH::WORMHOLE_B0: throw std::runtime_error("WORMHOLE_B0 arch not supported");
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
             case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
