@@ -1542,4 +1542,124 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
     Finish(device_->command_queue());
 }
 
+TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
+    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        log_info(tt::LogTest, "Creating Program {}", i);
+        Program program = CreateProgram();
+
+        uint32_t min_num_sems;
+        uint32_t max_num_sems;
+        uint32_t min_num_rt_args;
+        uint32_t max_num_rt_args;
+        uint32_t min_size_bytes;
+        uint32_t max_size_bytes;
+        uint32_t min_runtime_cycles;
+        uint32_t max_runtime_cycles;
+        if (i % 2 == 0) {
+            min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
+            max_num_sems = MAX_NUM_SEMS;
+            min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
+            max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
+            min_size_bytes = MAX_KERNEL_SIZE_BYTES * (9.0 / 10);
+            max_size_bytes = MAX_KERNEL_SIZE_BYTES;
+            min_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES * (9.0 / 10);
+            max_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES;
+        } else {
+            min_num_sems = MIN_NUM_SEMS;
+            max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
+            min_num_rt_args = max_num_sems;
+            max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (2.0 / 10);
+            min_size_bytes = MIN_KERNEL_SIZE_BYTES;
+            max_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
+            min_runtime_cycles = MIN_KERNEL_RUNTIME_CYCLES;
+            max_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES * (2.0 / 10);
+        }
+
+        const vector<uint32_t>& sem_ids = generate_semaphores(program, cores, min_num_sems, max_num_sems);
+        auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
+        const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+        KernelHandle kernel_id = create_kernel(
+            program,
+            cores,
+            sem_ids.size(),
+            num_unique_rt_args,
+            common_rt_args.size(),
+            false,
+            min_size_bytes,
+            max_size_bytes,
+            min_runtime_cycles,
+            max_runtime_cycles);
+
+        SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
+        SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
+    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        log_info(tt::LogTest, "Creating Program {}", i);
+        Program program = CreateProgram();
+
+        uint32_t min_num_sems;
+        uint32_t max_num_sems;
+        uint32_t min_num_rt_args;
+        uint32_t max_num_rt_args;
+        uint32_t min_size_bytes;
+        uint32_t max_size_bytes;
+        uint32_t min_runtime_cycles;
+        uint32_t max_runtime_cycles;
+        if (i == 0) {
+            min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
+            max_num_sems = MAX_NUM_SEMS;
+            min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
+            max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
+            min_size_bytes = MAX_KERNEL_SIZE_BYTES * (9.0 / 10);
+            max_size_bytes = MAX_KERNEL_SIZE_BYTES;
+            min_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES * (9.0 / 10);
+            max_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES;
+        } else {
+            min_num_sems = MIN_NUM_SEMS;
+            max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
+            min_num_rt_args = max_num_sems;
+            max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (2.0 / 10);
+            min_size_bytes = MIN_KERNEL_SIZE_BYTES;
+            max_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
+            min_runtime_cycles = MIN_KERNEL_RUNTIME_CYCLES;
+            max_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES * (2.0 / 10);
+        }
+
+        const vector<uint32_t>& sem_ids = generate_semaphores(program, cores, min_num_sems, max_num_sems);
+        auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
+        const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+        KernelHandle kernel_id = create_kernel(
+            program,
+            cores,
+            sem_ids.size(),
+            num_unique_rt_args,
+            common_rt_args.size(),
+            false,
+            min_size_bytes,
+            max_size_bytes,
+            min_runtime_cycles,
+            max_runtime_cycles);
+
+        SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
+        SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
 }  // namespace stress_tests
