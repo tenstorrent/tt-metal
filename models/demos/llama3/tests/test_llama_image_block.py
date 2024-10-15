@@ -41,7 +41,7 @@ from models.utility_functions import skip_for_grayskull
     [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
-def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_program_cache, reset_seeds):
+def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc = 0.99
 

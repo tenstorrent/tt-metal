@@ -37,7 +37,7 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
         (1024, 20),
     ),
 )
-def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds):
+def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)

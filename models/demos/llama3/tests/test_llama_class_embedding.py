@@ -85,6 +85,7 @@ def test_llama_class_embedding_inference(
     # Input params
     input_shape,
     layout,
+    ensure_gc,
 ):
     dtype = ttnn.bfloat16
     pcc = 0.9999

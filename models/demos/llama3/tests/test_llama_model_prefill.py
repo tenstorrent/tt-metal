@@ -47,7 +47,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
+def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC for all layers
 

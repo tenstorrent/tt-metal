@@ -28,7 +28,7 @@ from models.demos.llama3.tt.llama_common import HostEmbedding
     ],
     indirect=True,
 )
-def test_llama_embedding(mesh_device, use_program_cache, reset_seeds):
+def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)

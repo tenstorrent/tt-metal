@@ -13,7 +13,7 @@ from loguru import logger
 
 
 @torch.no_grad()
-def test_llama_torch_inference():
+def test_llama_torch_inference(ensure_gc):
     iterations = 20
 
     model_args = TtModelArgs(mesh_device=None)

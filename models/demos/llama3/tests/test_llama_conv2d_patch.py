@@ -98,6 +98,7 @@ def test_llama_conv2d_inference(
     kernel_size,
     stride,
     bias,
+    ensure_gc,
 ):
     pcc = 0.9999
     dtype = ttnn.bfloat16

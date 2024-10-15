@@ -42,7 +42,7 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_cross_attention_transformer_block_inference(
-    vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds
+    vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
     pcc = 0.99

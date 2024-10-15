@@ -27,7 +27,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds):
+def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)

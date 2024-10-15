@@ -10,7 +10,7 @@ from models.utility_functions import skip_for_grayskull
 # This test will run all the nightly fast dispatch tests for all supported Llama3 models in CI
 # [N150 / N300 only]
 @skip_for_grayskull("Requires wormhole_b0 to run")
-def test_llama_ci_dispatch():
+def test_llama_ci_dispatch(ensure_gc):
     dir_1b = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
     dir_3b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/"
     dir_8b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/"

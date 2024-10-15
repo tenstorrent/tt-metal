@@ -82,6 +82,7 @@ def test_llama_conv2d_inference(
     dim,
     gated,
     max_num_tiles,
+    ensure_gc,
 ):
     dtype = ttnn.bfloat16
     pcc = 0.9999

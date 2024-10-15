@@ -113,6 +113,7 @@ def test_llama_positional_embedding_inference(
     image_size,
     patch_size,
     max_num_tiles,
+    ensure_gc,
 ):
     dtype = ttnn.bfloat16
     pcc = 0.9999
