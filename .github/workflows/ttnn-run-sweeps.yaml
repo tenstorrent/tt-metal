@@ -142,6 +142,11 @@ on:
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.unary.gtz.gtz
+          - eltwise.unary.ltz.ltz
+          - eltwise.unary.gez.gez
+          - eltwise.unary.lez.lez
+          - eltwise.unary.nez.nez
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
