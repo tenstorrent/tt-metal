@@ -67,7 +67,8 @@ def test_llama_model_perf(
 
     # Embedding on host
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = kv_cache_len
     generation_length = 1

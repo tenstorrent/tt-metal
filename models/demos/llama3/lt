@@ -68,7 +68,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b) [all]", "value": "", "x": 0, "y": 1},
         {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
     ]
 
@@ -178,7 +178,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b"
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
                         # Parse models, devices, and commands
@@ -250,8 +250,8 @@ def main(stdscr):
                             entry["stop_event"].set()
                             terminate_process_tree(entry["process"].pid)
                             entry["status"] = "Terminating"
-                        elif entry["status"] in ["Cancelled", "Error", "Finished"]:
-                            # Remove the entry if it's already cancelled
+                        elif entry["status"] in ["Waiting", "Cancelled", "Error", "Finished"]:
+                            # Remove the entry if it's already cancelled or not started
                             output_entries.pop(entry_index)
                             total_lines -= 1
                             if current_line >= total_lines:
@@ -659,7 +659,8 @@ def get_llama_dir(model):
         "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
-    }.get(model, "")
+        "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
+    }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
         print(f"Error: The directory for the {model} model does not exist: {llama_dir}")
@@ -667,6 +668,7 @@ def get_llama_dir(model):
         print("  - LLAMA_32_1B_DIR for 1b model")
         print("  - LLAMA_32_3B_DIR for 3b model")
         print("  - LLAMA_31_8B_DIR for 8b model")
+        print("  - LLAMA_32_11B_DIR for 11b model")
         sys.exit(1)
 
     return llama_dir
