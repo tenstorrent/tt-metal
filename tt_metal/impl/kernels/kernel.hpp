@@ -14,6 +14,7 @@
 #include "common/base_types.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/llrt/tt_memory.h"
+#include "tt_metal/tt_stl/span.hpp"
 #include "runtime_args_data.hpp"
 
 namespace tt {
@@ -110,8 +111,8 @@ class Kernel : public JitBuildSettings {
     virtual void read_binaries(Device *device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
-    void set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args);
-    void set_common_runtime_args(const std::vector<uint32_t> &runtime_args);
+    void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
+    void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
 
     int get_watcher_kernel_id() { return watcher_kernel_id_; }
 
