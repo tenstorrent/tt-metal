@@ -8,10 +8,10 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.sweep_framework.utils import gen_shapes
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -19,29 +19,29 @@ TIMEOUT = 30
 
 random.seed(0)
 
+
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 512, 512], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 32, 32], [12, 1024, 1024], [1, 32, 32], 16)
-        + gen_shapes([32, 32], [1024, 1024], [32, 32], 16),
-        "input_a_dtype": [ttnn.int32],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16),
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
 }
 
 
-def mesh_device_fixture():
-    device = ttnn.open_device(device_id=0)
-    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
-    yield (device, "Wormhole_B0")
-    ttnn.close_device(device)
-    del device
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Row Major layout is not supported"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -61,12 +61,11 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-2147483647, high=2147483648, dtype=torch.int64), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_input_tensor_a = torch.full(size=input_shape, fill_value=-2147483647).to(torch.int32)
-
-    torch_output_tensor = torch.bitwise_not(torch_input_tensor_a)
+    golden_function = ttnn.get_golden_function(ttnn.ltz)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -77,7 +76,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_not(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.ltz(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
