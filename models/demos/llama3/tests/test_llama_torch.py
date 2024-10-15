@@ -9,6 +9,8 @@ from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
+from loguru import logger
+
 
 @torch.no_grad()
 def test_llama_torch_inference():
@@ -36,16 +38,12 @@ def test_llama_torch_inference():
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(model_args.max_batch_size, seqlen, -1)
-    print(pt_decode_input.shape)
+    logger.info(pt_decode_input.shape)
 
     all_outputs_ref = []
 
-    # After loading the model weights, wait for an input to start the generation
-    # print("Waiting for an input to start...")
-    # input()
-
     for i in range(generation_length):
-        print(f"[Decode] Generating token {i}")
+        logger.info(f"[Decode] Generating token {i}")
 
         start_pos = generation_start_pos + i
 
@@ -67,4 +65,4 @@ def test_llama_torch_inference():
             all_outputs_ref.append(pt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of ref outputs
 
         # TODO print all 32 users
-        print("[User 0] Ref generation: ", "".join(tokenizer.decode(all_outputs_ref)))
+        logger.info("[User 0] Ref generation: ", "".join(tokenizer.decode(all_outputs_ref)))

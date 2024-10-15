@@ -691,7 +691,7 @@ def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
 def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
 
-    print(f"Loading {len(checkpoints)} checkpoint files")
+    logger.info(f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
         if n_layers:
             # Layer range is in the file name, like layers_start-end.pth
@@ -709,7 +709,7 @@ def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
 
 def load_sharded_checkpoints(checkpoints, n_layers):
     checkpoint = {}
-    print(f"Loading {len(checkpoints)} checkpoint files")
+    logger.info(f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
         loaded_ckpt = torch.load(ckpt, map_location="cpu")
         for (

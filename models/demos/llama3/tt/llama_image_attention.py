@@ -11,6 +11,7 @@ from models.utility_functions import (
 )
 from models.common.lightweightmodule import LightweightModule
 import os
+from loguru import logger
 
 
 class TtLlamaImageAttention(LightweightModule):
@@ -162,7 +163,7 @@ class TtLlamaImageAttention(LightweightModule):
         # xqkv_fused_torch = torch.matmul(x_torch, wqkv).bfloat16().float()
         xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.T).bfloat16().float()
         # xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.tranpose).bfloat16().float()
-        print(xqkv_fused_torch.shape)
+        logger.info(xqkv_fused_torch.shape)
         # n, s, d = xqkv_fused_torch.shape[-3:]
         s, d = xqkv_fused_torch.shape[-2:]
         xqkv = xqkv_fused_torch.reshape(s, 3, d // 3)

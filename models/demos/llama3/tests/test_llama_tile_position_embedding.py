@@ -152,7 +152,7 @@ def test_llama_conv2d_inference(
     tt_output = tt_model(tt_input_tensor, tt_aspect_ratios)
 
     ##### Check the outputs #####
-    print("Checking outputs")
+    logger.info("Checking outputs")
     out = ttnn.from_device(tt_output)
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 

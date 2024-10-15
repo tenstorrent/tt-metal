@@ -84,7 +84,7 @@ def test_llama_decoder_inference(mesh_device, seq_len, use_program_cache, reset_
 
     # TODO Update start_pos (check llama test for reference)
     for i in range(generation_length):
-        print(f"[Decoder] Generating token {i}")
+        logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
         decode_input = prepare_inputs_ttnn_prefill(
