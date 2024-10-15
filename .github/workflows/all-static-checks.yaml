@@ -109,6 +109,6 @@ jobs:
         # to avoid GitHub API timeouts for heavily loaded
         # pull requests
         suggestions_per_comment: 10
-        continue-on-error: true
+      continue-on-error: true
     - name: Final step to signal success
       run: echo "The job passes even if 3rd party action fails."
