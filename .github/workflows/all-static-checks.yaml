@@ -68,7 +68,7 @@ jobs:
       pull-requests: write
       # OPTIONAL: auto-closing conversations requires the `contents` permission
       contents: write
-    if: github.event_name != 'workflow_dispatch' && github.event_name != 'workflow_call'
+    if: github.event_name == 'pull_request'  # Only run this job on pull request events
     steps:
     - uses: actions/checkout@v4
       with:
@@ -109,3 +109,4 @@ jobs:
         # to avoid GitHub API timeouts for heavily loaded
         # pull requests
         suggestions_per_comment: 10
+        continue-on-error: true
