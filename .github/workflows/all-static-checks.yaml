@@ -96,9 +96,6 @@ jobs:
     - name: Analyze
       run: |
         git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | clang-tidy-diff-17.py -p1 -path build -export-fixes clang-tidy-result/fixes.yml
-        pwd
-        ls -lart clang-tidy-result
-        cat clang-tidy-result/fixes.yml
     - name: Run clang-tidy-pr-comments action
       uses: platisd/clang-tidy-pr-comments@v1.5.0
       with:
