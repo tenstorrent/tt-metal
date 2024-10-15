@@ -62,6 +62,7 @@ def run_max_pool(
     #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
+
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
     act_shape = (1, 1, in_n * in_h * in_w, in_c)
