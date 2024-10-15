@@ -120,15 +120,20 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(w2_in)
 
-        if mode == "decode":
-            w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.L1_MEMORY_CONFIG)
-
         if seq_len >= 2048:  # Reshape back to intended shape
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 
         # All reduce
         if self.args.num_devices > 1:
-            w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            w2_out_gathered_memcfg = (
+                self.model_config["SHARDED_MLP_DECODE_W2_OUT_GATHERED_MEMCFG"] if mode == "decode" else None
+            )
+            w2_out_gathered = ttnn.all_gather(
+                w2_out, dim=1, num_links=1, topology=ttnn.Topology.Linear, memory_config=w2_out_gathered_memcfg
+            )
+            if mode == "decode":
+                # This sharded to interleaved call is needed as fast_reduce only supports interleaved inputs
+                w2_out_gathered = ttnn.sharded_to_interleaved(w2_out_gathered, ttnn.L1_MEMORY_CONFIG)
             w2_out_reduced = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
