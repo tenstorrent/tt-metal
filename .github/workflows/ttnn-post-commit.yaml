@@ -64,6 +64,15 @@ jobs:
             cmd: pytest tests/ttnn/unit_tests -xv --splits 10 --group 9 -m "not disable_fast_runtime_mode"
           - name: ttnn group 10
             cmd: pytest tests/ttnn/unit_tests -xv --splits 10 --group 10 -m "not disable_fast_runtime_mode"
+          - name: ttnn integration group 1
+            cmd: pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" -k "not stable_diffusion" -xv --splits 3 --group 1
+            wh_eth_dispatch: true
+          - name: ttnn integration group 2
+            cmd: pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" -k "not stable_diffusion" -xv --splits 3 --group 2
+            wh_eth_dispatch: true
+          - name: ttnn integration group 3
+            cmd: pytest tests/ttnn/integration_tests -m "not models_performance_bare_metal and not models_device_performance_bare_metal" -k "not stable_diffusion" -xv --splits 3 --group 3
+            wh_eth_dispatch: true
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
@@ -84,6 +93,10 @@ jobs:
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
+      - name: Set WH eth dispatch if exists in config
+        if: ${{ matrix.test-group.wh_eth_dispatch }}
+        run: |
+          echo "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
