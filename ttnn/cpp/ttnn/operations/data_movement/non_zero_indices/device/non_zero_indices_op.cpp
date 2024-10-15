@@ -21,10 +21,9 @@ void NonZeroIndices::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Non-zero does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NonZeroIndices::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::LegacyShape num_non_zero_shape({1,1,1,8});
-    return {num_non_zero_shape, input_tensor.get_legacy_shape()};
+std::vector<ttnn::SimpleShape> NonZeroIndices::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    ttnn::SimpleShape num_non_zero_shape({1,1,1,8});
+    return {std::move(num_non_zero_shape), input_tensors.at(0).get_logical_shape()};
 }
 
 std::vector<Tensor> NonZeroIndices::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

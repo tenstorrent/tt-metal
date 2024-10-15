@@ -1132,7 +1132,7 @@ void pytensor_module(py::module &m_tensor) {
             [](const Tensor &self,
                 const std::array<uint32_t, 4> &output_tensor_shape,
                 const std::array<uint32_t, 4> &input_tensor_start,
-                float pad_value) { return self.pad(output_tensor_shape, input_tensor_start, pad_value); },
+                float pad_value) { return self.pad(output_tensor_shape, ttnn::SimpleShape(input_tensor_start), pad_value); },
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
 
@@ -1204,7 +1204,7 @@ void pytensor_module(py::module &m_tensor) {
             [](const Tensor &self,
                 const std::array<uint32_t, 4> &output_tensor_start,
                 const std::array<uint32_t, 4> &output_tensor_end) {
-                return self.unpad(output_tensor_start, output_tensor_end);
+                return self.unpad(ttnn::SimpleShape(output_tensor_start), ttnn::SimpleShape(output_tensor_end));
             },
             R"doc(
             Unpad this TT Tensor.
@@ -1326,7 +1326,7 @@ void pytensor_module(py::module &m_tensor) {
         .def(
             "unpad_from_tile",
             [](const Tensor &self, const std::vector<uint32_t> &output_tensor_shape) {
-                return self.unpad_from_tile(output_tensor_shape);
+                return self.unpad_from_tile(ttnn::SimpleShape(output_tensor_shape));
             },
             R"doc(
             Unpads TT Tensor from given input tensor ``arg0``.

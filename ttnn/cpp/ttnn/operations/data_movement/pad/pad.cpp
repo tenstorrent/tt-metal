@@ -30,7 +30,7 @@ static ttnn::Tensor pad_impl(
             return input_tensor;
         }
         else {
-            return input_tensor.pad(tt::tt_metal::LegacyShape(output_padded_shape), tt::tt_metal::LegacyShape(input_tensor_start), value);
+            return input_tensor.pad(tt::tt_metal::LegacyShape(output_padded_shape), ttnn::SimpleShape(input_tensor_start), value);
         }
     }
     // on device
@@ -42,7 +42,7 @@ static ttnn::Tensor pad_impl(
 
         auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
         auto output_tensor = operation::run(
-            Pad{tt::tt_metal::LegacyShape(output_padded_shape), tt::tt_metal::LegacyShape(input_tensor_start), value, memory_config, use_multicore},
+            Pad{tt::tt_metal::LegacyShape(output_padded_shape), ttnn::SimpleShape(input_tensor_start), value, memory_config, use_multicore},
             {input_tensor}, {}, {}, queue_id).front();
 
         return output_tensor;

@@ -24,7 +24,7 @@ struct Fold {
         const Tensor& input_tensor;
     };
 
-    using shape_return_value_t = ttnn::Shape;
+    using shape_return_value_t = ttnn::SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct SingleCore {

@@ -48,10 +48,9 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t &op_attr, 
 
 Fold::shape_return_value_t Fold::compute_output_shapes(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
     auto input_tensor = tensors.input_tensor;
-    const Shape &input_shape = Shape(input_tensor.get_legacy_shape());
+    const ttnn::SimpleShape input_shape = input_tensor.get_logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
-    Shape output_shape = Shape(tt::tt_metal::LegacyShape({1, 1, input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w), input_shape[3] * op_attr.stride_h * op_attr.stride_w}));
-    return output_shape;
+    return ttnn::SimpleShape({1, 1, input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w), input_shape[3] * op_attr.stride_h * op_attr.stride_w});
 }
 
 Fold::tensor_return_value_t Fold::create_output_tensors(const operation_attributes_t &op_attr, const tensor_args_t &tensors) {
