@@ -1,2 +1,7 @@
-Checks: 'bugprone-*,performance-*,modernize-*,readability-*,cppcoreguidelines-*'
+Checks: >
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  cppcoreguidelines-*
 
