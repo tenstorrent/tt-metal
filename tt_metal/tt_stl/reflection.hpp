@@ -807,6 +807,7 @@ struct get_first_object_of_type_t<std::vector<T>> {
         for (auto& tensor : value) {
             return get_first_object_of_type<object_t>(tensor);
         }
+        throw std::out_of_range("No such element");
     }
 };
 

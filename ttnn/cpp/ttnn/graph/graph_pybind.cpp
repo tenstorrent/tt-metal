@@ -6,6 +6,8 @@
 
 #include "graph_processor.hpp"
 
+#include "pybind11/stl.h"
+
 namespace ttnn::graph {
 
 namespace py = pybind11;
