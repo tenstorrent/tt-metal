@@ -33,8 +33,9 @@ void CopyDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>
     DataType output_dtype = this->output_dtype;
     if(!output_tensors.empty() && output_tensors.at(0).has_value()){
         const auto& out_tensor = output_tensors.at(0).value();
-        const auto output_shape_required = input_tensors.size() == 2 ? input_tensors[1].get_legacy_shape() : input_tensor_a.legacy_shape();
-        TT_FATAL(out_tensor.get_legacy_shape() == output_shape_required, "The input tensors need a shape of {}, however the output tensor is only {}", output_shape_required,  out_tensor.get_legacy_shape());
+        const auto& output_shape_tensor = input_tensors.size() == 2 ? input_tensors[1] : input_tensor_a;
+        TT_FATAL(out_tensor.get_logical_shape() == output_shape_tensor.get_logical_shape() && out_tensor.get_padded_shape() == output_shape_tensor.get_padded_shape(),
+            "The input tensors need a shape of {}/{}, however the output tensor is only {}/{}", output_shape_tensor.get_logical_shape(), output_shape_tensor.get_padded_shape(),  out_tensor.get_logical_shape(), out_tensor.get_padded_shape());
         output_dtype = out_tensor.get_dtype();
     }
     if (output_dtype != input_tensor_a.get_dtype()) {
