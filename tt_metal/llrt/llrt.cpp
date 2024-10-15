@@ -56,7 +56,9 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id,
       // from segment sizes and pack there
       if (span_type == ll_api::memory::PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
-          uint64_t text_start = processor_to_fw_base_addr[riscv_id];
+          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
+              0 :
+              processor_to_fw_base_addr[riscv_id];
           ptr->pack_data_into_text(text_start, data_start);
       }
 
