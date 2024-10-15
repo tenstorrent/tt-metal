@@ -15,7 +15,7 @@ struct Expand {
         const std::vector<int32_t>& sizes,
 
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& output_mem_config,
+        const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::expand
