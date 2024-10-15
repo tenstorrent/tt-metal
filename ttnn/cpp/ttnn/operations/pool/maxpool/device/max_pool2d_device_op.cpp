@@ -86,7 +86,6 @@ MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operatio
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
         mem_config.shard_spec->shape[1] = input.shard_spec()->shape[1];
-        printf("mem_config shard_spec shape: %d, %d\n", mem_config.shard_spec->shape[0], mem_config.shard_spec->shape[1]);
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
         TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
