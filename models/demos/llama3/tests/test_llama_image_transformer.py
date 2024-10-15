@@ -42,7 +42,7 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_image_transformer_inference(
-    batch, num_chunks, ntok, mesh_device, is_global, use_program_cache, reset_seeds
+    batch, num_chunks, ntok, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
     pcc = 0.99
