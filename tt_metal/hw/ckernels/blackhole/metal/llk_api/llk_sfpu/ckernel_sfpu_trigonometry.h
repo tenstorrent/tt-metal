@@ -93,10 +93,6 @@ sfpi_inline vFloat sfpu_sine_maclaurin_series(vFloat val) {
     tmp = tmp * val * val;
     output += 0.0000027557 * tmp;
 
-    // x^11/11!
-    tmp = tmp * val * val;
-    output += -0.00000002505 * tmp;
-
     if constexpr (not APPROXIMATION_MODE) {
         // x^11/11!
         tmp = tmp * val * val;
@@ -155,7 +151,7 @@ inline void calculate_sine() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
-        vInt whole_v = float_to_int16(v);
+        vInt whole_v = float_to_int16(v, 0);
         vFloat whole_v_float = int32_to_float(whole_v, 0);
         v = v - whole_v_float;
         v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
@@ -177,7 +173,7 @@ inline void calculate_cosine() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
-        vInt whole_v = float_to_int16(v);
+        vInt whole_v = float_to_int16(v, 0);
         vFloat whole_v_float = int32_to_float(whole_v, 0);
         v = v - whole_v_float;
         v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
