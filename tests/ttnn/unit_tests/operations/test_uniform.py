@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import time
 import pytest
 import numpy as np
 import ttnn
+from collections import Counter
 from loguru import logger
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
@@ -15,11 +17,67 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_npu,
 )
 from models.utility_functions import skip_for_grayskull
+from enum import Enum
 
 
-def test_torch_uniform_bfloat16():
+class TestMode(Enum):
+    VALIDATE = 0
+    BENCHMARK = 1
+
+
+def check_torch_uniform_bfloat16():
     input = torch.zeros(10, 10, dtype=torch.bfloat16).uniform_(2.1, 2.11)
-    print(input)
+    logger.info(input)
+
+
+# ttnn is faster than torch if the tensor is big enough: [1024, 1024]
+def benchmark_uniform(cpu_input, npu_input, rand_from, rand_to):
+    iter_num = 10
+
+    cpu_total_time = 0
+    for i in range(iter_num + 1):
+        cpu_start_time = time.time_ns()
+        cpu_input.uniform_(rand_from, rand_to)
+        cpu_end_time = time.time_ns()
+        if i > 0:
+            cpu_total_time += cpu_end_time - cpu_start_time
+    logger.info(f"CPU avg time: {cpu_total_time / iter_num}ns")
+
+    npu_total_time = 0
+    for i in range(iter_num + 1):
+        npu_start_time = time.time_ns()
+        ttnn.uniform(npu_input, rand_from, rand_to)
+        npu_end_time = time.time_ns()
+        if i > 0:
+            npu_total_time += npu_end_time - npu_start_time
+    logger.info(f"NPU avg time: {npu_total_time / iter_num}ns")
+
+
+def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel_config):
+    ttnn.uniform(npu_input, rand_from, rand_to, compute_kernel_config=compute_kernel_config)
+    tt_input = to_cpu(npu_input, shape)
+    elem_cnt = Counter(tt_input.flatten().tolist())
+
+    expected_mean, expected_var = (rand_from + rand_to) / 2, pow(rand_to - rand_from, 2) / 12
+    npu_mean, npu_var = torch.mean(tt_input).item(), torch.var(tt_input).item()
+    min_val, max_val = torch.min(tt_input).item(), torch.max(tt_input).item()
+
+    logger.info(f"Distinct elements: {len(elem_cnt.keys())}")
+    logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
+    logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
+
+    bfloat16_ep = 0.015
+
+    """
+    Random bfloat16 is converted from random float. As 16 bits are truncated, the generated number might be smaller/bigger than from/to.
+    (even torch can't handle that case, check check_torch_uniform_bfloat16() function). I use bfloat16_ep is used to avoid asserting fail.
+    """
+    if dtype == "bfloat16":
+        assert rand_from - bfloat16_ep <= min_val and max_val < rand_to + bfloat16_ep
+    else:
+        assert rand_from <= min_val and max_val < rand_to
+    assert np.allclose(npu_mean, expected_mean, rtol=0.5)
+    assert np.allclose(npu_var, expected_var, rtol=0.5)
 
 
 def get_lib_dtype(lib, dtype):
@@ -31,40 +89,23 @@ def get_lib_dtype(lib, dtype):
     return dtype_map.get(dtype, None)
 
 
-def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None):
+def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     rand_from, rand_to = rand_range[0], rand_range[1]
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
     npu_input = to_npu(cpu_input, device, npu_dtype=get_lib_dtype(ttnn, dtype))
 
-    # Exec uniform operation on ttnn using NPU
-    ttnn.uniform(npu_input, rand_from, rand_to, compute_kernel_config=compute_kernel_config)
-    tt_input = to_cpu(npu_input, shape)
-
-    hash_mp = {}
-    for element in tt_input.flatten():
-        hash_mp[element.item()] = hash_mp.get(element.item(), 0) + 1
-
-    expected_mean, expected_var = (rand_from + rand_to) / 2, pow(rand_to - rand_from, 2) / 12
-    npu_mean, npu_var = torch.mean(tt_input).item(), torch.var(tt_input).item()
-    min_val, max_val = torch.min(tt_input).item(), torch.max(tt_input).item()
-
-    logger.info(f"Distinct elements: {len(list(hash_mp.keys()))}")
-    logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
-    logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
-
-    bfloat16_ep = 0.015
-
-    """
-    Random bfloat16 is converted from random float. As 16 bits are truncated, the generated number might be smaller/bigger than from/to.
-    (even torch can't handle that case, check test_torch_uniform_bfloat16() function). I use bfloat16_ep is used to avoid asserting fail.
-    """
-    if dtype == "bfloat16":
-        assert rand_from - bfloat16_ep <= min_val and max_val < rand_to + bfloat16_ep
+    if mode == TestMode.BENCHMARK:
+        benchmark_uniform(cpu_input=cpu_input, npu_input=npu_input, rand_from=rand_from, rand_to=rand_to)
     else:
-        assert rand_from <= min_val and max_val < rand_to
-    assert np.allclose(npu_mean, expected_mean, rtol=0.5)
-    assert np.allclose(npu_var, expected_var, rtol=0.5)
+        validate_uniform(
+            npu_input=npu_input,
+            shape=shape,
+            rand_from=rand_from,
+            rand_to=rand_to,
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
 
 
 # fmt: off
@@ -73,7 +114,8 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None):
     [
         [100, 100],
         [1, 512, 2, 256],
-        [400, 400],
+        [512, 512],
+        [1024, 1024],
     ],
 )
 @pytest.mark.parametrize("rand_range",
