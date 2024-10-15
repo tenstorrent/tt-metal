@@ -5,7 +5,7 @@
 #include "events.hpp"
 
 #include "tt_metal/impl/event/event.hpp"
-#include "pybind11/operators.h"
+#include "pybind11/pybind11.h"
 
 namespace ttnn::events {
 
