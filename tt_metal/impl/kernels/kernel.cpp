@@ -221,7 +221,7 @@ void Kernel::validate_runtime_args_size(
     }
 }
 
-void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<uint32_t> &runtime_args) {
+void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args) {
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
@@ -241,7 +241,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
             core_with_max_runtime_args_ = logical_core;
         }
         this->validate_runtime_args_size(runtime_args.size(), this->common_runtime_args_.size(), logical_core);
-        set_rt_args = runtime_args;
+        set_rt_args.assign(runtime_args.begin(), runtime_args.end());
         this->core_to_runtime_args_data_[logical_core.x][logical_core.y] =
             RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
         this->core_with_runtime_args_.insert(logical_core);
@@ -256,14 +256,14 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, const std::vector<u
     }
 }
 
-void Kernel::set_common_runtime_args(const std::vector<uint32_t> &common_runtime_args) {
+void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
     auto &set_rt_args = this->common_runtime_args_;
     TT_FATAL(
         set_rt_args.empty(),
         "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
     this->validate_runtime_args_size(
         max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
-    set_rt_args = common_runtime_args;
+    set_rt_args.assign(common_runtime_args.begin(), common_runtime_args.end());
     this->common_runtime_args_data_ = RuntimeArgsData{set_rt_args.data(), set_rt_args.size()};
 }
 
