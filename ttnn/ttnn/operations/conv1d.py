@@ -44,7 +44,7 @@ def Conv1d(
         _,
         weight_tensor_on_dev_new,
         bias_tensor_on_dev_new,
-    ) = ttnn._ttnn.operations.conv2d.conv2d(
+    ) = ttnn._ttnn.operations.conv2d.conv2d_host_weights(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
