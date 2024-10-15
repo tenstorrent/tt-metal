@@ -6,9 +6,6 @@ import sys
 import os
 import subprocess
 import shutil
-
-os.environ["TERM"] = "xterm-256color"
-
 import curses
 import threading
 import subprocess
@@ -68,7 +65,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b) [all]", "value": "", "x": 0, "y": 1},
         {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
     ]
 
@@ -178,7 +175,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b"
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
                         # Parse models, devices, and commands
@@ -250,8 +247,8 @@ def main(stdscr):
                             entry["stop_event"].set()
                             terminate_process_tree(entry["process"].pid)
                             entry["status"] = "Terminating"
-                        elif entry["status"] in ["Cancelled", "Error", "Finished"]:
-                            # Remove the entry if it's already cancelled
+                        elif entry["status"] in ["Waiting", "Cancelled", "Error", "Finished"]:
+                            # Remove the entry if it's already cancelled or not started
                             output_entries.pop(entry_index)
                             total_lines -= 1
                             if current_line >= total_lines:
@@ -507,7 +504,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py::test_llama_decoder_inference[wormhole_b0-True-mesh_device0-4096]",
         "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-4096]",
+        "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -600,16 +598,6 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
         screen_needs_update.set()  # Ensure screen is updated after process termination
 
-    # Start the next waiting entry
-    for next_entry in output_entries:
-        if next_entry["index"] > entry["index"]:
-            with next_entry["lock"]:
-                if next_entry["status"] == "Waiting" and not any(
-                    e["process"] and e["process"].poll() is None for e in output_entries
-                ):
-                    run_entry_command(next_entry, screen_lock, output_entries, screen_needs_update)
-                    break
-
 
 def parse_output_line(line, previous_line, current_status):
     line = line.strip()
@@ -668,7 +656,8 @@ def get_llama_dir(model):
         "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
-    }.get(model, "")
+        "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
+    }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
         print(f"Error: The directory for the {model} model does not exist: {llama_dir}")
@@ -676,6 +665,7 @@ def get_llama_dir(model):
         print("  - LLAMA_32_1B_DIR for 1b model")
         print("  - LLAMA_32_3B_DIR for 3b model")
         print("  - LLAMA_31_8B_DIR for 8b model")
+        print("  - LLAMA_32_11B_DIR for 11b model")
         sys.exit(1)
 
     return llama_dir
@@ -761,7 +751,7 @@ def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
 
 def get_help_text(current_line, num_input_fields, num_output_entries):
     if current_line == 0:
-        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
+        return "Shortcuts: demo, attention, mlp, decoder, decoder-prefill, model, model-prefill, model-quick | Enter: Submit | ↑↓: Navigate fields | Esc: Exit"
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
@@ -769,6 +759,8 @@ def get_help_text(current_line, num_input_fields, num_output_entries):
 
 
 if __name__ == "__main__":
+    os.environ["TERM"] = "xterm-256color"
+
     ensure_less_installed()
     ensure_ttsmi_installed()
     curses.wrapper(main)
