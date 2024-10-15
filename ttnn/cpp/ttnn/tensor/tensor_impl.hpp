@@ -25,8 +25,6 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile);
-
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              Low Level APIs
@@ -252,8 +250,6 @@ void validate_sharded_buffer_allocation(
 // ======================================================================================
 //                           Data reader, writer, and initializers
 // ======================================================================================
-
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile = std::nullopt);
 
 DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout);
 

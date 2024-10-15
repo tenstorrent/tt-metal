@@ -46,66 +46,6 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
-    uint32_t W = shape[-1];
-    uint32_t page_size = 0;
-    const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
-    const auto bfloat8b_tile_HW = tile.has_value() ? tile_HW + 64 : constants::BFLOAT8_B_TILE_HW;
-    const auto bfloat4b_tile_HW = tile.has_value() ? tile_HW / 2 + 64 : constants::BFLOAT4_B_TILE_HW;
-    switch (layout) {
-        case Layout::ROW_MAJOR: {
-            uint32_t size_of_element = element_size_bytes(dtype);
-            page_size = W * size_of_element;
-        } break;
-        case Layout::TILE: {
-            // TODO: Update to be generic for data type (issue 462)
-            switch (dtype) {
-                case DataType::BFLOAT16: {
-                    // Float is converted to bfloat16 before being written to device
-                    uint32_t size_of_element = element_size_bytes(DataType::BFLOAT16);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::FLOAT32: {
-                    uint32_t size_of_element = element_size_bytes(DataType::FLOAT32);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::UINT32:
-                case DataType::INT32:
-                case DataType::UINT16:
-                case DataType::UINT8:{
-                    uint32_t size_of_element = element_size_bytes(dtype);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::BFLOAT4_B: {
-                    page_size = bfloat4b_tile_HW;
-                } break;
-                case DataType::BFLOAT8_B: {
-                    page_size = bfloat8b_tile_HW;
-                } break;
-                default: TT_ASSERT(false && "Unsupported data type!");
-            }
-            TT_ASSERT(total_size_bytes % page_size == 0);
-        } break;
-        default: TT_ASSERT(false && "Unsupported layout to write to device");
-    }
-    TT_ASSERT(page_size != 0);
-    return page_size;
-}
-
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile) {
-    // Physical limitation in FD for now
-    switch (layout) {
-        case Layout::ROW_MAJOR:
-            // TODO: Explore valid page shapes other than 1,W
-            return {1, shard_shape[1]};
-        case Layout::TILE: {
-            auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
-            return {tile_shape[0], tile_shape[1]};
-        }
-        default: TT_THROW("Unsupported layout to write to device");
-    }
-}
-
 void validate_sharded_buffer_allocation(
     const ttnn::SimpleShape& shape,
     Layout layout,

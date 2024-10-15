@@ -35,10 +35,10 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     using namespace tt::tt_metal;
 
     const auto& params = GetParam();
-    TensorLayout layout(params.inputs.data_type, params.inputs.layout, DefaultMemoryConfig);
+    TensorLayout layout(params.inputs.data_type, PageConfig(params.inputs.layout), DefaultMemoryConfig);
 
     EXPECT_EQ(layout.get_alignment(), params.expected.alignment);
-    EXPECT_EQ(layout.get_physical_size(params.inputs.shape), params.expected.physical_size);
+    EXPECT_EQ(layout.get_physical_shape(params.inputs.shape), params.expected.physical_size);
     EXPECT_EQ(layout.get_strides(params.inputs.shape), params.expected.strides);
 }
 

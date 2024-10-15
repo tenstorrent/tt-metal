@@ -125,6 +125,9 @@ std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value)
     return os;
 }
 
+TilePageConfig::TilePageConfig(const Tile& tile)
+ : tile(tile) {
+}
 
 Alignment RowMajorPageConfig::createDefaultAlignment(DataType dataType) const {
 {
@@ -150,10 +153,10 @@ void TilePageConfig::validateAlignment(const Alignment& alignment, DataType data
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
     TT_FATAL(widthAlignment % tile.get_width() == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, config.tile.get_width());
+        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, tile.get_width());
     auto heightAlignment = alignment[-2];
     TT_FATAL((heightAlignment % tile.get_height()) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, config.tile.get_height());
+        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile.get_height());
 }
 
 Size RowMajorPageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
@@ -174,12 +177,16 @@ PageConfig::PageConfig(const Config& config)
     : mConfig(config) {
 }
 
-PageConfig::PageConfig(Layout layout) {
+PageConfig::PageConfig(Layout layout)
+    : PageConfig(layout, std::nullopt) {
+}
+
+PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if(layout == Layout::ROW_MAJOR) {
         mConfig = RowMajorPageConfig();
     }
     else {
-        mConfig =  TilePageConfig();
+        mConfig =  TilePageConfig(tile.value_or(Tile()));
     }
 }
 
@@ -211,12 +218,12 @@ TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, cons
 }
 
 // Private constructor to create TensorLayout from LegacyPaddedShape
-TensorLayout::TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
-    : TensorLayout(dataType, PageConfig(layout), memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
+TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
+    : TensorLayout(dataType, pageConfig, memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
 }
 
-TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
-    return TensorLayout(dataType, layout, memoryConfig, legacyPaddedShape);
+TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
+    return TensorLayout(dataType, pageConfig, memoryConfig, legacyPaddedShape);
 }
 
 void TensorLayout::initializeAlignment() {
@@ -250,7 +257,7 @@ size_t TensorLayout::get_packed_buffer_size_bytes(const ttnn::SimpleShape& shape
     const Size physical_size = get_physical_shape(shape);
     const Size page_shape = get_page_shape(physical_size);
     const Size size_modulo = physical_size % page_shape;
-    TT_FATAL(size_modulo.height() == 0 && size_modulo.width() == 0, "Physical size {} should be multiple of page size {}", physical_size, page_size);
+    TT_FATAL(size_modulo.height() == 0 && size_modulo.width() == 0, "Physical size {} should be multiple of page size {}", physical_size, page_shape);
 
     const size_t physical_area = physical_size.height() * physical_size.width();
     const size_t page_area = page_shape.height() * page_shape.width();

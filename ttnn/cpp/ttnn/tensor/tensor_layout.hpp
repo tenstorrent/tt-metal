@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "impl/tile/tile.hpp"
 #include "types.hpp"
 #include "enum_types.hpp"
 
@@ -33,6 +34,9 @@ public:
     size_t height() const;
     size_t width() const;
 
+    static constexpr auto attribute_names = std::forward_as_tuple("height", "width");
+    auto attribute_values() const { return std::forward_as_tuple(mHeight, mWidth); }
+
 private:
     size_t mHeight = 0;
     size_t mWidth = 0;
@@ -56,6 +60,8 @@ struct RowMajorPageConfig {
 struct TilePageConfig {
     Tile tile;
 
+    TilePageConfig(const Tile& tile = Tile());
+
     Alignment createDefaultAlignment(DataType dataType) const;
     void validateAlignment(const Alignment& alignment, DataType dataType) const;
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
@@ -66,7 +72,8 @@ public:
     using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
 
     PageConfig(const Config& config);
-    explicit PageConfig(Layout layout);
+    PageConfig(Layout layout);
+    PageConfig(Layout layout, const std::optional<Tile>& tile);
 
     Alignment createDefaultAlignment(DataType dataType) const;
     void validateAlignment(const Alignment& alignment, DataType dataType) const;
@@ -115,13 +122,15 @@ public:
 
     // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+    static TensorLayout fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
 
     Layout get_layout() const { return mPageConfig.isRowMajor() ? Layout::ROW_MAJOR : Layout::TILE; }
     PageConfig get_page_config() const { return mPageConfig; }
     DataType get_data_type() const { return mDataType; }
     const MemoryConfig& get_memory_config() const { return mMemoryConfig; }
     const Alignment& get_alignment() const { return mAlignment; }
+
+    Strides get_strides(const ttnn::SimpleShape& shape) const;
 
     std::optional<ShardSpecBuffer> get_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
 
@@ -133,11 +142,14 @@ public:
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
     ttnn::SimpleShape get_padded_shape(const ttnn::SimpleShape& shape) const;
 
-    Strides get_strides(const ttnn::SimpleShape& shape) const;
+    // Returns number of elements laid out in physically memory across H:W dimensions
+    //  W is row width aligned to page width and shard width, depends on data type
+    //  H is all dimensions except W multiplied and aligned to tile and shard height
+    Size get_physical_shape(const ttnn::SimpleShape& shape) const;
 
 private:
     // Private constructor to create TensorLayout from LegacyPaddedShape
-    TensorLayout(DataType dataType, Layout layout, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+    TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
 
     // For the case when Aligmnet is not provided or is empty
     // This method will initialize Alignment to reflect requirements of Layout/DType/Sharding(currently not supported)
@@ -146,11 +158,6 @@ private:
 
     uint32_t get_header_size_bytes() const;
     uint32_t get_page_elements_count(const ttnn::SimpleShape& shape) const;
-
-    // Returns number of elements laid out in physically memory across H:W dimensions
-    //  W is row width aligned to page width and shard width, depends on data type
-    //  H is all dimensions except W multiplied and aligned to tile and shard height
-    Size get_physical_shape(const ttnn::SimpleShape& shape) const;
 
     // Returns number of elements in a page
     // For SINGLE_BANK layout returns physical size

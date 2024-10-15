@@ -675,9 +675,9 @@ Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, 
 
     TensorLayout tensor_layout = [&](){
         if(tile.has_value()){
-            return TensorLayout(data_type, tile.value(), memory_config);
+            return TensorLayout(data_type, PageConfig(TilePageConfig(tile.value())), memory_config);
         } else {
-            return TensorLayout(data_type, layout, memory_config);
+            return TensorLayout(data_type, PageConfig(layout), memory_config);
         }
     }();
 
