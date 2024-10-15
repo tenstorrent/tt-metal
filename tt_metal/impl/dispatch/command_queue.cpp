@@ -989,8 +989,9 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             pcie_alignment);
     }
 
-    // Wait Cmd
-    if (program.program_transfer_info.num_active_cores > 0) {
+    // Wait Cmd, if DISPATH_S is enabled, the wait is coalesced into the DISPATCH_NOTIFY_SLAVE_GO
+    // so no need for reserving space.
+    if (program.program_transfer_info.num_active_cores > 0 && !this->device->dispatch_s_enabled()) {
         cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
     }
 
@@ -1248,15 +1249,16 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
         }
     }
 
-    // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
-    if (program.program_transfer_info.num_active_cores > 0) {
-        device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
-    }
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        // dispatch_d signals dispatch_s that its safe to send the go signal after a barrier
-        device_command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
+        device_command_sequence.add_notify_dispatch_s_go_signal_cmd(program.program_transfer_info.num_active_cores > 0);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+    } else {
+        // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
+        if (program.program_transfer_info.num_active_cores > 0) {
+            device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
+        }
     }
     go_msg_t run_program_go_signal;
     run_program_go_signal.signal = RUN_MSG_GO;
@@ -1707,7 +1709,7 @@ void EnqueueTraceCommand::process() {
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        command_sequence.add_notify_dispatch_s_go_signal_cmd(false);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
     go_msg_t reset_launch_message_read_ptr_go_signal;
