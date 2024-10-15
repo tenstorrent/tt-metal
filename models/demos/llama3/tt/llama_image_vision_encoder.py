@@ -5,6 +5,7 @@
 from typing import List, Optional
 import collections
 import torch
+from loguru import logger
 
 import ttnn
 from models.utility_functions import (
@@ -218,13 +219,13 @@ class TtLlamaVisionEncoder(LightweightModule):
 
         # NOTE: We need to do this padding because it creates a funky attention mask
         # return x
-        print(f"TT VisionEncoder: before tile padding x.shape: {x.shape}")
+        logger.info(f"TT VisionEncoder: before tile padding x.shape: {x.shape}")
         x, npad = pad_seq_one_tile(x, self.mesh_device)
-        print(f"TT VisionEncoder: after tile padding x.shape: {x.shape}")
+        logger.info(f"TT VisionEncoder: after tile padding x.shape: {x.shape}")
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
         attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
         attn_mask = mask_tile_padding(attn_mask, ntok, 32, num_chunks)
-        print(f"TT VisionEncoder: attn_mask.shape: {attn_mask.shape}")
+        logger.info(f"TT VisionEncoder: attn_mask.shape: {attn_mask.shape}")
         torch.save(attn_mask, "vision_encoder_attn_mask.pt")
         attn_mask = ttnn.as_tensor(
             attn_mask,
@@ -235,7 +236,7 @@ class TtLlamaVisionEncoder(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media, -1, dim))
-        print(f"TT VisionEncoder: input to self.transformer x.shape: {x.shape}")
+        logger.info(f"TT VisionEncoder: input to self.transformer x.shape: {x.shape}")
         x, int_x = self.transformer(x, return_intermediate=self.return_intermediate, mask=attn_mask)
 
         # # DEBUG transformer output

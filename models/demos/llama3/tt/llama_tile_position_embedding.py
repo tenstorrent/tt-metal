@@ -15,8 +15,6 @@ from models.common.lightweightmodule import LightweightModule
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
-TILE_SIZE = 32
-
 
 class TtLlamaTilePositionEmbedding(LightweightModule):
     """Tile Position Embedding layer.
@@ -73,6 +71,7 @@ class TtLlamaTilePositionEmbedding(LightweightModule):
             )
 
     def generate_padded_embeddings(self, embedding: torch.Tensor, num_tiles, width):
+        TILE_SIZE = 32
         embedding = torch.cat(
             [
                 embedding,
