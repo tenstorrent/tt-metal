@@ -15,7 +15,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "nightly": {
+    "nov5_3": {
         "input_specs": [
             {"shape": [1, 1024, 7, 7], "min_val": 0.0, "max_val": 6.0},
             {"shape": [1, 1152, 7, 7], "min_val": 0.0, "max_val": 6.0},
@@ -158,7 +158,7 @@ def run(
 
     golden_function = ttnn.get_golden_function(ttnn.hardtanh)
     torch_output_tensor = golden_function(torch_input_tensor_a, min_val=min_val, max_val=max_val)
-
+    
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_dtype,

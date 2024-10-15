@@ -194,7 +194,12 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     const std::optional<Tensor> &optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return ttnn::prim::binary(
+
+    if(binary_op_type == BinaryOpType::DIV_FAST && scalar != 0){
+        return ttnn::div_sfpu(queue_id, input_tensor_a, scalar, memory_config, optional_output_tensor);
+    }
+    else {
+        return ttnn::prim::binary(
         queue_id,
         input_tensor_a,
         scalar,
@@ -204,6 +209,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         optional_output_tensor,
         activations,
         input_tensor_a_activation);
+    }
 }
 
 // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this

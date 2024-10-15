@@ -93,6 +93,11 @@ def run(test_module, input_queue, output_queue):
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
+            if not status:
+                print("-----------------------")
+                print("current parameter ", test_vector)
+                print("STATUS", status)
+                print("message", message)
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
