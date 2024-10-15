@@ -29,6 +29,11 @@ inputs:
     default: |
       -v /dev/hugepages-1G:/dev/hugepages-1G
       --device /dev/tenstorrent
+  mount_mlperf_weka:
+    description: "Mount MLPerf Weka into the container"
+    type: boolean
+    required: false
+    default: false
   install_wheel:
     description: "Install the wheel that contains all of the Python environment. The artifact needs to be present."
     type: boolean
@@ -79,6 +84,7 @@ runs:
           -v /etc/passwd:/etc/passwd:ro
           -v /etc/shadow:/etc/shadow:ro
           -v /etc/bashrc:/etc/bashrc:ro
+          ${{ inputs.mount_mlperf_weka && '-v /mnt/MLPerf:/mnt/MLPerf' || '' }}
           -v ${{ github.workspace }}:${{ github.workspace }}
           --net=host
           --log-driver local
