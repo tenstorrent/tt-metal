@@ -9,6 +9,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::matmul {
 

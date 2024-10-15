@@ -5,7 +5,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
-
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 

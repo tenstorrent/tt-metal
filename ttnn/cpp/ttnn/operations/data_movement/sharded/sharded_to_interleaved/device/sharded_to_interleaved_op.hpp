@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
+
 namespace ttnn::operations::data_movement {
 
 struct ShardedToInterleavedDeviceOperation {

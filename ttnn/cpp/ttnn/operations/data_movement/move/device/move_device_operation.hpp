@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
 
