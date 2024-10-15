@@ -171,7 +171,8 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
     )
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device. Starting inference...")
     max_generated_tokens = 100  # Maximum number of tokens to generate per user
