@@ -8,8 +8,6 @@
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "ttnn/graph/graph_consts.hpp"
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include <cxxabi.h>
 #include <memory>
 #include <typeindex>
