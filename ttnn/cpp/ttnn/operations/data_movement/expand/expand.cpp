@@ -4,9 +4,13 @@
 
 #include "expand.hpp"
 
-#include <cstdio>
+#include <optional>
 
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/expand/device/expand_device_operation.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_op.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 namespace ttnn::operations::expand {
 
 std::vector<uint32_t> infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
@@ -62,6 +66,15 @@ Tensor Expand::invoke(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_shape = infer_size(input, sizes);
+
+    // Convert tile tensor to row major (lmfao)
+    if (input.get_layout() == Layout::TILE) {
+        Tensor rm_input_dev = core::to_device(
+            tensor_impl::to_layout_wrapper(input.cpu(true), Layout::ROW_MAJOR), input.device(), std::nullopt);
+
+        return ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt, compute_kernel_config);
+    }
+
     return ttnn::prim::expand(input, output_shape, output, output_mem_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::expand

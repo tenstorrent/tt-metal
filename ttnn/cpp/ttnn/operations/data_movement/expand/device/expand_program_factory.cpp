@@ -16,17 +16,18 @@
 #include "impl/buffers/buffer.hpp"
 #include "impl/buffers/circular_buffer_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::expand {
-ExpandOperation::Expand2DFactory::cached_program_t ExpandOperation::Expand2DFactory::create(
+ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::ExpandRowMajorFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
     auto output = output_tensor;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
+    auto output_mem_config = operation_attributes.memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Device Setup
@@ -66,7 +67,7 @@ ExpandOperation::Expand2DFactory::cached_program_t ExpandOperation::Expand2DFact
     uint32_t expanded_row_size = output_shape[output_tsr_rank - 1] * data_size;
     uint32_t horz_expand_count = expanded_row_size / unexpanded_row_size;
 
-    uint32_t nd_expand_count = output.volume() / input.volume() / horz_expand_count;
+    uint32_t nd_expand_count = output.get_logical_volume() / input.get_logical_volume() / horz_expand_count;
 
 #ifdef DEBUG
     tt::log_debug("Data size = %d\n", data_size);
@@ -185,7 +186,7 @@ ExpandOperation::Expand2DFactory::cached_program_t ExpandOperation::Expand2DFact
     return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
 }
 
-void ExpandOperation::Expand2DFactory::override_runtime_arguments(
+void ExpandOperation::ExpandRowMajorFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
