@@ -36,8 +36,6 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
     }
-    vector<string> strs;
-    strs.push_back("lalalala");
 }
 
 JitBuildEnv::JitBuildEnv() {}
