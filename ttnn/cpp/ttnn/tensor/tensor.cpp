@@ -556,11 +556,11 @@ void Tensor::print() const {
     tensor_ops::tensor_print(*this);
 }
 
-Tensor Tensor::pad(const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) const {
+Tensor Tensor::pad(const tt::tt_metal::LegacyShape& output_tensor_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) const {
     return tensor_ops::tensor_pad(*this, output_tensor_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad(const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) const {
+Tensor Tensor::unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const {
     return tensor_ops::tensor_unpad(*this, output_tensor_start, output_tensor_end);
 }
 
@@ -568,7 +568,7 @@ Tensor Tensor::pad_to_tile(float pad_value) const {
     return tensor_ops::tensor_pad_to_tile(*this, pad_value);
 }
 
-Tensor Tensor::unpad_from_tile(const tt::tt_metal::LegacyShape& output_tensor_shape) const {
+Tensor Tensor::unpad_from_tile(const ttnn::SimpleShape& output_tensor_shape) const {
     return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 

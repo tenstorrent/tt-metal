@@ -154,17 +154,17 @@ struct Tensor {
 
     Tensor to(Layout target_layout, distributed::MeshDevice *mesh_device) const;
 
-    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const tt::tt_metal::LegacyShape &input_tensor_start, float pad_value) const;
+    Tensor pad(const tt::tt_metal::LegacyShape &output_tensor_shape, const ttnn::SimpleShape &input_tensor_start, float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor cpu_sharded() const;
 
-    Tensor unpad(const tt::tt_metal::LegacyShape &output_tensor_start, const tt::tt_metal::LegacyShape &output_tensor_end) const;
+    Tensor unpad(const ttnn::SimpleShape &output_tensor_start, const ttnn::SimpleShape &output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const tt::tt_metal::LegacyShape &output_tensor_shape) const;
+    Tensor unpad_from_tile(const ttnn::SimpleShape &output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;
