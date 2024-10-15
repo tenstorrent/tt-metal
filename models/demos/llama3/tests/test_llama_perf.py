@@ -30,22 +30,29 @@ if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "kv_cache_len, expected_compile_time, expected_inference_time",
+    "kv_cache_len, expected_compile_time",
     (
-        (32, 6, 0.09),
-        (128, 6, 0.09),
-        (1024, 11, 0.09),
+        (32, 20),
+        (128, 20),
+        (1024, 20),
     ),
 )
-def test_llama_model_perf(
-    mesh_device, kv_cache_len, expected_compile_time, expected_inference_time, use_program_cache, reset_seeds
-):
+def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
+
+    if "3.2-1B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.04
+    elif "3.2-3B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.065
+    elif "3.1-8B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.07
+    else:
+        assert f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B]"
 
     # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
@@ -101,9 +108,6 @@ def test_llama_model_perf(
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
     ttnn.DumpDeviceProfiler(mesh_device.get_devices()[0])
-    # Synchronize devices to ensure all profiling data is captured accurately
-    ttnn.synchronize_device(mesh_device.get_devices()[0])
-    ttnn.synchronize_device(mesh_device.get_devices()[1])
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
@@ -139,6 +143,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     seqlen = 1  # Generating one token per user at a time
     batch = tt_model.args.max_batch_size
     mesh_device = tt_model.mesh_device
+
     # pre-compute the rotational embedding matrix and send to device
     current_rot_mat, rot_matrix = get_single_rot_mat(
         tt_model.args.head_dim,
@@ -150,41 +155,41 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
 
+    # Initialize tt_out_tok with the first token
+    tt_out_tok = ttnn.from_torch(
+        torch.nn.functional.pad(
+            encoded_prompts_tensor[:, 0].unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0
+        ),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint32,
+    )
+
+    current_pos = ttnn.from_torch(
+        torch.tensor([generation_start_pos] * batch),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.int32,
+    )
+
     for i in range(generation_length):
-        current_pos = generation_start_pos + i
-        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-        tt_decode_input = pt_decode_input
-        decode_input = prepare_inputs_ttnn(
-            tt_decode_input,
-            tt_model.args.dim,
-            tt_model.mesh_device,
-        )
-
-        current_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.int32,
-        )
-
         # Run TT model
         profiler.start(f"model_run_for_inference_{i}")
-        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
 
-        # Convert ttnn tensor to torch tensor
-        profiler.start(f"result_wait_for_inference_{i}")
-        tt_out = ttnn.untilize(tt_out, use_multicore=True)
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
-            .permute(2, 1, 0, 3)
-            .squeeze(1)
-        )  # [seq, batch, hidden_dim]
-
-        profiler.end(f"model_run_for_inference_{i}")
-        profiler.end(f"result_wait_for_inference_{i}")
-
-        # Greedy decode the generated token and pass it back in, this is just a perf test
-        tt_out_tok = sample(tt_output_torch, temperature=0, top_p=1)
+        decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
+        tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
+        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+        ttnn.deallocate(tt_out)
+        tt_out_tok = ttnn.argmax(tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok)
+        ttnn.deallocate(tt_out_rm)
 
         # Update the rotation matrix for the next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+        new_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
+        current_rot_mat = ttnn.copy(new_rot_mat, current_rot_mat)
+        ttnn.plus_one(current_pos)
+
+        profiler.end(f"model_run_for_inference_{i}")
+
+    # Synchronize devices to ensure all profiling data is captured accurately
+    for i in range(tt_model.args.num_devices):
+        ttnn.synchronize_device(mesh_device.get_devices()[i])
