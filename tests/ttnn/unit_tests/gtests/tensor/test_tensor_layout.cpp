@@ -142,6 +142,76 @@ INSTANTIATE_TEST_SUITE_P(
                 .alignment = Alignment({1}),
                 .strides = Strides({1, 1, 1, 1})
             }
+        },
+
+        // Rank 0, RM, in bfloat16 needs additional padding to 4 bytes
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{},
+                .data_type = DataType::BFLOAT16,
+                .layout = Layout::ROW_MAJOR
+            },
+            Expected{
+                .physical_size = {1, 2},
+                .alignment = Alignment({2}),
+                .strides = Strides({})
+            }
+        },
+
+        // Rank 0, RM, in uint32_t needs no additional padding
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{},
+                .data_type = DataType::UINT32,
+                .layout = Layout::ROW_MAJOR
+            },
+            Expected{
+                .physical_size = {1, 1},
+                .alignment = Alignment({1}),
+                .strides = Strides({})
+            }
+        },
+
+        // Rank 0, Tile
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{1},
+                .data_type = DataType::BFLOAT16,
+                .layout = Layout::TILE
+            },
+            Expected{
+                .physical_size = {32, 32},
+                .alignment = Alignment({32, 32}),
+                .strides = Strides({1})
+            }
+        },
+
+        // Rank 1, RM
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{1},
+                .data_type = DataType::BFLOAT16,
+                .layout = Layout::ROW_MAJOR
+            },
+            Expected{
+                .physical_size = {1, 2},
+                .alignment = Alignment({2}),
+                .strides = Strides({1})
+            }
+        },
+
+        // Rank 1, Tile
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{1},
+                .data_type = DataType::BFLOAT16,
+                .layout = Layout::TILE
+            },
+            Expected{
+                .physical_size = {32, 32},
+                .alignment = Alignment({32, 32}),
+                .strides = Strides({1})
+            }
         }
     )
 );

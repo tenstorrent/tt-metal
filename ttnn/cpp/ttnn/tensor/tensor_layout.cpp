@@ -14,6 +14,8 @@ namespace tt::tt_metal {
 
 namespace {
 size_t round_up(size_t value, size_t multiple) {
+    TT_FATAL(multiple != 0, "round_up: multiple should not be 0");
+
     // can be faster if multiple is power of 2
     // return (value + multiple - 1) & ~(multiple - 1);
     return ((value + multiple - 1) / multiple) * multiple;
@@ -307,19 +309,23 @@ size_t TensorLayout::get_page_size_bytes(const Size& page_size) const {
 }
 
 Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
-    TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
-
     const int rank = static_cast<int>(shape.rank());
+    const int alignmentRank = static_cast<int>(mAlignment.size());
+    const int maxRank = std::max(rank, alignmentRank);
     size_t width = 1;
     size_t height = 1;
 
-    if(rank > 0)
-        width = round_up(shape[-1], mAlignment[-1]);
+    // Iterate dims in reverse order and ensure alignment
+    // Even tensor of rank 0 or 1 must be aligned (to Tile / Page / Shard)
+    for (int i = -1; i >= -maxRank; --i) {
+        auto& dim = i == -1 ? width : height;
+        if(i >= -rank) {
+            dim *= shape[i];
+        }
 
-    for (int i = -2; i >= -rank; --i) {
-        height *= shape[i];
-        if (mAlignment.size() >= static_cast<size_t>(-i)) {
-            height = round_up(height, mAlignment[i]);
+        // Align the current dimension if alignment is available
+        if (i >= -alignmentRank) {
+            dim = round_up(dim, mAlignment[i]);
         }
     }
 
