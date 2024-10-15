@@ -30,8 +30,8 @@ namespace ckernel {
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-ALWI void bitwise_not_tile(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_bitwise_not<APPROX>(idst, param0)));
+ALWI void bitwise_not_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_bitwise_not<APPROX>(idst)));
 }
 
 /**

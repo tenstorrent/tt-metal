@@ -118,10 +118,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
-        case UnaryOpType::BITWISE_NOT:
-            op_init_and_name = {
-                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
-            break;
         case UnaryOpType::BITWISE_AND:
             op_init_and_name = {
                 "bitwise_and_tile_init();", fmt::format("bitwise_and_tile({}, {}u);", idst, std::to_string((uint)param0))};
@@ -325,6 +321,9 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
             break;
         case UnaryOpType::NEG:
             op_init_and_name = {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
+            break;
+        case UnaryOpType::BITWISE_NOT:
+            op_init_and_name = {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
             break;
         default: TT_ASSERT(false && "Undefined non-parametrized op type");
     }
