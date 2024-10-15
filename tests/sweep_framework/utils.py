@@ -10,6 +10,12 @@ import torch
 import ttnn
 
 
+def sanitize_shape_rm(input_shape):
+    if input_shape[-1] % 2 != 0:
+        input_shape[-1] = input_shape[-1] + input_shape[-1] % 2
+    return input_shape
+
+
 def tensor_to_dtype(x, dtype):
     if x.dtype == torch.bool:
         x = x.to(torch.bfloat16)
