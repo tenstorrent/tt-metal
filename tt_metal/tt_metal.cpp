@@ -158,7 +158,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
 }
 
 inline void SetRuntimeArgsImpl(
-    const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args) {
+    const Program &program, KernelHandle kernel_id, const CoreCoord &c, stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
     }
@@ -168,7 +168,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRange &core_range,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -183,7 +183,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (const auto &core_range : core_range_set.ranges()) {
@@ -1115,7 +1115,7 @@ void SetRuntimeArgs(
     const Program &program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
@@ -1166,7 +1166,7 @@ void SetRuntimeArgs(
     SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
