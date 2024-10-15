@@ -889,7 +889,6 @@ def eltwise_bitwise_xor(
 def eltwise_bitwise_not(
     x,
     *args,
-    value,
     device,
     dtype,
     layout,
@@ -898,7 +897,7 @@ def eltwise_bitwise_not(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.bitwise_not(t0, value, memory_config=output_mem_config, queue_id=0)
+    t1 = ttnn.bitwise_not(t0, memory_config=output_mem_config, queue_id=0)
 
     return tt2torch_tensor(t1)
 
