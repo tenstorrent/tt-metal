@@ -307,12 +307,15 @@ size_t TensorLayout::get_page_size_bytes(const Size& page_size) const {
 }
 
 Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
-    TT_FATAL(shape.rank() > 2, "Shape should have at least 2 dimensions");
     TT_FATAL(mAlignment.size() <= shape.rank(), "Alignment rank should be less than or equal to the rank of the shape");
 
     const int rank = static_cast<int>(shape.rank());
-    size_t width = round_up(shape[-1], mAlignment[-1]);
+    size_t width = 1;
     size_t height = 1;
+
+    if(rank > 0)
+        width = round_up(shape[-1], mAlignment[-1]);
+
     for (int i = -2; i >= -rank; --i) {
         height *= shape[i];
         if (mAlignment.size() >= static_cast<size_t>(-i)) {
