@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <variant>
+#include <vector>
+#include "common/core_coord.h"
 #include "gtest/gtest.h"
+#include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
 
 class CommandQueueFixture : public ::testing::Test {
    protected:
@@ -134,4 +141,92 @@ protected:
         }
     }
 
+};
+
+class RandomProgramFixture : public CommandQueueFixture {
+    protected:
+     const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
+     const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
+     const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
+     const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
+     const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
+     const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
+     const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
+     const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
+     const uint32_t MIN_NUM_SEMS = 0;
+     const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+     const uint32_t SEM_VAL = 1;
+     const uint32_t NUM_PROGRAMS = 1;
+
+     vector<uint32_t> generate_semaphores(Program& program, const std::variant<CoreRange, CoreRangeSet>& cores) {
+        const uint32_t num_sems = this->generate_random_num(MIN_NUM_SEMS, MAX_NUM_SEMS);
+        vector<uint32_t> sem_ids;
+        for (uint32_t i = 0; i < num_sems; i++) {
+            const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL);
+            sem_ids.push_back(sem_id);
+        }
+        return sem_ids;
+     }
+
+     pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(const vector<uint32_t> &sem_ids) {
+         const uint32_t num_sems = sem_ids.size();
+         const uint32_t max_num_unique_rt_args = MAX_NUM_RUNTIME_ARGS - num_sems;
+         const uint32_t num_unique_rt_args = this->generate_random_num(MIN_NUM_RUNTIME_ARGS, max_num_unique_rt_args);
+
+         const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
+         const uint32_t num_common_rt_args = this->generate_random_num(0, max_num_common_rt_args);
+
+         auto [unique_rt_args, common_rt_args] = create_runtime_args(
+             num_unique_rt_args, num_common_rt_args, UNIQUE_RUNTIME_ARGS_VAL_OFFSET, COMMON_RUNTIME_ARGS_VAL_OFFSET);
+
+         unique_rt_args.insert(unique_rt_args.end(), sem_ids.begin(), sem_ids.end());
+
+         return {unique_rt_args, common_rt_args};
+     }
+
+     KernelHandle create_kernel(
+         Program &program,
+         const std::variant<CoreCoord, CoreRange, CoreRangeSet> &cores,
+         const uint32_t num_sems,
+         const uint32_t num_unique_rt_args,
+         const uint32_t num_common_rt_args,
+         const bool create_eth_config) {
+         const std::vector<uint32_t> compile_args = {
+             num_unique_rt_args,
+             num_common_rt_args,
+             UNIQUE_RUNTIME_ARGS_VAL_OFFSET,
+             COMMON_RUNTIME_ARGS_VAL_OFFSET,
+             num_sems,
+             SEM_VAL};
+
+         const uint32_t kernel_size_bytes =
+             this->generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES);
+         const uint32_t kernel_runtime_cycles =
+             this->generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
+
+         const std::map<string, string> defines = {
+             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
+             {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
+
+         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
+         if (create_eth_config) {
+             config = EthernetConfig{.compile_args = compile_args, .defines = defines};
+         } else {
+             config = DataMovementConfig{.compile_args = compile_args, .defines = defines};
+         }
+
+         KernelHandle kernel_id = CreateKernel(
+             program,
+             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+             "dispatcher_kernel_size_and_runtime.cpp",
+             cores,
+             config);
+         return kernel_id;
+     }
+
+    private:
+     // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
+     uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
+        return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
+     }
 };

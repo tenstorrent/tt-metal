@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"
 #include "impl/device/device.hpp"
+#include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"
@@ -40,11 +41,6 @@ struct DummyProgramMultiCBConfig {
 
 
 namespace local_test_functions {
-
-// Generates a random number that is between the boundaries (inclusive) and is divisible by <divisible_by>
-uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
-    return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
-}
 
 bool does_device_have_active_eth_cores(const Device *device) {
     return !(device->get_active_ethernet_cores(true).empty());
@@ -1401,78 +1397,36 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     Finish(this->device_->command_queue());
 }
 
-TEST_F(CommandQueueFixture, TestSimpleRandomizedProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensix) {
     CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
 
-    const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-    const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
-    const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
-    const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
-    const uint32_t NUM_PROGRAMS = 100;
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         Program program = CreateProgram();
-
-        const uint32_t kernel_size_bytes = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES);
-        const uint32_t kernel_runtime_cycles = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
-
-        const std::map<string, string> defines = {
-            {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
-            {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
-
-        DataMovementConfig config{.defines = defines};
-
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            cores,
-            config);
+        create_kernel(program, cores, 0, 0, 0, false);
         EnqueueProgram(device_->command_queue(), program, false);
     }
 
     Finish(device_->command_queue());
 }
 
-TEST_F(CommandQueueFixture, TestSimpleRandomizedProgramsOnEth) {
+TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
 
     CoreRangeSet cores = local_test_functions::get_all_active_eth_cores(device_);
 
-    const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-    const uint32_t MAX_KERNEL_SIZE_BYTES = 16384;
-    const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
-    const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
-    const uint32_t NUM_PROGRAMS = 100;
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         Program program = CreateProgram();
-
-        const uint32_t kernel_size_bytes = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES, 4);
-        const uint32_t kernel_runtime_cycles = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
-
-        const std::map<string, string> defines = {
-            {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
-            {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
-
-        EthernetConfig config{.defines = defines};
-
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            cores,
-            config);
+        create_kernel(program, cores, 0, 0, 0, true);
         EnqueueProgram(device_->command_queue(), program, false);
     }
 
     Finish(device_->command_queue());
 }
 
-TEST_F(CommandQueueFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
+TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
@@ -1482,37 +1436,17 @@ TEST_F(CommandQueueFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
     CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange tensix_cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
 
-    const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-    const uint32_t MAX_KERNEL_SIZE_BYTES = 16384;
-    const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
-    const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
-    const uint32_t NUM_PROGRAMS = 100;
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         Program program = CreateProgram();
 
-        const uint32_t kernel_size_bytes = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES, 4);
-        const uint32_t kernel_runtime_cycles = local_test_functions::generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
-
-        const std::map<string, string> defines = {
-            {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
-            {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
-
-        EthernetConfig eth_config{.defines = defines};
-        DataMovementConfig data_movement_config{.defines = defines};
-
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            eth_cores,
-            eth_config);
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            tensix_cores,
-            data_movement_config);
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            create_kernel(program, eth_cores, 0, 0, 0, true);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            create_kernel(program, tensix_cores, 0, 0, 0, false);
+        }
 
         EnqueueProgram(device_->command_queue(), program, false);
     }
@@ -1520,76 +1454,87 @@ TEST_F(CommandQueueFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(CommandQueueFixture, TestRandomizedProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensix) {
     CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
-
-    const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-    const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
-    const uint32_t MIN_KERNEL_SIZE_CYCLES = 100;
-    const uint32_t MAX_KERNEL_SIZE_CYCLES = 20000;
-    const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
-    const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
-    const uint32_t MIN_NUM_SEMS = 0;
-    const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
-    const uint32_t NUM_PROGRAMS = 10;
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
 
-        const uint32_t num_sems = local_test_functions::generate_random_num(MIN_NUM_SEMS, MAX_NUM_SEMS);
-        const uint32_t sem_val = 1;
-        vector<uint32_t> sem_ids;
-        for (uint32_t j = 0; j < num_sems; j++) {
-            const uint32_t sem_id = CreateSemaphore(program, cores, sem_val);
-            std::cout << sem_id << std::endl;
-            sem_ids.push_back(sem_id);
-        }
-
-        const uint32_t max_num_unique_rt_args = MAX_NUM_RUNTIME_ARGS - num_sems;
-        const uint32_t num_unique_rt_args =
-            local_test_functions::generate_random_num(MIN_NUM_RUNTIME_ARGS, max_num_unique_rt_args);
-
-        const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
-        const uint32_t num_common_rt_args =
-            local_test_functions::generate_random_num(0, max_num_common_rt_args);
-
-        const uint32_t unique_rt_args_vals_offset = 50;
-        const uint32_t common_rt_args_vals_offset = 100;
-        auto [unique_rt_args, common_rt_args] = create_runtime_args(
-            num_unique_rt_args, num_common_rt_args, unique_rt_args_vals_offset, common_rt_args_vals_offset);
-
-        unique_rt_args.insert(unique_rt_args.end(), sem_ids.begin(), sem_ids.end());
-
-        const std::vector<uint32_t> compile_args = {
-            num_unique_rt_args,
-            num_common_rt_args,
-            unique_rt_args_vals_offset,
-            common_rt_args_vals_offset,
-            num_sems,
-            sem_val};
-
-        const uint32_t kernel_size_bytes =
-            local_test_functions::generate_random_num(MIN_KERNEL_SIZE_BYTES, MAX_KERNEL_SIZE_BYTES);
-        const uint32_t kernel_runtime_cycles =
-            local_test_functions::generate_random_num(MIN_KERNEL_SIZE_CYCLES, MAX_KERNEL_SIZE_CYCLES);
-
-        const std::map<string, string> defines = {
-            {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
-            {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
-
-        DataMovementConfig config{.compile_args = compile_args, .defines = defines};
-
-        KernelHandle kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
-            "dispatcher_kernel_size_and_runtime.cpp",
-            cores,
-            config);
+        const vector<uint32_t>& sem_ids = generate_semaphores(program, cores);
+        auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids);
+        const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+        KernelHandle kernel_id = create_kernel(program, cores, sem_ids.size(), num_unique_rt_args, common_rt_args.size(), false);
 
         SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
         SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestRandomizedProgramsOnEth) {
+    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    }
+
+    CoreRangeSet cores = local_test_functions::get_all_active_eth_cores(device_);
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        log_info(tt::LogTest, "Creating Program {}", i);
+        Program program = CreateProgram();
+
+        const vector<uint32_t>& sem_ids = generate_semaphores(program, cores);
+        auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids);
+        const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+        KernelHandle kernel_id = create_kernel(program, cores, sem_ids.size(), num_unique_rt_args, common_rt_args.size(), false);
+
+        SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
+        SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+
+        EnqueueProgram(device_->command_queue(), program, false);
+    }
+
+    Finish(device_->command_queue());
+}
+
+TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
+    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    }
+
+    CoreRangeSet eth_cores = local_test_functions::get_all_active_eth_cores(device_);
+
+    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange tensix_cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
+
+    for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
+        log_info(tt::LogTest, "Creating Program {}", i);
+        Program program = CreateProgram();
+
+        bool eth_kernel_added_to_program = false;
+        if (rand() % 2 == 0) {
+            const vector<uint32_t>& sem_ids = generate_semaphores(program, eth_cores);
+            auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids);
+            const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+            KernelHandle kernel_id =
+                create_kernel(program, eth_cores, sem_ids.size(), num_unique_rt_args, common_rt_args.size(), true);
+            SetRuntimeArgs(program, kernel_id, eth_cores, unique_rt_args);
+            SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+            eth_kernel_added_to_program = true;
+        }
+        if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
+            const vector<uint32_t>& sem_ids = generate_semaphores(program, tensix_cores);
+            auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids);
+            const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+            KernelHandle kernel_id = create_kernel(
+                program, tensix_cores, sem_ids.size(), num_unique_rt_args, common_rt_args.size(), false);
+            SetRuntimeArgs(program, kernel_id, tensix_cores, unique_rt_args);
+            SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+        }
 
         EnqueueProgram(device_->command_queue(), program, false);
     }
