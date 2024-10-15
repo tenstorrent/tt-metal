@@ -78,9 +78,8 @@ void FillRM::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "FillRM does not currently support sharding");
 }
 
-std::vector<tt::tt_metal::LegacyShape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::LegacyShape output_shape = {this->N, this->C, this->H, this->W};
-    return {output_shape};
+std::vector<ttnn::SimpleShape> FillRM::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    return {ttnn::SimpleShape({this->N, this->C, this->H, this->W})};
 }
 
 std::vector<Tensor> FillRM::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

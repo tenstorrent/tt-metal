@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
         auto padded_shape = a.get_legacy_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
-        Tensor padded_host_a = host_a.pad(padded_shape, {0,0,0,0}, 0);
+        Tensor padded_host_a = host_a.pad(padded_shape, ttnn::SimpleShape{0,0,0,0}, 0);
         Tensor golden = padded_host_a.to(Layout::TILE);
         auto golden_vec =  owned_buffer::get_as<bfloat16>(golden);
         auto result_vec = owned_buffer::get_as<bfloat16>(c);

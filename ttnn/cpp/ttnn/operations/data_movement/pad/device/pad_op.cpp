@@ -44,24 +44,13 @@ void Pad::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Pad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {tt::tt_metal::LegacyShape(this->output_tensor_shape)};
+std::vector<ttnn::SimpleShape> Pad::compute_output_shapes(const std::vector<Tensor>&) const {
+    return {this->output_tensor_shape.logical_shape()};
 }
 
 std::vector<Tensor> Pad::create_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto shapes = compute_output_shapes(input_tensors);
-
-    if (this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
-            shapes[0],
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config)};
-    } else {
-        return {create_device_tensor(shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
-    }
+    return {create_device_tensor(output_tensor_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
 }
 
 operation::ProgramWithCallbacks Pad::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
