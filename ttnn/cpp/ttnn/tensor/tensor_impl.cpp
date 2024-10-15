@@ -176,7 +176,6 @@ void validate_sharded_buffer_allocation(
             "Shard shape must be tile sized");
     } else if (layout == Layout::ROW_MAJOR) {
         TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0, "Error");
-        // width of shard shape needs to be multiple 4
     }
 }
 

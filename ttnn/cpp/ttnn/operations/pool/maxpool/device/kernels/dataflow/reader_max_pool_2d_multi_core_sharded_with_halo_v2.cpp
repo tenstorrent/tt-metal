@@ -93,7 +93,6 @@ void kernel_main() {
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
-
     while (counter < reader_nindices) {
         cb_reserve_back(in_cb_id, npages_to_reserve);
         uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);

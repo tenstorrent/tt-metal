@@ -21,7 +21,6 @@ void InterleavedToShardedDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(this->output_mem_config.buffer_type == BufferType::L1, "Error");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL((*this->output_mem_config.shard_spec).shape[1] * input_tensor.element_size() % hal.get_alignment(HalMemType::L1) == 0, "Shard page size must currently have L1 aligned page size");
-        // data transfers going throuh noc, i.e. dram requires minimum of 32 bytes and L1 requires 16 bytes
     }
     if (input_tensor.get_dtype() != this->output_dtype) {
         TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
