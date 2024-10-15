@@ -469,7 +469,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         "instruct_weights-3_batch",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 5560320, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 5603328, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
