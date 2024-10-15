@@ -212,7 +212,7 @@ jobs:
       create-tag,
       create-and-upload-draft-release
     ]
-    if: ${{ needs.get-params.outputs.is-release-candidate && needs.get-params.outputs.should-create-release }}
+    if: ${{ needs.get-params.outputs.is-release-candidate =='true' && needs.get-params.outputs.should-create-release == 'true' }}
     uses: ./.github/workflows/docs-release.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
