@@ -1,6 +1,8 @@
 from typing import Optional, Tuple
 
 import torch
+
+torch.manual_seed(42)
 import random
 import ttnn
 
@@ -66,14 +68,14 @@ def run(
     print(torch_output_tensor.shape)
 
     # Loop through rows of tensor and print first false element, print PASS if row is correct
-    for i in range(check_tensor.shape[1]):
-        if False in check_tensor[0, i]:
-            print(f"Row {i}: FAIL")
-            print(torch_output_tensor[0, i])
-            print(ttnn_output_tensor[0, i])
-            break
-        else:
-            print(f"Row {i}: PASS")
+    # for i in range(check_tensor.shape[1]):
+    #     if False in check_tensor[0, i]:
+    #         print(f"Row {i}: FAIL")
+    #         print(torch_output_tensor[0, i])
+    #         print(ttnn_output_tensor[0, i])
+    #         break
+    #     else:
+    #         print(f"Row {i}: PASS")
 
     # Compare the results and return performance and accuracy check
     result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
@@ -93,11 +95,11 @@ if __name__ == "__main__":
 
     # pcc errors
     # embedding_specs = {'weight_shape': [2, 768], 'indices_shape': [1, 8]}
-    # embedding_specs = {'weight_shape': [30528, 768], 'indices_shape': [1, 8], 'padding_idx': 0}
-    # embedding_specs = {'weight_shape': [400, 10], 'indices_shape': [1, 24]}
+    embedding_specs = {"weight_shape": [30528, 768], "indices_shape": [1, 32], "padding_idx": 0}
+    # embedding_specs = {'weight_shape': [400, 10], 'indices_shape': [1, 24]} # Should output 1, 24, 10
 
     # page/buffer errors
-    embedding_specs = {"weight_shape": [77, 512], "indices_shape": [1, 7]}
+    # embedding_specs = {"weight_shape": [77, 512], "indices_shape": [1, 8]} #SHould output 1, 7, 512
 
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT

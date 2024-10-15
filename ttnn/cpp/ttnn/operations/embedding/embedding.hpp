@@ -47,11 +47,16 @@ struct EmbeddingOperation {
         auto input_tensor =
             ttnn::reshape(mutable_input_tensor, ttnn::Shape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
 
-        bool tilized = false;
+        bool fuzed_tilized = layout == ttnn::TILE_LAYOUT;
+
+        // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
+        if(!fuzed_tilized || input_tensor.get_legacy_shape()[-1] % TILE_HEIGHT) fuzed_tilized = false;
+        if(!fuzed_tilized || weight.get_legacy_shape()[-1] % TILE_WIDTH) fuzed_tilized = false;
+
         auto embeddings = operation::run(
                                 Embeddings{
                                     .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                                    .tilized = tilized,
+                                    .tilized = fuzed_tilized,
                                     .embeddings_type = embeddings_type,
                                     .pad_token = pad_token,
                                     .output_dtype = dtype.value_or(weight.get_dtype())},
