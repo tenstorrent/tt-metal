@@ -22,8 +22,6 @@ OUTPUT_ARCH(riscv)
 ENTRY(_start)
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
-  PROVIDE (__executable_start = __firmware_start);
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
@@ -48,10 +46,6 @@ SECTIONS
   } > REGION_APP_KERNEL_CODE
 
 
-  PROVIDE (__etext = .);
-  _etext = .; PROVIDE (_etext = .);
-
-  PROVIDE (etext = .);
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE
   .sdata2         :
@@ -74,8 +68,6 @@ SECTIONS
   } > REGION_APP_KERNEL_DATA
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  _edata = .; PROVIDE (edata = .);
-  . = .;
   __l1_bss_start = .;
   .sbss           :
   {
