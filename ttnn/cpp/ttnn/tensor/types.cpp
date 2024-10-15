@@ -8,6 +8,21 @@
 
 namespace ttnn {
 
+SimpleShape SimpleShape::to_rank(size_t new_rank) const {
+    std::vector<uint32_t> result(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for(;cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        result[new_idx] = value[cur_idx];
+    }
+    for(;cur_idx >= 0; cur_idx--) {
+        TT_FATAL(value[cur_idx] == 1, "Can't convert shape rank");
+    }
+
+    return SimpleShape(std::move(result));
+}
+
 SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
     SimpleShape physical_shape = logical_shape;
     auto rank = physical_shape.rank();

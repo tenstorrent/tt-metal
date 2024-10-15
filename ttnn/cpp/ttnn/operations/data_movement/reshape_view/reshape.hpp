@@ -13,7 +13,7 @@ namespace operations::data_movement {
 struct ReshapeViewOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const ttnn::Shape& shape
+        const ttnn::SimpleShape& shape
         );
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,

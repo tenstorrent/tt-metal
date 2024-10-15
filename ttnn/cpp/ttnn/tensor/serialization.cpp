@@ -65,8 +65,8 @@ void dump_multi_device_host_storage(std::ofstream& output_stream, const MultiDev
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
             }, storage.get_buffer(0)
         );
-        output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(tt::tt_metal::LegacyShape));
-
+        tt::tt_metal::LegacyShape legacy_shape(storage.shapes.at(0).as_vector());
+        output_stream.write(reinterpret_cast<const char*>(&legacy_shape), sizeof(tt::tt_metal::LegacyShape));
     } else {
         for (int i = 0; i < num_buffers; i++) {
             std::visit(
@@ -79,7 +79,8 @@ void dump_multi_device_host_storage(std::ofstream& output_stream, const MultiDev
             );
         }
         for (const auto& shape : storage.shapes) {
-            output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
+            tt::tt_metal::LegacyShape legacy_shape(shape.as_vector());
+            output_stream.write(reinterpret_cast<const char*>(&legacy_shape), sizeof(tt::tt_metal::LegacyShape));
         }
     }
 }
@@ -102,7 +103,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
     input_stream.read(reinterpret_cast<char*>(&strategy), sizeof(DistributedTensorConfig));
 
     std::vector<OwnedBuffer> buffers;
-    std::vector<tt::tt_metal::LegacyShape> shapes;
+    std::vector<ttnn::SimpleShape> shapes;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::size_t size = 0;
         input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
@@ -111,11 +112,11 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
         input_stream.read(reinterpret_cast<char*>(buffer.begin()), sizeof(T) * size);
         input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
         buffers.push_back(buffer);
-        shapes.push_back(shape);
+        shapes.push_back(shape.logical_shape());
 
         for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
-            shapes.push_back(shape);
+            shapes.push_back(shape.logical_shape());
         }
 
     } else {
@@ -131,7 +132,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
         for (std::size_t i = 0; i < num_buffers; ++i) {
             auto shape = tt::tt_metal::LegacyShape{};
             input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
-            shapes.push_back(shape);
+            shapes.push_back(shape.logical_shape());
         }
     }
 

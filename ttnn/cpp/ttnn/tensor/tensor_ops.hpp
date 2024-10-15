@@ -44,6 +44,6 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
 
 Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W);
 
-Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& new_shape);
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape);
 
 }

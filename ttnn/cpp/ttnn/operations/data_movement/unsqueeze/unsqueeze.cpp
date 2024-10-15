@@ -38,8 +38,7 @@ ttnn::Tensor UnsqueezeOperation::invoke(
         output_shape_vector.push_back(1);
     }
 
-    ttnn::Shape output_shape(output_shape_vector);
-    return ttnn::reshape(input_tensor, output_shape);
+    return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
 
 
 }

@@ -42,7 +42,7 @@ bool test_tensor_copy_semantics(Device *device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(single_tile_shape), 1).reshape(single_tile_shape).to(Layout::TILE);
+    Tensor host_c = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(single_tile_shape), 1).reshape(1, 1, TILE_HEIGHT, TILE_WIDTH).to(Layout::TILE);
     Tensor host_c_copy = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE);
     host_c_copy = host_c;
     auto host_c_data = owned_buffer::get_as<bfloat16>(host_c);

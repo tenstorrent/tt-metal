@@ -105,156 +105,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks reshape_rm_single_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
-
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-    CoreRange core({0, 0}, {0, 0});
-
-    // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device *device = a.device();
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
-    tt::tt_metal::Buffer *src0_buffer = a.buffer();
-    tt::tt_metal::Buffer *dst_buffer = output.buffer();
-
-    uint32_t num_old_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * a.get_legacy_shape()[2];
-    uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
-
-    uint32_t old_stick_size = a.get_legacy_shape()[3] * 2; // Assuming bfloat16 data format
-    uint32_t new_stick_size = output_shape[3] * 2; // Assuming bfloat16 data format
-
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = (a.get_legacy_shape()[1] * a.get_legacy_shape()[2] * a.get_legacy_shape()[3] / tt::constants::TILE_HW);
-    uint32_t num_output_tiles = (output_shape[1] * output_shape[2] * output_shape[3] / tt::constants::TILE_HW);
-
-    // Currently added to support Bert large, TODO: Make op more generic, parallelize
-    uint32_t available_l1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
-    if (num_input_tiles * single_tile_size + num_output_tiles * single_tile_size > available_l1) {
-        if (old_stick_size >= new_stick_size) {
-            if (old_stick_size % new_stick_size == 0) {
-                // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
-                // Evenly divide L1 between input/output
-                uint32_t w_tiles = a.get_legacy_shape()[3] / tt::constants::TILE_WIDTH;
-                num_input_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
-                num_output_tiles = num_input_tiles;
-            } else {
-                // Not needed for Bert large at the moment so will trigger L1 OOM assert
-            }
-        } else {
-            if (new_stick_size % old_stick_size == 0) {
-                // Maximize L1 usage. Is this needed or do we just need to double buffer 32 sticks (64)
-                // Evenly divide L1 between input/output
-                uint32_t w_tiles = (output_shape[3] / tt::constants::TILE_WIDTH);
-                num_output_tiles = ((available_l1 / 2) / single_tile_size) / w_tiles * w_tiles;
-                num_input_tiles = num_output_tiles;
-            } else {
-                // Not needed for Bert large at the moment so will trigger L1 OOM assert
-            }
-        }
-        TT_ASSERT(num_input_tiles > 0 && num_output_tiles > 0, "Cannot fit input/output rows into L1");
-    }
-
-    tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-		.set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-    uint32_t output_cb_index = 16; // output operands start at index 16
-    tt::tt_metal::CircularBufferConfig cb_output_config = tt::tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
-		.set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-
-    // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
-    vector<uint32_t> reader_kernel_args = {src0_buffer->address(), num_old_sticks, old_stick_size};
-    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram};
-    if (old_stick_size_is_power_of_two) {
-        reader_kernel_args.push_back(log2(old_stick_size));
-
-        // Use the fast stick size power of 2 path (get noc addr uses just shift operations, no slow multiply algorithm)
-        reader_compile_time_args.push_back(1);
-    } else {
-        reader_compile_time_args.push_back(0);
-    }
-
-    // Writer compile-time args
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    bool new_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(new_stick_size);
-    vector<uint32_t> writer_kernel_args = {dst_buffer->address(), num_new_sticks, new_stick_size};
-    std::vector<uint32_t> writer_compile_time_args {dst_is_dram};
-    if (new_stick_size_is_power_of_two) {
-        writer_kernel_args.push_back(log2(new_stick_size));
-        writer_compile_time_args.push_back(1);
-    } else {
-        writer_compile_time_args.push_back(0);
-    }
-
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/reader_unary_reshape_stick_layout_interleaved.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/device/kernels/dataflow/writer_unary_reshape_stick_layout_interleaved.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-
-    // No compute required, so using blank kernel
-    vector<uint32_t> compute_args = {
-        uint(a.volume() / tt::constants::TILE_HW), // per_core_block_cnt
-        1 // per_core_block_size
-    };
-
-    auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
-        core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args}
-    );
-
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        unary_reader_kernel_id,
-        core,
-        reader_kernel_args
-    );
-
-    tt::tt_metal::SetRuntimeArgs(
-        program,
-        unary_writer_kernel_id,
-        core,
-        writer_kernel_args
-    );
-
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-        const Program &program,
-        const std::vector<Buffer*>& input_buffers,
-        const std::vector<Buffer*>& output_buffers
-    ) {
-
-        auto src_buffer = input_buffers.at(0);
-
-        auto dst_buffer = output_buffers.at(0);
-
-        CoreCoord core = {0, 0};
-
-        {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
-        }
-
-        {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
-        }
-    };
-
-    return {std::move(program), override_runtime_args_callback};
-}
-
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runtime_args_rm_multi_core(const Tensor &input_tensor,
                                                                                         Tensor &output_tensor,
                                                                                         uint32_t num_cores_total,
@@ -359,7 +209,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
 }
 
 operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
-
     TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -379,9 +228,9 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
     if (old_stick_size > new_stick_size) {
-        TT_FATAL(old_stick_size % new_stick_size == 0, "Error");
+        TT_FATAL(old_stick_size % new_stick_size == 0, "Last dimension of the old shape should be divisible by the last dimension of the new shape or vice versa");
     } else {
-        TT_FATAL(new_stick_size % old_stick_size == 0, "Error");
+        TT_FATAL(new_stick_size % old_stick_size == 0, "Last dimension of the old shape should be divisible by the last dimension of the new shape or vice versa");
     }
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

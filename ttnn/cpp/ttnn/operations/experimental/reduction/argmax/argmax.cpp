@@ -87,7 +87,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     max_val.deallocate();
                     Tensor concat_out = ttnn::concat(combined_tensors, dim, output_memory_config);
                     // Needed till `max` stops autoformatting output
-                    concat_out = ttnn::reshape(concat_out, input_a.get_shape());
+                    concat_out = ttnn::reshape(concat_out, input_a.get_logical_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
                     concat_out.deallocate();
                     Tensor tindex = numpy::index_channel<::bfloat16>(

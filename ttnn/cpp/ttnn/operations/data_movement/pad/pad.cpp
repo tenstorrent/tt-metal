@@ -140,21 +140,14 @@ ttnn::Tensor ExecutePad::invoke(
         output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
     }
     // output_tensor is currently 4D. We have to squeeze back to the original rank
-    auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
-    auto shape = to_vec(output_tensor.get_shape().value);
-    auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
+    auto shape = output_tensor.get_logical_shape().as_vector();
     if (auto rank_diff = shape.size() - original_rank; rank_diff) {
         auto remove_first_elements = [](auto& source, size_t n) {
             source.erase(source.begin(), source.begin() + n);
         };
         remove_first_elements(shape, rank_diff);
-        remove_first_elements(padded_shape, rank_diff);
-        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(shape, padded_shape));
-        output_tensor = ttnn::reshape(output_tensor, squeezedShape);
+        output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape(std::move(shape)));
     }
-
-    // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
 
     return output_tensor;
 }

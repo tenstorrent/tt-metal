@@ -60,6 +60,8 @@ public:
 
     const std::vector<uint32_t>& as_vector() const { return this->value; }
 
+    SimpleShape to_rank(size_t new_rank) const;
+
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value); }
@@ -468,7 +470,7 @@ struct BorrowedStorage {
 struct MultiDeviceHostStorage {
     DistributedTensorConfig strategy;
     std::vector<OwnedBuffer> buffers;
-    std::vector<LegacyShape> shapes;
+    std::vector<ttnn::SimpleShape> shapes;
     mutable std::mutex mtx;
 
     friend void swap(MultiDeviceHostStorage &first, MultiDeviceHostStorage &second) {
@@ -483,7 +485,7 @@ struct MultiDeviceHostStorage {
 
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<LegacyShape> shapes_) :
+        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<ttnn::SimpleShape> shapes_) :
         strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage &&other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
@@ -514,7 +516,7 @@ struct MultiDeviceHostStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const LegacyShape shape) {
+    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const ttnn::SimpleShape shape) {
         std::lock_guard<std::mutex> lock(mtx);
         buffers[buffer_index] = buffer;
         shapes[buffer_index] = shape;
@@ -532,7 +534,7 @@ struct MultiDeviceHostStorage {
         return buffers[buffer_index];
     }
 
-    LegacyShape get_tensor_shape(int shape_index) const {
+    ttnn::SimpleShape get_tensor_shape(int shape_index) const {
         std::lock_guard<std::mutex> lock(mtx);
         TT_ASSERT(shape_index < shapes.size(), "Buffer not found for device {}", shape_index);
         return shapes[shape_index];
@@ -558,7 +560,7 @@ struct MultiDeviceStorage {
     DistributedTensorConfig strategy;
     std::vector<int> ordered_device_ids;
     std::unordered_map<int, DeviceBuffer> buffers;
-    std::unordered_map<int, LegacyShape> shapes;
+    std::unordered_map<int, ttnn::SimpleShape> shapes;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
     MultiDeviceStorage() = default;
@@ -576,7 +578,7 @@ struct MultiDeviceStorage {
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
         std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, LegacyShape> shapes_) :
+        std::unordered_map<int, ttnn::SimpleShape> shapes_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
@@ -631,7 +633,7 @@ struct MultiDeviceStorage {
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
 
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const LegacyShape shape) {
+    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::SimpleShape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
@@ -665,7 +667,7 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline LegacyShape get_tensor_shape_for_device(Device *device) const {
+    inline ttnn::SimpleShape get_tensor_shape_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
         TT_ASSERT(
             shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());

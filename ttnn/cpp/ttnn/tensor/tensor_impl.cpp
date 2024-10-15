@@ -1004,7 +1004,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 return OwnedStorage{output_buffer};
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
-                std::vector<tt::tt_metal::LegacyShape> output_shapes;
+                std::vector<ttnn::SimpleShape> output_shapes;
                 for (int i = 0; i < storage.num_buffers(); i++) {
                     const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));

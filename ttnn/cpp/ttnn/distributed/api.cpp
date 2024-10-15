@@ -58,24 +58,24 @@ Tensor aggregate_as_tensor(std::vector<Tensor>& tensor_shards)
     // we want to use MultiDeviceHostStorage or MultiDeviceStorage
     StorageType storage_type = tensor_shards.at(0).storage_type();
     if (storage_type == StorageType::OWNED) {
-        std::vector<tt::tt_metal::LegacyShape> shapes;
+        std::vector<ttnn::SimpleShape> shapes;
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto &shard : tensor_shards) {
             host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-            shapes.push_back(shard.get_legacy_shape());
+            shapes.push_back(shard.get_logical_shape());
         }
         auto storage = MultiDeviceHostStorage{AllGatherTensor(), std::move(host_owned_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
     } else {
         std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
+        std::unordered_map<int, ttnn::SimpleShape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto &shard : tensor_shards) {
             Device* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device->id(), std::get<DeviceStorage>(shard.get_storage()).buffer});
-            shapes.insert({device->id(), shard.get_legacy_shape()});
+            shapes.insert({device->id(), shard.get_logical_shape()});
         }
         auto storage = MultiDeviceStorage{AllGatherTensor(), ordered_device_ids, std::move(device_buffers), shapes};
         return Tensor(std::move(storage), tensor_shards.at(0).get_legacy_shape(), tensor_shards.at(0).get_dtype(),  tensor_shards.at(0).get_layout());
@@ -199,7 +199,7 @@ Tensor create_multi_device_tensor(
 
     if (storage_type == StorageType::MULTI_DEVICE) {
         std::vector<int> ordered_device_ids;
-        std::unordered_map<int, tt::tt_metal::LegacyShape> shapes;
+        std::unordered_map<int, ttnn::SimpleShape> shapes;
         std::unordered_map<int, DeviceBuffer> device_buffers;
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<DeviceStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
@@ -207,7 +207,7 @@ Tensor create_multi_device_tensor(
             auto device_id = device->id();
             ordered_device_ids.push_back(device_id);
             device_buffers.insert({device_id, std::get<DeviceStorage>(tensor.get_storage()).buffer});
-            shapes.insert({device_id, tensor.get_legacy_shape()});
+            shapes.insert({device_id, tensor.get_logical_shape()});
         }
         return Tensor{
             MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, shapes},
@@ -216,11 +216,11 @@ Tensor create_multi_device_tensor(
             tensors.at(0).get_layout()};
     } else if (storage_type == StorageType::MULTI_DEVICE_HOST) {
         std::vector<OwnedBuffer> owned_buffers;
-        std::vector<tt::tt_metal::LegacyShape> shapes;
+        std::vector<ttnn::SimpleShape> shapes;
         for (const auto& tensor : tensors) {
             TT_ASSERT(std::holds_alternative<OwnedStorage>(tensor.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
             owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-            shapes.push_back(tensor.get_legacy_shape());
+            shapes.push_back(tensor.get_logical_shape());
         }
         return Tensor{
             MultiDeviceHostStorage{strategy, owned_buffers, shapes},
