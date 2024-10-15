@@ -38,7 +38,7 @@ inline std::string get_core_descriptor_file(const tt::ARCH &arch, CoreType dispa
             case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported"); // will be overwritten in tt_global_state constructor
             case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported for simulator");
             case tt::ARCH::WORMHOLE: throw std::runtime_error("WORMHOLE arch not supported for simulator");
-            case tt::ARCH::WORMHOLE_B0: throw std::runtime_error("WORMHOLE_B0 arch not supported for simulator");
+            case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
         };
