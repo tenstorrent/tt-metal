@@ -158,7 +158,7 @@ def from_torch(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
-) -> ttnn.Tensor:
+) -> Union[ttnn.Tensor, float, int]:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
     first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
@@ -187,6 +187,8 @@ def from_torch(
     """
 
     shape_with_padding = None
+    if tensor.dim() == 0:
+        return tensor.item()
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if len(tensor.shape) < 2:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
@@ -256,6 +258,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
     device: Optional[ttnn.Device] = None,
+    original_shape: Optional[list] = None,
     cq_id: Optional[int] = 0,
 ) -> "torch.Tensor":
     """
@@ -302,6 +305,11 @@ def to_torch(
     tensor = tensor.to_torch()
     slices = [slice(None, x) for x in shape_without_tile_padding]
     tensor = tensor[slices]
+
+    # to handle 1D inputs giving 2D outputs
+    if original_shape is not None and len(original_shape) == 1:
+        if tensor.shape[0] == 1:
+            tensor = torch.squeeze(tensor, 0)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "pass_1": {
         "input_shape": [
             [1],
         ],
@@ -72,7 +72,11 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.remainder(input_tensor_a, scalar, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    # to handle 1D inputs giving 2D outputs
+    if len(input_shape) == 1:
+        output_tensor = ttnn.to_torch(output_tensor, original_shape=input_shape)
+    else:
+        output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

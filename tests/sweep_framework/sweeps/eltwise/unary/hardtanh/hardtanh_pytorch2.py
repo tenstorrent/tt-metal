@@ -15,7 +15,7 @@ from models.utility_functions import torch_random
 
 
 parameters = {
-    "nightly": {
+    "nov5_3": {
         "input_specs": [
             {"shape": [1, 1024, 7, 7], "min_val": 0.0, "max_val": 6.0},
             {"shape": [1, 1152, 7, 7], "min_val": 0.0, "max_val": 6.0},

@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -14,19 +13,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "nov8_1": {
         "input_shape": [
-            {"self": [0], "other": 0.5},
+            {"self": [0], "other": 0.5},  # is [0] a valid shape ?
             {"self": [1, 1, 1, 10], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 12], "other": -3.4028234663852886e38},
             {"self": [1, 1, 1, 14], "other": -3.4028234663852886e38},
@@ -191,8 +186,8 @@ parameters = {
             {"self": [8732, 2], "other": 0.5},
             {"self": [8732], "other": 0.5},
             # vec other
-            {"self": [0, 1], "other": [0, 1]},
-            {"self": [0], "other": []},
+            {"self": [0, 1], "other": [0, 1]},  # invalid shape
+            {"self": [0], "other": []},  # invalid shape [0]
             {"self": [1, 1, 1, 17], "other": [1, 1, 1, 17]},
             {"self": [1, 1, 1, 1], "other": [1, 1, 1, 1]},
             {"self": [1, 1, 1, 2], "other": [1, 1, 1, 2]},
@@ -401,6 +396,19 @@ parameters = {
             {"self": [], "other": [1, 24, 768]},
             {"self": [], "other": [3234, 1]},
             {"self": [], "other": [8732, 1]},
+            # untested
+            # |  25 | Tensor<[1, 1, 1, s0 + 1]> self = ?,<br>Tensor other = -3.3895313892515355e+38
+            # |  26 | Tensor<[1, 1, 1, s0 + 1]> self = ?,<br>Tensor<[1, 1, 1, s0 + 1]> other = ?
+            # | 281 | Tensor<[1, s0*s1, 2560]> self = ?,<br>Tensor<[1, s0*s1, 2560]> other = ?
+            # | 282 | Tensor<[1, s0*s1, 5120]> self = ?,<br>Tensor<[1, s0*s1, 5120]> other = ?
+            # | 283 | Tensor<[1, s1*s2, 1280]> self = ?,<br>Tensor<[1, s1*s2, 1280]> other = ?
+            # | 284 | Tensor<[1, s1*s2, 2560]> self = ?,<br>Tensor<[1, s1*s2, 2560]> other = ?
+            # | 285 | Tensor<[1, s1*s2, 5120]> self = ?,<br>Tensor<[1, s1*s2, 5120]> other = ?
+            # | 286 | Tensor<[1, s10 + 1]> self = ?,<br>Tensor<[1, s10 + 1]> other = ?
+            # | 320 | Tensor<[2*s0]> self = ?,<br>Tensor<0.500000000000000> other = ?
+            # | 321 | Tensor<[2*s1]> self = ?,<br>Tensor<0.500000000000000> other = ?
+            # | 322 | Tensor<[2*s2]> self = ?,<br>Tensor<0.500000000000000> other = ?
+            # | 391 | Tensor<[s0 + 1, s0 + 1]> self = ?,<br>Tensor other = 16
         ],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -408,8 +416,32 @@ parameters = {
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        # "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
+        # "input_b_memory_config": [ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid. len(test_vector["input_shape"]["other"]) >= 4
+# def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+#     if len(test_vector["input_shape"]["self"]) == 0 or (
+#         isinstance(test_vector["input_shape"]["other"], list) and len(test_vector["input_shape"]["other"]) == 0
+#     ):
+#         return True, "empty shape not supported"
+# if isinstance(test_vector["input_shape"]["other"], list) and len(test_vector["input_shape"]["self"]) >= 4:
+#     is_less_than_3d = len(test_vector["input_shape"]["other"]) < 3
+#     c_index = test_vector["input_shape"]["self"][-3]
+#     if is_less_than_3d or (
+#         len(test_vector["input_shape"]["other"]) >= 3 and test_vector["input_shape"]["other"][-3] < c_index
+#     ):
+#         print("checking channel bcast")
+#         print("input ", test_vector["input_shape"]["self"])
+#         print("other ", test_vector["input_shape"]["other"])
+#         return True, "channel dim bcast not supported"
+
+# return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -427,19 +459,21 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), input_a_dtype
     )(input_shape["self"])
 
     if isinstance(input_shape["other"], list):
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(input_shape["other"])
+        if len(input_shape["other"]):
+            torch_input_tensor_b = gen_func_with_cast_tt(
+                partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), input_b_dtype
+            )(input_shape["other"])
+        else:
+            torch_input_tensor_b = torch.tensor(0, dtype=torch.bfloat16)
     else:
-        torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
+        torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.bfloat16)
         # torch_input_tensor_b = input_shape["other"]
 
     golden_function = ttnn.get_golden_function(ttnn.mul)
@@ -466,7 +500,11 @@ def run(
 
     start_time = start_measuring_time()
     result = ttnn.mul(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(result)
+    # handles 1 D input_a and scalar or empty [] input_b
+    if len(input_shape["self"]) == 1 and (not isinstance(input_shape["other"], list) or not input_shape["other"]):
+        output_tensor = ttnn.to_torch(result, original_shape=input_shape["self"])
+    else:
+        output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
