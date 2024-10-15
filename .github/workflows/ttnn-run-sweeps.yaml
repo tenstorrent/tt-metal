@@ -21,6 +21,7 @@ on:
           - eltwise.unary.gelu.gelu_pytorch2
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
+          - eltwise.unary.abs.abs
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
           - eltwise.unary.sin.sin
