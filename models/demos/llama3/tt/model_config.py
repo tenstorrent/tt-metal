@@ -589,7 +589,8 @@ class TtModelArgs:
         if self.dummy_weights:
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
-            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
+            state_dict_prefix = self.get_state_dict_prefix("", None)
+            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         else:
             state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
 

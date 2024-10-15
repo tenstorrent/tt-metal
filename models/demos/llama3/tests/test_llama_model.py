@@ -62,16 +62,23 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(mesh_device, instruct=instruct, dummy_weights=dummy_weights)
 
-    model_from_layers = {
-        16: "llama32_1b",
-        28: "llama32_3b",
-        32: "llama31_8b",
-    }[model_args.n_layers]
+    model_name = {
+        (16, False): "llama32_1b",
+        (28, False): "llama32_3b",
+        (32, False): "llama31_8b",
+        (32, True): "llama32_11b",
+    }[(model_args.n_layers, model_args.is_vision())]
 
-    final_model_pcc = {"llama32_1b": 0.9991, "llama32_3b": 0.9990, "llama31_8b": 0.99765}[model_from_layers]
-    final_k_cache_pcc = {"llama32_1b": 0.9998, "llama32_3b": 0.9998, "llama31_8b": 0.9995}[model_from_layers]  # TODO
-    final_v_cache_pcc = {"llama32_1b": 0.9996, "llama32_3b": 0.9998, "llama31_8b": 0.9996}[model_from_layers]  # TODO
-    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6}[model_from_layers]
+    final_model_pcc = {"llama32_1b": 0.9991, "llama32_3b": 0.9990, "llama31_8b": 0.9976, "llama32_11b": 0.9976}[
+        model_name
+    ]
+    final_k_cache_pcc = {"llama32_1b": 0.9998, "llama32_3b": 0.9998, "llama31_8b": 0.9995, "llama32_11b": 0.9995}[
+        model_name
+    ]
+    final_v_cache_pcc = {"llama32_1b": 0.9996, "llama32_3b": 0.9998, "llama31_8b": 0.9996, "llama32_11b": 0.9996}[
+        model_name
+    ]
+    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6}[model_name]
 
     iterations = quick_iterations if layers == 1 else 9
 
