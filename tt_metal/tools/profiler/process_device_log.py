@@ -246,7 +246,7 @@ def import_device_profile_log(logPath):
                     }
                 if doOpsDetection and "zone_name" in timerID.keys() and "dispatch" in timerID["zone_name"].lower():
                     logger.warning(
-                        "Dispatch core data is detected, stats across ops are skipped as op detection cannot work with dispatch data present"
+                        "Dispatch core data detected: Stats across ops are skipped as op detection cannot work with dispatch data present. Please turn off dispatch core profiling."
                     )
                     doOpsDetection = False
 
