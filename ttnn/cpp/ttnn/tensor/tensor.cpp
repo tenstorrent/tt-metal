@@ -17,10 +17,12 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/distributed/api.hpp"
 
 using namespace tt::constants;
 
@@ -512,8 +514,8 @@ Tensor Tensor::to(Device* target_device, const MemoryConfig& mem_config) const {
     return tensor_ops::tensor_to(*this, target_device, mem_config);
 }
 
-Tensor Tensor::to(MeshDevice* mesh_device, const MemoryConfig& mem_config) const {
-    std::vector<Device*> workers_to_use = distribute_tensor_to_mesh(*this, *mesh_device);
+Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config) const {
+    std::vector<Device*> workers_to_use = ttnn::distributed::distribute_tensor_to_mesh(*this, *mesh_device);
     return tensor_ops::tensor_to(*this, workers_to_use, mem_config);
 }
 
@@ -544,7 +546,7 @@ Tensor Tensor::to(Layout target_layout, Device* worker) const {
     return tensor_ops::tensor_to(*this, target_layout, worker);
 }
 
-Tensor Tensor::to(Layout target_layout, MeshDevice* mesh_device) const {
+Tensor Tensor::to(Layout target_layout, distributed::MeshDevice* mesh_device) const {
     return tensor_ops::tensor_to(*this, target_layout, mesh_device);
 }
 
@@ -841,7 +843,7 @@ Tensor allocate_tensor_on_device(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    MeshDevice* mesh_device,
+    distributed::MeshDevice* mesh_device,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile
     ) {
@@ -929,35 +931,6 @@ void write_tensor(Tensor host_tensor, Tensor device_tensor, uint8_t cq_id) {
     device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
 }
 
-
-std::vector<Device*> distribute_tensor_to_mesh(const Tensor& tensor, MeshDevice& mesh_device) {
-    auto get_multi_device_workers = [&](const std::vector<Device*>& workers) {
-        if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or
-            std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-            return std::vector<Device*>(workers.begin(), workers.begin() + num_buffers_in_tensor(tensor));
-        }
-        return workers;
-    };
-
-    if (mesh_device.get_view() != nullptr and std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
-        const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
-
-        return std::visit([&](const auto& strategy) {
-            using StrategyType = std::decay_t<decltype(strategy)>;
-            if constexpr (std::is_same_v<StrategyType, ShardTensor2D>) {
-                auto mesh_view = mesh_device.get_view();
-                return mesh_view->get_devices(strategy.shard_mesh);
-            } else {
-                return get_multi_device_workers(mesh_device.get_devices());
-            }
-        }, host_storage.strategy);
-    } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
-        return tensor.workers;
-    } else {
-        return get_multi_device_workers(mesh_device.get_devices());
-    }
-}
-
 Tensor set_tensor_id(const Tensor& tensor) {
     if (not GraphTracker::instance().is_enabled()) {
         return tensor;
@@ -966,6 +939,15 @@ Tensor set_tensor_id(const Tensor& tensor) {
     output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
     return output;
 };
+
+bool validate_worker_modes(const std::vector<Device*>& workers) {
+    bool worker_modes_match = true;
+    auto first_worker_mode = workers.at(0)->get_worker_mode();
+    for (auto worker : workers) {
+        worker_modes_match &= (worker->get_worker_mode() == first_worker_mode);
+    }
+    return worker_modes_match;
+}
 
 }  // namespace tt_metal
 

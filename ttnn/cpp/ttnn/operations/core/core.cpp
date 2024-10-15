@@ -10,11 +10,12 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (is_multi_device_tensor(tensor)) {
+    if (distributed::is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
