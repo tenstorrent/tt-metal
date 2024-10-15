@@ -315,7 +315,7 @@ void ElfFile::Impl::XIPify() {
     };
 
     // TODO:We'll eventually place at zero, but this allows the null transformation
-    const address_t text_placement = GetSegments().front().address;
+    const address_t text_placement = 0;
     unsigned num_reloc_sections = 0;
     for (auto const &relocHdr : GetShdrs()) {
         if (relocHdr.sh_type != SHT_RELA)

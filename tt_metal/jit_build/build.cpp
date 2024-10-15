@@ -195,6 +195,11 @@ void JitBuildState::finish_init() {
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
+
+    if (not this->is_fw_) {
+        // Emit relocations, so we can relocate the resulting binary
+        this->lflags_ += "-Wl,--emit-relocs ";
+    }
 }
 
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
@@ -523,8 +528,6 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
         cmd += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\" ";
     }
 
-    // Emit relocations, so we can relocate the resulting binary
-    cmd += "-Wl,--emit-relocs ";
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     if (!tt::utils::run_command(cmd, log_file, false)) {
