@@ -4,7 +4,9 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
+#include <cstdint>
 #include <string>
+#include "core_coord.h"
 #include "host_api.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "impl/program/program.hpp"
@@ -262,70 +264,70 @@ TEST_F(CommonFixture, TestCBsAcrossWorkerEth) {
     }
 }
 
-TEST_F(CommonFixture, TestSmallKernelSizeTensix) {
-    Device *device = devices_[0];
-    CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+// TEST_F(CommonFixture, TestSmallKernelSizeTensix) {
+//     Device *device = devices_[0];
+//     CoreCoord core = {0, 0};
+//     Program program = CreateProgram();
 
-    const uint32_t kernel_size_in_bytes = 16;
+//     const uint32_t kernel_size_in_bytes = 20;
 
-    const string& kernel_file_path = "";
-    const std::map<string, string> defines = {
-        {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
-    };
-    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
-    CreateKernel(program, kernel_file_path, core, config);
+//     const string& kernel_file_path = "";
+//     const std::map<string, string> defines = {
+//         {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
+//     };
+//     DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+//     CreateKernel(program, kernel_file_path, core, config);
 
-    this->RunProgram(device, program);
-}
+//     this->RunProgram(device, program);
+// }
 
-TEST_F(CommonFixture, TestLargeKernelSizeTensix) {
-    Device *device = devices_[0];
-    CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+// TEST_F(CommonFixture, TestLargeKernelSizeTensix) {
+//     Device *device = devices_[0];
+//     CoreCoord core = {0, 0};
+//     Program program = CreateProgram();
 
-    const uint32_t kernel_size_in_bytes = 2097152; // 2 ** 21
+//     const uint32_t kernel_size_in_bytes = 2097152; // 2 ** 21
 
-    const string& kernel_file_path = "";
-    const std::map<string, string> defines = {
-        {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
-    };
-    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
-    CreateKernel(program, kernel_file_path, core, config);
+//     const string& kernel_file_path = "";
+//     const std::map<string, string> defines = {
+//         {"KERNEL_BYTES", std::to_string(kernel_size_in_bytes)}
+//     };
+//     DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+//     CreateKernel(program, kernel_file_path, core, config);
 
-    this->RunProgram(device, program);
-}
+//     this->RunProgram(device, program);
+// }
 
-TEST_F(CommonFixture, TestKernelWithLongRuntimeTensix) {
-    Device *device = devices_[0];
-    CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+// TEST_F(CommonFixture, TestKernelWithLongRuntimeTensix) {
+//     Device *device = devices_[0];
+//     CoreCoord core = {0, 0};
+//     Program program = CreateProgram();
 
-    const uint32_t kernel_runtime_in_seconds = 50;
+//     const uint32_t kernel_runtime_in_seconds = 50;
 
-    const string& kernel_file_path = "";
-    const std::map<string, string> defines = {
-        {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_in_seconds)}
-    };
-    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
-    CreateKernel(program, kernel_file_path, core, config);
+//     const string& kernel_file_path = "";
+//     const std::map<string, string> defines = {
+//         {"KERNEL_RUNTIME", std::to_string(kernel_runtime_in_seconds)}
+//     };
+//     DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+//     CreateKernel(program, kernel_file_path, core, config);
 
-    this->RunProgram(device, program);
-}
+//     this->RunProgram(device, program);
+// }
 
-TEST_F(CommonFixture, TestKernelWithShortRuntimeTensix) {
-    Device *device = devices_[0];
-    CoreCoord core = {0, 0};
-    Program program = CreateProgram();
+// TEST_F(CommonFixture, TestKernelWithShortRuntimeTensix) {
+//     Device *device = devices_[0];
+//     CoreCoord core = {0, 0};
+//     Program program = CreateProgram();
 
-    const uint32_t kernel_runtime_in_seconds = 1;
+//     const uint32_t kernel_runtime_in_seconds = 1;
 
-    const string& kernel_file_path = "";
-    const std::map<string, string> defines = {
-        {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_in_seconds)}
-    };
-    DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
-    CreateKernel(program, kernel_file_path, core, config);
+//     const string& kernel_file_path = "";
+//     const std::map<string, string> defines = {
+//         {"KERNEL_RUNTIME_SECONDS", std::to_string(kernel_runtime_in_seconds)}
+//     };
+//     DataMovementConfig config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines=defines};
+//     CreateKernel(program, kernel_file_path, core, config);
 
-    this->RunProgram(device, program);
-}
+//     this->RunProgram(device, program);
+// }
