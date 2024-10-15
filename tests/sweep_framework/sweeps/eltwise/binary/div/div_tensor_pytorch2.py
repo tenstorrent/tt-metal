@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -14,14 +13,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
-
 
 parameters = {
-    "nightly": {
+    "nightly_14": {
         "input_specs": [
             {"shape": [0, 1], "other": 1.0},
             {"shape": [1, 1, 16384, 256], "other": 5.656854249492381},
@@ -143,8 +137,7 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     input_shape = input_specs["shape"]
     if len(input_shape) == 0:
@@ -186,7 +179,14 @@ def run(
     start_time = start_measuring_time()
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+
+    # handles 1 D input_a and scalar or empty [] input_b
+    if len(input_specs["shape"]) == 1 and (
+        not isinstance(input_specs["other"], list) or not input_specs["other"] or len(input_specs["other"]) == 1
+    ):
+        output_tensor = ttnn.to_torch(output_tensor, original_shape=input_specs["shape"])
+    else:
+        output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)
 

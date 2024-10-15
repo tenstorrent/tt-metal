@@ -88,3 +88,20 @@ def test_sub_4D(device, n, c, h, w):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize("shapes", [[[1, 10], [10, 1]], [[10, 1], [1, 10]]])
+def test_sub_pcc_fail(device, shapes):
+    print(shapes)
+    torch_input_tensor_a = torch.ones(shapes[0], dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.ones(shapes[1], dtype=torch.bfloat16)
+    torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
+    print("torch_output_tensor", torch_output_tensor)
+    print("torch_output_tensor", torch_output_tensor.shape)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.sub(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+    print("ttnn", output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.999)

@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt, gen_bin
@@ -14,18 +13,13 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
-
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "where": {
+    "test_where_bcast_1": {
         "input_shape": [
             {"shape1": [1, 1, 1, 46], "shape2": [1, 12, 1, 46], "shape3": []},
             {"shape1": [1, 1, 1, 6], "shape2": [1, 16, 1, 6], "shape3": []},
@@ -76,16 +70,23 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(gen_bin, input_a_dtype)(input_shape["shape1"])
     torch_input_tensor_b = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape["shape2"])
-    torch_input_tensor_c = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
-    )(input_shape["shape3"])
+
+    if isinstance(input_shape["shape3"], list):
+        if len(input_shape["shape3"]):
+            torch_input_tensor_c = gen_func_with_cast_tt(
+                partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
+            )(input_shape["shape3"])
+        else:
+            torch_input_tensor_c = torch.tensor(0, dtype=torch.bfloat16)
+    else:
+        torch_input_tensor_c = torch.tensor(input_shape["shape3"], dtype=torch.bfloat16)
+        # torch_input_tensor_c = input_shape["other"]
 
     golden_function = ttnn.get_golden_function(ttnn.where)
     torch_output_tensor = golden_function(torch_input_tensor_a > 0, torch_input_tensor_b, torch_input_tensor_c)
