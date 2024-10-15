@@ -108,6 +108,8 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.fill_zero_bw
+          - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.acos_bw
           - eltwise.unary_backward.acosh_bw
           - eltwise.unary_backward.atan_bw
@@ -215,6 +217,7 @@ on:
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.sub_bw
           - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
