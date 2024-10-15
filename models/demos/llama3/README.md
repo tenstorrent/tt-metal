@@ -28,6 +28,10 @@ export LLAMA_DIR=<meta_llama_model_dir>
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
+- `$LLAMA_DIR` sets the path for the Llama3 model weights and caches.
+
+- `$WH_ARCH_YAML` sets the dispatch over ethernet cores, enabling a full 8x8 grid of cores. This is required since our Llama3 model configuration makes use of the full grid size for maximum performance.
+
 On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
 These cache files only need to be created once for each model and each weight (i.e. new finetuned weights will need to be cached) and will be stored accordingly to the machine you are running the models:
 ```
@@ -45,14 +49,14 @@ The demo is also parametrized to run for 1 or 3 continuous batch of users, i.e. 
 
 The input prompts are based on the general or instruct (fine-tuned) weights. The prompts are included in the demo folder `models/demos/llama3/demo`.
 
-When running the demo, do not forget to setup the $LLAMA_DIR environment variable to the corresponding Llama3 model weights.
+When running the demo, do not forget to setup the `$LLAMA_DIR` environment variable to the corresponding Llama3 model weights.
 
 ```
 # Examples of how to run the demo for any supported Llama3 models
 
 # Run a single continuous batch with instruct weights
-$pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
+pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
 
 # Run 3 continuous batches with general weights
-$pytest models/demos/llama3/demo/demo.py -k 'general and 3_batch'
+pytest models/demos/llama3/demo/demo.py -k 'general and 3_batch'
 ```
