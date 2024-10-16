@@ -29,7 +29,7 @@ on:
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_pytorch2
-          - eltwise.unary.clamp_min.clamp_min_pytorch2
+          - eltwise.unary.clamp.clamp_min_pytorch2
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub

@@ -69,7 +69,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.clamp(input_tensor_a, input_specs["min"], memory_config=output_memory_config)
+    result = ttnn.clamp(input_tensor_a, min=input_specs["min"], memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

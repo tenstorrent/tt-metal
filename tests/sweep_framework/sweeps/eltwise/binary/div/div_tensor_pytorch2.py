@@ -164,7 +164,7 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(other)
 
-    golden_function = ttnn.get_golden_function(ttnn.div)
+    golden_function = ttnn.get_golden_function(ttnn.divide)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_other_tensor)
 
     input_tensor_a = ttnn.from_torch(
@@ -185,7 +185,7 @@ def run(
 
     start_time = start_measuring_time()
 
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)
