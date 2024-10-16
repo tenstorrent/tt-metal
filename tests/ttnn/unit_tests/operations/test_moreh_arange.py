@@ -8,17 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import to_ttnn
-
-
-def get_lib_dtype(lib, dtype):
-    """Maps dtype to corresponding library dtype."""
-    dtype_map = {
-        "int32": lib.int32,
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-    }
-    return dtype_map.get(dtype, None)
+from tests.ttnn.unit_tests.operations.test_utils import to_ttnn, get_lib_dtype
 
 
 def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):

@@ -145,3 +145,24 @@ def check_dim(input_shape, dim, keepdim):
             for i in dim:
                 if len(input_shape) - 2 <= i:
                     pytest.skip("`keepdim == false` don't support last 2-dim")
+
+
+def get_lib_dtype(lib, dtype):
+    """
+    Maps string-based data types to their corresponding library-specific dtypes.
+
+    Parameters:
+    lib: library module (e.g., torch, ttnn)
+        The library for which the dtype mapping is required.
+    dtype: str
+        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32').
+
+    Returns:
+    Corresponding library-specific dtype or None if not found.
+    """
+    dtype_map = {
+        "bfloat16": lib.bfloat16,
+        "float32": lib.float32,
+        "int32": lib.int32,
+    }
+    return dtype_map.get(dtype, None)
