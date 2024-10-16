@@ -355,12 +355,13 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
+@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -377,16 +378,19 @@ def test_conv_ws(
     has_bias,
     weights_dtype,
     activations_dtype,
+    auto_shard,
 ):
     stride_h = stride
     stride_w = stride
     batch_size = 2
-    fp32_accum = False
-    packer_l1_acc = False
+    fp32_accum = True
+    packer_l1_acc = True
     deallocate_activation = False
     debug = False
     groups = 1
 
+    if input_channels == 1280 and output_channels == 1280 and input_height == 16:
+        auto_shard = False
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -438,7 +442,7 @@ def test_conv_ws(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
         math_fidelity=ttnn.MathFidelity.HiFi4,
-        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
         input_channels_alignment=32,
         deallocate_activation=deallocate_activation,
         fp32_dest_acc_enabled=fp32_accum,
@@ -479,7 +483,7 @@ def test_conv_ws(
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
-    pcc = 0.94
+    pcc = 0.99
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"{pcc_msg} Threshold : {pcc}")
     if not passing:
