@@ -59,7 +59,7 @@ ttnn::Tensor ReshapeOperation::invoke(
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
-    ttnn::SimpleShape output_shape = tt::tt_metal::infer_dims_for_reshape({N, C, H, W}, input_tensor.get_logical_volume());
+    ttnn::SimpleShape output_shape = tt::tt_metal::infer_dims_for_reshape({N, C, H, W}, input_tensor.volume());
     if (
         ((input_tensor.get_layout() == Layout::TILE or input_tensor.get_layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor.get_legacy_shape()[3])
     ) {
@@ -67,7 +67,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         // since handled within the tensor reshape method
         return input_tensor.reshape(N, C, H, W);
     }
-    if (input_tensor.get_shape() == ttnn::Shape(output_shape.as_vector())) {
+    if (input_tensor.get_shape().padded_shape() == output_shape.as_vector()) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;

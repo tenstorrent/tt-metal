@@ -135,7 +135,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const std::vector<int32_t> & shape_vector
     ) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(shape_vector, tensor.get_logical_volume()));
+    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(shape_vector, tensor.volume()));
 }
 
 } // ttnn::operations::data_movement namespace

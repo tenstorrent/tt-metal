@@ -20,7 +20,7 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
     const bool transpose_key) {
     auto [query, key, value] = outputs;
 
-   auto batch_size = query.get_shape()[0];
+    auto batch_size = query.get_shape()[0];
     auto num_heads = query.get_shape()[1];
     auto head_size = query.get_shape()[-1];
     auto head_size_padded = query.get_shape().with_tile_padding()[-1];
@@ -40,7 +40,7 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
                 std::array{batch_size, num_kv_heads, head_size, sequence_size},
                 std::array{batch_size, num_kv_heads, head_size_padded, sequence_size_padded})));
     } else {
-         key = ttnn::reshape(
+        key = ttnn::reshape(
             key,
             ttnn::Shape(tt::tt_metal::LegacyShape(
                 std::array{batch_size, num_kv_heads, sequence_size, head_size},
