@@ -21,8 +21,8 @@ extern uint32_t __ldm_data_end[];
 extern void (* __init_array_start[])();
 extern void (* __init_array_end[])();
 
-extern void kernel_init();
-extern void kernel_launch();
+extern void kernel_init(uint32_t kernel_init);
+extern void kernel_launch(uint32_t kernel_base_addr);
 
 inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l1_addr, int32_t len) {
     // Cover L1 load latency of 6 cycles for the bulk of the copy

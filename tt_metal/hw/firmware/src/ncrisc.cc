@@ -100,13 +100,13 @@ int main(int argc, char *argv[]) {
         setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg->kernel_config.max_cb_index, true, true, false);
         WAYPOINT("R");
 
-#ifdef ARCH_BLACKHOLE
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::NCRISC);
-        void (*kernel_address)() =
-            (void (*)())(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-        (*kernel_address)();
+        void (*kernel_address)(uint32_t) =
+            (void (*)(uint32_t))(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+#ifdef ARCH_BLACKHOLE
+        (*kernel_address)((uint32_t)kernel_address);
 #else
-        kernel_init();
+        kernel_init((uint32_t)kernel_address);
 #endif
         RECORD_STACK_USAGE();
         WAYPOINT("D");

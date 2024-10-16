@@ -112,9 +112,9 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::TRISC0) + thread_id;
-        void (*kernel_address)() =
-            (void (*)())(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-        (*kernel_address)();
+        void (*kernel_address)(uint32_t) =
+            (void (*)(uint32_t))(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+        (*kernel_address)((uint32_t)kernel_address);
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 
