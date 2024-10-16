@@ -9,17 +9,17 @@
 
 namespace ttnn::operations::moreh::moreh_linear {
 struct MorehLinear {
-    static Tensor invoke(
-        const Tensor& input,
-        const Tensor& weight,
-        const std::optional<Tensor>& bias,
-        std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig> compute_kernel_config);
+    static Tensor invoke(const Tensor& input,
+                         const Tensor& weight,
+                         const std::optional<Tensor>& bias,
+                         std::optional<Tensor>& output,
+                         const std::optional<MemoryConfig>& memory_config,
+                         const std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_linear
 
 namespace ttnn {
-constexpr auto moreh_linear = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_linear", ttnn::operations::moreh::moreh_linear::MorehLinear>();
+constexpr auto moreh_linear =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_linear",
+                                                 ttnn::operations::moreh::moreh_linear::MorehLinear>();
 }

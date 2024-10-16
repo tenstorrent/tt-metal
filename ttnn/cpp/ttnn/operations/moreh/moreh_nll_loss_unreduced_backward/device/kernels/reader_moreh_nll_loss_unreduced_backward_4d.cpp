@@ -35,12 +35,11 @@ void kernel_main() {
     constexpr bool output_grad_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool weight_is_dram = get_compile_time_arg_val(2) == 1;
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
-    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGen<target_is_dram> addrg_target = {.bank_base_address = target_addr,
+                                                             .page_size = target_tile_bytes};
+    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {.bank_base_address = output_grad_addr,
+                                                                           .page_size = output_grad_tile_bytes,
+                                                                           .data_format = output_grad_data_format};
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)
@@ -83,7 +82,7 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t idx = h * TILE_WIDTH + w; // target and input_grad idx
+                uint32_t idx = h * TILE_WIDTH + w;  // target and input_grad idx
 
                 int32_t target_val = target_l1_ptr[idx];
 

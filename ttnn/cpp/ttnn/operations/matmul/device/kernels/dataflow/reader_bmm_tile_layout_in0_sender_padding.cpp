@@ -11,7 +11,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
-
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -55,11 +54,10 @@ void kernel_main() {
 
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            true, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks,
-            in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
+        fused_op_receiver = MatmulOpReceiver(true, /* wait_for_op_signal */
+                                             rt_args_idx,
+                                             num_blocks,
+                                             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
 
@@ -97,12 +95,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
+    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(in0_mcast_dest_noc_start_x,
+                                                                                  in0_mcast_dest_noc_start_y,
+                                                                                  in0_mcast_dest_noc_end_x,
+                                                                                  in0_mcast_dest_noc_end_y,
+                                                                                  in0_mcast_receiver_semaphore_addr);
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
@@ -117,10 +114,7 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             if constexpr (fuse_op) {
                 fused_op_receiver.update_current_block_start_tile_id(
-                    block,
-                    in0_tensor_current_block_start_tile_id,
-                    in0_tensor_start_tile_id
-                );
+                    block, in0_tensor_current_block_start_tile_id, in0_tensor_start_tile_id);
             }
 #ifndef IN0_SHARDED
             // Operand 0
@@ -191,9 +185,7 @@ void kernel_main() {
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_semaphore_set_multicast(
-                in0_mcast_receiver_semaphore_addr,
-                in0_mcast_receiver_semaphore_noc_addr,
-                in0_mcast_num_cores);
+                in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
 #endif
 
 #ifndef IN0_SHARDED

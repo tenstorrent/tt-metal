@@ -79,17 +79,16 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {CB::c_in0, 2},        // input
-            {CB::c_in1, 1},        // zero
-            {CB::c_in2, 1},        // scaler
-            {CB::c_intermed0, 1},  // accumulated mean
-            {CB::c_out0, 2},       // output
-        });
+    CreateCircularBuffer(program,
+                         all_cores,
+                         cb_data_format,
+                         {
+                             {CB::c_in0, 2},        // input
+                             {CB::c_in1, 1},        // zero
+                             {CB::c_in2, 1},        // scaler
+                             {CB::c_intermed0, 1},  // accumulated mean
+                             {CB::c_out0, 2},       // output
+                         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -113,19 +112,17 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }
     vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    auto compute_kernel_ids = CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {
-            {core_group_1, units_per_core_group_1, compute_args_group_1},
-            {core_group_2, units_per_core_group_2, compute_args_group_2},
-        },
-        ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .math_approx_mode = math_approx_mode,
-            .defines = compute_defines});
+    auto compute_kernel_ids = CreateComputeKernel(program,
+                                                  compute_kernel_file,
+                                                  {
+                                                      {core_group_1, units_per_core_group_1, compute_args_group_1},
+                                                      {core_group_2, units_per_core_group_2, compute_args_group_2},
+                                                  },
+                                                  ComputeKernelConfig{.math_fidelity = math_fidelity,
+                                                                      .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                                      .unpack_to_dest_mode = unpack_to_dest_mode,
+                                                                      .math_approx_mode = math_approx_mode,
+                                                                      .defines = compute_defines});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
@@ -144,18 +141,17 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_reduce_input_tile,
-             units_per_core,
-             input_tile_stride,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
-             HtWt,
-             inner_size});
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {input.buffer()->address(),
+                        num_reduce_input_tile,
+                        units_per_core,
+                        input_tile_stride,
+                        tile_offset,
+                        static_cast<uint32_t>(is_dram(input)),
+                        HtWt,
+                        inner_size});
 
         SetRuntimeArgs(
             program,

@@ -21,8 +21,10 @@ namespace unary_backward {
 namespace detail {
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_two_float(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
+void bind_unary_backward_two_float(py::module& module,
+                                   const unary_backward_operation_t& operation,
+                                   const std::string_view description,
+                                   const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -54,30 +56,31 @@ void bind_unary_backward_two_float(
         description,
         supported_dtype);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float min,
-               float max,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, min, max, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::arg("min"),
-            py::arg("max"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         float min,
+                                                         float max,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(
+                                                              grad_tensor, input_tensor, min, max, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::arg("min"),
+                                                      py::arg("max"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_op(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& supported_dtype = "") {
+void bind_unary_backward_op(py::module& module,
+                            const unary_backward_operation_t& operation,
+                            const std::string& description,
+                            const std::string& supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -106,26 +109,26 @@ void bind_unary_backward_op(
         description,
         supported_dtype);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(grad_tensor, input_tensor, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_rsqrt(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
+void bind_unary_backward_rsqrt(py::module& module,
+                               const unary_backward_operation_t& operation,
+                               const std::string_view description,
+                               const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -158,26 +161,26 @@ void bind_unary_backward_rsqrt(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   const std::optional<MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& input_grad,
+                                   const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                                    return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("input_grad") = std::nullopt,
+                                py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_op_reciprocal(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward_op_reciprocal(py::module& module,
+                                       const unary_backward_operation_t& operation,
+                                       const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -202,38 +205,36 @@ void bind_unary_backward_op_reciprocal(
         operation.python_fully_qualified_name(),
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(grad_tensor, input_tensor, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt},
 
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const MemoryConfig& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config")});
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ComplexTensor& grad_tensor,
+                                                         const ComplexTensor& input_tensor,
+                                                         const MemoryConfig& memory_config) {
+                                                          return self(grad_tensor, input_tensor, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config")});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_op_overload_abs(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
+void bind_unary_backward_op_overload_abs(py::module& module,
+                                         const unary_backward_operation_t& operation,
+                                         const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -258,37 +259,36 @@ void bind_unary_backward_op_overload_abs(
         operation.python_fully_qualified_name(),
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(grad_tensor, input_tensor, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt},
 
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const Tensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const MemoryConfig& memory_config) {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config")});
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const Tensor& grad_tensor,
+                                                         const ComplexTensor& input_tensor,
+                                                         const MemoryConfig& memory_config) {
+                                                          return self(grad_tensor, input_tensor, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config")});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward_float(py::module& module,
+                               const unary_backward_operation_t& operation,
+                               const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -314,38 +314,35 @@ void bind_unary_backward_float(py::module& module, const unary_backward_operatio
         operation.python_fully_qualified_name(),
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float scalar,
-               const std::optional<MemoryConfig>& memory_config)  {
-                return self(grad_tensor, input_tensor, scalar, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::arg("scalar"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt}
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         float scalar,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(grad_tensor, input_tensor, scalar, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::arg("scalar"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt}
 
     );
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_two_float_with_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    float parameter_b_value,
-    const std::string_view description) {
+void bind_unary_backward_two_float_with_default(py::module& module,
+                                                const unary_backward_operation_t& operation,
+                                                const std::string& parameter_name_a,
+                                                const std::string& parameter_a_doc,
+                                                float parameter_a_value,
+                                                const std::string& parameter_name_b,
+                                                const std::string& parameter_b_doc,
+                                                float parameter_b_value,
+                                                const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -382,31 +379,29 @@ void bind_unary_backward_two_float_with_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   float parameter_a,
+                                   float parameter_b,
+                                   const std::optional<MemoryConfig>& memory_config) {
+                                    return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg(parameter_name_a.c_str()) = parameter_a_value,
+                                py::arg(parameter_name_b.c_str()) = parameter_b_value,
+                                py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float_with_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& description) {
+void bind_unary_backward_float_with_default(py::module& module,
+                                            const unary_backward_operation_t& operation,
+                                            const std::string& parameter_name_a,
+                                            const std::string& parameter_a_doc,
+                                            float parameter_a_value,
+                                            const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {5}
@@ -436,36 +431,34 @@ void bind_unary_backward_float_with_default(
         parameter_a_value,
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         float parameter_a,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(
+                                                              grad_tensor, input_tensor, parameter_a, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg(parameter_name_a.c_str()) = parameter_a_value,
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_optional_float_params_with_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    std::optional<float> parameter_a_value,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    std::optional<float> parameter_b_value,
-    const std::string& description) {
+void bind_unary_backward_optional_float_params_with_default(py::module& module,
+                                                            const unary_backward_operation_t& operation,
+                                                            const std::string& parameter_name_a,
+                                                            const std::string& parameter_a_doc,
+                                                            std::optional<float> parameter_a_value,
+                                                            const std::string& parameter_name_b,
+                                                            const std::string& parameter_b_doc,
+                                                            std::optional<float> parameter_b_value,
+                                                            const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -502,33 +495,31 @@ void bind_unary_backward_optional_float_params_with_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               std::optional<float> parameter_a,
-               std::optional<float> parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   std::optional<float> parameter_a,
+                                   std::optional<float> parameter_b,
+                                   const std::optional<MemoryConfig>& memory_config) {
+                                    return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg(parameter_name_a.c_str()) = parameter_a_value,
+                                py::arg(parameter_name_b.c_str()) = parameter_b_value,
+                                py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float_string_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    string parameter_b_value,
-    const std::string_view description) {
+void bind_unary_backward_float_string_default(py::module& module,
+                                              const unary_backward_operation_t& operation,
+                                              const std::string& parameter_name_a,
+                                              const std::string& parameter_a_doc,
+                                              const std::string& parameter_name_b,
+                                              const std::string& parameter_b_doc,
+                                              string parameter_b_value,
+                                              const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {7}
@@ -564,31 +555,29 @@ void bind_unary_backward_float_string_default(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               string parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::arg(parameter_name_a.c_str()),
-            py::kw_only(),
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   float parameter_a,
+                                   string parameter_b,
+                                   const std::optional<MemoryConfig>& memory_config) {
+                                    return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::arg(parameter_name_a.c_str()),
+                                py::kw_only(),
+                                py::arg(parameter_name_b.c_str()) = parameter_b_value,
+                                py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_string_default(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    string parameter_a_value,
-    const std::string_view description) {
+void bind_unary_backward_string_default(py::module& module,
+                                        const unary_backward_operation_t& operation,
+                                        const std::string& parameter_name_a,
+                                        const std::string& parameter_a_doc,
+                                        string parameter_a_value,
+                                        const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {5}
@@ -617,32 +606,30 @@ void bind_unary_backward_string_default(
         parameter_a_value,
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               string parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         string parameter_a,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(
+                                                              grad_tensor, input_tensor, parameter_a, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg(parameter_name_a.c_str()) = parameter_a_value,
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_unary_optional_float(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name,
-    const std::string& parameter_doc,
-    const std::string_view description) {
+void bind_unary_backward_unary_optional_float(py::module& module,
+                                              const unary_backward_operation_t& operation,
+                                              const std::string& parameter_name,
+                                              const std::string& parameter_doc,
+                                              const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {4}
@@ -676,33 +663,31 @@ void bind_unary_backward_unary_optional_float(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               float parameter,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    queue_id, grad_tensor, input_tensor, parameter, memory_config, input_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::arg(parameter_name.c_str()),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   float parameter,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& input_grad,
+                                   const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                                    return self(
+                                        queue_id, grad_tensor, input_tensor, parameter, memory_config, input_grad);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::arg(parameter_name.c_str()),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("input_grad") = std::nullopt,
+                                py::arg("queue_id") = 0});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_shape(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    const std::string_view description) {
+void bind_unary_backward_shape(py::module& module,
+                               const unary_backward_operation_t& operation,
+                               const std::string& parameter_name_a,
+                               const std::string& parameter_a_doc,
+                               const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {4}
@@ -730,28 +715,28 @@ void bind_unary_backward_shape(
         parameter_a_doc,
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::LegacyShape& parameter_a,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, parameter_a, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::arg(parameter_name_a.c_str()),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                                         const ttnn::Tensor& grad_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const tt::tt_metal::LegacyShape& parameter_a,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(
+                                                              grad_tensor, input_tensor, parameter_a, memory_config);
+                                                      },
+                                                      py::arg("grad_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::arg(parameter_name_a.c_str()),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_optional(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
+void bind_unary_backward_optional(py::module& module,
+                                  const unary_backward_operation_t& operation,
+                                  const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -782,26 +767,27 @@ void bind_unary_backward_optional(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& input_grad,
+                                   const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                                    return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("input_grad") = std::nullopt,
+                                py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_neg(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
+void bind_unary_backward_neg(py::module& module,
+                             const unary_backward_operation_t& operation,
+                             const std::string_view description,
+                             const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -836,21 +822,20 @@ void bind_unary_backward_neg(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& input_grad,
+                                   const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                                    return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("input_grad") = std::nullopt,
+                                py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 template <typename unary_backward_operation_t>
@@ -884,26 +869,26 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               bool all_dimensions,
-               int64_t dim,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(grad_tensor, input_tensor, all_dimensions, dim, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("all_dimensions") = true,
-            py::arg("dim") = 0,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   bool all_dimensions,
+                                   int64_t dim,
+                                   const std::optional<MemoryConfig>& memory_config) {
+                                    return self(grad_tensor, input_tensor, all_dimensions, dim, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("all_dimensions") = true,
+                                py::arg("dim") = 0,
+                                py::arg("memory_config") = std::nullopt});
 }
 
-
 template <typename unary_backward_operation_t>
-void bind_unary_backward_opt(py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
+void bind_unary_backward_opt(py::module& module,
+                             const unary_backward_operation_t& operation,
+                             const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -942,15 +927,13 @@ void bind_unary_backward_opt(py::module& module, const unary_backward_operation_
             py::arg("input_tensor"),
             py::arg("alpha"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt}
-);
-
+            py::arg("memory_config") = std::nullopt});
 }
 
-
 template <typename unary_backward_operation_t>
-void bind_unary_backward(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward(py::module& module,
+                         const unary_backward_operation_t& operation,
+                         const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -995,13 +978,12 @@ void bind_unary_backward(
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_gelu(
-    py::module& module,
-    const unary_backward_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    string parameter_a_value,
-    const std::string_view description) {
+void bind_unary_backward_gelu(py::module& module,
+                              const unary_backward_operation_t& operation,
+                              const std::string& parameter_name_a,
+                              const std::string& parameter_a_doc,
+                              string parameter_a_value,
+                              const std::string_view description) {
     auto doc = fmt::format(
         R"doc(
         {5}
@@ -1033,23 +1015,23 @@ void bind_unary_backward_gelu(
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ttnn::Tensor& input_tensor,
-               string parameter_a,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(queue_id, grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = ttnn::DefaultQueueId});
+        ttnn::pybind_overload_t{[](const unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ttnn::Tensor& input_tensor,
+                                   string parameter_a,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& input_grad,
+                                   const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+                                    return self(
+                                        queue_id, grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg(parameter_name_a.c_str()) = parameter_a_value,
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("input_grad") = std::nullopt,
+                                py::arg("queue_id") = ttnn::DefaultQueueId});
 }
 
 }  // namespace detail
@@ -1076,7 +1058,6 @@ void py_module(py::module& module) {
         "Maximum value",
         1.0,
         R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
-
 
     detail::bind_unary_backward_float_with_default(
         module,

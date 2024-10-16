@@ -43,36 +43,34 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
         operation.base_name(),
         operation.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               bool all_dimensions,
-               int dim,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, all_dimensions, dim, memory_config); },
-            py::arg("input_tensor"),
-            py::arg("all_dimensions") = false,
-            py::arg("dim") = 0,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
-        // prod along nc dimensions
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input_tensor,
-               const Tensor& output_tensor,
-               std::vector<int64_t> &dims,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, output_tensor, dims, memory_config); },
-            py::arg("input_tensor"),
-            py::arg("output_tensor"),
-            py::kw_only(),
-            py::arg("dims") = std::vector<int64_t>(),
-            py::arg("memory_config") = std::nullopt}
-            );
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const unary_operation_t& self,
+                                                         const Tensor& input_tensor,
+                                                         bool all_dimensions,
+                                                         int dim,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor, all_dimensions, dim, memory_config);
+                                                      },
+                                                      py::arg("input_tensor"),
+                                                      py::arg("all_dimensions") = false,
+                                                      py::arg("dim") = 0,
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt},
+                              // prod along nc dimensions
+                              ttnn::pybind_overload_t{[](const unary_operation_t& self,
+                                                         const Tensor& input_tensor,
+                                                         const Tensor& output_tensor,
+                                                         std::vector<int64_t>& dims,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor, output_tensor, dims, memory_config);
+                                                      },
+                                                      py::arg("input_tensor"),
+                                                      py::arg("output_tensor"),
+                                                      py::kw_only(),
+                                                      py::arg("dims") = std::vector<int64_t>(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

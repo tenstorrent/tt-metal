@@ -25,33 +25,32 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     std::vector<std::optional<Tensor>> outputs;
     if (are_required_outputs[0]) {
-        outputs.push_back(ttnn::prim::moreh_group_norm_backward_input_grad(
-            output_grad,
-            input,
-            mean,
-            rstd,
-            num_groups,
-            gamma,
-            input_grad,
-            input_grad_memory_config,
-            compute_kernel_config));
+        outputs.push_back(ttnn::prim::moreh_group_norm_backward_input_grad(output_grad,
+                                                                           input,
+                                                                           mean,
+                                                                           rstd,
+                                                                           num_groups,
+                                                                           gamma,
+                                                                           input_grad,
+                                                                           input_grad_memory_config,
+                                                                           compute_kernel_config));
     } else {
         outputs.push_back(std::nullopt);
     }
     if (are_required_outputs[1] || are_required_outputs[2]) {
         std::vector<bool> are_required_outputs_gamma_beta_grad = {are_required_outputs[1], are_required_outputs[2]};
-        const auto& dgamma_dbeta = ttnn::prim::moreh_group_norm_backward_gamma_beta_grad(
-            output_grad,
-            input,
-            mean,
-            rstd,
-            num_groups,
-            are_required_outputs_gamma_beta_grad,
-            gamma_grad,
-            beta_grad,
-            gamma_grad_memory_config,
-            beta_grad_memory_config,
-            compute_kernel_config);
+        const auto& dgamma_dbeta =
+            ttnn::prim::moreh_group_norm_backward_gamma_beta_grad(output_grad,
+                                                                  input,
+                                                                  mean,
+                                                                  rstd,
+                                                                  num_groups,
+                                                                  are_required_outputs_gamma_beta_grad,
+                                                                  gamma_grad,
+                                                                  beta_grad,
+                                                                  gamma_grad_memory_config,
+                                                                  beta_grad_memory_config,
+                                                                  compute_kernel_config);
         outputs.push_back(std::move(dgamma_dbeta[0]));
         outputs.push_back(std::move(dgamma_dbeta[1]));
 
@@ -62,7 +61,8 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     return std::move(outputs);
 }
 std::vector<Tensor> MorehGroupNormBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     return {
         Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
         Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),

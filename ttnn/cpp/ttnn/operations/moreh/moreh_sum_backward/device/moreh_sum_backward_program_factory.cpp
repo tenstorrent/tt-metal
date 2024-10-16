@@ -28,8 +28,10 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const Shape &shape) {
     }
 }
 
-Shape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
+Shape get_output_grad_shape(const Tensor &output_grad,
+                            const Tensor &input_grad,
+                            const std::vector<int64_t> &dims,
+                            const bool &keepdim) {
     if (keepdim) {
         return output_grad.get_shape();
     }
@@ -108,13 +110,12 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
         log_debug(tt::LogOp, "need_bcast_dim [{}] = {}", i, need_bcast_dim[i]);
     }
     log_debug(tt::LogOp, "num_input_grad_tiles {}", num_input_grad_tiles);
-    log_debug(
-        tt::LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
+    log_debug(tt::LogOp,
+              "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+              math_fidelity,
+              math_approx_mode,
+              fp32_dest_acc_en,
+              packer_l1_acc);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -122,22 +123,24 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CB::c_in0, 2},   // input
-            {tt::CB::c_in1, 1},   // zero
-            {tt::CB::c_out0, 2},  // output
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  cb_data_format,
+                                                  {
+                                                      {tt::CB::c_in0, 2},   // input
+                                                      {tt::CB::c_in1, 1},   // zero
+                                                      {tt::CB::c_out0, 2},  // output
+                                                  });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -165,14 +168,14 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernel_1_id =
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {

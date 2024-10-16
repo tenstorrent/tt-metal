@@ -25,12 +25,10 @@
 #include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
-
 namespace ttnn {
 namespace experimental {
 
 struct AllGatherMatmul {
-
     /* All Gather Params */
     const ttnn::AllGather all_gather_struct;
 
@@ -41,14 +39,14 @@ struct AllGatherMatmul {
     const CoreCoord all_gather_core_grid_offset;
 
     /* General */
-    void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors,
+                  const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const;
+        std::vector<Tensor>& output_tensors) const;
 };
 
 operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
@@ -75,10 +73,8 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig program_config,
-    bool untilize_out
-);
+    bool untilize_out);
 }  // namespace experimental
-
 
 namespace operations {
 namespace experimental {
@@ -102,8 +98,8 @@ std::vector<Tensor> all_gather_matmul(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
-} // namespace ccl
-} // namespace experimental
-} // namespace operations
+}  // namespace ccl
+}  // namespace experimental
+}  // namespace operations
 
 }  // namespace ttnn

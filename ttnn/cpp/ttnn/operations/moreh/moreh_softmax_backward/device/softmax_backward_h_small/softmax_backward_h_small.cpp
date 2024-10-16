@@ -7,11 +7,10 @@
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
-MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::cached_program_t
-MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& input_grad) {
+MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::cached_program_t MorehSoftmaxBackwardOperation::
+    MorehSoftmaxBackwardHSmallFactory::create(const operation_attributes_t& operation_attributes,
+                                              const tensor_args_t& tensor_args,
+                                              tensor_return_value_t& input_grad) {
     log_info(tt::LogTest, "Small tensor algorithm selected");
     const auto& output = tensor_args.output_tensor;
     const auto& output_grad = tensor_args.output_grad_tensor;
@@ -130,15 +129,14 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         uint32_t mask_h = shape.without_padding()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0)
             mask_h = tt::constants::TILE_HEIGHT;
-        vector<uint32_t> reader_args = {
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-            Ht,
-            Wt,
-            *reinterpret_cast<uint32_t*>(&scaler),
-            mask_h};
+        vector<uint32_t> reader_args = {output.buffer()->address(),
+                                        output_grad.buffer()->address(),
+                                        num_tiles_per_core,
+                                        tile_offset,
+                                        Ht,
+                                        Wt,
+                                        *reinterpret_cast<uint32_t*>(&scaler),
+                                        mask_h};
 
         vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 

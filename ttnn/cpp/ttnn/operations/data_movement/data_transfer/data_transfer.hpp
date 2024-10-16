@@ -14,12 +14,16 @@ struct DataTransferToHostOperation {
 };
 
 struct DataTransferToDeviceOperation {
-    static Tensor invoke(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config);
+    static Tensor invoke(const Tensor &input_tensor, Device *device, const MemoryConfig &memory_config);
 };
 
-} // operations::data_movement
+}  // namespace operations::data_movement
 
-constexpr auto data_transfer_to_host = ttnn::register_operation_with_auto_launch_op<"ttnn::data_transfer_to_host", ttnn::operations::data_movement::DataTransferToHostOperation>();
-constexpr auto data_transfer_to_device = ttnn::register_operation_with_auto_launch_op<"ttnn::data_transfer_to_device", ttnn::operations::data_movement::DataTransferToDeviceOperation>();
+constexpr auto data_transfer_to_host =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::data_transfer_to_host",
+                                                 ttnn::operations::data_movement::DataTransferToHostOperation>();
+constexpr auto data_transfer_to_device =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::data_transfer_to_device",
+                                                 ttnn::operations::data_movement::DataTransferToDeviceOperation>();
 
 }  // namespace ttnn

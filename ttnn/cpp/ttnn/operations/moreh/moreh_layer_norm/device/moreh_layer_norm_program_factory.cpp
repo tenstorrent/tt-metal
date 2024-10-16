@@ -107,9 +107,12 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     // core_group_2 works more.
     // If number of working cores is 108 and num_outer is 110,
     // core_group_2[(x=0, y=0), (x=0, y=1)] works for 2 rows. Others work for 1 row.
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_outer);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_rows_per_core_group_1,
+                num_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -196,11 +199,10 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(gamma)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(beta)),
-        block_size};
+    const std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
+                                                         static_cast<uint32_t>(tt::operations::primary::is_dram(gamma)),
+                                                         static_cast<uint32_t>(tt::operations::primary::is_dram(beta)),
+                                                         block_size};
 
     const std::vector<uint32_t> writer_compile_time_args{
         static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
@@ -247,55 +249,51 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const auto writer_kernels_id =
         tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
-    const std::vector<uint32_t> compute_args_group_1{
-        num_rows_per_core_group_1,
-        origin_H,
-        origin_W,
-        num_inner,
-        block_size,
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(beta_has_value),
-        static_cast<uint32_t>(mean_has_value),
-        static_cast<uint32_t>(rstd_has_value),
-        static_cast<uint32_t>(is_lastdim_layer_norm),
-        static_cast<uint32_t>(is_groupnorm)};
+    const std::vector<uint32_t> compute_args_group_1{num_rows_per_core_group_1,
+                                                     origin_H,
+                                                     origin_W,
+                                                     num_inner,
+                                                     block_size,
+                                                     static_cast<uint32_t>(gamma_has_value),
+                                                     static_cast<uint32_t>(beta_has_value),
+                                                     static_cast<uint32_t>(mean_has_value),
+                                                     static_cast<uint32_t>(rstd_has_value),
+                                                     static_cast<uint32_t>(is_lastdim_layer_norm),
+                                                     static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file =
         use_large_algorithm
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    tt::operations::primary::CreateComputeKernel(program,
+                                                 compute_kernel_file,
+                                                 {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
+                                                 compute_defines,
+                                                 math_fidelity,
+                                                 fp32_dest_acc_en,
+                                                 math_approx_mode);
 
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
-            num_rows_per_core_group_2,
-            origin_H,
-            origin_W,
-            num_inner,
-            block_size,
-            static_cast<uint32_t>(gamma_has_value),
-            static_cast<uint32_t>(beta_has_value),
-            static_cast<uint32_t>(mean_has_value),
-            static_cast<uint32_t>(rstd_has_value),
-            static_cast<uint32_t>(is_lastdim_layer_norm),
-            static_cast<uint32_t>(is_groupnorm)};
+        const std::vector<uint32_t> compute_args_group_2{num_rows_per_core_group_2,
+                                                         origin_H,
+                                                         origin_W,
+                                                         num_inner,
+                                                         block_size,
+                                                         static_cast<uint32_t>(gamma_has_value),
+                                                         static_cast<uint32_t>(beta_has_value),
+                                                         static_cast<uint32_t>(mean_has_value),
+                                                         static_cast<uint32_t>(rstd_has_value),
+                                                         static_cast<uint32_t>(is_lastdim_layer_norm),
+                                                         static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -344,29 +342,27 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
             TT_THROW("Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            input_addr,
-            gamma_addr,
-            beta_addr,
-            num_rows_per_core,
-            num_inner,
-            tile_offset,
-            scaler.u,
-            e.u,
-            mask_h,
-            mask_w};
+        const std::vector<uint32_t> reader_runtime_args{input_addr,
+                                                        gamma_addr,
+                                                        beta_addr,
+                                                        num_rows_per_core,
+                                                        num_inner,
+                                                        tile_offset,
+                                                        scaler.u,
+                                                        e.u,
+                                                        mask_h,
+                                                        mask_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
-        const std::vector<uint32_t> writer_runtime_args{
-            output_addr,
-            mean_addr,
-            rstd_addr,
-            num_rows_per_core,
-            num_inner,
-            tile_offset,
-            mean_rstd_height,
-            mean_rstd_width,
-            normalized_dims};
+        const std::vector<uint32_t> writer_runtime_args{output_addr,
+                                                        mean_addr,
+                                                        rstd_addr,
+                                                        num_rows_per_core,
+                                                        num_inner,
+                                                        tile_offset,
+                                                        mean_rstd_height,
+                                                        mean_rstd_width,
+                                                        normalized_dims};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         tile_offset += num_rows_per_core * num_inner;

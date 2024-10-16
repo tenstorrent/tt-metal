@@ -15,11 +15,12 @@ Tensor DataTransferToHostOperation::invoke(const Tensor &input_tensor) {
     return input_tensor.cpu();
 }
 
-
-Tensor DataTransferToDeviceOperation::invoke(const Tensor &input_tensor, Device* device, const MemoryConfig& memory_config) {
+Tensor DataTransferToDeviceOperation::invoke(const Tensor &input_tensor,
+                                             Device *device,
+                                             const MemoryConfig &memory_config) {
     TT_FATAL(device != nullptr, "Error");
 
-    if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
         TT_FATAL(input_tensor.get_legacy_shape()[-1] * input_tensor.element_size() % sizeof(uint32_t) == 0, "Error");
     }
 

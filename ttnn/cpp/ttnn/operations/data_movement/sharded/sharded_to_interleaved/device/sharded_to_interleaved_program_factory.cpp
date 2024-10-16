@@ -13,8 +13,10 @@ using namespace tt::constants;
 using namespace tt;
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
+operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor& input,
+                                                                  const Tensor& output,
+                                                                  uint32_t num_slices,
+                                                                  uint32_t slice_index) {
     tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -103,35 +105,35 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     if (input.get_layout() == Layout::TILE) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)dst_is_dram};
 
-        unary_writer_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        unary_writer_kernel_id =
+            tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                   "writer_unary_sharded_blocks_interleaved_start_id.cpp",
+                                   all_cores,
+                                   tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     } else {
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
         uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)dst_is_dram,
-            (std::uint32_t)dst_stick_size_is_power_of_two,
-            (std::uint32_t)dst_log2_stick_size};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index,
+                                                          (std::uint32_t)dst_is_dram,
+                                                          (std::uint32_t)dst_stick_size_is_power_of_two,
+                                                          (std::uint32_t)dst_log2_stick_size};
 
-        unary_writer_kernel_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-            "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
-            tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        unary_writer_kernel_id =
+            tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                   "writer_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
+                                   all_cores,
+                                   tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     if (convert_df) {
         vector<uint32_t> compute_kernel_args = {num_units_per_shard};
 
-        auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
-            all_cores,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+        auto eltwise_unary_kernel_group_1 =
+            tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
+                                   all_cores,
+                                   tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
     }
 
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, {num_units_per_shard});
@@ -171,19 +173,18 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {dst_buffer->address(),
-                 num_units_per_shard_height,
-                 num_units_per_shard_width,
-                 shard_height,
-                 shard_width,
-                 num_units_offset,
-                 num_units_per_shard,
-                 curr_idx_h + curr_idx_w,
-                 starting_idx_h});
+            tt_metal::SetRuntimeArgs(program,
+                                     unary_writer_kernel_id,
+                                     core,
+                                     {dst_buffer->address(),
+                                      num_units_per_shard_height,
+                                      num_units_per_shard_width,
+                                      shard_height,
+                                      shard_width,
+                                      num_units_offset,
+                                      num_units_per_shard,
+                                      curr_idx_h + curr_idx_w,
+                                      starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -217,17 +218,16 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {dst_buffer->address(),
-                 num_units_per_row,
-                 shard_height,
-                 shard_width,
-                 padded_shard_width,
-                 curr_idx_w,
-                 curr_idx_h});
+            tt_metal::SetRuntimeArgs(program,
+                                     unary_writer_kernel_id,
+                                     core,
+                                     {dst_buffer->address(),
+                                      num_units_per_row,
+                                      shard_height,
+                                      shard_width,
+                                      padded_shard_width,
+                                      curr_idx_w,
+                                      curr_idx_h});
             curr_idx_w += output_unit_size;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -255,7 +255,10 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                 dst_buffer = input_tensors.at(1).buffer();
 
                 // Calculate starting_idx_h
-                uint32_t runtime_slice_index = static_cast<const ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation*>(operation)->slice_index;
+                uint32_t runtime_slice_index =
+                    static_cast<const ttnn::operations::data_movement::ShardedToInterleavedPartialDeviceOperation*>(
+                        operation)
+                        ->slice_index;
                 starting_idx_h = calculate_starting_idx_h(input_tensors.at(1), num_slices, runtime_slice_index);
             } else {
                 dst_buffer = output_tensors.at(0).buffer();
@@ -275,7 +278,4 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-
-
-
-}
+}  // namespace ttnn::operations::data_movement::detail

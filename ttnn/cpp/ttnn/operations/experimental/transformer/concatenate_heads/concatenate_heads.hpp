@@ -12,23 +12,24 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 
 struct ConcatenateHeadsOperation {
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operation::run(
-                   ConcatenateHeadsDeviceOperation{compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
-                   {input_tensor}, {}, {optional_output_tensor}, queue_id)
+    static ttnn::Tensor invoke(uint8_t queue_id,
+                               const Tensor& input_tensor,
+                               const CoreCoord& compute_with_storage_grid_size,
+                               const std::optional<MemoryConfig>& memory_config = std::nullopt,
+                               std::optional<Tensor> optional_output_tensor = std::nullopt) {
+        return operation::run(ConcatenateHeadsDeviceOperation{compute_with_storage_grid_size,
+                                                              memory_config.value_or(input_tensor.memory_config())},
+                              {input_tensor},
+                              {},
+                              {optional_output_tensor},
+                              queue_id)
             .at(0);
     }
 
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
+    static ttnn::Tensor invoke(const Tensor& input_tensor,
+                               const CoreCoord& compute_with_storage_grid_size,
+                               const std::optional<MemoryConfig>& memory_config = std::nullopt,
+                               std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return invoke(
             DefaultQueueId, input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
     }

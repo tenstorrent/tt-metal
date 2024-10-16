@@ -9,39 +9,37 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 // #include "debug/dprint.h"
 
-
 void kernel_main() {
-    constexpr bool is_mcast_sender                  = get_compile_time_arg_val(0) == 1;
-    constexpr bool fuse_gamma                       = get_compile_time_arg_val(1) == 1;
-    constexpr bool fuse_beta                        = get_compile_time_arg_val(2) == 1;
-    constexpr bool gamma_is_dram                    = get_compile_time_arg_val(3) == 1;
-    constexpr bool beta_is_dram                     = get_compile_time_arg_val(4) == 1;
-    constexpr bool input_mask_is_dram                = get_compile_time_arg_val(5) == 1;
+    constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
+    constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
+    constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
+    constexpr bool gamma_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr bool input_mask_is_dram = get_compile_time_arg_val(5) == 1;
 
-    constexpr uint32_t num_cols_tile_gamma_beta       = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(6);
 
-    constexpr uint32_t per_core_N                     = get_compile_time_arg_val(7);
-    constexpr uint32_t per_core_N_bytes                = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_N_bytes_with_stride    = get_compile_time_arg_val(9);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(7);
+    constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(9);
 
-    constexpr uint32_t num_groups_per_core              = get_compile_time_arg_val(10);
-    constexpr uint32_t num_batches_per_core              = get_compile_time_arg_val(11);
-    constexpr uint32_t block_w              = get_compile_time_arg_val(12);
+    constexpr uint32_t num_groups_per_core = get_compile_time_arg_val(10);
+    constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t block_w = get_compile_time_arg_val(12);
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(13) == 1
-    #if (stick_size_is_pow2)
+#define stick_size_is_pow2 get_compile_time_arg_val(13) == 1
+#if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(14);
-    #else
+#else
     constexpr uint32_t page_size = get_compile_time_arg_val(14);
-    #endif
+#endif
 
-
-    const uint32_t gamma_addr                     = get_arg_val<uint32_t>(3);
-    const uint32_t beta_addr                      = get_arg_val<uint32_t>(4);
-    const uint32_t input_mask_addr                 = get_arg_val<uint32_t>(5);
-    const uint32_t gamma_tile_start_id            = get_arg_val<uint32_t>(6);
-    const uint32_t beta_tile_start_id             = get_arg_val<uint32_t>(7);
-    const uint32_t input_mask_tile_start_id             = get_arg_val<uint32_t>(8);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(4);
+    const uint32_t input_mask_addr = get_arg_val<uint32_t>(5);
+    const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(6);
+    const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
+    const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
 
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
     constexpr uint32_t cb_beta = tt::CB::c_in6;
@@ -54,18 +52,16 @@ void kernel_main() {
     const DataFormat input_mask_data_format = get_dataformat(cb_input_mask);
 
     // input mask
-    const InterleavedAddrGenFast<input_mask_is_dram> mask = {
-        .bank_base_address = input_mask_addr,
-        .page_size = input_mask_single_tile_size_bytes,
-        .data_format = input_mask_data_format
-    };
+    const InterleavedAddrGenFast<input_mask_is_dram> mask = {.bank_base_address = input_mask_addr,
+                                                             .page_size = input_mask_single_tile_size_bytes,
+                                                             .data_format = input_mask_data_format};
 
-    for (uint32_t b=0; b < num_batches_per_core; ++b) {
+    for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
-        for (uint32_t i=0; i < num_groups_per_core; ++i) {
+        for (uint32_t i = 0; i < num_groups_per_core; ++i) {
             cb_reserve_back(cb_input_mask, block_w);
             uint32_t l1_write_addr_input_mask = get_write_ptr(cb_input_mask);
-            for (uint32_t j=0; j < block_w; ++j) {
+            for (uint32_t j = 0; j < block_w; ++j) {
                 noc_async_read_tile(input_mask_tile_id, mask, l1_write_addr_input_mask);
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
@@ -78,8 +74,7 @@ void kernel_main() {
                 const uint32_t scalar_w = get_arg_val<uint32_t>(1);
                 generate_reduce_scaler(cb_in_2, scalar_w);
 
-
-                if constexpr(is_mcast_sender) {
+                if constexpr (is_mcast_sender) {
                     constexpr uint32_t cb_in_4 = tt::CB::c_in4;
                     const uint32_t scalar_c = get_arg_val<uint32_t>(0);
                     generate_reduce_scaler(cb_in_4, scalar_c);
@@ -89,19 +84,15 @@ void kernel_main() {
                 const uint32_t eps = get_arg_val<uint32_t>(2);
                 generate_bcast_col_scalar(eps_cb_id, eps);
 
-                if constexpr(fuse_gamma) {
+                if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-                    #if (stick_size_is_pow2)
+#if (stick_size_is_pow2)
                     const InterleavedPow2AddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr,
-                        .log_base_2_of_page_size = log_base_2_of_page_size
-                    };
-                    #else
-                    const InterleavedAddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr,
-                        .page_size = page_size
-                    };
-                    #endif
+                        .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+#else
+                    const InterleavedAddrGen<gamma_is_dram> gamma = {.bank_base_address = gamma_addr,
+                                                                     .page_size = page_size};
+#endif
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
@@ -117,19 +108,15 @@ void kernel_main() {
                     cb_push_back(cb_gamma, num_cols_tile_gamma_beta);
                 }
 
-                if constexpr(fuse_beta) {
+                if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-                    #if (stick_size_is_pow2)
+#if (stick_size_is_pow2)
                     const InterleavedPow2AddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr,
-                        .log_base_2_of_page_size = log_base_2_of_page_size
-                    };
-                    #else
-                    const InterleavedAddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr,
-                        .page_size = page_size
-                    };
-                    #endif
+                        .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+#else
+                    const InterleavedAddrGen<beta_is_dram> beta = {.bank_base_address = beta_addr,
+                                                                   .page_size = page_size};
+#endif
 
                     uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
                     cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
@@ -147,5 +134,4 @@ void kernel_main() {
             }
         }
     }
-
 }

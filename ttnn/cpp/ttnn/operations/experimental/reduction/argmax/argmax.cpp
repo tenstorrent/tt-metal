@@ -24,8 +24,10 @@ Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& out
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
-
+Tensor ArgmaxOperation::invoke(const Tensor& input_t,
+                               int64_t _dim,
+                               bool all,
+                               const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
     operation::launch_op(
@@ -102,7 +104,8 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     Tensor result = ttnn::where(ttnn::eqz(max_indices), midx, max_indices, output_memory_config);
                     result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
-                    result = ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
+                    result =
+                        ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
                     if (is_channel) {
                         std::vector<int64_t> permute_dims = {1, 0, 2, 3};
                         Tensor transpose_res = ttnn::permute(result, permute_dims, output_memory_config);
@@ -131,10 +134,12 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
         {input_t},
         output_tensors);
     return output_tensors[0];
-
 }
 
-Tensor ArgminOperation::invoke(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgminOperation::invoke(const Tensor& input_a,
+                               int64_t _dim,
+                               bool all,
+                               const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor neg_input = ttnn::neg(input_a, output_memory_config);
     return ttnn::experimental::argmax(neg_input, _dim, all, output_memory_config);

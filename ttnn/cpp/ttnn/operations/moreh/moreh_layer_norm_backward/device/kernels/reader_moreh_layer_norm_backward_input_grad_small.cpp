@@ -5,16 +5,15 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 template <typename T>
-void read_mean_rstd(
-    uint32_t cb_id,
-    uint32_t tile_offset,
-    uint32_t normalized_dims,
-    uint32_t outer_idx,
-    uint32_t height,
-    uint32_t width,
-    uint32_t Ht,
-    uint32_t Wt,
-    T addrg) {
+void read_mean_rstd(uint32_t cb_id,
+                    uint32_t tile_offset,
+                    uint32_t normalized_dims,
+                    uint32_t outer_idx,
+                    uint32_t height,
+                    uint32_t width,
+                    uint32_t Ht,
+                    uint32_t Wt,
+                    T addrg) {
     constexpr uint32_t onetile = 1;
 
     const uint32_t cb_tile_bytes = get_tile_size(cb_id);
@@ -44,10 +43,9 @@ void read_mean_rstd(
 
             auto dst_noc_addr = get_noc_addr(noc_id, addrg);
 
-            noc_async_read(
-                dst_noc_addr + tilized_idx * cb_dtype_bytes,
-                l1_write_addr + src_idx * cb_dtype_bytes,
-                cb_dtype_bytes * FACE_HEIGHT);
+            noc_async_read(dst_noc_addr + tilized_idx * cb_dtype_bytes,
+                           l1_write_addr + src_idx * cb_dtype_bytes,
+                           cb_dtype_bytes * FACE_HEIGHT);
 
             noc_async_read_barrier();
         }
@@ -132,10 +130,9 @@ void kernel_main() {
     constexpr bool do_mask_h = get_compile_time_arg_val(6) == 1;
     constexpr bool do_mask_w = get_compile_time_arg_val(7) == 1;
 
-    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {.bank_base_address = output_grad_addr,
+                                                                           .page_size = output_grad_tile_bytes,
+                                                                           .data_format = output_grad_data_format};
 
     const InterleavedAddrGenFast<input_is_dram> input_addrg = {
         .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
@@ -174,28 +171,26 @@ void kernel_main() {
         uint32_t mean_rstd_tile_offset = tile_offset / num_inner;
 
         // mean
-        read_mean_rstd(
-            cb_id_mean,
-            mean_rstd_tile_offset,
-            normalized_dims,
-            outer_idx,
-            mean_rstd_height,
-            mean_rstd_width,
-            mean_rstd_Ht,
-            mean_rstd_Wt,
-            mean_addrg);
+        read_mean_rstd(cb_id_mean,
+                       mean_rstd_tile_offset,
+                       normalized_dims,
+                       outer_idx,
+                       mean_rstd_height,
+                       mean_rstd_width,
+                       mean_rstd_Ht,
+                       mean_rstd_Wt,
+                       mean_addrg);
 
         // rstd
-        read_mean_rstd(
-            cb_id_rstd,
-            mean_rstd_tile_offset,
-            normalized_dims,
-            outer_idx,
-            mean_rstd_height,
-            mean_rstd_width,
-            mean_rstd_Ht,
-            mean_rstd_Wt,
-            rstd_addrg);
+        read_mean_rstd(cb_id_rstd,
+                       mean_rstd_tile_offset,
+                       normalized_dims,
+                       outer_idx,
+                       mean_rstd_height,
+                       mean_rstd_width,
+                       mean_rstd_Ht,
+                       mean_rstd_Wt,
+                       rstd_addrg);
 
         // input (N, C, H, W)
         const uint32_t input_l1_write_ptr = get_write_ptr(cb_id_input);

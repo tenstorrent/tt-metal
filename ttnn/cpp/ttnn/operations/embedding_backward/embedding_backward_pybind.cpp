@@ -56,36 +56,33 @@ void py_bind_embedding_backward(py::module& module) {
             >>> output = ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor, dtype=ttnn.bfloat16))doc";
 
     using OperationType = decltype(ttnn::embedding_bw);
-    bind_registered_operation(
-        module,
-        ttnn::embedding_bw,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const ttnn::Tensor& output_gradient_tensor,
-               const std::optional<const DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    output_gradient_tensor,
-                    dtype,
-                    memory_config,
-                    optional_output_tensor);
-            },
-            py::arg("input_tensor").noconvert(),
-            py::arg("weight_tensor").noconvert(),
-            py::arg("output_gradient_tensor").noconvert(),
-            py::kw_only(),
-            py::arg("dtype").noconvert() = std::nullopt,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+    bind_registered_operation(module,
+                              ttnn::embedding_bw,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const ttnn::Tensor& weight_tensor,
+                                                         const ttnn::Tensor& output_gradient_tensor,
+                                                         const std::optional<const DataType> dtype,
+                                                         std::optional<ttnn::Tensor>& optional_output_tensor,
+                                                         const std::optional<ttnn::MemoryConfig>& memory_config,
+                                                         uint8_t queue_id) {
+                                                          return self(queue_id,
+                                                                      input_tensor,
+                                                                      weight_tensor,
+                                                                      output_gradient_tensor,
+                                                                      dtype,
+                                                                      memory_config,
+                                                                      optional_output_tensor);
+                                                      },
+                                                      py::arg("input_tensor").noconvert(),
+                                                      py::arg("weight_tensor").noconvert(),
+                                                      py::arg("output_gradient_tensor").noconvert(),
+                                                      py::kw_only(),
+                                                      py::arg("dtype").noconvert() = std::nullopt,
+                                                      py::arg("output_tensor").noconvert() = std::nullopt,
+                                                      py::arg("memory_config") = std::nullopt,
+                                                      py::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::embedding_backward

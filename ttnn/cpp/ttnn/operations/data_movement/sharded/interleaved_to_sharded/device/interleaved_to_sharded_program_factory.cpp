@@ -13,8 +13,10 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor& input,
+                                                                  const Tensor& output,
+                                                                  uint32_t num_slices,
+                                                                  uint32_t slice_index) {
     tt::tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
@@ -43,9 +45,11 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_offset = num_units_per_row;
         uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height -
+            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
-            num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
+            num_units_per_shard_width -
+            (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
         num_units = (input.volume() / input.get_legacy_shape()[-1] / shard_spec.shape[0]) *
@@ -59,7 +63,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_offset = 1;
         uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1];
         num_units_per_shard_height_last =
-            num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
+            num_units_per_shard_height -
+            (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
@@ -84,7 +89,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         out_cb_index = tt::CB::c_out0;
         uint32_t input_page_size = align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size,
+                                               {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
         auto cb_input = tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
     }
@@ -107,27 +113,27 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram, all_cores.num_cores()};
 
-        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
-            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        unary_reader_kernel_id =
+            tt::tt_metal::CreateKernel(program,
+                                       "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                       "reader_unary_sharded_blocks_interleaved_start_id.cpp",
+                                       all_cores,
+                                       tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)scratch_cb_index,
-            (std::uint32_t)src_is_dram,
-            (std::uint32_t)src_stick_size_is_power_of_two,
-            (std::uint32_t)src_log2_stick_size};
+        std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index,
+                                                          (std::uint32_t)scratch_cb_index,
+                                                          (std::uint32_t)src_is_dram,
+                                                          (std::uint32_t)src_stick_size_is_power_of_two,
+                                                          (std::uint32_t)src_log2_stick_size};
 
-        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-            "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
-            all_cores,
-            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        unary_reader_kernel_id =
+            tt::tt_metal::CreateKernel(program,
+                                       "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+                                       "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp",
+                                       all_cores,
+                                       tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     }
 
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
@@ -186,18 +192,17 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 }
             }
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(),
-                 shard_height,
-                 shard_width,
-                 padded_offset,
-                 num_units_offset,
-                 curr_num_units_per_shard,
-                 curr_idx_h + curr_idx_w,
-                 starting_idx_h});
+            tt::tt_metal::SetRuntimeArgs(program,
+                                         unary_reader_kernel_id,
+                                         core,
+                                         {src_buffer->address(),
+                                          shard_height,
+                                          shard_width,
+                                          padded_offset,
+                                          num_units_offset,
+                                          curr_num_units_per_shard,
+                                          curr_idx_h + curr_idx_w,
+                                          starting_idx_h});
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -248,20 +253,19 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 aligned_offset = 0;
             }
 
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(),
-                 num_units_per_row,
-                 shard_height,
-                 shard_width,
-                 padded_offset_bytes,
-                 static_cast<uint32_t>(aligned),
-                 aligned_width_offset,
-                 aligned_shard_width,
-                 aligned_offset,
-                 curr_idx_h});
+            tt::tt_metal::SetRuntimeArgs(program,
+                                         unary_reader_kernel_id,
+                                         core,
+                                         {src_buffer->address(),
+                                          num_units_per_row,
+                                          shard_height,
+                                          shard_width,
+                                          padded_offset_bytes,
+                                          static_cast<uint32_t>(aligned),
+                                          aligned_width_offset,
+                                          aligned_shard_width,
+                                          aligned_offset,
+                                          curr_idx_h});
             curr_idx_w += input_unit_size;
             if (curr_idx_w >= num_units_per_row) {
                 curr_idx_w = 0;
@@ -287,7 +291,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             bool partial_op = num_slices > 1;
             uint32_t starting_idx_h = 0;
             if (partial_op) {
-                uint32_t runtime_slice_index = static_cast<const InterleavedToShardedPartialDeviceOperation*>(operation)->slice_index;
+                uint32_t runtime_slice_index =
+                    static_cast<const InterleavedToShardedPartialDeviceOperation*>(operation)->slice_index;
                 starting_idx_h = calculate_starting_idx_h(input_tensors.at(0), num_slices, runtime_slice_index);
             }
 
@@ -305,6 +310,4 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-
-
-}
+}  // namespace ttnn::operations::data_movement::detail

@@ -41,26 +41,25 @@ std::vector<tt::tt_metal::LegacyShape> Tilize::compute_output_shapes(const std::
     return {output_shape};
 }
 
-std::vector<Tensor> Tilize::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+std::vector<Tensor> Tilize::create_output_tensors(const std::vector<Tensor>& input_tensors,
+                                                  const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.memory_config().is_sharded()) {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = input_tensor.memory_config().shard_spec;
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            Layout::TILE,
-            input_tensor.device(),
-            mem_config)};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0),
+                                     this->output_dtype,
+                                     Layout::TILE,
+                                     input_tensor.device(),
+                                     mem_config)};
     } else {
         return operation::generic_create_output_tensors(
             *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
     }
 }
 
-operation::ProgramWithCallbacks Tilize::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks Tilize::create_program(const std::vector<Tensor>& input_tensors,
+                                                       std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     if (this->use_multicore) {

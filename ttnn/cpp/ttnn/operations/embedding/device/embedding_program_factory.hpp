@@ -14,12 +14,11 @@ using namespace tt;
 
 namespace ttnn::operations::embedding::detail {
 
-operation::ProgramWithCallbacks embeddings_tilized(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
-    EmbeddingsType embeddings_type,
-    std::optional<uint32_t> pad_token) {
+operation::ProgramWithCallbacks embeddings_tilized(const Tensor &a,
+                                                   const Tensor &weights,
+                                                   Tensor &output,
+                                                   EmbeddingsType embeddings_type,
+                                                   std::optional<uint32_t> pad_token) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -81,13 +80,11 @@ operation::ProgramWithCallbacks embeddings_tilized(
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
-
 
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.get_dtype());
     uint32_t weights_single_tile_size = tt_metal::detail::TileSize(weights_cb_data_format);
@@ -98,8 +95,8 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            buffering * num_tiles_per_block * weights_single_tile_size, {{src0_cb_index, weights_cb_data_format}})
+        tt_metal::CircularBufferConfig(buffering * num_tiles_per_block * weights_single_tile_size,
+                                       {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -127,8 +124,8 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            buffering * num_tiles_per_block * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+        tt_metal::CircularBufferConfig(buffering * num_tiles_per_block * output_single_tile_size,
+                                       {{output_cb_index, output_cb_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
@@ -139,38 +136,35 @@ operation::ProgramWithCallbacks embeddings_tilized(
 
     // Create Kernels
     // reader
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)input_stick_size_is_power_of_two,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)input_log2_stick_size,
-        (std::uint32_t)weights_is_dram,
-        (std::uint32_t)weight_stick_size_is_power_of_two,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_log2_stick_size,
-        (std::uint32_t)num_tiles_per_block,
-        (std::uint32_t)TILE_HEIGHT * input_element_size_bytes};
+    std::vector<uint32_t> embedding_compile_time_args = {(std::uint32_t)in0_is_dram,
+                                                         (std::uint32_t)input_stick_size_is_power_of_two,
+                                                         (std::uint32_t)input_page_size,
+                                                         (std::uint32_t)input_log2_stick_size,
+                                                         (std::uint32_t)weights_is_dram,
+                                                         (std::uint32_t)weight_stick_size_is_power_of_two,
+                                                         (std::uint32_t)weight_page_size,
+                                                         (std::uint32_t)weight_log2_stick_size,
+                                                         (std::uint32_t)num_tiles_per_block,
+                                                         (std::uint32_t)TILE_HEIGHT * input_element_size_bytes};
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"},
+                                                  {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-             embedding_defines));
+    auto reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
+                               all_cores,
+                               tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
         vector<uint32_t> compute_args_1 = {
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_1 = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
-            core_group_1,
-            tt_metal::ComputeConfig{.compile_args = compute_args_1});
+        auto tilize_kernel_id_1 = tt_metal::CreateKernel(program,
+                                                         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+                                                         core_group_1,
+                                                         tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
 
     if (num_blocks_per_core_group_2 > 0) {
@@ -178,11 +172,10 @@ operation::ProgramWithCallbacks embeddings_tilized(
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_2 = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
-            core_group_2,
-            tt_metal::ComputeConfig{.compile_args = compute_args_2});
+        auto tilize_kernel_id_2 = tt_metal::CreateKernel(program,
+                                                         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+                                                         core_group_2,
+                                                         tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)out_is_dram};
@@ -192,8 +185,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -264,12 +256,11 @@ operation::ProgramWithCallbacks embeddings_tilized(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks embeddings_rm(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
-    EmbeddingsType embeddings_type,
-    std::optional<uint32_t> pad_token) {
+operation::ProgramWithCallbacks embeddings_rm(const Tensor &a,
+                                              const Tensor &weights,
+                                              Tensor &output,
+                                              EmbeddingsType embeddings_type,
+                                              std::optional<uint32_t> pad_token) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -376,43 +367,39 @@ operation::ProgramWithCallbacks embeddings_rm(
 
     // Create Kernels
     // reader
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)input_stick_size_is_power_of_two,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)input_log2_stick_size,
-        (std::uint32_t)weights_is_dram,
-        (std::uint32_t)weight_stick_size_is_power_of_two,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_log2_stick_size,
-        (std::uint32_t)block_height,
-        (std::uint32_t)block_height * input_element_size_bytes};
+    std::vector<uint32_t> embedding_compile_time_args = {(std::uint32_t)in0_is_dram,
+                                                         (std::uint32_t)input_stick_size_is_power_of_two,
+                                                         (std::uint32_t)input_page_size,
+                                                         (std::uint32_t)input_log2_stick_size,
+                                                         (std::uint32_t)weights_is_dram,
+                                                         (std::uint32_t)weight_stick_size_is_power_of_two,
+                                                         (std::uint32_t)weight_page_size,
+                                                         (std::uint32_t)weight_log2_stick_size,
+                                                         (std::uint32_t)block_height,
+                                                         (std::uint32_t)block_height * input_element_size_bytes};
 
     EmbeddingsIndexType embeddings_index_type;
-    if(a.get_dtype() == DataType::BFLOAT16) {
+    if (a.get_dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
-    }
-    else{
+    } else {
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"}, {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+    std::map<string, string> embedding_defines = {{magic_enum::enum_name(embeddings_type).data(), "1"},
+                                                  {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(
-            embedding_compile_time_args,
-            embedding_defines));
+    auto reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
+                               all_cores,
+                               tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)log2(output_page_size) : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)output_stick_size_is_power_of_two,
-        (std::uint32_t)output_log2_stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index,
+                                                      (std::uint32_t)out_is_dram,
+                                                      (std::uint32_t)output_stick_size_is_power_of_two,
+                                                      (std::uint32_t)output_log2_stick_size};
 
     // Tilized writer
     auto writer_kernel_id = tt_metal::CreateKernel(
@@ -489,13 +476,12 @@ operation::ProgramWithCallbacks embeddings_rm(
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks embeddings_(
-    const Tensor &a,
-    const Tensor &weights,
-    Tensor &output,
-    bool tilized,
-    EmbeddingsType embeddings_type,
-    std::optional<uint32_t> pad_token) {
+operation::ProgramWithCallbacks embeddings_(const Tensor &a,
+                                            const Tensor &weights,
+                                            Tensor &output,
+                                            bool tilized,
+                                            EmbeddingsType embeddings_type,
+                                            std::optional<uint32_t> pad_token) {
     if (tilized) {
         return embeddings_tilized(a, weights, output, embeddings_type, pad_token);
     } else {

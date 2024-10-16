@@ -11,22 +11,21 @@
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
 
 struct MorehNllLossBackward {
-    static Tensor invoke(
-        const Tensor &target_tensor,
-        const Tensor &output_grad_tensor,
-        const bool reduction_mean,
-        const std::optional<Tensor>& weight_tensor,
-        const std::optional<Tensor>& input_grad_tensor,
-        const std::optional<Tensor>& divisor_tensor,
-        const int32_t ignore_index,
-        const std::optional<ttnn::MemoryConfig> &memory_config,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    static Tensor invoke(const Tensor &target_tensor,
+                         const Tensor &output_grad_tensor,
+                         const bool reduction_mean,
+                         const std::optional<Tensor> &weight_tensor,
+                         const std::optional<Tensor> &input_grad_tensor,
+                         const std::optional<Tensor> &divisor_tensor,
+                         const int32_t ignore_index,
+                         const std::optional<ttnn::MemoryConfig> &memory_config,
+                         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_backward
 
 namespace ttnn {
-constexpr auto moreh_nll_loss_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_nll_loss_backward",
-    operations::moreh::moreh_nll_loss_backward::MorehNllLossBackward>();
+constexpr auto moreh_nll_loss_backward =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_nll_loss_backward",
+                                                 operations::moreh::moreh_nll_loss_backward::MorehNllLossBackward>();
 }  // namespace ttnn

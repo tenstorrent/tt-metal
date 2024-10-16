@@ -16,18 +16,16 @@ namespace py = pybind11;
 namespace ttnn::operations::moreh::moreh_dot {
 
 void bind_moreh_dot_operation(py::module& module) {
-    bind_registered_operation(
-        module,
-        ttnn::moreh_dot,
-        "Moreh Moreh Dot Operation",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("output") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+    bind_registered_operation(module,
+                              ttnn::moreh_dot,
+                              "Moreh Moreh Dot Operation",
+                              ttnn::pybind_arguments_t{py::arg("input_tensor_a"),
+                                                       py::arg("input_tensor_b"),
+                                                       py::kw_only(),
+                                                       py::arg("output") = std::nullopt,
+                                                       py::arg("dtype") = std::nullopt,
+                                                       py::arg("memory_config") = std::nullopt,
+                                                       py::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::moreh::moreh_dot

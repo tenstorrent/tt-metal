@@ -10,13 +10,12 @@ namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
-    const Tensor& a,
-    const Tensor& bx,
-    const Tensor& h,
-    Tensor& output,
-    MathFidelity math_fidelity,
-    CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(const Tensor& a,
+                                                           const Tensor& bx,
+                                                           const Tensor& h,
+                                                           Tensor& output,
+                                                           MathFidelity math_fidelity,
+                                                           CoreCoord compute_with_storage_grid_size) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto* a_buffer = a.buffer();
@@ -32,12 +31,11 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const auto all_cores = a.shard_spec()->grid;
-    const auto create_circular_buffer = [&program, &all_cores](
-                                            uint32_t index,
-                                            uint32_t num_tiles,
-                                            uint32_t tile_size,
-                                            const tt::DataFormat& format,
-                                            Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
+    const auto create_circular_buffer = [&program, &all_cores](uint32_t index,
+                                                               uint32_t num_tiles,
+                                                               uint32_t tile_size,
+                                                               const tt::DataFormat& format,
+                                                               Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
         auto config = CircularBufferConfig(num_tiles * tile_size, {{index, format}}).set_page_size(index, tile_size);
         if (buffer != nullptr) {
             config = config.set_globally_allocated_address(*buffer);
@@ -98,18 +96,17 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
-    std::vector<uint32_t> compute_compile_time_args = {
-        cb_a_in_id,
-        cb_bx_in_id,
-        cb_h_in_id,
-        cb_a_tilize_in_id,
-        cb_bx_tilize_in_id,
-        cb_h_prev_id,
-        cb_ah_id,
-        cb_h_id,
-        cb_tilize_out_id,
-        cb_out_id,
-        cb_h_acc_id};
+    std::vector<uint32_t> compute_compile_time_args = {cb_a_in_id,
+                                                       cb_bx_in_id,
+                                                       cb_h_in_id,
+                                                       cb_a_tilize_in_id,
+                                                       cb_bx_tilize_in_id,
+                                                       cb_h_prev_id,
+                                                       cb_ah_id,
+                                                       cb_h_id,
+                                                       cb_tilize_out_id,
+                                                       cb_out_id,
+                                                       cb_h_acc_id};
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -127,11 +124,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ssm/prefix_scan/device/kernels/ssm_prefix_scan.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                    .fp32_dest_acc_en = false,
+                                    .math_approx_mode = false,
+                                    .compile_args = compute_compile_time_args});
 
     std::vector<CoreCoord> cores =
         grid_to_cores(all_cores.num_cores(), compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, true);
@@ -190,12 +186,11 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     set_runtime_args(program, a, bx, h, output);
 
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
+    auto override_runtime_arguments_callback = [set_runtime_args](const void* operation,
+                                                                  Program& program,
+                                                                  const std::vector<Tensor>& input_tensors,
+                                                                  const std::vector<std::optional<const Tensor>>&,
+                                                                  const std::vector<Tensor>& output_tensors) {
         auto& a = input_tensors.at(0);
         auto& bx = input_tensors.at(1);
         auto& h = input_tensors.at(2);

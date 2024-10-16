@@ -22,7 +22,8 @@ struct MorehLayerNorm {
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
     static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_inputs);
 
     // The parameters of this function must be identical to those of invoke.
     static std::vector<bool> create_async_return_flag(
@@ -40,7 +41,7 @@ struct MorehLayerNorm {
 }  // namespace ttnn::operations::moreh::moreh_layer_norm
 
 namespace ttnn {
-constexpr auto moreh_layer_norm = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_layer_norm",
-    ttnn::operations::moreh::moreh_layer_norm::MorehLayerNorm>();
+constexpr auto moreh_layer_norm =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_layer_norm",
+                                                 ttnn::operations::moreh::moreh_layer_norm::MorehLayerNorm>();
 }  // namespace ttnn

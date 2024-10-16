@@ -24,8 +24,8 @@ namespace core {
 namespace detail {
 
 // Issue #8617: Limitations on tensor width for multicore device tilize
-inline bool use_multicore_device_tilize(
-    const Tensor& input, const std::optional<tt::tt_metal::DataType>& output_dtype) {
+inline bool use_multicore_device_tilize(const Tensor& input,
+                                        const std::optional<tt::tt_metal::DataType>& output_dtype) {
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
 
@@ -35,19 +35,19 @@ inline bool use_multicore_device_tilize(
             : input_single_tile_size;
 
     uint32_t num_tiles_in_row = input.get_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t max_l1_size = input.device()->l1_size_per_core() / 2 - input.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        input.device()->l1_size_per_core() / 2 - input.device()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
 
     return num_tiles_in_row <= max_tiles;
 }
 
 template <typename T>
-Tensor to_layout_impl(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    T* device) {
+Tensor to_layout_impl(const ttnn::Tensor& tensor_arg,
+                      const ttnn::Layout layout,
+                      const std::optional<ttnn::DataType>& dtype,
+                      const std::optional<ttnn::MemoryConfig>& memory_config,
+                      T* device) {
     if (tensor_arg.get_layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.get_dtype()) {
             tt::log_warning(
@@ -75,15 +75,16 @@ Tensor to_layout_impl(
         TT_THROW("ttnn::to_layout: Unsupported layout conversion from {} to {}!", tensor_arg.get_layout(), layout);
     }
 
-    const auto requires_padding_change = [](ttnn::Tensor& tensor, ttnn::Layout layout, const ttnn::Shape& shape) -> bool {
+    const auto requires_padding_change =
+        [](ttnn::Tensor& tensor, ttnn::Layout layout, const ttnn::Shape& shape) -> bool {
         const auto intended_shape = shape;
         const auto padded_shape = shape.with_tile_padding();
         if (layout == ttnn::ROW_MAJOR_LAYOUT and intended_shape != padded_shape) {
             return true;
-        } else if (
-            auto tile = tensor.tile();
-            layout == ttnn::TILE_LAYOUT and (padded_shape.rank() < 2 or padded_shape[-1] % tile.get_tile_shape()[1] != 0 or
-                                             padded_shape[-2] % tile.get_tile_shape()[0] != 0)) {
+        } else if (auto tile = tensor.tile();
+                   layout == ttnn::TILE_LAYOUT and
+                   (padded_shape.rank() < 2 or padded_shape[-1] % tile.get_tile_shape()[1] != 0 or
+                    padded_shape[-2] % tile.get_tile_shape()[0] != 0)) {
             return true;
         } else {
             return false;
@@ -97,11 +98,10 @@ Tensor to_layout_impl(
     std::vector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {
         output_shape.push_back(1);
-        tensor = ttnn::reshape(
-            tensor,
-            ttnn::Shape(
-                std::vector<std::uint32_t>{1, intended_shape[0]},
-                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
+        tensor =
+            ttnn::reshape(tensor,
+                          ttnn::Shape(std::vector<std::uint32_t>{1, intended_shape[0]},
+                                      std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
     }
     for (auto index = 0; index < intended_shape.rank(); ++index) {
         output_shape.push_back(intended_shape[index]);
@@ -166,11 +166,10 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                std::vector<std::pair<uint32_t, uint32_t>> padding = {
-                    {0, 0},
-                    {0, 0},
-                    {0, padded_output_shape[2] - output_shape[2]},
-                    {0, padded_output_shape[3] - output_shape[3]}};
+                std::vector<std::pair<uint32_t, uint32_t>> padding = {{0, 0},
+                                                                      {0, 0},
+                                                                      {0, padded_output_shape[2] - output_shape[2]},
+                                                                      {0, padded_output_shape[3] - output_shape[3]}};
                 tensor = ttnn::pad(0, tensor, padding, 0, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
@@ -213,21 +212,19 @@ Tensor to_layout_impl(
 }
 }  // namespace detail
 
-/* static */ Tensor ToLayout::invoke(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    Device* device) {
+/* static */ Tensor ToLayout::invoke(const ttnn::Tensor& tensor_arg,
+                                     const ttnn::Layout layout,
+                                     const std::optional<ttnn::DataType>& dtype,
+                                     const std::optional<ttnn::MemoryConfig>& memory_config,
+                                     Device* device) {
     return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 
-/* static */ Tensor ToLayout::invoke(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    MeshDevice* device) {
+/* static */ Tensor ToLayout::invoke(const ttnn::Tensor& tensor_arg,
+                                     const ttnn::Layout layout,
+                                     const std::optional<ttnn::DataType>& dtype,
+                                     const std::optional<ttnn::MemoryConfig>& memory_config,
+                                     MeshDevice* device) {
     return detail::to_layout_impl(tensor_arg, layout, dtype, memory_config, device);
 }
 

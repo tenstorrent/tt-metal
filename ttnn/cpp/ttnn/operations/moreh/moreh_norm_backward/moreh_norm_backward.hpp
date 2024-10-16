@@ -9,21 +9,20 @@
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 struct MorehNormBackward {
-    static Tensor invoke(
-        const Tensor& input,
-        const Tensor& output,
-        const Tensor& output_grad,
-        float p,
-        std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-        bool keepdim,
-        const std::optional<Tensor>& input_grad,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+    static Tensor invoke(const Tensor& input,
+                         const Tensor& output,
+                         const Tensor& output_grad,
+                         float p,
+                         std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+                         bool keepdim,
+                         const std::optional<Tensor>& input_grad,
+                         const std::optional<MemoryConfig>& memory_config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_norm_backward
 
 namespace ttnn {
-constexpr auto moreh_norm_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_norm_backward",
-    ttnn::operations::moreh::moreh_norm_backward::MorehNormBackward>();
+constexpr auto moreh_norm_backward =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_norm_backward",
+                                                 ttnn::operations::moreh::moreh_norm_backward::MorehNormBackward>();
 }

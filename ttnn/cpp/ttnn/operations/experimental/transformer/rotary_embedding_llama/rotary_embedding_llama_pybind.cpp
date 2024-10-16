@@ -33,14 +33,13 @@ void py_bind_rotary_embedding_llama(pybind11::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensor = DEFAULT_OUTPUT_MEMORY_CONFIG
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
-        ttnn::pybind_arguments_t {
-            py::arg("input_tensor"),
-            py::arg("cos_cache"),
-            py::arg("sin_cache"),
-            py::arg("trans_mat"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor"),
+                                 py::arg("cos_cache"),
+                                 py::arg("sin_cache"),
+                                 py::arg("trans_mat"),
+                                 py::kw_only(),
+                                 py::arg("memory_config") = std::nullopt,
+                                 py::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

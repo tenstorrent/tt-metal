@@ -20,18 +20,24 @@ namespace operations {
 
 namespace matmul {
 
-using ttnn::operations::unary::UnaryWithParam;
 using tt::tt_metal::LegacyShape;
+using ttnn::operations::unary::UnaryWithParam;
 
 /*
  * GENERAL MATMUL AND BMM
  */
-operation::ProgramWithCallbacks matmul_multi_core(
-    const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse(
-    const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, bool bcast_batch);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(
-    const Tensor &input_tensor_a, const Tensor &input_tensor_b, Tensor &output_tensor, bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core(const Tensor &input_tensor_a,
+                                                  const Tensor &input_tensor_b,
+                                                  Tensor &output_tensor,
+                                                  bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse(const Tensor &input_tensor_a,
+                                                        const Tensor &input_tensor_b,
+                                                        Tensor &output_tensor,
+                                                        bool bcast_batch);
+operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast(const Tensor &input_tensor_a,
+                                                              const Tensor &input_tensor_b,
+                                                              Tensor &output_tensor,
+                                                              bool bcast_batch);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor &input_tensor_a,
@@ -81,21 +87,20 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out);
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    Tensor &output_tensor,
-    bool bcast_batch,
-    CoreCoord compute_with_storage_grid_size,
-    tt::tt_metal::DataType output_dtype,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool untilize_out);
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor &input_tensor_a,
+                                                               const Tensor &input_tensor_b,
+                                                               Tensor &output_tensor,
+                                                               bool bcast_batch,
+                                                               CoreCoord compute_with_storage_grid_size,
+                                                               tt::tt_metal::DataType output_dtype,
+                                                               DeviceComputeKernelConfig compute_kernel_config,
+                                                               uint32_t in0_block_w,
+                                                               uint32_t out_subblock_h,
+                                                               uint32_t out_subblock_w,
+                                                               uint32_t per_core_M,
+                                                               uint32_t per_core_N,
+                                                               bool fuse_batch,
+                                                               bool untilize_out);
 
 // TODO: Uplift this to support fused activation and bias
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1 for in1 iff B=1 for in0 (ie. single
@@ -144,13 +149,12 @@ struct MatmulMultiCoreProgramConfig {};
 
 struct MatmulMultiCoreNonOptimizedReuseProgramConfig {};
 
-using MatmulProgramConfig = std::variant<
-    MatmulMultiCoreProgramConfig,
-    MatmulMultiCoreNonOptimizedReuseProgramConfig,
-    MatmulMultiCoreReuseProgramConfig,
-    MatmulMultiCoreReuseMultiCastProgramConfig,
-    MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
+using MatmulProgramConfig = std::variant<MatmulMultiCoreProgramConfig,
+                                         MatmulMultiCoreNonOptimizedReuseProgramConfig,
+                                         MatmulMultiCoreReuseProgramConfig,
+                                         MatmulMultiCoreReuseMultiCastProgramConfig,
+                                         MatmulMultiCoreReuseMultiCast1DProgramConfig,
+                                         MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
 
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
@@ -166,12 +170,11 @@ struct Matmul {
     const bool transpose_b = false;
     const std::optional<const Tile> output_tile;
 
-    void validate(
-        const std::vector<Tensor> &input_tensors,
-        const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
+    void validate(const std::vector<Tensor> &input_tensors,
+                  const std::vector<std::optional<const Tensor>> &optional_input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes_dram_sharded(
-        const std::vector<Tensor> &input_tensors, uint32_t N_unpadded) const;
+    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes_dram_sharded(const std::vector<Tensor> &input_tensors,
+                                                                              uint32_t N_unpadded) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor> &input_tensors,
@@ -183,14 +186,12 @@ struct Matmul {
         std::vector<Tensor> &output_tensors) const;
 };
 
-Matmul create_matmul_struct(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const struct Matmul &parameters
-);
+Matmul create_matmul_struct(const Tensor &input_tensor_a,
+                            const Tensor &input_tensor_b,
+                            const struct Matmul &parameters);
 
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -201,7 +202,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler);
 operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program &program,
     const Tensor &input_tensor_a,
     const Tensor &input_tensor_b,
     const std::optional<const Tensor> bias,
@@ -212,12 +213,11 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helpe
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &matmul_signal_info);
 
-Tensor matmul(
-    const Tensor &input_tensor_a,
-    const Tensor &input_tensor_b,
-    const std::optional<const Tensor> bias = std::nullopt,
-    const struct Matmul &parameters = Matmul{},
-    const uint8_t queue_id = 0);
+Tensor matmul(const Tensor &input_tensor_a,
+              const Tensor &input_tensor_b,
+              const std::optional<const Tensor> bias = std::nullopt,
+              const struct Matmul &parameters = Matmul{},
+              const uint8_t queue_id = 0);
 
 }  // namespace matmul
 
@@ -227,13 +227,14 @@ Tensor matmul(
 
 namespace bmm_op_utils {
 
-std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
-    const uint32_t per_core_M,
-    const uint32_t per_core_N,
-    const bool per_core_M_equals_subblock_h_constraint,
-    const bool per_core_N_equals_subblock_w_constraint,
-    const bool fp32_dest_acc_en);
+std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(const uint32_t per_core_M,
+                                                          const uint32_t per_core_N,
+                                                          const bool per_core_M_equals_subblock_h_constraint,
+                                                          const bool per_core_N_equals_subblock_w_constraint,
+                                                          const bool fp32_dest_acc_en);
 
-void add_stagger_defines_if_needed(const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+void add_stagger_defines_if_needed(const tt::ARCH arch,
+                                   const int num_cores,
+                                   std::map<string, string> &mm_kernel_defines);
 
 }  // namespace bmm_op_utils

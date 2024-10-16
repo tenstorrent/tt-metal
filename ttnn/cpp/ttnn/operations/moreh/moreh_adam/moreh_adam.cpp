@@ -27,29 +27,29 @@ std::vector<std::optional<Tensor>> MorehAdam::invoke(
     const std::optional<const Tensor> max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::moreh_adam(
-        param_in,
-        grad,
-        exp_avg_in,
-        exp_avg_sq_in,
-        lr,
-        beta1,
-        beta2,
-        eps,
-        weight_decay,
-        step,
-        amsgrad,
-        max_exp_avg_sq_in,
-        param_out,
-        exp_avg_out,
-        exp_avg_sq_out,
-        max_exp_avg_sq_out,
-        memory_config,
-        compute_kernel_config);
+    return ttnn::prim::moreh_adam(param_in,
+                                  grad,
+                                  exp_avg_in,
+                                  exp_avg_sq_in,
+                                  lr,
+                                  beta1,
+                                  beta2,
+                                  eps,
+                                  weight_decay,
+                                  step,
+                                  amsgrad,
+                                  max_exp_avg_sq_in,
+                                  param_out,
+                                  exp_avg_out,
+                                  exp_avg_sq_out,
+                                  max_exp_avg_sq_out,
+                                  memory_config,
+                                  compute_kernel_config);
 }
 
 std::vector<Tensor> MorehAdam::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& param_in = input_tensors.at(0);
     const auto& grad = input_tensors.at(1);
     const auto& exp_avg_in = input_tensors.at(2);

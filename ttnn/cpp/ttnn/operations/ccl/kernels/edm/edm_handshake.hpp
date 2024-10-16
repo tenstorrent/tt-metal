@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "ethernet/dataflow_api.h"
 
-
 namespace erisc {
 namespace datamover {
 
@@ -106,7 +105,7 @@ FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address)
     }
     eth_receiver_channel_done(0);
 }
-} // namespace handshake
+}  // namespace handshake
 
-} // namespace datamover
-} // namespace erisc
+}  // namespace datamover
+}  // namespace erisc

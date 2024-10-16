@@ -15,12 +15,11 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_multi_core_w(
-    const Tensor &a,
-    Tensor &output,
-    ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
-    float scaler) {
+operation::ProgramWithCallbacks reduce_multi_core_w(const Tensor &a,
+                                                    Tensor &output,
+                                                    ReduceOpMath reduce_op,
+                                                    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
+                                                    float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     uint32_t HW = H * W;
@@ -81,12 +80,12 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::W);
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_interleaved_start_id.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
+    tt_metal::KernelHandle reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                               "reader_unary_reduce_interleaved_start_id.cpp",
+                               all_cores,
+                               tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -100,15 +99,14 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         1,                          // NC
     };
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = reduce_defines});
+    auto reduce_compute_kernel_group_1_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+                               core_group_1,
+                               tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                                       .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                       .compile_args = compute_kernel_args_group_1,
+                                                       .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_kernel_args_group_2 = {
@@ -117,15 +115,14 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             1,                          // NC
         };
 
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = reduce_defines});
+        auto reduce_compute_kernel_group_2_id =
+            tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_w.cpp",
+                                   core_group_2,
+                                   tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                                           .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                           .compile_args = compute_kernel_args_group_2,
+                                                           .defines = reduce_defines});
     }
 
     uint32_t out_dim_divider = Wt;
@@ -142,25 +139,23 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = num_rows_per_core * Wt;
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {
-                a.buffer()->address(),
-                num_tensor_tiles_per_core,
-                num_tiles_read  // tile index of row to start reading from
-            });
+        tt_metal::SetRuntimeArgs(program,
+                                 reader_kernel_id,
+                                 core,
+                                 {
+                                     a.buffer()->address(),
+                                     num_tensor_tiles_per_core,
+                                     num_tiles_read  // tile index of row to start reading from
+                                 });
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {
-                output.buffer()->address(),
-                num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
-                num_tiles_read / out_dim_divider              // output tile start index
-            });
+        tt_metal::SetRuntimeArgs(program,
+                                 writer_kernel_id,
+                                 core,
+                                 {
+                                     output.buffer()->address(),
+                                     num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
+                                     num_tiles_read / out_dim_divider              // output tile start index
+                                 });
         num_tiles_read += num_tensor_tiles_per_core;
     }
 

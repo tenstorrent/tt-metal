@@ -11,7 +11,14 @@
 
 namespace ttnn::operations::experimental::transformer {
 
-operation::ProgramWithCallbacks multi_core_create_q_and_kv_heads_sharded(const Tensor &input_tensor_q, const Tensor &input_tensor_kv, const uint32_t num_q_heads, const uint32_t num_kv_heads, const uint32_t head_dim, const bool transpose_k_heads, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size);
+operation::ProgramWithCallbacks multi_core_create_q_and_kv_heads_sharded(const Tensor& input_tensor_q,
+                                                                         const Tensor& input_tensor_kv,
+                                                                         const uint32_t num_q_heads,
+                                                                         const uint32_t num_kv_heads,
+                                                                         const uint32_t head_dim,
+                                                                         const bool transpose_k_heads,
+                                                                         std::vector<Tensor>& output,
+                                                                         CoreCoord compute_with_storage_grid_size);
 
 struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     uint32_t num_q_heads;
@@ -22,7 +29,7 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors,
+                                                   std::vector<Tensor>& output_tensors) const;
 };
 }  // namespace ttnn::operations::experimental::transformer

@@ -11,15 +11,14 @@
 
 namespace ttnn::distributed::api {
 
-std::shared_ptr<MeshDevice> open_mesh_device(
-    const MeshShape& mesh_shape,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    size_t num_command_queues,
-    DispatchCoreType dispatch_core_type,
-    MeshType mesh_type = MeshType::RowMajor,
-    const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
-    const std::vector<int>& physical_device_ids = {});
+std::shared_ptr<MeshDevice> open_mesh_device(const MeshShape& mesh_shape,
+                                             size_t l1_small_size,
+                                             size_t trace_region_size,
+                                             size_t num_command_queues,
+                                             DispatchCoreType dispatch_core_type,
+                                             MeshType mesh_type = MeshType::RowMajor,
+                                             const std::pair<size_t, size_t>& offset = std::pair<size_t, size_t>(0, 0),
+                                             const std::vector<int>& physical_device_ids = {});
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 
@@ -39,7 +38,6 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const Device* device);
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
-
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_multi_device_tensor(const Tensor& tensor);
 
@@ -47,8 +45,9 @@ bool is_multi_device_tensor(const Tensor& tensor);
 std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
 
 // Given a list of per-device shards, return a multi-device tensor
-Tensor create_multi_device_tensor(
-    const std::vector<Tensor>& tensors, StorageType storage_type, const DistributedTensorConfig& strategy);
+Tensor create_multi_device_tensor(const std::vector<Tensor>& tensors,
+                                  StorageType storage_type,
+                                  const DistributedTensorConfig& strategy);
 
 }  // namespace ttnn::distributed::api
 

@@ -18,18 +18,17 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
-    Program& program,
-    const Tensor& input_tensor,
-    const uint32_t pad_val,
-    const uint32_t ncores_nhw,
-    const uint32_t max_out_nsticks_per_core,
-    const Tensor& padding_config,
-    const Tensor& local_config,
-    const Tensor& remote_config,
-    const bool remote_read,
-    const bool transpose_mcast,
-    Tensor& output_tensor) {
+operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(Program& program,
+                                                                 const Tensor& input_tensor,
+                                                                 const uint32_t pad_val,
+                                                                 const uint32_t ncores_nhw,
+                                                                 const uint32_t max_out_nsticks_per_core,
+                                                                 const Tensor& padding_config,
+                                                                 const Tensor& local_config,
+                                                                 const Tensor& remote_config,
+                                                                 const bool remote_read,
+                                                                 const bool transpose_mcast,
+                                                                 Tensor& output_tensor) {
     Device* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -127,11 +126,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         std::string compute_kernel(
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
         if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH) {
-            log_debug(
-                tt::LogOp,
-                "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
-                ntiles_per_block,
-                MAX_PACK_UNTILIZE_WIDTH);
+            log_debug(tt::LogOp,
+                      "Falling back to slow untilize since ntiles_per_block {} > MAX_PACK_UNTILIZE_WIDTH {}",
+                      ntiles_per_block,
+                      MAX_PACK_UNTILIZE_WIDTH);
             compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
         }
         KernelHandle untilize_kernel_id =
@@ -167,22 +165,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     // reader kernel
-    std::vector<uint32_t> reader_ct_args = {
-        0,  // padding_config_cb_id
-        0,  // local_config_cb_id
-        0,  // remote_config_cb_id
-        src_cb_id,
-        input_to_writer_cb_id,
-        out_cb_id,
-        pad_cb_id,
-        pad_val,
-        input_npages,
-        out_stick_nbytes,
-        is_block_sharded,
-        remote_read,
-        (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded
-    };
+    std::vector<uint32_t> reader_ct_args = {0,  // padding_config_cb_id
+                                            0,  // local_config_cb_id
+                                            0,  // remote_config_cb_id
+                                            src_cb_id,
+                                            input_to_writer_cb_id,
+                                            out_cb_id,
+                                            pad_cb_id,
+                                            pad_val,
+                                            input_npages,
+                                            out_stick_nbytes,
+                                            is_block_sharded,
+                                            remote_read,
+                                            (uint32_t)(transpose_mcast ? 1 : 0),
+                                            is_width_sharded};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;

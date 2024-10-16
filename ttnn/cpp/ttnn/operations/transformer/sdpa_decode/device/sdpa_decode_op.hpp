@@ -24,7 +24,7 @@ struct ScaledDotProductAttentionDecode {
     const std::optional<bool> share_cache;
 
     void validate(const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+                  const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
 
@@ -36,7 +36,7 @@ struct ScaledDotProductAttentionDecode {
         std::vector<Tensor>& output_tensors) const;
 
     operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+                                         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
 }  // namespace ttnn::operations::transformer

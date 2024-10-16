@@ -12,10 +12,11 @@
 
 using namespace tt::constants;
 
-
 namespace ttnn::operations::data_movement {
 
-void ReshardDeviceOperation::validate_with_output_tensors(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+void ReshardDeviceOperation::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to shard need to be allocated in buffers on device!");
@@ -27,50 +28,53 @@ void ReshardDeviceOperation::validate_with_output_tensors(const std::vector<Tens
         TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Error");
         TT_FATAL(input_tensor.get_layout() == output_tensor.get_layout(), "Error");
     }
-    const auto& out_mem_config = has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
+    const auto& out_mem_config =
+        has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
     if ((input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)) {
-        TT_FATAL((input_tensor.memory_config().buffer_type == BufferType::L1 || out_mem_config.buffer_type == BufferType::L1), "Resharding height shard to height shard must have at least one buffer in L1");
+         out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)) {
+        TT_FATAL((input_tensor.memory_config().buffer_type == BufferType::L1 ||
+                  out_mem_config.buffer_type == BufferType::L1),
+                 "Resharding height shard to height shard must have at least one buffer in L1");
     } else {
         TT_FATAL(out_mem_config.buffer_type == BufferType::L1, "Resharding requires output buffer to be in L1");
     }
-    if(input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        bool same_row_size = input_tensor.memory_config().shard_spec.value().shape[1] == out_mem_config.shard_spec.value().shape[1];
+    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
+        bool same_row_size =
+            input_tensor.memory_config().shard_spec.value().shape[1] == out_mem_config.shard_spec.value().shape[1];
         TT_FATAL(same_row_size, "row major must have shard_spec[1] be the same on both input and output");
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ReshardDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> ReshardDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {input_tensor.get_legacy_shape()};
 }
 
-operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-
+operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(const std::vector<Tensor>& input_tensors,
+                                                                       std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    //each tensor has its respective shard_spec within its memory_config
+    // each tensor has its respective shard_spec within its memory_config
     return detail::reshard_multi_core(input_tensor, output_tensor);
 }
 
-std::vector<Tensor> ReshardDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+std::vector<Tensor> ReshardDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
         return {output_tensors[0].value()};
     } else {
         auto mem_config = this->output_mem_config;
 
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            mem_config
-            )};
+        return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0),
+                                     input_tensor.get_dtype(),
+                                     input_tensor.get_layout(),
+                                     input_tensor.device(),
+                                     mem_config)};
     }
 }
-
 
 }  // namespace ttnn::operations::data_movement

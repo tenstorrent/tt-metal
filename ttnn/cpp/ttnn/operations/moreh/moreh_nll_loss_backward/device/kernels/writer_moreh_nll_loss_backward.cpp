@@ -17,15 +17,14 @@ void kernel_main() {
 
     constexpr bool input_grad_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                                         .page_size = input_grad_tile_bytes,
+                                                                         .data_format = input_grad_data_format};
 
     constexpr uint32_t onetile = 1;
 
     uint32_t end_id = start_id + num_tiles_per_core;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_input_grad, onetile);
         uint32_t input_grad_l1_write_addr = get_read_ptr(cb_input_grad);
         noc_async_write_tile(i, input_grad_addrg, input_grad_l1_write_addr);

@@ -23,15 +23,14 @@ void bind_clone_operation(py::module& module) {
         * :attr:`memory_config`: The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
     )doc";
 
-    bind_registered_operation(
-        module,
-        ttnn::clone,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-        });
+    bind_registered_operation(module,
+                              ttnn::clone,
+                              doc,
+                              ttnn::pybind_arguments_t{
+                                  py::arg("input"),
+                                  py::kw_only(),
+                                  py::arg("dtype") = std::nullopt,
+                                  py::arg("memory_config") = std::nullopt,
+                              });
 }
 }  // namespace ttnn::operations::data_movement::clone

@@ -38,54 +38,55 @@ void bind_slice(py::module& module) {
                 * :attr:`queue_id` (Optional[uint8]): command queue id
         )doc";
 
-    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than a vector with a fixed size default value
+    // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
+    // a vector with a fixed size default value
     using OperationType = decltype(ttnn::slice);
     ttnn::bind_registered_operation(
         module,
         ttnn::slice,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::vector<int> &slice_start,
-                const std::vector<int> &slice_end,
-                const std::optional<std::vector<int>> &step,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<Tensor>& optional_output_tensor,
-                uint8_t queue_id) {
-                    const auto step_value = step.value_or(std::vector<int>(slice_end.size(), 1));
-                    return self(queue_id, input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::arg("slice_start"),
-                py::arg("slice_end"),
-                py::arg("slice_step") = std::nullopt, // should consider a better default value
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0,
-                },
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::vector<int>& slice_start,
+               const std::vector<int>& slice_end,
+               const std::optional<std::vector<int>>& step,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<Tensor>& optional_output_tensor,
+               uint8_t queue_id) {
+                const auto step_value = step.value_or(std::vector<int>(slice_end.size(), 1));
+                return self(
+                    queue_id, input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("slice_start"),
+            py::arg("slice_end"),
+            py::arg("slice_step") = std::nullopt,  // should consider a better default value
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0,
+        },
 
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::array<uint32_t, 4> &begins,
-                const std::array<uint32_t, 4> &ends,
-                const std::array<uint32_t, 4> &step,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<Tensor>& optional_output_tensor,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::arg("starts"),
-                py::arg("ends"),
-                py::arg("steps"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0,
-                }
-        );
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::array<uint32_t, 4>& begins,
+               const std::array<uint32_t, 4>& ends,
+               const std::array<uint32_t, 4>& step,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<Tensor>& optional_output_tensor,
+               uint8_t queue_id) {
+                return self(queue_id, input_tensor, begins, ends, step, memory_config, optional_output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("starts"),
+            py::arg("ends"),
+            py::arg("steps"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0,
+        });
 }
 }  // namespace ttnn::operations::data_movement::detail

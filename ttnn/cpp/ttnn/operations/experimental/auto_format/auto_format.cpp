@@ -40,8 +40,10 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 // are not quite ready. So here we basically just put the tensor back on device.
 // Used in backward_ops.cpp
 // See: Remove auto format within permute_op.cpp #9404
-Tensor AutoFormat::move_tensor_to_device_and_pad(
-    const Tensor& input, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::move_tensor_to_device_and_pad(const Tensor& input,
+                                                 Device* device,
+                                                 Layout target_layout,
+                                                 std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
     const auto intended_shape = input.get_shape();
     const auto device_shape = input.get_legacy_shape();
@@ -56,13 +58,12 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
     return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
-Tensor AutoFormat::format_input_tensor(
-    const Tensor& input,
-    Device* device,
-    const tt::tt_metal::LegacyShape& padded_shape,
-    float pad_value,
-    Layout target_layout,
-    std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_input_tensor(const Tensor& input,
+                                       Device* device,
+                                       const tt::tt_metal::LegacyShape& padded_shape,
+                                       float pad_value,
+                                       Layout target_layout,
+                                       std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.get_legacy_shape() != padded_shape;
     bool convert_layout = input.get_layout() != target_layout;
 
@@ -91,28 +92,26 @@ Tensor AutoFormat::format_input_tensor(
             }
         } else if (!convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
-                return ttnn::pad(
-                    0,
-                    (const ttnn::Tensor)formatted_input,
-                    padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value,
-                    false,
-                    mem_config);
+                return ttnn::pad(0,
+                                 (const ttnn::Tensor)formatted_input,
+                                 padded_shape.to_array_4D(),
+                                 tt::tt_metal::Array4D({0, 0, 0, 0}),
+                                 pad_value,
+                                 false,
+                                 mem_config);
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
                 return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
-                return ttnn::pad(
-                    0,
-                    (const ttnn::Tensor)formatted_input,
-                    padded_shape.to_array_4D(),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value,
-                    false,
-                    mem_config);
+                return ttnn::pad(0,
+                                 (const ttnn::Tensor)formatted_input,
+                                 padded_shape.to_array_4D(),
+                                 tt::tt_metal::Array4D({0, 0, 0, 0}),
+                                 pad_value,
+                                 false,
+                                 mem_config);
             }
         }
         // Fall back to host conversions
@@ -125,11 +124,10 @@ Tensor AutoFormat::format_input_tensor(
             formatted_input = formatted_input.to(Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
-        formatted_input = ttnn::pad(
-            (const ttnn::Tensor)formatted_input,
-            padded_shape.to_array_4D(),
-            tt::tt_metal::Array4D({0, 0, 0, 0}),
-            pad_value);
+        formatted_input = ttnn::pad((const ttnn::Tensor)formatted_input,
+                                    padded_shape.to_array_4D(),
+                                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                                    pad_value);
     }
 
     if (convert_layout) {
@@ -139,12 +137,11 @@ Tensor AutoFormat::format_input_tensor(
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
 }
 
-Tensor AutoFormat::format_output_tensor(
-    const Tensor& output,
-    const tt::tt_metal::LegacyShape& shape,
-    Device* device,
-    Layout target_layout,
-    std::optional<MemoryConfig> target_mem_config) {
+Tensor AutoFormat::format_output_tensor(const Tensor& output,
+                                        const tt::tt_metal::LegacyShape& shape,
+                                        Device* device,
+                                        Layout target_layout,
+                                        std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.get_legacy_shape() != shape;
     bool convert_layout = output.get_layout() != target_layout;
 
@@ -199,9 +196,8 @@ Tensor AutoFormat::format_output_tensor(
                     std::vector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
-            } else if (
-                formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
-                AutoFormat::legal_tile_shape(shape)) {
+            } else if (formatted_output.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE &&
+                       AutoFormat::legal_tile_shape(shape)) {
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});

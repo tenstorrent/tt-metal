@@ -6,15 +6,15 @@
 
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht  = get_compile_time_arg_val(1);
-    constexpr uint32_t Wt  = get_compile_time_arg_val(2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
-    uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    uint32_t col_start_tile_id = get_arg_val<uint32_t>(1); // Start id in column major order. This should be the start of a column
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t col_start_tile_id =
+        get_arg_val<uint32_t>(1);  // Start id in column major order. This should be the start of a column
     uint32_t curr_col_in_batch = get_arg_val<uint32_t>(2);
-    uint32_t num_cols = get_arg_val<uint32_t>(3); // number of cols to read
+    uint32_t num_cols = get_arg_val<uint32_t>(3);  // number of cols to read
     uint32_t mask_h = get_arg_val<uint32_t>(4);
-
 
     constexpr uint32_t cb_id_in0 = 0;
 
@@ -29,10 +29,7 @@ void kernel_main() {
 #endif
 
     const InterleavedAddrGenFast<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
     uint32_t w = curr_col_in_batch;
 
@@ -45,7 +42,7 @@ void kernel_main() {
             noc_async_read_tile(curr_id, s, l1_write_addr);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
-            curr_id += Wt; // stride in H
+            curr_id += Wt;  // stride in H
         }
         w++;
         if (w == Wt) {

@@ -20,14 +20,13 @@ using tt::tt_metal::Tensor;
 namespace ttnn::operations::sliding_window {
 
 // Calculate Convolution on padded input buffer.
-owned_buffer::Buffer<bfloat16> ref_conv_op(
-    const Tensor &input_padded_tensor,
-    const Shape &input_nchw_shape,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    const vector<float> &filter_vector,
-    const Shape &filter_pyt_tensor_shape,
-    const Shape &out_golden_pyt_tensor_shape);
+owned_buffer::Buffer<bfloat16> ref_conv_op(const Tensor &input_padded_tensor,
+                                           const Shape &input_nchw_shape,
+                                           uint32_t stride_h,
+                                           uint32_t stride_w,
+                                           const vector<float> &filter_vector,
+                                           const Shape &filter_pyt_tensor_shape,
+                                           const Shape &out_golden_pyt_tensor_shape);
 
 // Calculate convolution using op_trace_metadata on padded input buffer.
 owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
@@ -94,4 +93,4 @@ vector<uint32_t> input_indices_from_flattened_remote_config(
     bool is_block_sharded = false,
     bool transpose_mcast = false);
 
-}  // namespace tt::tt_metal::sliding_window
+}  // namespace ttnn::operations::sliding_window

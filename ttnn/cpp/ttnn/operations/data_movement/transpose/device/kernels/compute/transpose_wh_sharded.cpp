@@ -8,7 +8,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     uint32_t NHtWt = get_arg_val<uint32_t>(0);
     uint32_t HtWt = get_arg_val<uint32_t>(1);
     uint32_t N = get_arg_val<uint32_t>(2);
@@ -48,4 +47,4 @@ void MAIN {
     cb_push_back(cb_id_out, NHtWt);
     cb_pop_front(cb_id_in, NHtWt);
 }
-}
+}  // namespace NAMESPACE

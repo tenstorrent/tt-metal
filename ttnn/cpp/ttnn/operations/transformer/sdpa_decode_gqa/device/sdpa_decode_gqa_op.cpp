@@ -9,7 +9,9 @@
 
 namespace ttnn::operations::transformer {
 
-void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void ScaledDotProductAttentionGQADecode::validate(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
@@ -21,7 +23,7 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
     const auto k_shape = input_tensors.at(1).get_legacy_shape();
     const auto v_shape = input_tensors.at(2).get_legacy_shape();
 
-    if (optional_input_tensors.at(0).has_value()){
+    if (optional_input_tensors.at(0).has_value()) {
         const auto& cur_pos_tensor = optional_input_tensors.at(0).value();
 
         TT_FATAL(cur_pos_tensor.get_dtype() == DataType::INT32, "Error");
@@ -65,9 +67,8 @@ void ScaledDotProductAttentionGQADecode::validate(const std::vector<Tensor>& inp
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(
-                    compute_kernel_config.fp32_dest_acc_en == false,
-                    "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
+                TT_FATAL(compute_kernel_config.fp32_dest_acc_en == false,
+                         "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
             }
         },
         this->compute_kernel_config);
@@ -88,7 +89,9 @@ std::vector<Tensor> ScaledDotProductAttentionGQADecode::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_program(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
@@ -120,31 +123,30 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionGQADecode::create_progr
     //     },
     //     this->program_config);
 
-    return detail::sdpa_decode_multi_core(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        cur_pos_tensor,
-        std::nullopt,
-        output_tensor,
-        this->cur_pos,
-        scale,
-        this->compute_kernel_config,
-        this->program_config,
-        this->k_chunk_size,
-        this->share_cache);
+    return detail::sdpa_decode_multi_core(input_tensor_q,
+                                          input_tensor_k,
+                                          input_tensor_v,
+                                          cur_pos_tensor,
+                                          std::nullopt,
+                                          output_tensor,
+                                          this->cur_pos,
+                                          scale,
+                                          this->compute_kernel_config,
+                                          this->program_config,
+                                          this->k_chunk_size,
+                                          this->share_cache);
 }
 
 operation::Hash ScaledDotProductAttentionGQADecode::compute_program_hash(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<ScaledDotProductAttentionGQADecode>(
-        this->scale,
-        this->output_mem_config,
-        this->program_config,
-        this->compute_kernel_config,
-        this->k_chunk_size,
-        input_tensors,
-        optional_input_tensors);
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    return operation::hash_operation<ScaledDotProductAttentionGQADecode>(this->scale,
+                                                                         this->output_mem_config,
+                                                                         this->program_config,
+                                                                         this->compute_kernel_config,
+                                                                         this->k_chunk_size,
+                                                                         input_tensors,
+                                                                         optional_input_tensors);
 }
 
 }  // namespace ttnn::operations::transformer

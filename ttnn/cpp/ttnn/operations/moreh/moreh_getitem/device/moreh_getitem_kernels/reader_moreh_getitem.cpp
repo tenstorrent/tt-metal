@@ -69,16 +69,16 @@ void kernel_main() {
 
     const InterleavedAddrGen<in_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
 
-    const InterleavedAddrGen<index0_is_dram> index0 = {
-        .bank_base_address = index0_addr, .page_size = index0_stick_size};
-    const InterleavedAddrGen<index1_is_dram> index1 = {
-        .bank_base_address = index1_addr, .page_size = index1_stick_size};
-    const InterleavedAddrGen<index2_is_dram> index2 = {
-        .bank_base_address = index2_addr, .page_size = index2_stick_size};
-    const InterleavedAddrGen<index3_is_dram> index3 = {
-        .bank_base_address = index3_addr, .page_size = index3_stick_size};
-    const InterleavedAddrGen<index4_is_dram> index4 = {
-        .bank_base_address = index4_addr, .page_size = index4_stick_size};
+    const InterleavedAddrGen<index0_is_dram> index0 = {.bank_base_address = index0_addr,
+                                                       .page_size = index0_stick_size};
+    const InterleavedAddrGen<index1_is_dram> index1 = {.bank_base_address = index1_addr,
+                                                       .page_size = index1_stick_size};
+    const InterleavedAddrGen<index2_is_dram> index2 = {.bank_base_address = index2_addr,
+                                                       .page_size = index2_stick_size};
+    const InterleavedAddrGen<index3_is_dram> index3 = {.bank_base_address = index3_addr,
+                                                       .page_size = index3_stick_size};
+    const InterleavedAddrGen<index4_is_dram> index4 = {.bank_base_address = index4_addr,
+                                                       .page_size = index4_stick_size};
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,

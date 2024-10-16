@@ -39,36 +39,31 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
 
-    #define page_size_is_pow2 get_compile_time_arg_val(3) == 1
+#define page_size_is_pow2 get_compile_time_arg_val(3) == 1
 
-    #if (page_size_is_pow2)
+#if (page_size_is_pow2)
     const InterleavedPow2AddrGen<src_is_dram> src_addrgen = {
         .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
+        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
     };
     const InterleavedPow2AddrGen<dst_is_dram> dst_addrgen = {
         .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size // TODO(AP): refactor
+        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
     };
-    #else
-    const InterleavedAddrGen<src_is_dram> src_addrgen = {
-        .bank_base_address = src_addr,
-        .page_size = page_size
-    };
-    const InterleavedAddrGen<dst_is_dram> dst_addrgen = {
-        .bank_base_address = dst_addr,
-        .page_size = page_size
-    };
-    #endif
+#else
+    const InterleavedAddrGen<src_is_dram> src_addrgen = {.bank_base_address = src_addr, .page_size = page_size};
+    const InterleavedAddrGen<dst_is_dram> dst_addrgen = {.bank_base_address = dst_addr, .page_size = page_size};
+#endif
 
     // if controller core then this local address will be incremented by remote cores,
-    // otherwise controller core will set this to signal that write to dst can be done once controller core sees control_value locally
-    volatile uint32_t *semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(semaphore_addr);
+    // otherwise controller core will set this to signal that write to dst can be done once controller core sees
+    // control_value locally
+    volatile uint32_t *semaphore_addr_ptr = reinterpret_cast<volatile uint32_t *>(semaphore_addr);
 
     // read a ublock of tiles from src to CB
     cb_reserve_back(cb_id, num_pages);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
-    for (uint32_t i = start_id; i < start_id + num_pages; ++ i) {
+    for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         uint64_t src_noc_addr = get_noc_addr(i, src_addrgen);
         noc_async_read(src_noc_addr, l1_write_addr, page_size);
         noc_async_read_barrier();
@@ -80,12 +75,15 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
 
         // signal to cores that write to dst can begin
-        uint64_t range0_multicast_semaphore_addr = get_noc_multicast_addr(range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, semaphore_addr);
+        uint64_t range0_multicast_semaphore_addr = get_noc_multicast_addr(
+            range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, semaphore_addr);
         noc_semaphore_set_multicast(semaphore_addr, range0_multicast_semaphore_addr, range_0_size);
-        uint64_t range1_multicast_semaphore_addr = get_noc_multicast_addr(range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, semaphore_addr);
+        uint64_t range1_multicast_semaphore_addr = get_noc_multicast_addr(
+            range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, semaphore_addr);
         noc_semaphore_set_multicast(semaphore_addr, range1_multicast_semaphore_addr, range_1_size);
         if (do_third_multicast) {
-            uint64_t range2_multicast_semaphore_addr = get_noc_multicast_addr(range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, semaphore_addr);
+            uint64_t range2_multicast_semaphore_addr = get_noc_multicast_addr(
+                range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, semaphore_addr);
             noc_semaphore_set_multicast(semaphore_addr, range2_multicast_semaphore_addr, range_2_size);
         }
     } else {
@@ -98,7 +96,7 @@ void kernel_main() {
 
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
-    for (uint32_t i = start_id; i < start_id + num_pages; ++ i) {
+    for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
         uint64_t dst_noc_addr = get_noc_addr(i, dst_addrgen);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();

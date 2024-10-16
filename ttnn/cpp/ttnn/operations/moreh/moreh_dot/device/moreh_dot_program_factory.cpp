@@ -53,26 +53,24 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     CoreCoord core = {0, 0};
 
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        std::set<CoreRange>{CoreRange(core, core)},
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},
-            {CB::c_in1, in1_t},
-            {CB::c_in2, in2_t},
-            {CB::c_out0, out0_t},
-            {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  std::set<CoreRange>{CoreRange(core, core)},
+                                                  cb_data_format,
+                                                  {
+                                                      {CB::c_in0, in0_t},
+                                                      {CB::c_in1, in1_t},
+                                                      {CB::c_in2, in2_t},
+                                                      {CB::c_out0, out0_t},
+                                                      {CB::c_intermed0, im0_t},
+                                                      {CB::c_intermed1, im1_t},
+                                                  });
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)tt::operations::primary::is_dram(src0_buffer),
-        (std::uint32_t)tt::operations::primary::is_dram(src1_buffer),
-        *reinterpret_cast<uint32_t*>(&scaler)};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::operations::primary::is_dram(src0_buffer),
+                                                      (std::uint32_t)tt::operations::primary::is_dram(src1_buffer),
+                                                      *reinterpret_cast<uint32_t*>(&scaler)};
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)CB::c_out0, (std::uint32_t)tt::operations::primary::is_dram(dst_buffer)};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)CB::c_out0,
+                                                      (std::uint32_t)tt::operations::primary::is_dram(dst_buffer)};
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/reader_moreh_dot.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/writer_moreh_dot.cpp";
 
@@ -88,34 +86,31 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
 
     const uint32_t core_num = 1;
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_dot/device/kernels/moreh_dot.cpp";
-    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core, core_num, compute_kernel_args},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(program,
+                                                                                compute_kernel_file,
+                                                                                {core, core_num, compute_kernel_args},
+                                                                                compute_defines,
+                                                                                math_fidelity,
+                                                                                fp32_dest_acc_en,
+                                                                                math_approx_mode);
 
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core,
-        {src0_buffer->address(), src1_buffer->address(), num_tiles, 0, mask_h, mask_w});
+    SetRuntimeArgs(program,
+                   reader_kernel_id,
+                   core,
+                   {src0_buffer->address(), src1_buffer->address(), num_tiles, 0, mask_h, mask_w});
     SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles, 1});
     SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), 1, 0});
 
     const std::vector<Tensor> input_tensors = {input_a, input_b};
 
-    return {
-        std::move(program), {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
 }
 
-void MorehDotOperation::SingleCore::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+void MorehDotOperation::SingleCore::override_runtime_arguments(cached_program_t& cached_program,
+                                                               const operation_attributes_t& operation_attributes,
+                                                               const tensor_args_t& tensor_args,
+                                                               tensor_return_value_t& output) {
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

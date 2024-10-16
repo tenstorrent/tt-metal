@@ -47,7 +47,7 @@ FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address,
 
 using ttnn::ccl::WorkerXY;
 
-template<uint8_t num_senders, uint8_t num_receivers>
+template <uint8_t num_senders, uint8_t num_receivers>
 struct sender_receiver_index_t {
     static constexpr bool ZERO_SENDERS = num_senders == 0;
     static constexpr bool ZERO_RECEIVERS = num_receivers == 0;
@@ -107,7 +107,6 @@ struct sender_receiver_index_t {
     }
 };
 
-
 void kernel_main() {
     constexpr bool enable_sender_side = get_compile_time_arg_val(0) != 0;
 
@@ -123,7 +122,7 @@ void kernel_main() {
     static constexpr ttnn::ccl::EriscDataMoverTerminationMode terminate_on_worker_signal =
         static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(5));
 
-    static constexpr bool use_compile_time_designated_handshake_sender = false;//get_compile_time_arg_val(6) != 0;
+    static constexpr bool use_compile_time_designated_handshake_sender = false;  // get_compile_time_arg_val(6) != 0;
     static constexpr bool is_handshake_sender = get_compile_time_arg_val(7) != 0;
 
     static constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(8);
@@ -153,7 +152,7 @@ void kernel_main() {
 
     // Receiver args
     uint8_t const receiver_channels_start = get_arg_val<uint32_t>(args_offset++);
-    uint32_t const receiver_num_channels = num_receivers;//get_arg_val<uint32_t>(args_offset++);
+    uint32_t const receiver_num_channels = num_receivers;  // get_arg_val<uint32_t>(args_offset++);
     uint8_t num_receivers_with_no_work = 0;
     for (uint32_t channel = 0; channel < receiver_num_channels; channel++) {
         uint32_t const receiver_buffers_base_address = get_arg_val<uint32_t>(args_offset++);
@@ -166,16 +165,16 @@ void kernel_main() {
         uint32_t const receiver_num_workers = get_arg_val<uint32_t>(args_offset++);
         const uint32_t workers_xy_list_addr = get_arg_addr(args_offset);
         args_offset += receiver_num_workers;
-        new (&buffer_channels[receiver_channels_start + channel]) ChannelBufferT(
-            receiver_channels_start + channel,
-            receiver_buffers_base_address,
-            receiver_channel_size,
-            worker_semaphore_address,
-            receiver_num_workers,
-            receiver_num_messages_to_send,
-            (volatile tt_l1_ptr uint32_t *const)receiver_semaphores_base_address,
-            (const WorkerXY *)workers_xy_list_addr,
-            false);
+        new (&buffer_channels[receiver_channels_start + channel])
+            ChannelBufferT(receiver_channels_start + channel,
+                           receiver_buffers_base_address,
+                           receiver_channel_size,
+                           worker_semaphore_address,
+                           receiver_num_workers,
+                           receiver_num_messages_to_send,
+                           (volatile tt_l1_ptr uint32_t *const)receiver_semaphores_base_address,
+                           (const WorkerXY *)workers_xy_list_addr,
+                           false);
 
         if constexpr (terminate_on_worker_signal == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
             if (receiver_num_messages_to_send == 0) {
@@ -191,9 +190,8 @@ void kernel_main() {
         }
     }
 
-
     uint8_t const sender_channels_start = get_arg_val<uint32_t>(args_offset++);
-    uint32_t const sender_num_channels = num_senders;//get_arg_val<uint32_t>(args_offset++);
+    uint32_t const sender_num_channels = num_senders;  // get_arg_val<uint32_t>(args_offset++);
     uint8_t num_senders_with_no_work = 0;
     for (uint32_t channel = 0; channel < sender_num_channels; channel++) {
         uint32_t const sender_buffer_address = get_arg_val<uint32_t>(args_offset++);
@@ -208,16 +206,16 @@ void kernel_main() {
         const uint32_t sender_num_workers = get_arg_val<uint32_t>(args_offset++);
         const uint32_t workers_xy_list_addr = get_arg_addr(args_offset);
         args_offset += sender_num_workers;
-        new (&buffer_channels[sender_channels_start + channel]) ChannelBufferT(
-            sender_channels_start + channel,
-            sender_buffer_address,
-            sender_channel_size,
-            worker_semaphore_address,
-            sender_num_workers,
-            sender_num_messages_to_send,
-            (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
-            (const WorkerXY *)workers_xy_list_addr,
-            true);
+        new (&buffer_channels[sender_channels_start + channel])
+            ChannelBufferT(sender_channels_start + channel,
+                           sender_buffer_address,
+                           sender_channel_size,
+                           worker_semaphore_address,
+                           sender_num_workers,
+                           sender_num_messages_to_send,
+                           (volatile tt_l1_ptr uint32_t *const)sender_semaphores_base_address,
+                           (const WorkerXY *)workers_xy_list_addr,
+                           true);
         if constexpr (terminate_on_worker_signal == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
             if (sender_num_messages_to_send == 0) {
                 num_senders_with_no_work++;
@@ -244,7 +242,8 @@ void kernel_main() {
     bool senders_in_progress = num_senders_complete != sender_num_channels;
     bool receivers_in_progress = num_receivers_complete != receiver_num_channels;
 
-    auto send_recv_index = sender_receiver_index_t<num_senders,num_receivers>(sender_channels_start, receiver_channels_start, sender_num_channels, receiver_num_channels);
+    auto send_recv_index = sender_receiver_index_t<num_senders, num_receivers>(
+        sender_channels_start, receiver_channels_start, sender_num_channels, receiver_num_channels);
 
     while (senders_in_progress || receivers_in_progress) {
         bool did_something_sender = false;
@@ -258,29 +257,28 @@ void kernel_main() {
             ChannelBufferT &current_sender = buffer_channels[send_recv_index.real_index.sender];
             switch (current_sender.get_state()) {
                 case ChannelBufferT::STATE::SENDER_WAITING_FOR_WORKER:
-                did_something_sender =
-                    erisc::datamover::sender_noc_receive_payload_ack_check_sequence(current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
-                break;
+                    did_something_sender = erisc::datamover::sender_noc_receive_payload_ack_check_sequence(
+                        current_sender, num_senders_complete);
+                    senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
+                    break;
 
                 case ChannelBufferT::STATE::SENDER_READY_FOR_ETH_TRANSFER:
-                did_something_sender = erisc::datamover::sender_eth_send_data_sequence(current_sender);
+                    did_something_sender = erisc::datamover::sender_eth_send_data_sequence(current_sender);
                     break;
 
                 case ChannelBufferT::STATE::SENDER_SIGNALING_WORKER:
-                did_something_sender = erisc::datamover::sender_notify_workers_if_buffer_available_sequence(
-                                    current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
-                break;
+                    did_something_sender = erisc::datamover::sender_notify_workers_if_buffer_available_sequence(
+                        current_sender, num_senders_complete);
+                    senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
+                    break;
 
                 case ChannelBufferT::STATE::SENDER_WAITING_FOR_ETH:
-                did_something_sender =
-                    erisc::datamover::sender_eth_check_receiver_ack_sequence(current_sender, num_senders_complete);
-                senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
-                break;
+                    did_something_sender =
+                        erisc::datamover::sender_eth_check_receiver_ack_sequence(current_sender, num_senders_complete);
+                    senders_in_progress = senders_in_progress && num_senders_complete != sender_num_channels;
+                    break;
 
-                default:
-                break;
+                default: break;
             };
         }
 
@@ -291,23 +289,23 @@ void kernel_main() {
 
             switch (current_receiver.get_state()) {
                 case ChannelBufferT::STATE::RECEIVER_WAITING_FOR_ETH:
-                did_something_receiver = erisc::datamover::receiver_eth_accept_payload_sequence(current_receiver, num_receivers_complete, eth_transaction_ack_word_addr);
-                receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
-                break;
+                    did_something_receiver = erisc::datamover::receiver_eth_accept_payload_sequence(
+                        current_receiver, num_receivers_complete, eth_transaction_ack_word_addr);
+                    receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
+                    break;
 
                 case ChannelBufferT::STATE::RECEIVER_SIGNALING_WORKER:
-                did_something_receiver =
-                    erisc::datamover::receiver_eth_notify_workers_payload_available_sequence(current_receiver);
-                break;
+                    did_something_receiver =
+                        erisc::datamover::receiver_eth_notify_workers_payload_available_sequence(current_receiver);
+                    break;
 
                 case ChannelBufferT::STATE::RECEIVER_WAITING_FOR_WORKER:
-                did_something_receiver = erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
-                                    current_receiver, num_receivers_complete);
-                receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
-                break;
+                    did_something_receiver = erisc::datamover::receiver_noc_read_worker_completion_check_sequence(
+                        current_receiver, num_receivers_complete);
+                    receivers_in_progress = receivers_in_progress && num_receivers_complete != receiver_num_channels;
+                    break;
 
-                default:
-                break;
+                default: break;
             };
         }
         send_recv_index.increment();

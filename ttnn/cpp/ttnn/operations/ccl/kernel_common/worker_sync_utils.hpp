@@ -26,18 +26,22 @@ FORCE_INLINE void master_sync_slaves(
 
     uint32_t fused_op_core_idx) {
     // Wait for all the slaves to finish their work
-    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-    noc_semaphore_wait(master_l1_semaphore_addr,  num_workers_to_sync - 1);
+    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+    noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
     // DPRINT << "MASTER SYNCED WITH SLAVES" << ENDL();
 
     // Send signal to op
     if (mcast_signal_op_cores) {
         for (uint32_t i = 0; i < num_fused_op_cores_to_signal; i++) {
-            uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
+            uint64_t remote_fused_op_l1_semaphore_addr =
+                get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
             noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
         }
     } else {
-        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[fused_op_core_idx * 2], fused_op_cores_noc_coords[fused_op_core_idx * 2 + 1], fused_op_sem_addr);
+        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(fused_op_cores_noc_coords[fused_op_core_idx * 2],
+                                                                  fused_op_cores_noc_coords[fused_op_core_idx * 2 + 1],
+                                                                  fused_op_sem_addr);
         noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
     }
     // DPRINT << "MASTER SIGNALED REMOTE OP" << ENDL();
@@ -46,26 +50,26 @@ FORCE_INLINE void master_sync_slaves(
     noc_semaphore_set(master_l1_semaphore_addr, 0);
 
     // Clear the slave semaphores, so that they can continue processing
-    for (uint32_t i = 1; i < num_workers_to_sync; i++) { // Skip the first set of coords because they are for master worker
-        uint64_t remote_slave_l1_sem_addr = get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
+    for (uint32_t i = 1; i < num_workers_to_sync;
+         i++) {  // Skip the first set of coords because they are for master worker
+        uint64_t remote_slave_l1_sem_addr =
+            get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
         noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
         // DPRINT << "MASTER CLEAREED A SLAVE SEMAPHORE" << ENDL();
     }
 }
 
-
 // Called by the slave worker to synchronize with the master worker
-FORCE_INLINE void slave_sync_master(
-    const uint32_t* worker_noc_coords,
-    const uint32_t worker_sync_sem_addr) {
-
+FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
     // Signal the master that the slave has finished its work
-    uint64_t remote_master_l1_semaphore_addr = get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
+    uint64_t remote_master_l1_semaphore_addr =
+        get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
     noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
     // DPRINT << "SLAVE SYNCED WITH MASTER" << ENDL();
 
     // Wait for the master to signal that this slave is ready to continue
-    volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+    volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
     noc_semaphore_wait(slave_l1_semaphore_addr, 1);
     // DPRINT << "SLAVE SEMAPHORE CLEARED BY MASTER" << ENDL();
 
@@ -73,12 +77,11 @@ FORCE_INLINE void slave_sync_master(
     noc_semaphore_set(slave_l1_semaphore_addr, 0);
 }
 
-
 FORCE_INLINE bool is_master(uint32_t master_x, uint32_t master_y, uint32_t worker_x, uint32_t worker_y) {
     return master_x == worker_x && master_y == worker_y;
 }
 
-uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args=1) {
+uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     uint32_t old_arg_idx = arg_idx;
     arg_idx += num_args;
     return old_arg_idx;
@@ -87,7 +90,7 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args=1) {
 // Used to signal an operation that it can start processing data, resulting in overlapping
 struct OpSignaler {
     uint32_t num_workers_to_sync = 0;
-    uint32_t* workers_noc_coords = nullptr; // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
+    uint32_t* workers_noc_coords = nullptr;  // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
     uint32_t worker_sync_sem_addr = 0;
 
     uint32_t num_fused_op_cores_to_signal = 0;
@@ -101,15 +104,16 @@ struct OpSignaler {
     OpSignaler() {}
 
     OpSignaler(uint32_t& rt_args_idx) {
-
         // Runtime args
         this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
-        this-> worker_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-        this->workers_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2)); // Skip over the number of workers
+        this->worker_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        this->workers_noc_coords = (uint32_t*)get_arg_addr(
+            increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));  // Skip over the number of workers
 
         this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
-        this->signal_op_cores_noc_coords = (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
+        this->signal_op_cores_noc_coords =
+            (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
         this->signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
         this->mcast_signal_op_cores = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
@@ -117,7 +121,8 @@ struct OpSignaler {
         uint32_t master_worker_noc_y = this->workers_noc_coords[1];
         uint32_t curr_worker_noc_x = this->workers_noc_coords[curr_worker_index * 2];
         uint32_t curr_worker_noc_y = this->workers_noc_coords[curr_worker_index * 2 + 1];
-        this->curr_worker_is_master = is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
+        this->curr_worker_is_master =
+            is_master(master_worker_noc_x, master_worker_noc_y, curr_worker_noc_x, curr_worker_noc_y);
 
         this->initialized = true;
     }
@@ -126,34 +131,29 @@ struct OpSignaler {
         ASSERT(this->initialized);
 
         if (this->curr_worker_is_master) {
-            master_sync_slaves(
-                this->num_workers_to_sync,
-                this->workers_noc_coords,
-                this->worker_sync_sem_addr,
+            master_sync_slaves(this->num_workers_to_sync,
+                               this->workers_noc_coords,
+                               this->worker_sync_sem_addr,
 
-                this->num_fused_op_cores_to_signal,
-                this->signal_op_cores_noc_coords,
-                this->signal_op_sem_addr,
-                this->mcast_signal_op_cores,
+                               this->num_fused_op_cores_to_signal,
+                               this->signal_op_cores_noc_coords,
+                               this->signal_op_sem_addr,
+                               this->mcast_signal_op_cores,
 
-                fused_op_core_idx
-            );
+                               fused_op_core_idx);
         } else {
             slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
         }
     }
-
 };
 
 // Used by datacopy kernel
-FORCE_INLINE void advance_start_page_idx(
-    uint32_t& start_page_idx,
-    uint32_t& curr_ring_index,
-    const uint32_t ring_size,
-    const uint32_t is_clockwise_direction,
-    const uint32_t output_page_offset,
-    const uint32_t last_output_page_offset) {
-
+FORCE_INLINE void advance_start_page_idx(uint32_t& start_page_idx,
+                                         uint32_t& curr_ring_index,
+                                         const uint32_t ring_size,
+                                         const uint32_t is_clockwise_direction,
+                                         const uint32_t output_page_offset,
+                                         const uint32_t last_output_page_offset) {
     if (is_clockwise_direction) {
         bool is_wraparound_ring_index = curr_ring_index == 0;
         if (is_wraparound_ring_index) {
@@ -174,18 +174,16 @@ FORCE_INLINE void advance_start_page_idx(
             curr_ring_index++;
         }
     }
-
 }
 
-
 struct MatmulOpReceiver {
-    static constexpr uint32_t num_directions = 2; // ASSUMPTION: Always 2 directions
+    static constexpr uint32_t num_directions = 2;  // ASSUMPTION: Always 2 directions
     uint32_t num_tensor_slices = 0;
 
     bool wait_for_op_signal = 0;
     uint32_t num_transfers = 0;
     uint32_t ring_size = 0;
-    uint32_t tensor_slice_shape_width = 0; // In tiles
+    uint32_t tensor_slice_shape_width = 0;  // In tiles
     uint32_t output_page_offset = 0;
     uint32_t last_output_page_offset = 0;
 
@@ -200,20 +198,16 @@ struct MatmulOpReceiver {
     uint32_t curr_dir = 0;
     uint32_t curr_transfer_idx = 0;
 
-
     bool initialized = false;
 
     MatmulOpReceiver() {}
 
-    MatmulOpReceiver(
-        bool wait_for_op_signal,
-        uint32_t& rt_args_idx,
-        uint32_t num_blocks,
-        uint32_t tiles_per_block // Across the same dimension as tensor_slice_shape_width
-    ) : wait_for_op_signal(wait_for_op_signal),
-        num_blocks(num_blocks)
-    {
-
+    MatmulOpReceiver(bool wait_for_op_signal,
+                     uint32_t& rt_args_idx,
+                     uint32_t num_blocks,
+                     uint32_t tiles_per_block  // Across the same dimension as tensor_slice_shape_width
+                     )
+        : wait_for_op_signal(wait_for_op_signal), num_blocks(num_blocks) {
         // Runtime args
         this->num_transfers = get_arg_val<uint32_t>(rt_args_idx++);
         this->ring_size = get_arg_val<uint32_t>(rt_args_idx++);
@@ -245,33 +239,29 @@ struct MatmulOpReceiver {
         this->num_blocks_per_slice = this->tensor_slice_shape_width / tiles_per_block;
         ASSERT(this->num_tensor_slices * this->num_blocks_per_slice == this->num_blocks);
 
-        this->curr_dir = is_clockwise_direction ? 1 : 0; // Anti-clockwise direction is the first since it has local slice
+        this->curr_dir =
+            is_clockwise_direction ? 1 : 0;  // Anti-clockwise direction is the first since it has local slice
         this->curr_transfer_idx = 0;
 
         this->initialized = true;
     }
 
-
-    void update_current_block_start_tile_id(
-        const uint32_t& block_idx,
-        uint32_t& curr_block_start_tile_id,
-        const uint32_t& tensor_start_tile_id
-    ) {
+    void update_current_block_start_tile_id(const uint32_t& block_idx,
+                                            uint32_t& curr_block_start_tile_id,
+                                            const uint32_t& tensor_start_tile_id) {
         ASSERT(this->initialized);
 
-        if (block_idx % this->num_blocks_per_slice == 0) { // Aligned to the start of a tensor slice
+        if (block_idx % this->num_blocks_per_slice == 0) {  // Aligned to the start of a tensor slice
 
-            if (this->curr_transfer_idx != 0) { // Skip update for local slice
+            if (this->curr_transfer_idx != 0) {  // Skip update for local slice
 
                 // Update the start page idx of the tensor slice in curr_direction
-                advance_start_page_idx(
-                    this->start_page_idxs[this->curr_dir],
-                    this->ring_idxs[this->curr_dir],
-                    this->ring_size,
-                    this->is_clockwise_dirs[this->curr_dir],
-                    this->output_page_offset,
-                    this->last_output_page_offset
-                );
+                advance_start_page_idx(this->start_page_idxs[this->curr_dir],
+                                       this->ring_idxs[this->curr_dir],
+                                       this->ring_size,
+                                       this->is_clockwise_dirs[this->curr_dir],
+                                       this->output_page_offset,
+                                       this->last_output_page_offset);
             }
 
             // Use the new start page idx to find the start tile id of the current tensor slice
@@ -287,7 +277,7 @@ struct MatmulOpReceiver {
 
             // Update the relevant internal states
             this->curr_transfer_idx++;
-            this->curr_dir = !this->curr_dir; // Change direction
+            this->curr_dir = !this->curr_dir;  // Change direction
         }
     }
 
@@ -297,22 +287,20 @@ struct MatmulOpReceiver {
         // Align the id to the start of the tensor slice in order of processing from all gather
         uint32_t block_id = this->ring_idxs[this->curr_dir];
 
-        if (block_idx % this->num_blocks_per_slice == 0) { // Aligned to the start of a tensor slice
+        if (block_idx % this->num_blocks_per_slice == 0) {  // Aligned to the start of a tensor slice
 
-            if (this->curr_transfer_idx != 0) { // Skip update for local slice
+            if (this->curr_transfer_idx != 0) {  // Skip update for local slice
                 // Change direction
                 this->curr_dir = !this->curr_dir;
 
                 // Update the start page idx of the tensor slice in curr_direction
                 // We only want to know the update for the ring index
-                advance_start_page_idx(
-                    this->start_page_idxs[this->curr_dir],
-                    this->ring_idxs[this->curr_dir],
-                    this->ring_size,
-                    this->is_clockwise_dirs[this->curr_dir],
-                    this->output_page_offset,
-                    this->last_output_page_offset
-                );
+                advance_start_page_idx(this->start_page_idxs[this->curr_dir],
+                                       this->ring_idxs[this->curr_dir],
+                                       this->ring_size,
+                                       this->is_clockwise_dirs[this->curr_dir],
+                                       this->output_page_offset,
+                                       this->last_output_page_offset);
             }
 
             // Update the alignment

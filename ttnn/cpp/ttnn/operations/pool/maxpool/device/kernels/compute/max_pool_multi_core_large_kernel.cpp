@@ -52,20 +52,18 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 // }
 #endif
 
-template <
-    uint32_t in_ntiles_hw,
-    uint32_t in_ntiles_c,
-    uint32_t out_ntiles_c,
-    uint32_t nblocks,
-    bool is_partial_tile,
-    uint32_t split_reader>
-inline void reduce_h_fused(
-    const uint32_t in_cb_id,
-    const uint32_t in_scalar_cb_id,
-    const uint32_t num_tiles_for_reduction,
-    const uint32_t in_stick_index,
-    const uint32_t out_cb_id,
-    const uint32_t unpA_face_r_dim) {
+template <uint32_t in_ntiles_hw,
+          uint32_t in_ntiles_c,
+          uint32_t out_ntiles_c,
+          uint32_t nblocks,
+          bool is_partial_tile,
+          uint32_t split_reader>
+inline void reduce_h_fused(const uint32_t in_cb_id,
+                           const uint32_t in_scalar_cb_id,
+                           const uint32_t num_tiles_for_reduction,
+                           const uint32_t in_stick_index,
+                           const uint32_t out_cb_id,
+                           const uint32_t unpA_face_r_dim) {
     constexpr uint32_t num_output_tiles = out_ntiles_c * nblocks;
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
@@ -73,13 +71,12 @@ inline void reduce_h_fused(
         const uint32_t curr_in_cb_id =
             split_reader ? (in_cb_id + (in_stick_index * nblocks + out_elem_i) & 0x1) : in_cb_id;
         cb_wait_front(curr_in_cb_id, 1);
-        unpack_tilizeA_B_block(
-            curr_in_cb_id,
-            in_scalar_cb_id,
-            num_tiles_for_reduction,
-            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-            num_faces_in_tile /* unpack 1 or 2 faces ) */,
-            unpA_face_r_dim);
+        unpack_tilizeA_B_block(curr_in_cb_id,
+                               in_scalar_cb_id,
+                               num_tiles_for_reduction,
+                               0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                               num_faces_in_tile /* unpack 1 or 2 faces ) */,
+                               unpA_face_r_dim);
         for (uint32_t c_i = 0; c_i < num_tiles_for_reduction; ++c_i) {
             reduce_tile_math(in_ntiles_c * out_elem_i + c_i, num_faces_in_tile /* reduce 1 or 2 faces */);
         }
@@ -127,13 +124,12 @@ void MAIN {
             num_output_tiles / MAX_TILES_PER_REDUCTION;  // For now, only pow of 2 number of channels are supported.
     }
 
-    tilizeA_B_reduce_init<true>(
-        in_cb_id,
-        in_scalar_cb_id,
-        num_tiles_for_reduction,
-        interm_reduction_cb_id,
-        num_faces_in_tile,
-        MAX_ROWS_FOR_REDUCTION);
+    tilizeA_B_reduce_init<true>(in_cb_id,
+                                in_scalar_cb_id,
+                                num_tiles_for_reduction,
+                                interm_reduction_cb_id,
+                                num_faces_in_tile,
+                                MAX_ROWS_FOR_REDUCTION);
 
     uint32_t interm_reduction_chunks = window_size_hw / MAX_ROWS_FOR_REDUCTION;
     cb_wait_front(in_scalar_cb_id, 1);
@@ -174,13 +170,12 @@ void MAIN {
                 out_cb_id, num_out_rows, num_faces_in_tile);
 
             tile_regs_acquire();
-            unpack_tilizeA_B_block(
-                interm_reduction_cb_id,
-                in_scalar_cb_id,
-                num_tiles_for_reduction,
-                0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                num_faces_in_tile /* unpack 1 or 2 faces ) */,
-                MAX_ROWS_FOR_REDUCTION);
+            unpack_tilizeA_B_block(interm_reduction_cb_id,
+                                   in_scalar_cb_id,
+                                   num_tiles_for_reduction,
+                                   0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                                   num_faces_in_tile /* unpack 1 or 2 faces ) */,
+                                   MAX_ROWS_FOR_REDUCTION);
             for (uint32_t c_i = 0; c_i < num_tiles_for_reduction; ++c_i) {
                 reduce_tile_math(c_i, num_faces_in_tile /* reduce 1 or 2 faces */);
             }

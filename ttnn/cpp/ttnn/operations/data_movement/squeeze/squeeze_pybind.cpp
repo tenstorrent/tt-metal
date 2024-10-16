@@ -22,26 +22,19 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int dim
-             ) -> ttnn::Tensor {
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int dim) -> ttnn::Tensor {
                 return self(input_tensor, dim);
             },
             py::arg("input_tensor"),
-            py::arg("dim")
-            }
-        );
+            py::arg("dim")});
 }
 
 }  // namespace detail
 
-
 void py_bind_squeeze(pybind11::module& module) {
-    detail::bind_squeeze(
-        module,
-        ttnn::squeeze,
-        R"doc(squeeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
+    detail::bind_squeeze(module,
+                         ttnn::squeeze,
+                         R"doc(squeeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
 
         Returns a tensor squeezed at the specified dimension. Pytorch supports a tuple as well as a single scalar value for dim, currently our version only supports scalar values. We will address this in the future. If input_tensor.shape()[dim] is not 1, squeeze will be ignored for that shape.
 

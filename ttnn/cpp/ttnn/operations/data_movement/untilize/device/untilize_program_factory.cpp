@@ -19,19 +19,19 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement::detail {
 
-
 uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor = 1) {
     for (uint32_t curr_div = starting_divisor; curr_div > 0; curr_div--) {
-        if (dividend % (curr_div*divisor_factor) == 0) {
+        if (dividend % (curr_div * divisor_factor) == 0) {
             return curr_div;
         }
     }
     return 1;
 }
 
-operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-
+operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(const Tensor& a,
+                                                                       Tensor& output,
+                                                                       bool use_pack_untilize,
+                                                                       bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -44,22 +44,21 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t ntiles = a.volume() / TILE_HW;
     uint32_t ncores_x = grid_size.x;
-    //uint32_t ncores_x = 2;
+    // uint32_t ncores_x = 2;
 
     ncores_x = get_largest_divisor(ntiles, ncores_x);
     uint32_t ncores_y = grid_size.y;
-    //uint32_t ncores_y = 1;
+    // uint32_t ncores_y = 1;
     ncores_y = get_largest_divisor(ntiles, ncores_y, ncores_x);
 
     TT_ASSERT(ntiles % (ncores_x * ncores_y) == 0);
-    uint32_t ntiles_per_block = ntiles/(ncores_x * ncores_y);
+    uint32_t ntiles_per_block = ntiles / (ncores_x * ncores_y);
 
-    //TODO increase block size to increase untilize performance, currently each untilize block is a single tile
-    //uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
-    //uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double buffering each
+    // TODO increase block size to increase untilize performance, currently each untilize block is a single tile
+    // uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    // uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double
+    // buffering each
     uint32_t max_tiles = 1;
-
-
 
     uint32_t stick_s = a.get_legacy_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
@@ -70,10 +69,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         starting_tile = max_tiles;
     }
     ntiles_per_block = get_largest_divisor(ntiles_per_row, starting_tile);
-    TT_ASSERT(ntiles_per_row % ntiles_per_block == 0 and ntiles_per_block >= 1 and ntiles_per_block <= ntiles_per_row and ntiles % ntiles_per_block == 0);
+    TT_ASSERT(ntiles_per_row % ntiles_per_block == 0 and ntiles_per_block >= 1 and
+              ntiles_per_block <= ntiles_per_row and ntiles % ntiles_per_block == 0);
 
     uint32_t nblocks = (ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes =  input_single_tile_size;
+    uint32_t block_size_nbytes = input_single_tile_size;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(CoreCoord(ncores_x, ncores_y), nblocks);
@@ -87,23 +87,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
     auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
-        program,
-        all_cores,
-        input_single_tile_size,
-        num_input_tiles,
-        input_cb_data_format,
-        nullptr);
+        tt::CB::c_in0, program, all_cores, input_single_tile_size, num_input_tiles, input_cb_data_format, nullptr);
 
-    uint32_t num_output_tiles =  ntiles_per_block * 2;
+    uint32_t num_output_tiles = ntiles_per_block * 2;
     auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
-        program,
-        all_cores,
-        output_single_tile_size,
-        num_output_tiles,
-        output_cb_data_format,
-         nullptr);
+        tt::CB::c_out0, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format, nullptr);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -125,13 +113,12 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         (uint32_t)log2_stick_size,
     };
 
-    auto unary_writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-        "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_ct_args));
-
+    auto unary_writer_kernel_id =
+        CreateKernel(program,
+                     "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+                     "writer_unary_stick_layout_split_rows_interleaved_parallel_columns.cpp",
+                     all_cores,
+                     WriterDataMovementConfig(writer_ct_args));
 
     /** compute
      */
@@ -140,34 +127,34 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
     vector<uint32_t> compute_args_cliff = {
-        (uint32_t)nblocks_per_core_cliff ,
+        (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel =
+            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
     if (core_range.ranges().size() > 0) {
-        auto untilize_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        auto untilize_kernel_id =
+            CreateKernel(program,
+                         compute_kernel,
+                         core_range,
+                         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
     }
     if (core_range_cliff.ranges().size() > 0) {
-        auto untilize_cliff_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            core_range_cliff,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_cliff});
+        auto untilize_cliff_kernel_id =
+            CreateKernel(program,
+                         compute_kernel,
+                         core_range_cliff,
+                         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_cliff});
     }
-
-
 
     uint32_t ncores_full = ncores;
     auto full_cores = all_cores;
@@ -191,21 +178,19 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         vector<uint32_t> reader_rt_args;
         auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
         reader_rt_args = {
-            src0_buffer->address(),               // src_addr
-            ntiles_per_core,  // ntiles
-            tile_start_id                         // start_id
+            src0_buffer->address(),  // src_addr
+            ntiles_per_core,         // ntiles
+            tile_start_id            // start_id
         };
 
         std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
-            dst_buffer->address(),           // dst_addr
-            nsticks_per_core,  // nsticks
-            stick_size,               // block_size_nbytes
-            ntiles_per_core,                // ntiles_per_core
-            TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
-            offset_within_stick
-        };
+        writer_rt_args = {dst_buffer->address(),               // dst_addr
+                          nsticks_per_core,                    // nsticks
+                          stick_size,                          // block_size_nbytes
+                          ntiles_per_core,                     // ntiles_per_core
+                          TILE_WIDTH * output.element_size(),  // tile_width_size
+                          0,                                   // start stick id = 0, since parallelizing on height
+                          offset_within_stick};
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
@@ -221,21 +206,19 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         std::vector<uint32_t> reader_rt_args;
         auto ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
         reader_rt_args = {
-            src0_buffer->address(),               // src_addr
-            ntiles_per_core_cliff,  // ntiles
-            tile_start_id                         // start_id
+            src0_buffer->address(),  // src_addr
+            ntiles_per_core_cliff,   // ntiles
+            tile_start_id            // start_id
         };
 
         std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
-            dst_buffer->address(),           // dst_addr
-            nsticks_per_core,  // nsticks
-            stick_size,               // block_size_nbytes
-            ntiles_per_core_cliff,                // ntiles_per_core
-            TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
-            offset_within_stick
-        };
+        writer_rt_args = {dst_buffer->address(),               // dst_addr
+                          nsticks_per_core,                    // nsticks
+                          stick_size,                          // block_size_nbytes
+                          ntiles_per_core_cliff,               // ntiles_per_core
+                          TILE_WIDTH * output.element_size(),  // tile_width_size
+                          0,                                   // start stick id = 0, since parallelizing on height
+                          offset_within_stick};
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
@@ -244,12 +227,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
                                                 writer_kernel_id = unary_writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_rtargs](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
+                                                cores_with_rtargs](const void* operation,
+                                                                   Program& program,
+                                                                   const std::vector<Tensor>& input_tensors,
+                                                                   const std::vector<std::optional<const Tensor>>&,
+                                                                   const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
         {
@@ -272,10 +254,10 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-
-
-operation::ProgramWithCallbacks untilize_multi_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+operation::ProgramWithCallbacks untilize_multi_core(const Tensor& a,
+                                                    Tensor& output,
+                                                    bool use_pack_untilize,
+                                                    bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -295,17 +277,17 @@ operation::ProgramWithCallbacks untilize_multi_core(
     uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
 
     uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
+    uint32_t max_tiles =
+        (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
     if (ntiles_per_block > max_tiles) {
-        if(!src_sharded and !out_sharded) {
+        if (!src_sharded and !out_sharded) {
             uint32_t ntiles_height = ntiles / ntiles_per_block;
-            if(ntiles_height == 1) {
+            if (ntiles_height == 1) {
                 return untilize_multi_core_parallelize_column(a, output, use_pack_untilize, fp32_dest_acc_en);
-            }
-            else {
+            } else {
                 return untilize_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
             }
         }
@@ -351,24 +333,22 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     uint32_t num_input_tiles = src_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
-    auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CB::c_in0,
-        program,
-        all_cores,
-        input_single_tile_size,
-        num_input_tiles,
-        input_cb_data_format,
-        src_sharded ? a.buffer() : nullptr);
+    auto [src0_cb_index, cb_src0] = create_cb(tt::CB::c_in0,
+                                              program,
+                                              all_cores,
+                                              input_single_tile_size,
+                                              num_input_tiles,
+                                              input_cb_data_format,
+                                              src_sharded ? a.buffer() : nullptr);
 
     uint32_t num_output_tiles = out_sharded ? ntiles_per_block * nblocks_per_core : ntiles_per_block * 2;
-    auto [output_cb_index, cb_output] = create_cb(
-        tt::CB::c_out0,
-        program,
-        all_cores,
-        output_single_tile_size,
-        num_output_tiles,
-        output_cb_data_format,
-        out_sharded ? output.buffer() : nullptr);
+    auto [output_cb_index, cb_output] = create_cb(tt::CB::c_out0,
+                                                  program,
+                                                  all_cores,
+                                                  output_single_tile_size,
+                                                  num_output_tiles,
+                                                  output_cb_data_format,
+                                                  out_sharded ? output.buffer() : nullptr);
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -410,8 +390,8 @@ operation::ProgramWithCallbacks untilize_multi_core(
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         if (src_block_sharded) {
-            vector<uint32_t> writer_ct_args = {
-                (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
+            vector<uint32_t> writer_ct_args = {(uint32_t)out_is_dram,
+                                               (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
             unary_writer_kernel_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
@@ -426,12 +406,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
                 (uint32_t)log2_stick_size,
             };
 
-            unary_writer_kernel_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
-                "writer_unary_stick_layout_split_rows_interleaved.cpp",
-                all_cores,
-                WriterDataMovementConfig(writer_ct_args));
+            unary_writer_kernel_id =
+                CreateKernel(program,
+                             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+                             "writer_unary_stick_layout_split_rows_interleaved.cpp",
+                             all_cores,
+                             WriterDataMovementConfig(writer_ct_args));
         }
     }
 
@@ -446,27 +426,29 @@ operation::ProgramWithCallbacks untilize_multi_core(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel =
+            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
     if (core_range.ranges().size() > 0) {
-        auto untilize_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            core_range,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
+        auto untilize_kernel_id =
+            CreateKernel(program,
+                         compute_kernel,
+                         core_range,
+                         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
     }
     if (core_range_cliff.ranges().size() > 0) {
-        auto untilize_cliff_kernel_id = CreateKernel(
-            program,
-            compute_kernel,
-            core_range_cliff,
-            ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_cliff});
+        auto untilize_cliff_kernel_id =
+            CreateKernel(program,
+                         compute_kernel,
+                         core_range_cliff,
+                         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args_cliff});
     }
 
     // 1D distribution of blocks across all cores
@@ -534,29 +516,27 @@ operation::ProgramWithCallbacks untilize_multi_core(
                     }
                 }
 
-                writer_rt_args = {
-                    dst_buffer->address(),  // dst_addr
-                    num_rows_block,
-                    block_row_size,
-                    1,
-                    1,
-                    1,
-                    output_row_size,
-                    row_size_unpadded,
-                    num_rows_unpadded,
-                    block_start_row_id_offset,
-                    block_start_row_offset};
+                writer_rt_args = {dst_buffer->address(),  // dst_addr
+                                  num_rows_block,
+                                  block_row_size,
+                                  1,
+                                  1,
+                                  1,
+                                  output_row_size,
+                                  row_size_unpadded,
+                                  num_rows_unpadded,
+                                  block_start_row_id_offset,
+                                  block_start_row_offset};
             } else {
-                writer_rt_args = {
-                    dst_buffer->address(),           // dst_addr
-                    nblocks_per_core * TILE_HEIGHT,  // nblocks per core
-                    block_size_nbytes,               // block_size_nbytes
-                    ntiles_per_block,                // ntiles_per_block
-                    block_size_nbytes,               // block_size_nbytes
-                    1,                               // full blocks in a row
-                    0,
-                    0,
-                    row_start_id};
+                writer_rt_args = {dst_buffer->address(),           // dst_addr
+                                  nblocks_per_core * TILE_HEIGHT,  // nblocks per core
+                                  block_size_nbytes,               // block_size_nbytes
+                                  ntiles_per_block,                // ntiles_per_block
+                                  block_size_nbytes,               // block_size_nbytes
+                                  1,                               // full blocks in a row
+                                  0,
+                                  0,
+                                  row_start_id};
             }
         }
         // log_debug("writer[{}]: {},{} = {} {}", dst_buffer->address(), core.x, core.y, block_size_nbytes,
@@ -621,29 +601,27 @@ operation::ProgramWithCallbacks untilize_multi_core(
                         num_rows_unpadded = num_output_rows_unpadded;
                     }
                 }
-                writer_rt_args = {
-                    dst_buffer->address(),  // dst_addr
-                    num_rows_block,
-                    block_row_size,
-                    1,
-                    1,
-                    1,
-                    output_row_size,
-                    row_size_unpadded,
-                    num_rows_unpadded,
-                    block_start_row_id_offset,
-                    block_start_row_offset};
+                writer_rt_args = {dst_buffer->address(),  // dst_addr
+                                  num_rows_block,
+                                  block_row_size,
+                                  1,
+                                  1,
+                                  1,
+                                  output_row_size,
+                                  row_size_unpadded,
+                                  num_rows_unpadded,
+                                  block_start_row_id_offset,
+                                  block_start_row_offset};
             } else {
-                writer_rt_args = {
-                    dst_buffer->address(),                 // dst_addr
-                    nblocks_per_core_cliff * TILE_HEIGHT,  // nsticks
-                    block_size_nbytes,                     // stick_size_nbytes
-                    ntiles_per_block,                      // ntiles_per_block
-                    block_size_nbytes,                     // block_width_nbytes
-                    1,                                     // full blocks in a row
-                    0,                                     // UNUSED
-                    0,                                     // UNUSED
-                    row_start_id};
+                writer_rt_args = {dst_buffer->address(),                 // dst_addr
+                                  nblocks_per_core_cliff * TILE_HEIGHT,  // nsticks
+                                  block_size_nbytes,                     // stick_size_nbytes
+                                  ntiles_per_block,                      // ntiles_per_block
+                                  block_size_nbytes,                     // block_width_nbytes
+                                  1,                                     // full blocks in a row
+                                  0,                                     // UNUSED
+                                  0,                                     // UNUSED
+                                  row_start_id};
             }
         }
         // log_debug("writer: {},{} = {} {}", core.x, core.y, block_size_nbytes, row_start_id);
@@ -657,12 +635,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
                                                 writer_kernel_id = unary_writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_rtargs](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
+                                                cores_with_rtargs](const void* operation,
+                                                                   Program& program,
+                                                                   const std::vector<Tensor>& input_tensors,
+                                                                   const std::vector<std::optional<const Tensor>>&,
+                                                                   const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
@@ -693,8 +670,10 @@ operation::ProgramWithCallbacks untilize_multi_core(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks untilize_single_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+operation::ProgramWithCallbacks untilize_single_core(const Tensor& a,
+                                                     Tensor& output,
+                                                     bool use_pack_untilize,
+                                                     bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -741,36 +720,35 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
-    auto cb_src0_config = tt::tt_metal::CircularBufferConfig(
-                              num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
+    auto cb_src0_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size,
+                                                             {{src0_cb_index, input_cb_data_format}})
                               .set_page_size(src0_cb_index, input_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = num_tiles_per_block;
-    auto cb_output_config = tt::tt_metal::CircularBufferConfig(
-                                num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+    auto cb_output_config = tt::tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size,
+                                                               {{output_cb_index, output_cb_data_format}})
                                 .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Writer compile-time args
-    vector<uint32_t> writer_kernel_args = {
-        dst_buffer->address(),
-        num_sticks,
-        stick_size,
-        num_tiles_per_block,
-        block_width_size,
-        num_full_blocks_in_row,
-        num_leftover_tiles,
-        leftover_width_in_row,
-        0};
+    vector<uint32_t> writer_kernel_args = {dst_buffer->address(),
+                                           num_sticks,
+                                           stick_size,
+                                           num_tiles_per_block,
+                                           block_width_size,
+                                           num_full_blocks_in_row,
+                                           num_leftover_tiles,
+                                           leftover_width_in_row,
+                                           0};
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
 
     bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1): 0;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::bit_width(stick_size) - 1) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)out_is_dram,
         (std::uint32_t)stick_size_is_power_of_two,
@@ -785,21 +763,24 @@ operation::ProgramWithCallbacks untilize_single_core(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Untilized writer
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_interleaved.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    tt::tt_metal::KernelHandle unary_writer_kernel_id =
+        tt::tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+                                   "writer_unary_stick_layout_split_rows_interleaved.cpp",
+                                   core,
+                                   tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
         uint32_t(num_tiles_per_block)               // per_core_block_tile_cnt
     };
 
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
         log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+        compute_kernel =
+            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }

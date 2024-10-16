@@ -22,10 +22,9 @@ void kernel_main() {
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
     const auto input_grad_data_format = get_dataformat(cb_id_input_grad);
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                                         .page_size = input_grad_tile_bytes,
+                                                                         .data_format = input_grad_data_format};
 
     auto input_grad_tile_idx = tile_offset;
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {

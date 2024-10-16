@@ -7,8 +7,8 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
-void MorehGroupNormBackwardInputGradOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehGroupNormBackwardInputGradOperation::validate_tensors(const operation_attributes_t& operation_attributes,
+                                                                const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
     const auto& mean = tensor_args.mean;
@@ -54,46 +54,43 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     TT_FATAL(rstd.get_shape().value.without_padding()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardInputGradOperation::program_factory_t
-MorehGroupNormBackwardInputGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardInputGradOperation::program_factory_t MorehGroupNormBackwardInputGradOperation::
+    select_program_factory(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return MorehGroupNormBackwardInputGradFactory();
 }
 
 void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
 
 void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehGroupNormBackwardInputGradOperation::shape_return_value_t
-MorehGroupNormBackwardInputGradOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardInputGradOperation::shape_return_value_t MorehGroupNormBackwardInputGradOperation::
+    compute_output_shapes(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tensor_args.output_grad.get_shape();
 }
 
-MorehGroupNormBackwardInputGradOperation::tensor_return_value_t
-MorehGroupNormBackwardInputGradOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardInputGradOperation::tensor_return_value_t MorehGroupNormBackwardInputGradOperation::
+    create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad.has_value()) {
         return {tensor_args.input_grad.value()};
     }
 
-    return create_device_tensor(
-        tensor_args.output_grad.get_shape(),
-        tensor_args.output_grad.get_dtype(),
-        Layout::TILE,
-        tensor_args.output_grad.device(),
-        operation_attributes.input_grad_memory_config);
+    return create_device_tensor(tensor_args.output_grad.get_shape(),
+                                tensor_args.output_grad.get_dtype(),
+                                Layout::TILE,
+                                tensor_args.output_grad.device(),
+                                operation_attributes.input_grad_memory_config);
 }
 
-std::tuple<
-    MorehGroupNormBackwardInputGradOperation::operation_attributes_t,
-    MorehGroupNormBackwardInputGradOperation::tensor_args_t>
+std::tuple<MorehGroupNormBackwardInputGradOperation::operation_attributes_t,
+           MorehGroupNormBackwardInputGradOperation::tensor_args_t>
 MorehGroupNormBackwardInputGradOperation::invoke(
     const Tensor& output_grad,
     const Tensor& input,

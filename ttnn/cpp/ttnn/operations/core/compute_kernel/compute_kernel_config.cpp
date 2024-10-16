@@ -18,7 +18,6 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     bool default_fp32_acc,
     bool default_l1_acc,
     bool default_dst_full_sync_en) {
-
     DeviceComputeKernelConfig defaultConfig;
     if (device_kernel_config.has_value()) {
         auto compute_kernel_config = device_kernel_config.value();
@@ -30,23 +29,22 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
                     MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
                     bool math_approx_mode = compute_kernel_config.math_approx_mode;
                     bool dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
-                    defaultConfig = GrayskullComputeKernelConfig{
-                        .math_fidelity = math_fidelity,
-                        .math_approx_mode = math_approx_mode,
-                        .dst_full_sync_en = dst_full_sync_en};
+                    defaultConfig = GrayskullComputeKernelConfig{.math_fidelity = math_fidelity,
+                                                                 .math_approx_mode = math_approx_mode,
+                                                                 .dst_full_sync_en = dst_full_sync_en};
                 } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
+                    TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch),
+                              "kernel config is not for wormhole_b0 or blackhole");
                     MathFidelity math_fidelity = compute_kernel_config.math_fidelity;
                     bool math_approx_mode = compute_kernel_config.math_approx_mode;
                     bool fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
                     bool packer_l1_acc = compute_kernel_config.packer_l1_acc;
                     bool dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
-                    defaultConfig = WormholeComputeKernelConfig{
-                        .math_fidelity = math_fidelity,
-                        .math_approx_mode = math_approx_mode,
-                        .fp32_dest_acc_en = fp32_dest_acc_en,
-                        .packer_l1_acc = packer_l1_acc,
-                        .dst_full_sync_en = dst_full_sync_en};
+                    defaultConfig = WormholeComputeKernelConfig{.math_fidelity = math_fidelity,
+                                                                .math_approx_mode = math_approx_mode,
+                                                                .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                                .packer_l1_acc = packer_l1_acc,
+                                                                .dst_full_sync_en = dst_full_sync_en};
                 } else {
                     TT_THROW("arch not supported");
                 }
@@ -55,15 +53,14 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
         return defaultConfig;
     } else {
         if (arch == tt::ARCH::GRAYSKULL) {
-            return GrayskullComputeKernelConfig{
-                .math_fidelity = default_fidelity, .math_approx_mode = default_approx_mode};
+            return GrayskullComputeKernelConfig{.math_fidelity = default_fidelity,
+                                                .math_approx_mode = default_approx_mode};
         } else if (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE) {
-            return WormholeComputeKernelConfig{
-                .math_fidelity = default_fidelity,
-                .math_approx_mode = default_approx_mode,
-                .fp32_dest_acc_en = default_fp32_acc,
-                .packer_l1_acc = default_l1_acc,
-                .dst_full_sync_en = default_dst_full_sync_en};
+            return WormholeComputeKernelConfig{.math_fidelity = default_fidelity,
+                                               .math_approx_mode = default_approx_mode,
+                                               .fp32_dest_acc_en = default_fp32_acc,
+                                               .packer_l1_acc = default_l1_acc,
+                                               .dst_full_sync_en = default_dst_full_sync_en};
         } else {
             TT_THROW("arch not supported");
         }
@@ -107,8 +104,8 @@ MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& c
 }
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config) {
-
+    tt::ARCH arch,
+    const DeviceComputeKernelConfig compute_kernel_config) {
     MathFidelity math_fidelity;
     bool math_approx_mode;
     bool fp32_dest_acc_en;
@@ -126,7 +123,8 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
                 packer_l1_acc = false;
                 dst_full_sync_en = false;
             } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch), "kernel config is not for wormhole_b0 or blackhole");
+                TT_ASSERT(ttnn::device::is_wormhole_or_blackhole(arch),
+                          "kernel config is not for wormhole_b0 or blackhole");
                 math_fidelity = compute_kernel_config.math_fidelity;
                 math_approx_mode = compute_kernel_config.math_approx_mode;
                 fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
@@ -141,8 +139,8 @@ std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     return std::make_tuple(math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en);
 }
 
-uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config, std::optional<std::array<uint32_t, 2>> tile_shape) {
-
+uint32_t get_dest_reg_count(const DeviceComputeKernelConfig& compute_kernel_config,
+                            std::optional<std::array<uint32_t, 2>> tile_shape) {
     uint32_t tile_height;
     uint32_t tile_width;
     if (tile_shape.has_value()) {

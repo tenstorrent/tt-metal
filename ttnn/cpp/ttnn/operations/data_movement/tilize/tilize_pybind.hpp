@@ -37,23 +37,25 @@ void bind_tilize(py::module &module) {
         )doc";
 
     using OperationType = decltype(ttnn::tilize);
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::tilize,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = true,
-            py::arg("queue_id") = 0,
-        });
+    ttnn::bind_registered_operation(module,
+                                    ttnn::tilize,
+                                    doc,
+                                    ttnn::pybind_overload_t{
+                                        [](const OperationType &self,
+                                           const ttnn::Tensor &input_tensor,
+                                           const std::optional<MemoryConfig> &memory_config,
+                                           std::optional<DataType> output_dtype,
+                                           bool use_multicore,
+                                           uint8_t queue_id) {
+                                            return self(
+                                                queue_id, input_tensor, memory_config, output_dtype, use_multicore);
+                                        },
+                                        py::arg("input_tensor"),
+                                        py::kw_only(),
+                                        py::arg("memory_config") = std::nullopt,
+                                        py::arg("dtype") = std::nullopt,
+                                        py::arg("use_multicore") = true,
+                                        py::arg("queue_id") = 0,
+                                    });
 }
 }  // namespace ttnn::operations::data_movement::detail

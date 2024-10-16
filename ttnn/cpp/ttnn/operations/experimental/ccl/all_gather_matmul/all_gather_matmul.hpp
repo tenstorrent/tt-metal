@@ -32,13 +32,13 @@ struct ExecuteAllGatherMatmul {
         const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 };
 
-}  // namespace opereations::experimental::ccl
+}  // namespace operations::experimental::ccl
 
 namespace experimental {
 
-constexpr auto all_gather_matmul = ttnn::register_operation<
-    "ttnn::experimental::all_gather_matmul",
-    ttnn::operations::experimental::ccl::ExecuteAllGatherMatmul>();
+constexpr auto all_gather_matmul =
+    ttnn::register_operation<"ttnn::experimental::all_gather_matmul",
+                             ttnn::operations::experimental::ccl::ExecuteAllGatherMatmul>();
 
 }  // namespace experimental
 }  // namespace ttnn

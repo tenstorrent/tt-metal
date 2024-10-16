@@ -9,11 +9,10 @@
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad {
 
-MorehLayerNormBackwardInputGradOperation::ProgramFactory::cached_program_t
-MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& input_grad) {
+MorehLayerNormBackwardInputGradOperation::ProgramFactory::cached_program_t MorehLayerNormBackwardInputGradOperation::
+    ProgramFactory::create(const operation_attributes_t& operation_attributes,
+                           const tensor_args_t& tensor_args,
+                           tensor_return_value_t& input_grad) {
     auto& output_grad = tensor_args.output_grad;
     auto& input = tensor_args.input;
     auto& mean = tensor_args.mean;
@@ -77,9 +76,12 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_outer);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_rows_per_core_group_1,
+                num_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_outer);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -196,14 +198,13 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const auto writer_kernels_id =
         tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
-    const std::vector<uint32_t> compute_args_group_1{
-        num_rows_per_core_group_1,
-        origin_H,
-        origin_W,
-        num_inner,
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(is_lastdim_layer_norm),
-        static_cast<uint32_t>(is_groupnorm)};
+    const std::vector<uint32_t> compute_args_group_1{num_rows_per_core_group_1,
+                                                     origin_H,
+                                                     origin_W,
+                                                     num_inner,
+                                                     static_cast<uint32_t>(gamma_has_value),
+                                                     static_cast<uint32_t>(is_lastdim_layer_norm),
+                                                     static_cast<uint32_t>(is_groupnorm)};
 
     const auto compute_kernel_file = use_large_algorithm
                                          ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
@@ -211,33 +212,30 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
                                          : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    tt::operations::primary::CreateComputeKernel(program,
+                                                 compute_kernel_file,
+                                                 {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
+                                                 compute_defines,
+                                                 math_fidelity,
+                                                 fp32_dest_acc_en,
+                                                 math_approx_mode);
 
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
-            num_rows_per_core_group_2,
-            origin_H,
-            origin_W,
-            num_inner,
-            static_cast<uint32_t>(gamma_has_value),
-            static_cast<uint32_t>(is_lastdim_layer_norm),
-            static_cast<uint32_t>(is_groupnorm)};
+        const std::vector<uint32_t> compute_args_group_2{num_rows_per_core_group_2,
+                                                         origin_H,
+                                                         origin_W,
+                                                         num_inner,
+                                                         static_cast<uint32_t>(gamma_has_value),
+                                                         static_cast<uint32_t>(is_lastdim_layer_norm),
+                                                         static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -264,22 +262,21 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            output_grad_addr,
-            input_addr,
-            mean_addr,
-            rstd_addr,
-            gamma_addr,
-            num_rows_per_core,
-            num_inner,
-            tile_offset,
-            *reinterpret_cast<uint32_t*>(&n),
-            *reinterpret_cast<uint32_t*>(&recip_n),
-            mask_h,
-            mask_w,
-            normalized_dims,
-            mean_rstd_height,
-            mean_rstd_width};
+        const std::vector<uint32_t> reader_runtime_args{output_grad_addr,
+                                                        input_addr,
+                                                        mean_addr,
+                                                        rstd_addr,
+                                                        gamma_addr,
+                                                        num_rows_per_core,
+                                                        num_inner,
+                                                        tile_offset,
+                                                        *reinterpret_cast<uint32_t*>(&n),
+                                                        *reinterpret_cast<uint32_t*>(&recip_n),
+                                                        mask_h,
+                                                        mask_w,
+                                                        normalized_dims,
+                                                        mean_rstd_height,
+                                                        mean_rstd_width};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args{input_grad_addr, num_rows_per_core, num_inner, tile_offset};

@@ -39,19 +39,17 @@ Tensor* get_tensor(T& maybe_tensor) {
     return output_tensor;
 }
 
-void check_output(auto& output_tensors, const std::vector<Device *>& workers) {
+void check_output(auto& output_tensors, const std::vector<Device*>& workers) {
     for (auto& output_tensor_like : output_tensors) {
         auto output_tensor = get_tensor(output_tensor_like);
         if (!output_tensor) {
             continue;
         }
-        TT_FATAL(
-            output_tensor->workers.size(),
-            "Worker threads must be specified for outputs populated by launch_op. This API can only be used for "
-            "creating output tensors on device.");
-        TT_FATAL(
-            output_tensor->workers == workers,
-            "Worker threads must be consistent across all outputs populated by launch_op.");
+        TT_FATAL(output_tensor->workers.size(),
+                 "Worker threads must be specified for outputs populated by launch_op. This API can only be used for "
+                 "creating output tensors on device.");
+        TT_FATAL(output_tensor->workers == workers,
+                 "Worker threads must be consistent across all outputs populated by launch_op.");
     }
 }
 
@@ -65,15 +63,13 @@ auto& get_workers(auto& output_tensors) {
     TT_THROW("Workers not found in output tensors.");
 }
 
-
-template<class Callable, class OutputType>
-void launch_op(
-    Callable&& op_func,
-    const Tensors input_tensors,
-    OutputType& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device) {
+template <class Callable, class OutputType>
+void launch_op(Callable&& op_func,
+               const Tensors input_tensors,
+               OutputType& output_tensors,
+               const OptionalConstTensors optional_input_tensors,
+               const OptionalTensors optional_output_tensors,
+               bool enable_autoformat_device) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
@@ -119,7 +115,6 @@ void launch_op(
         if (output_tensor) {
             output_tensor_ref_count[i] = output_tensor->tensor_attributes->record_main_thread_ref_count();
         }
-
     }
     for (int i = 0; i < optional_output_tensors.size(); i++) {
         if (optional_output_tensors[i].has_value()) {
@@ -213,13 +208,16 @@ void launch_op(
                         auto local_tensor = get_tensor(local_tensors[i]);
                         // not sure if it the case but in my opinion it should not happen
                         // both output and local tensor should be presented or absent
-                        TT_ASSERT((output_tensor != nullptr && local_tensor != nullptr) || (local_tensor == nullptr && output_tensor == nullptr));
+                        TT_ASSERT((output_tensor != nullptr && local_tensor != nullptr) ||
+                                  (local_tensor == nullptr && output_tensor == nullptr));
                         if (!output_tensor || !local_tensor) {
                             continue;
                         }
 
-                        // The return type is vector<optional<Tensor>>, and this refers to the case where the i-th value is nullopt.
-                        if (output_tensor->tensor_attributes.use_count() != 0 && local_tensor->tensor_attributes.use_count() == 0) {
+                        // The return type is vector<optional<Tensor>>, and this refers to the case where the i-th value
+                        // is nullopt.
+                        if (output_tensor->tensor_attributes.use_count() != 0 &&
+                            local_tensor->tensor_attributes.use_count() == 0) {
                             continue;
                         }
 
@@ -247,15 +245,16 @@ void launch_op(
             });
 
         for (auto target_device : workers) {
-            target_device->push_work(std::make_shared<std::function<void()>>(
-                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); }));
+            target_device->push_work(std::make_shared<std::function<void()>>([target_device, work_lambda]() mutable {
+                (*work_lambda)(target_device);
+            }));
         }
     }
 
     // Update ref counts of all tensors after push was performed (done only in main thread).
     for (int i = 0; i < async_safe_input_tensors.size(); i++) {
-        async_safe_input_tensors[i].tensor_attributes->update_main_thread_ref_count(
-            workers[0], input_tensor_ref_count[i]);
+        async_safe_input_tensors[i].tensor_attributes->update_main_thread_ref_count(workers[0],
+                                                                                    input_tensor_ref_count[i]);
     }
     for (int i = 0; i < async_safe_optional_input_tensors.size(); i++) {
         if (async_safe_optional_input_tensors[i].has_value()) {
@@ -277,4 +276,4 @@ void launch_op(
         }
     }
 }
-}
+}  // namespace tt::tt_metal::operation

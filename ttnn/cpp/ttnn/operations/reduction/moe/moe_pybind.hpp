@@ -44,31 +44,33 @@ void bind_reduction_moe_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::moe);
-    bind_registered_operation(
-        module,
-        ttnn::moe,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& expert_mask_tensor,
-                const ttnn::Tensor& topk_mask_tensor,
-                const uint16_t k,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                std::optional<ttnn::Tensor> optional_output_tensor,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, expert_mask_tensor, topk_mask_tensor, k,
-                    memory_config, optional_output_tensor);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("expert_mask_tensor").noconvert(),
-                py::arg("topk_mask_tensor").noconvert(),
-                py::arg("k") = 32,
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt,
-                py::arg("queue_id") = 0});
+    bind_registered_operation(module,
+                              ttnn::moe,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const ttnn::Tensor& expert_mask_tensor,
+                                                         const ttnn::Tensor& topk_mask_tensor,
+                                                         const uint16_t k,
+                                                         const std::optional<ttnn::MemoryConfig>& memory_config,
+                                                         std::optional<ttnn::Tensor> optional_output_tensor,
+                                                         uint8_t queue_id) {
+                                                          return self(queue_id,
+                                                                      input_tensor,
+                                                                      expert_mask_tensor,
+                                                                      topk_mask_tensor,
+                                                                      k,
+                                                                      memory_config,
+                                                                      optional_output_tensor);
+                                                      },
+                                                      py::arg("input_tensor").noconvert(),
+                                                      py::arg("expert_mask_tensor").noconvert(),
+                                                      py::arg("topk_mask_tensor").noconvert(),
+                                                      py::arg("k") = 32,
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt,
+                                                      py::arg("output_tensor") = std::nullopt,
+                                                      py::arg("queue_id") = 0});
 }
-
 
 }  // namespace ttnn::operations::reduction::detail

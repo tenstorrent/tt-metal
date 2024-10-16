@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
@@ -18,7 +17,6 @@
 
 namespace ttnn::operations::data_movement {
 
-
 namespace detail {
 
 ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
@@ -30,8 +28,8 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     auto device = tensor.device();
     auto memory_config = tensor.memory_config();
     auto host_tensor = tensor.cpu();
-    auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
-    if(tensor_shape.has_tile_padding()) {
+    auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    if (tensor_shape.has_tile_padding()) {
         ttnn::Tensor slice_input;
         std::vector<uint32_t> begins;
         std::vector<uint32_t> ends;
@@ -45,7 +43,8 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
         host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
     }
     auto host_reshape_tensor = rm_tensor.reshape(shape.value);
-    auto final_layout_tensor = ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device *)nullptr);
+    auto final_layout_tensor =
+        ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device*)nullptr);
     auto device_tensor = ttnn::data_transfer_to_device(final_layout_tensor, device, memory_config);
     return device_tensor;
 }
@@ -54,22 +53,23 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& sh
     const auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
 
-    //Constraint in device kernel
+    // Constraint in device kernel
     uint32_t ROW_MAJOR_WIDTH = 8;
     ttnn::Tensor reshaped_rm_tensor;
-    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0)) {
-        auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
+    if ((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0)) {
+        auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
             if (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]) {
                 return rm_tensor.reshape(shape.value);
             }
-            //Different page width, going to use device kernel that does transpose
+            // Different page width, going to use device kernel that does transpose
             else {
                 auto original_rank = shape.rank();
                 auto tensor_4d = unsqueeze_to_4D(rm_tensor);
                 const auto shape_4d = shape.to_rank<4>();
-                auto reshaped_tensor = ttnn::reshape_on_device(tensor_4d, shape_4d[0], shape_4d[1], shape_4d[2], shape_4d[3], tensor.memory_config());
+                auto reshaped_tensor = ttnn::reshape_on_device(
+                    tensor_4d, shape_4d[0], shape_4d[1], shape_4d[2], shape_4d[3], tensor.memory_config());
                 reshaped_rm_tensor = squeeze_from_4D(reshaped_tensor, original_rank);
             }
         } else if (tensor_shape.rank() >= 2 and shape.rank() >= 2) {
@@ -91,15 +91,14 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& sh
     }
 
     if (((shape[-1] * tensor.element_size()) % sizeof(uint32_t) == 0) and reshaped_rm_tensor.layout() != layout) {
-        return ttnn::to_layout(reshaped_rm_tensor, layout, std::nullopt, std::nullopt, (Device *)nullptr);
-    }
-    else {
+        return ttnn::to_layout(reshaped_rm_tensor, layout, std::nullopt, std::nullopt, (Device*)nullptr);
+    } else {
         return reshaped_rm_tensor;
     }
-
 }
 
-ttnn::Shape get_shape_from_vector_with_possible_negative_values(const ttnn::Tensor& tensor, const std::vector<int32_t> & shape) {
+ttnn::Shape get_shape_from_vector_with_possible_negative_values(const ttnn::Tensor& tensor,
+                                                                const std::vector<int32_t>& shape) {
     std::int64_t new_volume = 1;
     std::int64_t index_of_negative_1 = -1;
 
@@ -107,7 +106,7 @@ ttnn::Shape get_shape_from_vector_with_possible_negative_values(const ttnn::Tens
         if (shape[index] == -1) {
             if (index_of_negative_1 != -1) {
                 std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
-                for(auto & s: shape) {
+                for (auto& s : shape) {
                     error_msg += std::to_string(s) + ",";
                 }
                 error_msg += ")";
@@ -127,17 +126,11 @@ ttnn::Shape get_shape_from_vector_with_possible_negative_values(const ttnn::Tens
     return ttnn::Shape(new_shape);
 }
 
-}
+}  // namespace detail
 
-
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& shape
-    ) {
-
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_shape();
-
 
     // First Case, No reshape Required
     if (tensor_shape == shape) {
@@ -145,9 +138,9 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
 
     bool tile_tensor_view_reshape_possible = (layout == ttnn::Layout::TILE and
-        ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
-        (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1])
-        );
+                                              ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and
+                                               (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
+                                              (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1]));
 
     // For Tensors already on host we can do the tensor.reshape (changing of view)
     if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) or tile_tensor_view_reshape_possible) {
@@ -157,16 +150,11 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     // Catch-all
     // Do the reshape in row-major
     return detail::row_major_reshape(tensor, shape);
-
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const std::vector<int32_t> & shape_vector
-    ) {
-
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const std::vector<int32_t>& shape_vector) {
     auto shape = detail::get_shape_from_vector_with_possible_negative_values(tensor, shape_vector);
     return invoke(tensor, shape);
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

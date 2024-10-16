@@ -30,28 +30,36 @@ struct OpHandler;
 
 template <>
 struct OpHandler<ComplexBinaryOpType::ADD> {
-    static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
+    static ComplexTensor handle(const ComplexTensor& input_a,
+                                const ComplexTensor& input_b,
+                                const MemoryConfig& output_mem_config) {
         return _add(input_a, input_b, output_mem_config);
     }
 };
 
 template <>
 struct OpHandler<ComplexBinaryOpType::SUB> {
-    static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
+    static ComplexTensor handle(const ComplexTensor& input_a,
+                                const ComplexTensor& input_b,
+                                const MemoryConfig& output_mem_config) {
         return _sub(input_a, input_b, output_mem_config);
     }
 };
 
 template <>
 struct OpHandler<ComplexBinaryOpType::MUL> {
-    static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
+    static ComplexTensor handle(const ComplexTensor& input_a,
+                                const ComplexTensor& input_b,
+                                const MemoryConfig& output_mem_config) {
         return _mul(input_a, input_b, output_mem_config);
     }
 };
 
 template <>
 struct OpHandler<ComplexBinaryOpType::DIV> {
-    static ComplexTensor handle( const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config ) {
+    static ComplexTensor handle(const ComplexTensor& input_a,
+                                const ComplexTensor& input_b,
+                                const MemoryConfig& output_mem_config) {
         return _div(input_a, input_b, output_mem_config);
     }
 };

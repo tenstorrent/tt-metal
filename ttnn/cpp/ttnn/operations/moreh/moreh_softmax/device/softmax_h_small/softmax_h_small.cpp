@@ -7,11 +7,10 @@
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::cached_program_t
-MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::cached_program_t MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::
+    create(const operation_attributes_t& operation_attributes,
+           const tensor_args_t& tensor_args,
+           tensor_return_value_t& output) {
     log_info(tt::LogTest, "Large tensor algorithm selected");
     const auto& input = tensor_args.input;
     const auto op = operation_attributes.op;
@@ -46,21 +45,20 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {tt::CB::c_in0, Ht},                              // input
-            {tt::CB::c_in1, 1},                               // mask
-            {tt::CB::c_in2, 1},                               // scaler
-            {tt::CB::c_out0, Ht},                             // output
-            {tt::CB::c_intermed0, Ht, intermed_data_format},  // exp(x)
-            {tt::CB::c_intermed1, 1, intermed_data_format},   // reduce
-            {tt::CB::c_intermed2, 1, intermed_data_format},   // max
-            {tt::CB::c_intermed3, Ht, intermed_data_format},  // x - max
-            {tt::CB::c_intermed4, 1, intermed_data_format}    // tmp
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  data_format,
+                                                  {
+                                                      {tt::CB::c_in0, Ht},                              // input
+                                                      {tt::CB::c_in1, 1},                               // mask
+                                                      {tt::CB::c_in2, 1},                               // scaler
+                                                      {tt::CB::c_out0, Ht},                             // output
+                                                      {tt::CB::c_intermed0, Ht, intermed_data_format},  // exp(x)
+                                                      {tt::CB::c_intermed1, 1, intermed_data_format},   // reduce
+                                                      {tt::CB::c_intermed2, 1, intermed_data_format},   // max
+                                                      {tt::CB::c_intermed3, Ht, intermed_data_format},  // x - max
+                                                      {tt::CB::c_intermed4, 1, intermed_data_format}    // tmp
+                                                  });
 
     // create read/wrtie kernel
     bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -128,14 +126,13 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
         uint32_t mask_h = shape.without_padding()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0)
             mask_h = tt::constants::TILE_HEIGHT;
-        vector<uint32_t> reader_args = {
-            input.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-            Ht,
-            Wt,
-            *reinterpret_cast<uint32_t*>(&scaler),
-            mask_h};
+        vector<uint32_t> reader_args = {input.buffer()->address(),
+                                        num_tiles_per_core,
+                                        tile_offset,
+                                        Ht,
+                                        Wt,
+                                        *reinterpret_cast<uint32_t*>(&scaler),
+                                        mask_h};
 
         vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 

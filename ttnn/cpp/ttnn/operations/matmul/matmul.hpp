@@ -28,42 +28,39 @@ bool is_input_batched(const ttnn::Shape& shape);
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation);
 
-ttnn::Tensor bound_matmul(
-    const ttnn::Tensor& input_tensor_a,
-    const ttnn::Tensor& input_tensor_b,
-    const std::optional<const ttnn::Tensor>& bias,
-    const struct Matmul& parameters,
-    const uint8_t& queue_id);
+ttnn::Tensor bound_matmul(const ttnn::Tensor& input_tensor_a,
+                          const ttnn::Tensor& input_tensor_b,
+                          const std::optional<const ttnn::Tensor>& bias,
+                          const struct Matmul& parameters,
+                          const uint8_t& queue_id);
 
 struct MatmulOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const bool transpose_a = false,
-        const bool transpose_b = false,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const Tile>& output_tile = std::nullopt);
+    static Tensor invoke(const Tensor& input_tensor_a,
+                         const Tensor& input_tensor_b,
+                         const bool transpose_a = false,
+                         const bool transpose_b = false,
+                         const std::optional<const MemoryConfig> memory_config = std::nullopt,
+                         const std::optional<const DataType> dtype = std::nullopt,
+                         const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+                         const std::optional<const std::string>& activation = std::nullopt,
+                         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+                         const std::optional<const CoreGrid> core_grid = std::nullopt,
+                         const std::optional<const Tile>& output_tile = std::nullopt);
 };
 
 struct LinearOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const Tensor>& bias = std::nullopt,
-        const bool transpose_a = false,
-        const bool transpose_b = false,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt,
-        const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
-        const std::optional<const std::string>& activation = std::nullopt,
-        const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const Tile>& output_tile = std::nullopt);
+    static Tensor invoke(const Tensor& input_tensor_a,
+                         const Tensor& input_tensor_b,
+                         const std::optional<const Tensor>& bias = std::nullopt,
+                         const bool transpose_a = false,
+                         const bool transpose_b = false,
+                         const std::optional<const MemoryConfig> memory_config = std::nullopt,
+                         const std::optional<const DataType> dtype = std::nullopt,
+                         const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+                         const std::optional<const std::string>& activation = std::nullopt,
+                         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+                         const std::optional<const CoreGrid> core_grid = std::nullopt,
+                         const std::optional<const Tile>& output_tile = std::nullopt);
 };
 
 }  // namespace matmul

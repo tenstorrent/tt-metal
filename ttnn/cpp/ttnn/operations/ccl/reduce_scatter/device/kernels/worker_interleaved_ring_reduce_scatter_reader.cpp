@@ -16,38 +16,37 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
+using tt::tt_metal::TensorMemoryLayout;
 using ttnn::ccl::coord_t;
 using ttnn::ccl::WorkerXY;
-using tt::tt_metal::TensorMemoryLayout;
 
 struct reduce_scatter_reader_common_args_t {
-    reduce_scatter_reader_common_args_t(std::size_t& arg_idx, DataFormat in0_df) :
-        input_tensor_addr(get_arg_val<uint32_t>(arg_idx++)),
-        output_tensor_addr(get_arg_val<uint32_t>(arg_idx++)),
-        num_transfers(get_arg_val<uint32_t>(arg_idx++)),
-        full_chunk_num_pages(get_arg_val<uint32_t>(arg_idx++)),
-        page_size(get_arg_val<uint32_t>(arg_idx++)),
+    reduce_scatter_reader_common_args_t(std::size_t& arg_idx, DataFormat in0_df)
+        : input_tensor_addr(get_arg_val<uint32_t>(arg_idx++)),
+          output_tensor_addr(get_arg_val<uint32_t>(arg_idx++)),
+          num_transfers(get_arg_val<uint32_t>(arg_idx++)),
+          full_chunk_num_pages(get_arg_val<uint32_t>(arg_idx++)),
+          page_size(get_arg_val<uint32_t>(arg_idx++)),
 
-        my_ring_idx(get_arg_val<uint32_t>(arg_idx++)),
-        ring_size(get_arg_val<uint32_t>(arg_idx++)),
-        sem_addr(get_semaphore(get_arg_val<uint32_t>(arg_idx++))),
+          my_ring_idx(get_arg_val<uint32_t>(arg_idx++)),
+          ring_size(get_arg_val<uint32_t>(arg_idx++)),
+          sem_addr(get_semaphore(get_arg_val<uint32_t>(arg_idx++))),
 
-        is_clockwise_direction(get_arg_val<uint32_t>(arg_idx++) == 1),
-        half_cb_n_pages(get_arg_val<uint32_t>(arg_idx++)),
-        edm_core_noc0_core_x(get_arg_val<uint32_t>(arg_idx++)),
-        edm_core_noc0_core_y(get_arg_val<uint32_t>(arg_idx++)),
-        edm_core_semaphore_address(get_arg_val<uint32_t>(arg_idx++)),
-        edm_core_buffer_address(get_arg_val<uint32_t>(arg_idx++)),
-        num_concurrent_workers(get_arg_val<uint32_t>(arg_idx++)),
+          is_clockwise_direction(get_arg_val<uint32_t>(arg_idx++) == 1),
+          half_cb_n_pages(get_arg_val<uint32_t>(arg_idx++)),
+          edm_core_noc0_core_x(get_arg_val<uint32_t>(arg_idx++)),
+          edm_core_noc0_core_y(get_arg_val<uint32_t>(arg_idx++)),
+          edm_core_semaphore_address(get_arg_val<uint32_t>(arg_idx++)),
+          edm_core_buffer_address(get_arg_val<uint32_t>(arg_idx++)),
+          num_concurrent_workers(get_arg_val<uint32_t>(arg_idx++)),
 
-        input_tensor_shape(ttnn::ccl::coord_from_args(arg_idx)),
-        tensor_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
-        worker_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
-        worker_slice_offset(ttnn::ccl::coord_from_args(arg_idx)),
-        total_eltwise_kernel_num_pages(get_arg_val<uint32_t>(arg_idx++)),
-        requires_last_input_from_other_sender(get_arg_val<uint32_t>(arg_idx++)),
-        in0_df(in0_df)
-        {
+          input_tensor_shape(ttnn::ccl::coord_from_args(arg_idx)),
+          tensor_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
+          worker_slice_shape(ttnn::ccl::coord_from_args(arg_idx)),
+          worker_slice_offset(ttnn::ccl::coord_from_args(arg_idx)),
+          total_eltwise_kernel_num_pages(get_arg_val<uint32_t>(arg_idx++)),
+          requires_last_input_from_other_sender(get_arg_val<uint32_t>(arg_idx++)),
+          in0_df(in0_df) {
         ASSERT(full_chunk_num_pages > 0);
         ASSERT(page_size > 0);
         ASSERT(ring_size > 0);
@@ -86,17 +85,26 @@ constexpr bool row_major_layout = true;
 constexpr bool row_major_layout = false;
 #endif
 
-template <TensorMemoryLayout layout, bool src_is_dram> struct source_tensor_addrgen {
+template <TensorMemoryLayout layout, bool src_is_dram>
+struct source_tensor_addrgen {
 #ifdef ROW_MAJOR_LAYOUT
     using type = InterleavedAddrGen<src_is_dram>;
 #else
     using type = InterleavedAddrGenFast<src_is_dram>;
 #endif
 };
-template <bool src_is_dram> struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, src_is_dram> { using type = tt::tt_metal::address_generators::DefaultWidthShardedAddressGenerator; };
-template <bool src_is_dram> struct source_tensor_addrgen<TensorMemoryLayout::HEIGHT_SHARDED, src_is_dram> { using type = tt::tt_metal::address_generators::DefaultHeightShardedAddressGenerator; };
-template <bool src_is_dram> struct source_tensor_addrgen<TensorMemoryLayout::BLOCK_SHARDED, src_is_dram> { using type = tt::tt_metal::address_generators::DefaultBlockShardedAddressGenerator; };
-
+template <bool src_is_dram>
+struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, src_is_dram> {
+    using type = tt::tt_metal::address_generators::DefaultWidthShardedAddressGenerator;
+};
+template <bool src_is_dram>
+struct source_tensor_addrgen<TensorMemoryLayout::HEIGHT_SHARDED, src_is_dram> {
+    using type = tt::tt_metal::address_generators::DefaultHeightShardedAddressGenerator;
+};
+template <bool src_is_dram>
+struct source_tensor_addrgen<TensorMemoryLayout::BLOCK_SHARDED, src_is_dram> {
+    using type = tt::tt_metal::address_generators::DefaultBlockShardedAddressGenerator;
+};
 
 constexpr bool is_sharded = get_compile_time_arg_val(0) == 1;
 
@@ -129,7 +137,6 @@ static constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_tim
 static constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(12);
 static constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(13) != 0;
 
-
 static constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(14);
 static constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(15);
 static constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(16);
@@ -157,28 +164,28 @@ static constexpr uint32_t output_tensor_shard_pages_per_shard_x = 0;
 static constexpr bool output_tensor_shard_grid_transposed = 0;
 #endif
 
-
-
 template <tt::tt_metal::TensorMemoryLayout tensor_memory_layout, bool tensor_is_dram>
-auto build_source_address_generator(std::size_t &arg_idx, reduce_scatter_reader_common_args_t const& args, uint32_t tensor_base_addr) -> typename source_tensor_addrgen<input_tensor_memory_layout, src_is_dram>::type {
+auto build_source_address_generator(std::size_t& arg_idx,
+                                    reduce_scatter_reader_common_args_t const& args,
+                                    uint32_t tensor_base_addr) ->
+    typename source_tensor_addrgen<input_tensor_memory_layout, src_is_dram>::type {
     if constexpr (tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         if constexpr (row_major_layout) {
-            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr, args.page_size};
+            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr,
+                                                                                              args.page_size};
         } else {
-            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr, args.page_size, args.in0_df};
+            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{
+                tensor_base_addr, args.page_size, args.in0_df};
         }
-    } else if constexpr (
-        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
-        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
-        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+    } else if constexpr (tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                         tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+                         tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         ASSERT(is_sharded_mode);
         uint32_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t* const input_shard_grid_row_map =
-            reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
+        const uint32_t* const input_shard_grid_row_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
         arg_idx += input_shard_grid_nrows;
         uint32_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t* const input_shard_grid_col_map =
-            reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
+        const uint32_t* const input_shard_grid_col_map = reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
         arg_idx += input_shard_grid_ncols;
 
         return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type(
@@ -199,18 +206,17 @@ auto build_source_address_generator(std::size_t &arg_idx, reduce_scatter_reader_
     }
 }
 
-using advance_to_next_transfer_slice_result_t = std::tuple<
-    uint32_t,  // ring_index
-    uint32_t   // slice_base_page_offset
-    >;
-advance_to_next_transfer_slice_result_t advance_to_next_transfer_slice(
-    uint32_t const ring_size,
-    uint32_t const curr_ring_idx,
-    uint32_t const slice_base_page_offset,
-    coord_t const& input_tensor_shape,
-    coord_t const& tensor_slice_shape,
-    bool const is_clockwise_direction) {
-    bool const sliced_only_on_width = tensor_slice_shape.x < input_tensor_shape.x && tensor_slice_shape.y == input_tensor_shape.y;
+using advance_to_next_transfer_slice_result_t = std::tuple<uint32_t,  // ring_index
+                                                           uint32_t   // slice_base_page_offset
+                                                           >;
+advance_to_next_transfer_slice_result_t advance_to_next_transfer_slice(uint32_t const ring_size,
+                                                                       uint32_t const curr_ring_idx,
+                                                                       uint32_t const slice_base_page_offset,
+                                                                       coord_t const& input_tensor_shape,
+                                                                       coord_t const& tensor_slice_shape,
+                                                                       bool const is_clockwise_direction) {
+    bool const sliced_only_on_width =
+        tensor_slice_shape.x < input_tensor_shape.x && tensor_slice_shape.y == input_tensor_shape.y;
     uint32_t single_ring_idx_stride =
         sliced_only_on_width ? tensor_slice_shape.x : tensor_slice_shape.y * input_tensor_shape.x;
     uint32_t n_minus_one_ring_indices_stride = sliced_only_on_width
@@ -247,11 +253,12 @@ advance_to_next_transfer_slice_result_t advance_to_next_transfer_slice(
 template <bool connected_to_producer>
 struct signal_receiver {
     bool requires_last_input_from_other_sender;
-    volatile uint32_t * noc_semaphore_address;
+    volatile uint32_t* noc_semaphore_address;
 
-    FORCE_INLINE static signal_receiver build(bool requires_last_input_from_other_sender, std::size_t &arg_idx) {
+    FORCE_INLINE static signal_receiver build(bool requires_last_input_from_other_sender, std::size_t& arg_idx) {
         if constexpr (connected_to_producer) {
-            return {requires_last_input_from_other_sender, reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)))};
+            return {requires_last_input_from_other_sender,
+                    reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)))};
         } else {
             return {requires_last_input_from_other_sender, 0};
         }
@@ -266,7 +273,6 @@ struct signal_receiver {
     }
 };
 
-
 void kernel_main() {
     std::size_t arg_idx = 0;
 
@@ -274,12 +280,14 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
     constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
     auto args = reduce_scatter_reader_common_args_t(arg_idx, get_dataformat(cb_id_in0));
-    auto output_partial_signal_ready_receiver = signal_receiver<is_line_reduce_scatter>::build(args.requires_last_input_from_other_sender, arg_idx);
+    auto output_partial_signal_ready_receiver =
+        signal_receiver<is_line_reduce_scatter>::build(args.requires_last_input_from_other_sender, arg_idx);
 
-    auto s = build_source_address_generator<input_tensor_memory_layout, src_is_dram>(arg_idx, args, args.input_tensor_addr);
+    auto s =
+        build_source_address_generator<input_tensor_memory_layout, src_is_dram>(arg_idx, args, args.input_tensor_addr);
 
-    auto d = build_source_address_generator<output_tensor_memory_layout, dest_is_dram>(arg_idx, args, args.output_tensor_addr);
-
+    auto d = build_source_address_generator<output_tensor_memory_layout, dest_is_dram>(
+        arg_idx, args, args.output_tensor_addr);
 
     bool width_sliced = args.tensor_slice_shape.x <= args.input_tensor_shape.x;
 
@@ -314,8 +322,8 @@ void kernel_main() {
 
         auto const& next_slice_offset = advance_wrapped_slice_row_major(
             args.worker_slice_offset, args.worker_slice_shape, args.tensor_slice_shape, args.num_concurrent_workers);
-        bool last_slice_of_worker = next_slice_offset.x >= args.tensor_slice_shape.x ||
-                                    next_slice_offset.y >= args.tensor_slice_shape.y;
+        bool last_slice_of_worker =
+            next_slice_offset.x >= args.tensor_slice_shape.x || next_slice_offset.y >= args.tensor_slice_shape.y;
 
         const uint32_t worker_relative_start_offset_into_slice =
             args.worker_slice_offset.x + (args.worker_slice_offset.y * args.input_tensor_shape.x);
@@ -326,20 +334,19 @@ void kernel_main() {
             args.worker_slice_offset.x + (args.worker_slice_offset.y * args.tensor_slice_shape.x);
         uint32_t output_curr_tile_id = worker_relative_start_offset_into_output_slice;
 
-
         // Set the valid_worker_slice_shape
         coord_t valid_worker_slice_shape = args.worker_slice_shape;
-        if (args.worker_slice_offset.y == args.tensor_slice_shape.y - 1) { // Worker is on last row of tensor_slice
-            if (args.tensor_slice_shape.x - args.worker_slice_offset.x < args.worker_slice_shape.x) { // Worker is cutoff by the end of the tensor_slice
+        if (args.worker_slice_offset.y == args.tensor_slice_shape.y - 1) {  // Worker is on last row of tensor_slice
+            if (args.tensor_slice_shape.x - args.worker_slice_offset.x <
+                args.worker_slice_shape.x) {  // Worker is cutoff by the end of the tensor_slice
                 valid_worker_slice_shape.x = args.tensor_slice_shape.x - args.worker_slice_offset.x;
             }
         }
 
         bool last_page_of_worker = false;
         uint32_t const worker_slice_n_pages = valid_worker_slice_shape.x * valid_worker_slice_shape.y;
-        ASSERT(
-            (args.num_transfers - 1) * worker_slice_n_pages + total_cb_pages_pushed_to_math <=
-            args.total_eltwise_kernel_num_pages);
+        ASSERT((args.num_transfers - 1) * worker_slice_n_pages + total_cb_pages_pushed_to_math <=
+               args.total_eltwise_kernel_num_pages);
 
         if constexpr (!is_line_reduce_scatter) {
             // is_line_reduce_scatter enabled for linear only. In linear topology reduce scatter,
@@ -347,23 +354,21 @@ void kernel_main() {
             // output. Therefore we don't do this short-circuit when that mode is enabled
             uint32_t offset_into_worker_slice = 0;
             for (uint32_t p = 0; p < worker_slice_n_pages; p += args.full_chunk_num_pages) {
-
                 uint32_t n_pages = std::min(args.full_chunk_num_pages, worker_slice_n_pages - p);
                 ASSERT(args.half_cb_n_pages >= n_pages);
                 ASSERT(!last_page_of_worker);
-                read_wrapped_chunk_from_output_tensor(
-                    curr_tile_id,
-                    offset_into_worker_slice,
-                    args.worker_slice_offset, // Offset into tensor slice
-                    valid_worker_slice_shape,
-                    // In tiles for tile layout
-                    args.input_tensor_shape,
-                    args.tensor_slice_shape,
-                    to_dm_sender_short_circuit_cb,
-                    s,
-                    n_pages,
-                    args.page_size,
-                    last_page_of_worker);
+                read_wrapped_chunk_from_output_tensor(curr_tile_id,
+                                                      offset_into_worker_slice,
+                                                      args.worker_slice_offset,  // Offset into tensor slice
+                                                      valid_worker_slice_shape,
+                                                      // In tiles for tile layout
+                                                      args.input_tensor_shape,
+                                                      args.tensor_slice_shape,
+                                                      to_dm_sender_short_circuit_cb,
+                                                      s,
+                                                      n_pages,
+                                                      args.page_size,
+                                                      last_page_of_worker);
                 total_cb_pages_pushed += n_pages;
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;
@@ -378,13 +383,13 @@ void kernel_main() {
         for (uint32_t i = 1; i < args.num_transfers; ++i) {
             bool last_transfer = i == args.num_transfers - 1;
             uint32_t offset_into_worker_slice = 0;
-            std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) = advance_to_next_transfer_slice(
-                args.ring_size,
-                args.my_ring_idx,
-                curr_ring_slice_start_page_offset,
-                args.input_tensor_shape,
-                args.tensor_slice_shape,
-                args.is_clockwise_direction);
+            std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) =
+                advance_to_next_transfer_slice(args.ring_size,
+                                               args.my_ring_idx,
+                                               curr_ring_slice_start_page_offset,
+                                               args.input_tensor_shape,
+                                               args.tensor_slice_shape,
+                                               args.is_clockwise_direction);
             ASSERT(last_page_of_worker);
             last_page_of_worker = false;
             curr_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
@@ -401,25 +406,27 @@ void kernel_main() {
                 // we are waiting for the other direction to complete its output, which typically will be equidistant
                 // from the very first read - in other words, we are likely to be waiting for a little bit of time.
                 // During that time, we may as well try reading from EDM first, as it is likely to be ready sooner.
-                bool read_from_output_tensor = is_line_reduce_scatter && last_transfer && output_partial_signal_ready_receiver.requires_last_input_from_other_sender;
+                bool read_from_output_tensor =
+                    is_line_reduce_scatter && last_transfer &&
+                    output_partial_signal_ready_receiver.requires_last_input_from_other_sender;
                 if (!read_from_output_tensor) {
-                    read_wrapped_chunk_from_output_tensor(
-                        curr_tile_id,
-                        offset_into_worker_slice,
-                        args.worker_slice_offset, // Offset into tensor slice
-                        valid_worker_slice_shape,
-                        // In tiles for tile layout
-                        args.input_tensor_shape,
-                        args.tensor_slice_shape,
-                        cb_id_in1,
-                        s,
-                        n_pages,
-                        args.page_size,
-                        last_page_of_worker);
+                    read_wrapped_chunk_from_output_tensor(curr_tile_id,
+                                                          offset_into_worker_slice,
+                                                          args.worker_slice_offset,  // Offset into tensor slice
+                                                          valid_worker_slice_shape,
+                                                          // In tiles for tile layout
+                                                          args.input_tensor_shape,
+                                                          args.tensor_slice_shape,
+                                                          cb_id_in1,
+                                                          s,
+                                                          n_pages,
+                                                          args.page_size,
+                                                          last_page_of_worker);
                 }
 
                 // Fetch from EDM
-                bool last_worker_message_to_edm = last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
+                bool last_worker_message_to_edm =
+                    last_transfer && last_slice_of_worker && (p + n_pages >= worker_slice_n_pages);
                 reader.wait_for_payload_available();
                 reader.fetch_payload_blocking(cb_id_in0, n_pages, args.page_size, last_worker_message_to_edm);
 
@@ -434,25 +441,22 @@ void kernel_main() {
                         output_partial_signal_ready_receiver.wait_min(n_reads++);
                     }
 
-                    read_wrapped_chunk_from_output_tensor(
-                        output_curr_tile_id,//curr_tile_id,
-                        offset_into_worker_slice,
-                        args.worker_slice_offset, // Offset into tensor slice
-                        valid_worker_slice_shape,
-                        // In tiles for tile layout
-                        args.tensor_slice_shape, // output tensor shape
-                        args.tensor_slice_shape,
-                        cb_id_in1,
-                        d,
-                        n_pages,
-                        args.page_size,
-                        last_page_of_worker);
+                    read_wrapped_chunk_from_output_tensor(output_curr_tile_id,  // curr_tile_id,
+                                                          offset_into_worker_slice,
+                                                          args.worker_slice_offset,  // Offset into tensor slice
+                                                          valid_worker_slice_shape,
+                                                          // In tiles for tile layout
+                                                          args.tensor_slice_shape,  // output tensor shape
+                                                          args.tensor_slice_shape,
+                                                          cb_id_in1,
+                                                          d,
+                                                          n_pages,
+                                                          args.page_size,
+                                                          last_page_of_worker);
                 }
-
 
                 total_cb_pages_pushed_to_math += n_pages;
                 total_cb_pages_pushed += n_pages;
-
 
                 if (n_pages < args.half_cb_n_pages) {
                     uint32_t num_filler_pages = args.half_cb_n_pages - n_pages;

@@ -15,19 +15,17 @@ namespace tt {
 namespace operations {
 namespace primary {
 
-
 void py_module(py::module& m_primary) {
-    m_primary.def(
-        "moreh_clip_grad_norm_",
-        &moreh_clip_grad_norm,
-        py::arg("inputs").noconvert(),
-        py::arg("max_norm").noconvert(),
-        py::arg("norm_type").noconvert() = 2.0f,
-        py::arg("error_if_nonfinite").noconvert() = false,
-        py::kw_only(),
-        py::arg("total_norm").noconvert() = std::nullopt,
-        py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        R"doc(
+    m_primary.def("moreh_clip_grad_norm_",
+                  &moreh_clip_grad_norm,
+                  py::arg("inputs").noconvert(),
+                  py::arg("max_norm").noconvert(),
+                  py::arg("norm_type").noconvert() = 2.0f,
+                  py::arg("error_if_nonfinite").noconvert() = false,
+                  py::kw_only(),
+                  py::arg("total_norm").noconvert() = std::nullopt,
+                  py::arg("output_mem_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                  R"doc(
         "Performs a moreh_clip_grad_norm operation.
     )doc");
 }

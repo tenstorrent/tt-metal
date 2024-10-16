@@ -42,12 +42,11 @@ void kernel_main() {
     constexpr bool divisor_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr bool output_grad_is_dram = get_compile_time_arg_val(3) == 1;
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
-    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGen<target_is_dram> addrg_target = {.bank_base_address = target_addr,
+                                                             .page_size = target_tile_bytes};
+    const InterleavedAddrGenFast<output_grad_is_dram> addrg_output_grad = {.bank_base_address = output_grad_addr,
+                                                                           .page_size = output_grad_tile_bytes,
+                                                                           .data_format = output_grad_data_format};
     constexpr uint32_t onetile = 1;
 
 #if defined(WEIGHT)

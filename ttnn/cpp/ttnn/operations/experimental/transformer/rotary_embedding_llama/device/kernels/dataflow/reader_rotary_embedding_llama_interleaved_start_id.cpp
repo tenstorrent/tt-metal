@@ -7,9 +7,9 @@
 
 void kernel_main() {
     uint32_t argrt = 0;
-    uint32_t src_addr  = get_arg_val<uint32_t>(argrt++);
-    uint32_t cos_addr  = get_arg_val<uint32_t>(argrt++);
-    uint32_t sin_addr  = get_arg_val<uint32_t>(argrt++);
+    uint32_t src_addr = get_arg_val<uint32_t>(argrt++);
+    uint32_t cos_addr = get_arg_val<uint32_t>(argrt++);
+    uint32_t sin_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t trans_mat_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
     uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
@@ -36,37 +36,25 @@ void kernel_main() {
     const DataFormat input_data_format = get_dataformat(input_cb_id);
 
     const InterleavedAddrGenFast<input_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = input_tile_bytes,
-        .data_format = input_data_format
-    };
+        .bank_base_address = src_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
     const DataFormat cos_data_format = get_dataformat(cos_cb_id);
 
     const InterleavedAddrGenFast<cos_is_dram> s1 = {
-        .bank_base_address = cos_addr,
-        .page_size = cos_tile_bytes,
-        .data_format = cos_data_format
-    };
+        .bank_base_address = cos_addr, .page_size = cos_tile_bytes, .data_format = cos_data_format};
 
     const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
     const DataFormat sin_data_format = get_dataformat(sin_cb_id);
 
     const InterleavedAddrGenFast<sin_is_dram> s2 = {
-        .bank_base_address = sin_addr,
-        .page_size = sin_tile_bytes,
-        .data_format = sin_data_format
-    };
+        .bank_base_address = sin_addr, .page_size = sin_tile_bytes, .data_format = sin_data_format};
 
     const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
     const DataFormat trans_mat_format = get_dataformat(trans_mat_cb_id);
 
     const InterleavedAddrGenFast<trans_mat_is_dram> s3 = {
-        .bank_base_address = trans_mat_addr,
-        .page_size = trans_mat_tile_bytes,
-        .data_format = trans_mat_format
-    };
+        .bank_base_address = trans_mat_addr, .page_size = trans_mat_tile_bytes, .data_format = trans_mat_format};
 
     uint32_t trans_mat_curr_idx = 0;
 
@@ -86,13 +74,13 @@ void kernel_main() {
             Wt = 4
     */
 
-   for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
-        #if RELOAD_IMPL == 0
+    for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
+#if RELOAD_IMPL == 0
         cb_reserve_back(sin_cb_id, my_cos_sin_tiles);
         cb_reserve_back(cos_cb_id, my_cos_sin_tiles);
         uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
         uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-        #endif
+#endif
 
         // To make sure the sin/cos row are read only once
         uint32_t sin_cos_row_cnt = 0;
@@ -100,32 +88,31 @@ void kernel_main() {
 
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
-                #if RELOAD_IMPL == 1
+#if RELOAD_IMPL == 1
                 cb_reserve_back(sin_cb_id, Wt);
                 cb_reserve_back(cos_cb_id, Wt);
                 uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
                 uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-                #endif
+#endif
 
                 cb_reserve_back(input_cb_id, Wt);
                 uint32_t input_l1_write_addr = get_write_ptr(input_cb_id);
                 uint32_t input_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
-                uint32_t cos_sin_curr_idx = batch_id * Ht * Wt + seq_tile * Wt; // Does not depend on n_heads
+                uint32_t cos_sin_curr_idx = batch_id * Ht * Wt + seq_tile * Wt;  // Does not depend on n_heads
                 for (uint32_t j = 0; j < Wt; ++j) {
-
                     // Read input into CB
                     noc_async_read_tile(input_curr_idx, s0, input_l1_write_addr);
                     input_curr_idx++;
-                    input_l1_write_addr+=input_tile_bytes;
+                    input_l1_write_addr += input_tile_bytes;
 
                     if (!done_sin_cos) {
                         // Read sin into CB
                         noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
-                        sin_l1_write_addr+=sin_tile_bytes;
+                        sin_l1_write_addr += sin_tile_bytes;
 
                         // Read cos into CB
                         noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
-                        cos_l1_write_addr+=cos_tile_bytes;
+                        cos_l1_write_addr += cos_tile_bytes;
 
                         cos_sin_curr_idx++;
                     }
@@ -133,10 +120,10 @@ void kernel_main() {
 
                 noc_async_read_barrier();
                 cb_push_back(input_cb_id, Wt);
-                #if RELOAD_IMPL == 1
+#if RELOAD_IMPL == 1
                 cb_push_back(sin_cb_id, Wt);
                 cb_push_back(cos_cb_id, Wt);
-                #else
+#else
 
                 if (!done_sin_cos) {
                     cb_push_back(sin_cb_id, Wt);
@@ -149,9 +136,8 @@ void kernel_main() {
                         done_sin_cos = true;
                     }
                 }
-                #endif
+#endif
             }
         }
-   }
-
+    }
 }

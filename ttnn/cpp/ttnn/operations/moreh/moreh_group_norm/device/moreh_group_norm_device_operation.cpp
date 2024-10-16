@@ -8,8 +8,8 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm {
-void MorehGroupNormOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehGroupNormOperation::validate_tensors(const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     auto& output = tensor_args.output;
@@ -53,52 +53,49 @@ void MorehGroupNormOperation::validate_tensors(
 
     // mean (1, 1, N, num_groups)
     if (mean.has_value()) {
-        TT_FATAL(
-            mean.value().get_shape().value.without_padding()[-1] == num_groups,
-            "mean_shape[-1] must match num_groups.");
+        TT_FATAL(mean.value().get_shape().value.without_padding()[-1] == num_groups,
+                 "mean_shape[-1] must match num_groups.");
     }
     // rstd (1, 1, N, num_groups)
     if (rstd.has_value()) {
-        TT_FATAL(
-            rstd.value().get_shape().value.without_padding()[-1] == num_groups,
-            "rstd_shape[-1] must match num_groups.");
+        TT_FATAL(rstd.value().get_shape().value.without_padding()[-1] == num_groups,
+                 "rstd_shape[-1] must match num_groups.");
     }
 }
 
 MorehGroupNormOperation::program_factory_t MorehGroupNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return MorehGroupNormFactory();
 }
 
-void MorehGroupNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehGroupNormOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                             const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehGroupNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehGroupNormOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                            const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
 MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     // mean, rstd (1, 1, N, num_groups)
     const auto output_shape = tensor_args.input.get_logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    std::vector<uint32_t> mean_rstd_origin_shape{
-        1,
-        1,
-        N,
-        num_groups};
+    std::vector<uint32_t> mean_rstd_origin_shape{1, 1, N, num_groups};
 
     SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
 }
 
 MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.input.get_dtype();
     Layout layout{Layout::TILE};
@@ -138,20 +135,19 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
 }
 
 std::tuple<MorehGroupNormOperation::operation_attributes_t, MorehGroupNormOperation::tensor_args_t>
-MorehGroupNormOperation::invoke(
-    const Tensor& input,
-    const uint32_t num_groups,
-    const float eps,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<const Tensor> output,
-    const std::optional<const Tensor> mean,
-    const std::optional<const Tensor> rstd,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& mean_memory_config,
-    const std::optional<MemoryConfig>& rstd_memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+MorehGroupNormOperation::invoke(const Tensor& input,
+                                const uint32_t num_groups,
+                                const float eps,
+                                const std::optional<const Tensor> gamma,
+                                const std::optional<const Tensor> beta,
+                                const std::vector<bool>& are_required_outputs,
+                                const std::optional<const Tensor> output,
+                                const std::optional<const Tensor> mean,
+                                const std::optional<const Tensor> rstd,
+                                const std::optional<MemoryConfig>& memory_config,
+                                const std::optional<MemoryConfig>& mean_memory_config,
+                                const std::optional<MemoryConfig>& rstd_memory_config,
+                                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{
         num_groups,
         eps,

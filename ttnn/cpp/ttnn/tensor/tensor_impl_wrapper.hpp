@@ -24,7 +24,10 @@ auto dispatch(DataType dtype, Func &&func, Args &&...args) {
     }
 }
 
-#define AS_LAMBDA(func) []<typename T>(auto &&...args) { return func<T>(std::forward<decltype(args)>(args)...); }
+#define AS_LAMBDA(func)                                        \
+    []<typename T>(auto &&...args) {                           \
+        return func<T>(std::forward<decltype(args)>(args)...); \
+    }
 
 #define WRAP_FUNCTION(func)                                                                                         \
     template <typename... Args>                                                                                     \

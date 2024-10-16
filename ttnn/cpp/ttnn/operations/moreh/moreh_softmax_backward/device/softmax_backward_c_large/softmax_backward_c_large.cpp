@@ -7,11 +7,10 @@
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
-MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::cached_program_t
-MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& input_grad) {
+MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::cached_program_t MorehSoftmaxBackwardOperation::
+    MorehSoftmaxBackwardCLargeFactory::create(const operation_attributes_t& operation_attributes,
+                                              const tensor_args_t& tensor_args,
+                                              tensor_return_value_t& input_grad) {
     log_info(tt::LogTest, "Large tensor algorithm selected");
     const auto& output = tensor_args.output_tensor;
     const auto& output_grad = tensor_args.output_grad_tensor;
@@ -130,14 +129,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
-            num_tiles_per_core,
-            tile_offset,
-            outer_stride,
-            inner_size,
-            dim_size};
+        vector<uint32_t> reader_args = {output.buffer()->address(),
+                                        output_grad.buffer()->address(),
+                                        num_tiles_per_core,
+                                        tile_offset,
+                                        outer_stride,
+                                        inner_size,
+                                        dim_size};
 
         vector<uint32_t> writer_args = {
             input_grad.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};

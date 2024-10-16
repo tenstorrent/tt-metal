@@ -52,10 +52,9 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         output_cb_index = CB::c_out0;
         uint32_t num_output_units = 2;
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
-        auto output_cb_config =
-            CircularBufferConfig(
-                num_output_units * aligned_output_unit_size, {{output_cb_index, output_cb_data_format}})
-                .set_page_size(output_cb_index, aligned_output_unit_size);
+        auto output_cb_config = CircularBufferConfig(num_output_units * aligned_output_unit_size,
+                                                     {{output_cb_index, output_cb_data_format}})
+                                    .set_page_size(output_cb_index, aligned_output_unit_size);
         auto cb_output = CreateCircularBuffer(program, all_cores, output_cb_config);
     }
 
@@ -71,49 +70,47 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)log2(input_unit_size) : 0;
-        reader_compile_time_args = {
-            (uint32_t)src0_cb_index,
-            (uint32_t)src_is_dram,
-            (uint32_t)src_stick_size_is_power_of_two,
-            (uint32_t)src_log2_stick_size};
+        reader_compile_time_args = {(uint32_t)src0_cb_index,
+                                    (uint32_t)src_is_dram,
+                                    (uint32_t)src_stick_size_is_power_of_two,
+                                    (uint32_t)src_log2_stick_size};
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
         uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)log2(output_unit_size) : 0;
-        writer_compile_time_args = {
-            (uint32_t)output_cb_index,
-            (uint32_t)dst_is_dram,
-            (uint32_t)dst_stick_size_is_power_of_two,
-            (uint32_t)dst_log2_stick_size};
+        writer_compile_time_args = {(uint32_t)output_cb_index,
+                                    (uint32_t)dst_is_dram,
+                                    (uint32_t)dst_stick_size_is_power_of_two,
+                                    (uint32_t)dst_log2_stick_size};
     }
     map<string, string> kernel_defines;
-    KernelHandle unary_reader_kernel_id = CreateKernel(
-        program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+    KernelHandle unary_reader_kernel_id =
+        CreateKernel(program,
+                     tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel.cpp"
+                             : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_rm.cpp",
+                     all_cores,
+                     ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
+    KernelHandle unary_writer_kernel_id =
+        CreateKernel(program,
+                     tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel.cpp"
+                             : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp",
+                     all_cores,
+                     WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     if (convert_dtype) {
         vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};
-        auto eltwise_unary_kernel_group_1 = CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
-            core_group_1,
-            ComputeConfig{.compile_args = compute_kernel_args_group_1});
+        auto eltwise_unary_kernel_group_1 =
+            CreateKernel(program,
+                         "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
+                         core_group_1,
+                         ComputeConfig{.compile_args = compute_kernel_args_group_1});
 
         if (!core_group_2.ranges().empty()) {
             vector<uint32_t> compute_kernel_args_group_2 = {num_units_per_core_group_2};
-            auto eltwise_unary_kernel_group_2 = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
-                core_group_2,
-                ComputeConfig{.compile_args = compute_kernel_args_group_2});
+            auto eltwise_unary_kernel_group_2 =
+                CreateKernel(program,
+                             "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
+                             core_group_2,
+                             ComputeConfig{.compile_args = compute_kernel_args_group_2});
         }
     }
 
@@ -131,16 +128,14 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
             SetRuntimeArgs(
                 program, unary_writer_kernel_id, core, {dst_buffer->address(), num_units_per_core, start_id});
         } else {
-            SetRuntimeArgs(
-                program,
-                unary_reader_kernel_id,
-                core,
-                {src_buffer->address(), input_unit_size, num_units_per_core, start_id});
-            SetRuntimeArgs(
-                program,
-                unary_writer_kernel_id,
-                core,
-                {dst_buffer->address(), output_unit_size, num_units_per_core, start_id});
+            SetRuntimeArgs(program,
+                           unary_reader_kernel_id,
+                           core,
+                           {src_buffer->address(), input_unit_size, num_units_per_core, start_id});
+            SetRuntimeArgs(program,
+                           unary_writer_kernel_id,
+                           core,
+                           {dst_buffer->address(), output_unit_size, num_units_per_core, start_id});
         }
         start_id += num_units_per_core;
     }
@@ -148,11 +143,10 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     return {std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, cores}};
 }
 
-void CloneOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+void CloneOperation::ProgramFactory::override_runtime_arguments(cached_program_t& cached_program,
+                                                                const operation_attributes_t& operation_attributes,
+                                                                const tensor_args_t& tensor_args,
+                                                                tensor_return_value_t& output) {
     const auto& program = cached_program.program;
     const auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     const auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

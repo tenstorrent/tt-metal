@@ -15,12 +15,11 @@
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/decorators.hpp"
 
-
 namespace ttnn::operations {
 namespace pool {
 
 inline uint32_t ceil_multiple_of(uint32_t n, uint32_t m) {
-    return (uint32_t) std::ceil((float) n / m) * m;
+    return (uint32_t)std::ceil((float)n / m) * m;
 }
 
 // new maxpool uop -- called from the macro-op
@@ -67,14 +66,15 @@ struct MaxPool2D {
     static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-    static operation::OpPerformanceModel create_op_performance_model(const operation_attributes_t&, const tensor_args_t&, const Tensor&);
+    static operation::OpPerformanceModel create_op_performance_model(const operation_attributes_t&,
+                                                                     const tensor_args_t&,
+                                                                     const Tensor&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         DataType output_dtype,
         MemoryConfig memory_config);
-
 };
 
 }  // namespace pool

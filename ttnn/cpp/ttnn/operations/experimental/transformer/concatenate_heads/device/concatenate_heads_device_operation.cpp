@@ -9,7 +9,8 @@
 namespace ttnn::operations::experimental::transformer {
 
 void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
     // TODO: See issue #1744
@@ -17,22 +18,22 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(
-        input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
-        "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+                 input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+             "Unsupported data format");
 
-    TT_FATAL(
-        (input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 16, 384, 64})), "Unsupported input shape");
+    TT_FATAL((input_tensor.get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 16, 384, 64})),
+             "Unsupported input shape");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
     if (optional_output_tensor.has_value()) {
-        TT_FATAL(
-            optional_output_tensor.value().get_dtype() == input_tensor.get_dtype(),
-            "Output dtype must be same as input dtype!");
+        TT_FATAL(optional_output_tensor.value().get_dtype() == input_tensor.get_dtype(),
+                 "Output dtype must be same as input dtype!");
 
         TT_FATAL(
-            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}), "Output shape must be (batch_size, 1, 384, 1024)!");
+            optional_output_tensor.value().get_legacy_shape() == tt::tt_metal::LegacyShape({batch_size, 1, 384, 1024}),
+            "Output shape must be (batch_size, 1, 384, 1024)!");
     }
 }
 
@@ -44,7 +45,8 @@ std::vector<tt::tt_metal::LegacyShape> ConcatenateHeadsDeviceOperation::compute_
 }
 
 std::vector<Tensor> ConcatenateHeadsDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
@@ -55,16 +57,16 @@ std::vector<Tensor> ConcatenateHeadsDeviceOperation::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks ConcatenateHeadsDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto batch_size = input_tensor.get_legacy_shape()[0];
 
     auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    TT_FATAL(
-        (this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
-         this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
-        "Unsupported grid shape");
+    TT_FATAL((this->compute_with_storage_grid_size.x <= device_compute_with_storage_grid_size.x &&
+              this->compute_with_storage_grid_size.y <= device_compute_with_storage_grid_size.y),
+             "Unsupported grid shape");
 
     return detail::concatenate_heads_multi_core(input_tensor, output_tensor, this->compute_with_storage_grid_size);
 }

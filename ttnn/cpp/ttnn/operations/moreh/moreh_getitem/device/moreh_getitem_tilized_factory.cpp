@@ -16,11 +16,10 @@ struct IndexInfo {
 };
 
 namespace ttnn::operations::moreh::moreh_getitem {
-MorehGetItemOperation::MorehGetItemTilizedFactory::cached_program_t
-MorehGetItemOperation::MorehGetItemTilizedFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+MorehGetItemOperation::MorehGetItemTilizedFactory::cached_program_t MorehGetItemOperation::MorehGetItemTilizedFactory::
+    create(const operation_attributes_t &operation_attributes,
+           const tensor_args_t &tensor_args,
+           tensor_return_value_t &output_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
@@ -109,9 +108,12 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
-        auto
-            [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-                split_work_to_cores(core_range, num_units);
+        auto [num_cores,
+              all_cores,
+              core_group_1,
+              core_group_2,
+              num_units_per_core_group_1,
+              num_units_per_core_group_2] = split_work_to_cores(core_range, num_units);
 
         Program program = Program();
 
@@ -161,27 +163,27 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             reader_defines["TILIZE_INDEX"] = 1;
         }
 
-        auto reader_kernel_id = CreateReadKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "reader_moreh_getitem_tilize_w.cpp",
-            all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
-            reader_defines);
-        auto writer_kernel_id = CreateWriteKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "writer_moreh_getitem_tilize_w.cpp",
-            all_cores,
-            {dst_is_dram},
-            writer_defines);
+        auto reader_kernel_id =
+            CreateReadKernel(program,
+                             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+                             "reader_moreh_getitem_tilize_w.cpp",
+                             all_cores,
+                             {
+                                 src_is_dram,
+                                 index_info[0].is_dram,
+                                 index_info[1].is_dram,
+                                 index_info[2].is_dram,
+                                 index_info[3].is_dram,
+                                 index_info[4].is_dram,
+                             },
+                             reader_defines);
+        auto writer_kernel_id =
+            CreateWriteKernel(program,
+                              "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+                              "writer_moreh_getitem_tilize_w.cpp",
+                              all_cores,
+                              {dst_is_dram},
+                              writer_defines);
 
         uint32_t face_width = 16;
         uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
@@ -313,8 +315,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
             start_id += num_units_per_core;
         }
-        return {
-            std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
+        return {std::move(program),
+                {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
 
     } else {
         // compute index info
@@ -342,9 +344,12 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
-        auto
-            [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-                split_work_to_cores(core_range, num_units);
+        auto [num_cores,
+              all_cores,
+              core_group_1,
+              core_group_2,
+              num_units_per_core_group_1,
+              num_units_per_core_group_2] = split_work_to_cores(core_range, num_units);
 
         Program program = Program();
 
@@ -390,27 +395,27 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             reader_defines["TILIZE_INDEX"] = 1;
         }
 
-        auto reader_kernel_id = CreateReadKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "reader_moreh_getitem_tilize.cpp",
-            all_cores,
-            {
-                src_is_dram,
-                index_info[0].is_dram,
-                index_info[1].is_dram,
-                index_info[2].is_dram,
-                index_info[3].is_dram,
-                index_info[4].is_dram,
-            },
-            reader_defines);
-        auto writer_kernel_id = CreateWriteKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
-            "writer_moreh_getitem_tilize.cpp",
-            all_cores,
-            {dst_is_dram},
-            writer_defines);
+        auto reader_kernel_id =
+            CreateReadKernel(program,
+                             "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+                             "reader_moreh_getitem_tilize.cpp",
+                             all_cores,
+                             {
+                                 src_is_dram,
+                                 index_info[0].is_dram,
+                                 index_info[1].is_dram,
+                                 index_info[2].is_dram,
+                                 index_info[3].is_dram,
+                                 index_info[4].is_dram,
+                             },
+                             reader_defines);
+        auto writer_kernel_id =
+            CreateWriteKernel(program,
+                              "ttnn/cpp/ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_tilized_kernels/"
+                              "writer_moreh_getitem_tilize.cpp",
+                              all_cores,
+                              {dst_is_dram},
+                              writer_defines);
 
         uint32_t face_width = 16;
         uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
@@ -537,8 +542,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             start_id += num_units_per_core;
         }
 
-        return {
-            std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
+        return {std::move(program),
+                {reader_kernel_id, writer_kernel_id, num_cores, core_h, index_dims, input_dim_offset}};
     }
 }
 

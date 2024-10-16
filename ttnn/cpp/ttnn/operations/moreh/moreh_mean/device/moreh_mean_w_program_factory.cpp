@@ -64,18 +64,17 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
 
     uint32_t num_input_tiles = 2;
     uint32_t num_output_tiles = 2;
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        data_format,
-        {
-            {CB::c_in0, num_input_tiles},                        // input
-            {CB::c_in2, 1},                                      // scalar
-            {CB::c_in3, 1},                                      // mask
-            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  //
-            {CB::c_intermed1, 1},                                //
-            {CB::c_out0, 1},                                     // output
-        });
+    CreateCircularBuffer(program,
+                         all_cores,
+                         data_format,
+                         {
+                             {CB::c_in0, num_input_tiles},                        // input
+                             {CB::c_in2, 1},                                      // scalar
+                             {CB::c_in3, 1},                                      // mask
+                             {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  //
+                             {CB::c_intermed1, 1},                                //
+                             {CB::c_out0, 1},                                     // output
+                         });
 
     float scaler = 1.0f / origin_W;
     auto bfloat_scaler_value = *(new class bfloat16(scaler));
@@ -83,19 +82,19 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input)), packed_scaler_value};
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(CB::c_out0),
+                                                      static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
-    const auto reader_kernel_id = CreateReadKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_w.cpp",
-        all_cores,
-        reader_compile_time_args,
-        reader_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program,
+                         "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_w.cpp",
+                         all_cores,
+                         reader_compile_time_args,
+                         reader_defines);
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
@@ -127,19 +126,18 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     };
     vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
-    auto compute_kernel_ids = CreateComputeKernel(
-        program,
-        compute_kernel_name,
-        {
-            {core_group_1, units_per_core_group_1, compute_kernel_args_group_1},
-            {core_group_2, units_per_core_group_2, compute_kernel_args_group_2},
-        },
-        ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .math_approx_mode = math_approx_mode,
-            .defines = compute_defines});
+    auto compute_kernel_ids =
+        CreateComputeKernel(program,
+                            compute_kernel_name,
+                            {
+                                {core_group_1, units_per_core_group_1, compute_kernel_args_group_1},
+                                {core_group_2, units_per_core_group_2, compute_kernel_args_group_2},
+                            },
+                            ComputeKernelConfig{.math_fidelity = math_fidelity,
+                                                .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                .unpack_to_dest_mode = unpack_to_dest_mode,
+                                                .math_approx_mode = math_approx_mode,
+                                                .defines = compute_defines});
 
     uint32_t out_dim_divider = Wt;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
@@ -153,24 +151,22 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_tensor_tiles_per_core = units_per_core * Wt;
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_tensor_tiles_per_core,
-             tile_offset,  // tile index of row to start reading from
-             mask_w});
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {input.buffer()->address(),
+                        num_tensor_tiles_per_core,
+                        tile_offset,  // tile index of row to start reading from
+                        mask_w});
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {
-                output.buffer()->address(),
-                num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
-                tile_offset / out_dim_divider                 // output tile start index
-            });
+        SetRuntimeArgs(program,
+                       writer_kernel_id,
+                       core,
+                       {
+                           output.buffer()->address(),
+                           num_tensor_tiles_per_core / out_dim_divider,  // number of tiles to write
+                           tile_offset / out_dim_divider                 // output tile start index
+                       });
         tile_offset += num_tensor_tiles_per_core;
     }
     return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, core_h}};

@@ -27,15 +27,15 @@ struct ReduceScatter {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors,
+                                                   std::vector<Tensor> &output_tensors) const;
 };
 
 namespace ccl {
 namespace reduce_scatter_detail {
 operation::ProgramWithCallbacks reduce_scatter_with_workers(
-    const Tensor& input_tensors,
-    const Tensor& output_tensors,
+    const Tensor &input_tensors,
+    const Tensor &output_tensors,
     ttnn::operations::binary::BinaryOpType reduce_op,
     const uint32_t scatter_split_dim,
     const uint32_t num_links,
@@ -47,21 +47,19 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel);
 }
-}; // namespace ccl
+};  // namespace ccl
 
-namespace operations{
-namespace ccl{
-    Tensor reduce_scatter(
-    const Tensor &input_tensor,
-    const uint32_t scatter_split_dim,
-    ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const uint32_t num_links = 1,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
-} // namespace ccl
-} // namespace operations
-
+namespace operations {
+namespace ccl {
+Tensor reduce_scatter(const Tensor &input_tensor,
+                      const uint32_t scatter_split_dim,
+                      ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
+                      const uint32_t num_links = 1,
+                      const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                      ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+                      const std::optional<size_t> user_defined_num_workers = std::nullopt,
+                      const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+}  // namespace ccl
+}  // namespace operations
 
 };  // namespace ttnn

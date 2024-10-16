@@ -33,27 +33,20 @@ args_list_t emit_runtime_args(T const& args);
 template <typename T>
 args_list_t emit_compile_time(T const& args);
 
-
 ////////////
 // Shape 4D
-template<typename T>
+template <typename T>
 args_list_t emit_runtime_args(Shape4D<T> const& shape) {
-    return {
-        shape.w,
-        shape.z,
-        shape.y,
-        shape.x
-    };
+    return {shape.w, shape.z, shape.y, shape.x};
 }
 
-template<typename T>
+template <typename T>
 args_list_t emit_compile_time(Shape4D<T> const& shape) {
     return {};
 }
 
-
-
-args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& tensor);
+args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d,
+                                                tt::tt_metal::Tensor const& tensor);
 args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& tensor);
 
 struct ShardedAddrGenArgBuilder {
@@ -63,6 +56,5 @@ struct ShardedAddrGenArgBuilder {
     static void log_sharded_tensor_kernel_args(tt::tt_metal::Tensor const& t, std::string const& prefix);
 };
 
-
-} // namespace ccl
-} // namespace ttnn
+}  // namespace ccl
+}  // namespace ttnn

@@ -45,16 +45,16 @@ void MAIN {
 
                 if (do_mask) {
                     tile_regs_acquire();
-                    #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_in0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_in0);
+#endif
                     copy_tile_to_dst_init_short(cb_in0);
                     copy_tile(cb_in0, 0, dst0);
 
                     if (do_mask_h && last_row) {
-                        #if defined FP32_DEST_ACC_EN
-                            reconfig_data_format_srca(cb_mask_h_w);
-                        #endif
+#if defined FP32_DEST_ACC_EN
+                        reconfig_data_format_srca(cb_mask_h_w);
+#endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 0, dst1);
                         mask_tile_init();
@@ -62,9 +62,9 @@ void MAIN {
                     }
 
                     if (do_mask_w && last_col) {
-                        #if defined FP32_DEST_ACC_EN
-                            reconfig_data_format_srca(cb_mask_h_w);
-                        #endif
+#if defined FP32_DEST_ACC_EN
+                        reconfig_data_format_srca(cb_mask_h_w);
+#endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 1, dst1);
                         mask_tile_init();
@@ -74,9 +74,9 @@ void MAIN {
 
                     tile_regs_wait();
                     cb_reserve_back(cb_intermed0, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_intermed0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_intermed0);
+#endif
                     pack_tile(dst0, cb_intermed0);
                     cb_push_back(cb_intermed0, onetile);
                     tile_regs_release();
@@ -85,9 +85,9 @@ void MAIN {
                 tile_regs_acquire();
                 if (enable_reload) {
                     cb_wait_front(cb_intermed1, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_intermed1);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_intermed1);
+#endif
                     copy_tile_to_dst_init_short(cb_intermed1);
                     copy_tile(cb_intermed1, 0, 0);
                     cb_pop_front(cb_intermed1, onetile);
@@ -97,9 +97,9 @@ void MAIN {
                     cb_wait_front(cb_intermed0, onetile);
 
                 auto cb_reduce = (do_mask) ? (cb_intermed0) : (cb_in0);
-                #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_reduce, cb_scaler);
-                #endif
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format(cb_reduce, cb_scaler);
+#endif
                 reduce_init_delta<false>();
                 reduce_tile((do_mask) ? (cb_intermed0) : (cb_in0), cb_scaler, 0, 0, 0);
                 reduce_revert_delta();
@@ -113,18 +113,17 @@ void MAIN {
                 tile_regs_wait();
                 if (last_out) {
                     cb_reserve_back(cb_out0, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_out0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_out0);
+#endif
                     pack_tile(0, cb_out0);
                     cb_push_back(cb_out0, onetile);
 
-                }
-                else {
+                } else {
                     cb_reserve_back(cb_intermed1, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_intermed1);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_intermed1);
+#endif
                     pack_tile(0, cb_intermed1);
                     cb_push_back(cb_intermed1, onetile);
                 }

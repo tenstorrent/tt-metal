@@ -4,8 +4,12 @@
 
 #include "compute_kernel_api/bcast.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    acquire_dst();
+}
+ALWI void REL() {
+    release_dst();
+}
 
 namespace NAMESPACE {
 void MAIN {

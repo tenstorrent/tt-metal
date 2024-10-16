@@ -14,21 +14,20 @@ void bind_moreh_softmax_backward_operation(py::module& module) {
     export_enum<MorehSoftmaxBackwardOp>(module, "MorehSoftmaxBackwardOp");
     export_enum<MorehSoftmaxBackwardOpParallelizationStrategy>(module, "MorehSoftmaxBackwardOpParallelizationStrategy");
 
-#define BIND_MOREH_SOFT_BACKWARD_OP(op_name, op_enum, op_desc)                         \
-    bind_registered_operation(                                                         \
-        module,                                                                        \
-        ttnn::op_name,                                                                 \
-        op_desc,                                                                       \
-        ttnn::pybind_arguments_t{                                                      \
-            py::arg("output_tensor"),                                                  \
-            py::arg("output_grad_tensor"),                                             \
-            py::arg("dim"),                                                            \
-            py::kw_only(),                                                             \
-            py::arg("input_grad_tensor") = std::nullopt,                               \
-            py::arg("op") = op_enum,                                                   \
-            py::arg("strategy") = MorehSoftmaxBackwardOpParallelizationStrategy::NONE, \
-            py::arg("memory_config") = std::nullopt,                                   \
-            py::arg("compute_kernel_config") = std::nullopt});
+#define BIND_MOREH_SOFT_BACKWARD_OP(op_name, op_enum, op_desc)                                              \
+    bind_registered_operation(                                                                              \
+        module,                                                                                             \
+        ttnn::op_name,                                                                                      \
+        op_desc,                                                                                            \
+        ttnn::pybind_arguments_t{py::arg("output_tensor"),                                                  \
+                                 py::arg("output_grad_tensor"),                                             \
+                                 py::arg("dim"),                                                            \
+                                 py::kw_only(),                                                             \
+                                 py::arg("input_grad_tensor") = std::nullopt,                               \
+                                 py::arg("op") = op_enum,                                                   \
+                                 py::arg("strategy") = MorehSoftmaxBackwardOpParallelizationStrategy::NONE, \
+                                 py::arg("memory_config") = std::nullopt,                                   \
+                                 py::arg("compute_kernel_config") = std::nullopt});
 
     BIND_MOREH_SOFT_BACKWARD_OP(
         moreh_softmax_backward, MorehSoftmaxBackwardOp::SOFTMAX, "Moreh Softmax Backward Operation")

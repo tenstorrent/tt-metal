@@ -21,7 +21,9 @@ namespace complex_unary_backward {
 namespace detail {
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
+void bind_complex_unary_backward(py::module& module,
+                                 const complex_unary_backward_operation_t& operation,
+                                 const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -56,21 +58,22 @@ void bind_complex_unary_backward(py::module& module, const complex_unary_backwar
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config")});
+        ttnn::pybind_overload_t{[](const complex_unary_backward_operation_t& self,
+                                   const ComplexTensor& grad_tensor,
+                                   const ComplexTensor& input_tensor,
+                                   const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                                    return self(grad_tensor, input_tensor, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("memory_config")});
 }
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
+void bind_complex_unary_backward_tensor(py::module& module,
+                                        const complex_unary_backward_operation_t& operation,
+                                        const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -105,21 +108,19 @@ void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            py::arg("grad_tensor"),
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config")});
+        ttnn::pybind_overload_t{[](const complex_unary_backward_operation_t& self,
+                                   const ttnn::Tensor& grad_tensor,
+                                   const ComplexTensor& input_tensor,
+                                   const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
+                                    return self(grad_tensor, input_tensor, memory_config);
+                                },
+                                py::arg("grad_tensor"),
+                                py::arg("input_tensor"),
+                                py::kw_only(),
+                                py::arg("memory_config")});
 }
 
 }  // namespace detail
-
 
 void py_module(py::module& module) {
     detail::bind_complex_unary_backward(
@@ -146,7 +147,6 @@ void py_module(py::module& module) {
         module,
         ttnn::angle_bw,
         R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
-
 }
 
 }  // namespace complex_unary_backward

@@ -31,14 +31,12 @@ void kernel_main() {
     const uint32_t clip_coef_clamped_tile_bytes = get_tile_size(cb_id_clip_coef_clamped);
     const auto clip_coef_clamped_data_format = get_dataformat(cb_id_clip_coef_clamped);
 
-    const InterleavedAddrGenFast<true> dram_clip_coef_clamped_addrg = {
-        .bank_base_address = clip_coef_clamped_addr,
-        .page_size = clip_coef_clamped_tile_bytes,
-        .data_format = clip_coef_clamped_data_format};
-    const InterleavedAddrGenFast<false> l1_clip_coef_clamped_addrg = {
-        .bank_base_address = clip_coef_clamped_addr,
-        .page_size = clip_coef_clamped_tile_bytes,
-        .data_format = clip_coef_clamped_data_format};
+    const InterleavedAddrGenFast<true> dram_clip_coef_clamped_addrg = {.bank_base_address = clip_coef_clamped_addr,
+                                                                       .page_size = clip_coef_clamped_tile_bytes,
+                                                                       .data_format = clip_coef_clamped_data_format};
+    const InterleavedAddrGenFast<false> l1_clip_coef_clamped_addrg = {.bank_base_address = clip_coef_clamped_addr,
+                                                                      .page_size = clip_coef_clamped_tile_bytes,
+                                                                      .data_format = clip_coef_clamped_data_format};
 
     // clip_coef_clamped
     const auto clip_coef_clamped_l1_write_ptr = get_write_ptr(cb_id_clip_coef_clamped);

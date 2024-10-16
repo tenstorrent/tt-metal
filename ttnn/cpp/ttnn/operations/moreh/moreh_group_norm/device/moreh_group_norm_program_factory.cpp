@@ -93,13 +93,12 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_rows_per_core_group_1,
-         num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_rows);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_rows_per_core_group_1,
+                num_rows_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_rows);
 
     log_debug(LogTest, "num_cores_to_be_used: {}", num_cores_to_be_used);
     log_debug(LogTest, "num_rows_per_core_group_1: {}", num_rows_per_core_group_1);
@@ -148,30 +147,29 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
         log_info(LogTest, "Small moreh_group_norm algorithm is selected.");
     }
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},        // input
-            {CB::c_in1, in1_t},        // scaler
-            {CB::c_in2, in2_t},        // eps
-            {CB::c_in3, in3_t},        // gamma
-            {CB::c_in4, in4_t},        // beta
-            {CB::c_in5, in5_t},        // mask_h
-            {CB::c_in6, in6_t},        // mask_w
-            {CB::c_out0, out0_t},      // output
-            {CB::c_out1, out1_t},      // mean
-            {CB::c_out2, out2_t},      // rstd
-            {CB::c_intermed0, im0_t},  // E[x]
-            {CB::c_intermed1, im1_t},  // x - E[x]
-            {CB::c_intermed2, im2_t},  // (x - E[x])^2
-            {CB::c_intermed3, im3_t},  // Sum[(x - E[x])^2]
-            {CB::c_intermed4, im4_t},  // E[(x - E[x])^2] = Var[x]
-            {CB::c_intermed5, im5_t},  // 1.0/(sqrt(Var[x] + eps))
-            {CB::c_intermed6, im6_t},  // y * gamm + beta
-            {CB::c_intermed7, im7_t},  // Sum[x]
-        });
+    CreateCircularBuffer(program,
+                         all_cores,
+                         cb_data_format,
+                         {
+                             {CB::c_in0, in0_t},        // input
+                             {CB::c_in1, in1_t},        // scaler
+                             {CB::c_in2, in2_t},        // eps
+                             {CB::c_in3, in3_t},        // gamma
+                             {CB::c_in4, in4_t},        // beta
+                             {CB::c_in5, in5_t},        // mask_h
+                             {CB::c_in6, in6_t},        // mask_w
+                             {CB::c_out0, out0_t},      // output
+                             {CB::c_out1, out1_t},      // mean
+                             {CB::c_out2, out2_t},      // rstd
+                             {CB::c_intermed0, im0_t},  // E[x]
+                             {CB::c_intermed1, im1_t},  // x - E[x]
+                             {CB::c_intermed2, im2_t},  // (x - E[x])^2
+                             {CB::c_intermed3, im3_t},  // Sum[(x - E[x])^2]
+                             {CB::c_intermed4, im4_t},  // E[(x - E[x])^2] = Var[x]
+                             {CB::c_intermed5, im5_t},  // 1.0/(sqrt(Var[x] + eps))
+                             {CB::c_intermed6, im6_t},  // y * gamm + beta
+                             {CB::c_intermed7, im7_t},  // Sum[x]
+                         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -199,41 +197,38 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
-    const std::vector<uint32_t> compute_args_group_1{
-        num_rows_per_core_group_1,
-        origin_h,
-        origin_w,
-        num_inner_tiles,
-        block_size,
-        static_cast<uint32_t>(gamma_has_value),
-        static_cast<uint32_t>(beta_has_value),
-        static_cast<uint32_t>(mean_has_value),
-        static_cast<uint32_t>(rstd_has_value),
-        static_cast<uint32_t>(is_lastdim_layernorm),
-        static_cast<uint32_t>(is_group_norm)};
+    const std::vector<uint32_t> compute_args_group_1{num_rows_per_core_group_1,
+                                                     origin_h,
+                                                     origin_w,
+                                                     num_inner_tiles,
+                                                     block_size,
+                                                     static_cast<uint32_t>(gamma_has_value),
+                                                     static_cast<uint32_t>(beta_has_value),
+                                                     static_cast<uint32_t>(mean_has_value),
+                                                     static_cast<uint32_t>(rstd_has_value),
+                                                     static_cast<uint32_t>(is_lastdim_layernorm),
+                                                     static_cast<uint32_t>(is_group_norm)};
 
     CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_rows_per_core_group_1, compute_args_group_1}, compute_defines);
 
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
-            num_rows_per_core_group_2,
-            origin_h,
-            origin_w,
-            num_inner_tiles,
-            block_size,
-            static_cast<uint32_t>(gamma_has_value),
-            static_cast<uint32_t>(beta_has_value),
-            static_cast<uint32_t>(mean_has_value),
-            static_cast<uint32_t>(rstd_has_value),
-            static_cast<uint32_t>(is_lastdim_layernorm),
-            static_cast<uint32_t>(is_group_norm)};
+        const std::vector<uint32_t> compute_args_group_2{num_rows_per_core_group_2,
+                                                         origin_h,
+                                                         origin_w,
+                                                         num_inner_tiles,
+                                                         block_size,
+                                                         static_cast<uint32_t>(gamma_has_value),
+                                                         static_cast<uint32_t>(beta_has_value),
+                                                         static_cast<uint32_t>(mean_has_value),
+                                                         static_cast<uint32_t>(rstd_has_value),
+                                                         static_cast<uint32_t>(is_lastdim_layernorm),
+                                                         static_cast<uint32_t>(is_group_norm)};
 
-        CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
-            compute_defines);
+        CreateComputeKernel(program,
+                            compute_kernel_file,
+                            {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
+                            compute_defines);
     }
 
     ////////////////////////////////////////////////////////////////////////////

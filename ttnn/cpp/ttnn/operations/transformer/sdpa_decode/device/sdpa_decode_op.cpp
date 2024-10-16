@@ -9,18 +9,19 @@
 
 namespace ttnn::operations::transformer {
 
-void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+void ScaledDotProductAttentionDecode::validate(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors and mask");
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device!");
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device!");
         TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
-        TT_FATAL(
-            input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
-            input_tensor.get_dtype() == DataType::BFLOAT4_B,
-            "Unsupported data type {}.",
-            input_tensor.get_dtype());
+        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
+                     input_tensor.get_dtype() == DataType::BFLOAT4_B,
+                 "Unsupported data type {}.",
+                 input_tensor.get_dtype());
     }
 
     const auto q_shape = input_tensors.at(0).get_legacy_shape();
@@ -46,7 +47,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
 
     if (this->paged_attention) {
         // Paged attention verification
-        TT_FATAL(! this->share_cache.value_or(false), "Share cache feature not supported for paged attention");
+        TT_FATAL(!this->share_cache.value_or(false), "Share cache feature not supported for paged attention");
         TT_FATAL(optional_input_tensors.at(0).has_value(), "Must have cur_pos tensor for paged attention");
         TT_FATAL(optional_input_tensors.at(1).has_value(), "Must have page_table tensor for paged attention");
 
@@ -105,15 +106,25 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
     }
 
     // Check gqa specific validation
-    TT_FATAL(k_shape[1] == v_shape[1], "Flash decode expects K and V to have same number of heads, but got {} and {}", k_shape[1], v_shape[1]);
+    TT_FATAL(k_shape[1] == v_shape[1],
+             "Flash decode expects K and V to have same number of heads, but got {} and {}",
+             k_shape[1],
+             v_shape[1]);
     bool is_gqa = (k_shape[1] > 1);
     if (is_gqa) {
-        TT_FATAL(! output_mem_config.is_sharded(), "Sharded output not supported for GQA");
-        TT_FATAL(input_tensors.at(0).get_dtype() == DataType::BFLOAT16, "GQA expects BFLOAT16 input tensor, but got {}", input_tensors.at(0).get_dtype());
-        uint32_t num_heads_per_kv = q_shape_unpadded[2]/k_shape[1];
-        TT_FATAL(q_shape_unpadded[2]%k_shape[1] == 0, "GQA expects Q to have a multiple of K heads, but got {} and {}", q_shape_unpadded[2], k_shape[1]);
+        TT_FATAL(!output_mem_config.is_sharded(), "Sharded output not supported for GQA");
+        TT_FATAL(input_tensors.at(0).get_dtype() == DataType::BFLOAT16,
+                 "GQA expects BFLOAT16 input tensor, but got {}",
+                 input_tensors.at(0).get_dtype());
+        uint32_t num_heads_per_kv = q_shape_unpadded[2] / k_shape[1];
+        TT_FATAL(q_shape_unpadded[2] % k_shape[1] == 0,
+                 "GQA expects Q to have a multiple of K heads, but got {} and {}",
+                 q_shape_unpadded[2],
+                 k_shape[1]);
         // check that num_heads_per_kv is a power of 2
-        TT_FATAL(num_heads_per_kv != 0 && (num_heads_per_kv & (num_heads_per_kv - 1)) == 0, "GQA expects Q to have a power of 2 number of heads per kv head, but got {}", num_heads_per_kv);
+        TT_FATAL(num_heads_per_kv != 0 && (num_heads_per_kv & (num_heads_per_kv - 1)) == 0,
+                 "GQA expects Q to have a power of 2 number of heads per kv head, but got {}",
+                 num_heads_per_kv);
     }
 
     // Check compute kernel config
@@ -121,9 +132,8 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         [&](auto&& compute_kernel_config) {
             using T = std::decay_t<decltype(compute_kernel_config)>;
             if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(
-                    compute_kernel_config.fp32_dest_acc_en == false,
-                    "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
+                TT_FATAL(compute_kernel_config.fp32_dest_acc_en == false,
+                         "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
             }
         },
         this->compute_kernel_config);
@@ -141,7 +151,9 @@ std::vector<Tensor> ScaledDotProductAttentionDecode::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     auto& input_tensor_q = input_tensors.at(0);
     auto& input_tensor_k = input_tensors.at(1);
     auto& input_tensor_v = input_tensors.at(2);
@@ -156,30 +168,30 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
     }
 
-    return detail::sdpa_decode_multi_core(
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        cur_pos_tensor,
-        page_table_tensor,
-        output_tensor,
-        this->cur_pos,
-        scale,
-        this->compute_kernel_config,
-        this->program_config,
-        this->k_chunk_size,
-        this->share_cache);
+    return detail::sdpa_decode_multi_core(input_tensor_q,
+                                          input_tensor_k,
+                                          input_tensor_v,
+                                          cur_pos_tensor,
+                                          page_table_tensor,
+                                          output_tensor,
+                                          this->cur_pos,
+                                          scale,
+                                          this->compute_kernel_config,
+                                          this->program_config,
+                                          this->k_chunk_size,
+                                          this->share_cache);
 }
 
-operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
-    return operation::hash_operation<ScaledDotProductAttentionDecode>(
-        this->scale,
-        this->output_mem_config,
-        this->program_config,
-        this->compute_kernel_config,
-        this->k_chunk_size,
-        this->paged_attention,
-        input_tensors);
+operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    return operation::hash_operation<ScaledDotProductAttentionDecode>(this->scale,
+                                                                      this->output_mem_config,
+                                                                      this->program_config,
+                                                                      this->compute_kernel_config,
+                                                                      this->k_chunk_size,
+                                                                      this->paged_attention,
+                                                                      input_tensors);
 }
 
 }  // namespace ttnn::operations::transformer

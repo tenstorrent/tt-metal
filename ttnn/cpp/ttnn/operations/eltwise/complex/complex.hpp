@@ -23,21 +23,15 @@ struct ComplexTensor {
     void deallocate();
 };
 
-
 struct CreateComplexTensor {
-
-    static ComplexTensor invoke(
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg);
+    static ComplexTensor invoke(const Tensor& input_tensor_a_arg, const Tensor& input_tensor_b_arg);
 };
 
 }  // namespace operations::complex
 
 using ComplexTensor = operations::complex::ComplexTensor;
 
-constexpr auto complex_tensor = ttnn::register_operation<
-    "ttnn::complex_tensor",
-    operations::complex::CreateComplexTensor>();
+constexpr auto complex_tensor =
+    ttnn::register_operation<"ttnn::complex_tensor", operations::complex::CreateComplexTensor>();
 
-
-} // namespace ttnn
+}  // namespace ttnn

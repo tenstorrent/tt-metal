@@ -38,26 +38,24 @@ void bind_transpose(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::transpose);
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::transpose,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const int64_t & dim1,
-                const int64_t & dim2,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dim1, dim2, memory_config);
-                },
-                py::arg("input_tensor"),
-                py::arg("dim1"),
-                py::arg("dim2"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0,
-                }
-        );
+    ttnn::bind_registered_operation(module,
+                                    ttnn::transpose,
+                                    doc,
+                                    ttnn::pybind_overload_t{
+                                        [](const OperationType& self,
+                                           const ttnn::Tensor& input_tensor,
+                                           const int64_t& dim1,
+                                           const int64_t& dim2,
+                                           const std::optional<ttnn::MemoryConfig>& memory_config,
+                                           uint8_t queue_id) {
+                                            return self(queue_id, input_tensor, dim1, dim2, memory_config);
+                                        },
+                                        py::arg("input_tensor"),
+                                        py::arg("dim1"),
+                                        py::arg("dim2"),
+                                        py::kw_only(),
+                                        py::arg("memory_config") = std::nullopt,
+                                        py::arg("queue_id") = 0,
+                                    });
 }
 }  // namespace ttnn::operations::data_movement::detail

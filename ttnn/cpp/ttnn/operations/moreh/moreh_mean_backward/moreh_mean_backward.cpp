@@ -8,14 +8,13 @@
 #include "ttnn/operations/moreh/moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
-Tensor MorehMeanBackward::invoke(
-    const Tensor& output_grad,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const bool keepdim,
-    const std::optional<Shape>& input_grad_shape,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+Tensor MorehMeanBackward::invoke(const Tensor& output_grad,
+                                 std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+                                 const bool keepdim,
+                                 const std::optional<Shape>& input_grad_shape,
+                                 const std::optional<Tensor>& input_grad,
+                                 const std::optional<MemoryConfig>& memory_config,
+                                 const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_grad_rank = output_grad.get_shape().rank();
     auto input_grad_rank = output_grad_rank;
     if (keepdim == false) {

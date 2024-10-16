@@ -37,37 +37,34 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
     }
 }
 
-inline void moreh_linear_backward_validate(
-    const Tensor& output_grad,
-    const Tensor& input,
-    const Tensor& weight,
-    const std::optional<const Tensor>& input_grad,
-    const std::optional<const Tensor>& weight_grad,
-    const std::optional<const Tensor>& bias_grad) {
+inline void moreh_linear_backward_validate(const Tensor& output_grad,
+                                           const Tensor& input,
+                                           const Tensor& weight,
+                                           const std::optional<const Tensor>& input_grad,
+                                           const std::optional<const Tensor>& weight_grad,
+                                           const std::optional<const Tensor>& bias_grad) {
     if (input_grad.has_value()) {
         const auto& input_grad_tensor = input_grad.value();
-        TT_FATAL(
-            tt::operations::primary::is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
+        TT_FATAL(tt::operations::primary::is_same_shape(input, input_grad_tensor),
+                 "both tensors should be the same shape");
     }
 
     if (weight_grad.has_value()) {
         const auto& weight_grad_tensor = weight_grad.value();
-        TT_FATAL(
-            tt::operations::primary::is_same_shape(weight, weight_grad_tensor),
-            "both tensors should be the same shape");
+        TT_FATAL(tt::operations::primary::is_same_shape(weight, weight_grad_tensor),
+                 "both tensors should be the same shape");
     }
 
     if (bias_grad.has_value()) {
         const auto& bias_grad_tensor = bias_grad.value();
-        TT_FATAL(
-            tt::operations::primary::is_scalar(bias_grad_tensor) ||
-                tt::operations::primary::is_1d_tensor(bias_grad_tensor),
-            "bias_grad tensor should be 1d or scalar");
+        TT_FATAL(tt::operations::primary::is_scalar(bias_grad_tensor) ||
+                     tt::operations::primary::is_1d_tensor(bias_grad_tensor),
+                 "bias_grad tensor should be 1d or scalar");
     }
 }
 
-std::vector<int64_t> find_reduce_dim(
-    const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
+std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape,
+                                     const tt::tt_metal::LegacyShape& b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -106,14 +103,14 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
 }
 
 std::vector<Tensor> MorehLinearBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& output_grad = input_tensors.at(0);
     const auto& input = input_tensors.at(1);
     const auto& weight = input_tensors.at(2);
-    return {
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
-        Tensor(operation::get_workers_for_op_output({output_grad, input, weight}))};
+    return {Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
+            Tensor(operation::get_workers_for_op_output({output_grad, input, weight})),
+            Tensor(operation::get_workers_for_op_output({output_grad, input, weight}))};
 }
 
 std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
@@ -133,25 +130,23 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     const auto [input_required_grad, weight_required_grad, bias_required_grad] =
         get_required_outputs(are_required_outputs);
 
-    TT_FATAL(
-        output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
-            weight.storage_type() == StorageType::DEVICE,
-        "input and weight tensors need to be on device");
+    TT_FATAL(output_grad.storage_type() == StorageType::DEVICE && input.storage_type() == StorageType::DEVICE &&
+                 weight.storage_type() == StorageType::DEVICE,
+             "input and weight tensors need to be on device");
 
     TT_FATAL(output_grad.storage_type() == StorageType::DEVICE, "Error");
     moreh_linear_backward_validate(output_grad, input, weight, input_grad, weight_grad, bias_grad);
 
     if (input_required_grad) {
         TT_FATAL(input_grad.has_value(), "input_grad tensor should not be std::nullopt");
-        result[0] = ttnn::moreh_matmul(
-            output_grad,
-            weight,
-            false,
-            false,
-            input_grad,
-            std::nullopt,
-            input_grad_memory_config,
-            compute_kernel_config);
+        result[0] = ttnn::moreh_matmul(output_grad,
+                                       weight,
+                                       false,
+                                       false,
+                                       input_grad,
+                                       std::nullopt,
+                                       input_grad_memory_config,
+                                       compute_kernel_config);
     }
 
     if (weight_required_grad) {
@@ -159,25 +154,23 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
         const auto& weight_grad_tensor = weight_grad.value();
 
         if (is_same_batch_dim(output_grad, weight_grad_tensor)) {
-            ttnn::moreh_matmul(
-                output_grad,
-                input,
-                true,
-                false,
-                weight_grad_tensor,
-                std::nullopt,
-                weight_grad_memory_config,
-                compute_kernel_config);
+            ttnn::moreh_matmul(output_grad,
+                               input,
+                               true,
+                               false,
+                               weight_grad_tensor,
+                               std::nullopt,
+                               weight_grad_memory_config,
+                               compute_kernel_config);
         } else {
-            const auto& temp_weight_grad = ttnn::moreh_matmul(
-                output_grad,
-                input,
-                true,
-                false,
-                std::nullopt,
-                std::nullopt,
-                weight_grad_memory_config,
-                compute_kernel_config);
+            const auto& temp_weight_grad = ttnn::moreh_matmul(output_grad,
+                                                              input,
+                                                              true,
+                                                              false,
+                                                              std::nullopt,
+                                                              std::nullopt,
+                                                              weight_grad_memory_config,
+                                                              compute_kernel_config);
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             std::vector<int64_t> dims =
                 find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());

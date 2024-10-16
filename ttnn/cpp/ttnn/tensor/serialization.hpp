@@ -13,11 +13,13 @@ namespace tt {
 
 namespace tt_metal {
 
-void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy);
+void dump_tensor(const std::string& file_name,
+                 const Tensor& tensor,
+                 const std::unordered_map<std::string, std::string>& strategy);
 
 Tensor load_tensor(const std::string& file_name, Device* device = nullptr);
 Tensor load_tensor(const std::string& file_name, distributed::MeshDevice* device = nullptr);
 
-}  // namespace tt_metalls
+}  // namespace tt_metal
 
 }  // namespace tt

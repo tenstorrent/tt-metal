@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -40,20 +39,19 @@ void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& o
         operation.base_name(),
         operation.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const kv_cache_operation_t& self,
-               const ttnn::Tensor& cache,
-               const ttnn::Tensor& input,
-               const uint32_t batch_index) -> ttnn::Tensor {
-                return self(cache, input, batch_index);
-            },
-            py::arg("cache"), py::arg("input"), py::arg("batch_index")});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const kv_cache_operation_t& self,
+                                                         const ttnn::Tensor& cache,
+                                                         const ttnn::Tensor& input,
+                                                         const uint32_t batch_index) -> ttnn::Tensor {
+                                                          return self(cache, input, batch_index);
+                                                      },
+                                                      py::arg("cache"),
+                                                      py::arg("input"),
+                                                      py::arg("batch_index")});
 }
-
 
 template <typename kv_cache_operation_t>
 void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t& operation) {
@@ -77,19 +75,20 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
         operation.base_name(),
         operation.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const kv_cache_operation_t& self,
-               const ttnn::Tensor& cache,
-               const ttnn::Tensor& input,
-               const uint32_t update_index,
-               const uint32_t batch_offset) -> ttnn::Tensor {
-                return self(cache, input, update_index, batch_offset);
-            },
-            py::arg("cache"), py::arg("input"), py::arg("update_index"), py::arg("batch_offset") = 0});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const kv_cache_operation_t& self,
+                                                         const ttnn::Tensor& cache,
+                                                         const ttnn::Tensor& input,
+                                                         const uint32_t update_index,
+                                                         const uint32_t batch_offset) -> ttnn::Tensor {
+                                                          return self(cache, input, update_index, batch_offset);
+                                                      },
+                                                      py::arg("cache"),
+                                                      py::arg("input"),
+                                                      py::arg("update_index"),
+                                                      py::arg("batch_offset") = 0});
 }
 
 template <typename update_cache_operation_t>
@@ -159,20 +158,18 @@ void bind_fill_cache(pybind11::module& module, const update_cache_operation_t& o
         operation.base_name(),
         operation.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const update_cache_operation_t& self,
-               const ttnn::Tensor& cache_tensor,
-               const ttnn::Tensor& input_tensor,
-               const uint32_t batch_idx) -> ttnn::Tensor {
-                return self(cache_tensor, input_tensor, batch_idx);
-            },
-            py::arg("cache_tensor"),
-            py::arg("input_tensor"),
-            py::arg("batch_idx")});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const update_cache_operation_t& self,
+                                                         const ttnn::Tensor& cache_tensor,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const uint32_t batch_idx) -> ttnn::Tensor {
+                                                          return self(cache_tensor, input_tensor, batch_idx);
+                                                      },
+                                                      py::arg("cache_tensor"),
+                                                      py::arg("input_tensor"),
+                                                      py::arg("batch_idx")});
 }
 
 }  // namespace detail

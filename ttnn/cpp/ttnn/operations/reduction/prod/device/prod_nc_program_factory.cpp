@@ -44,13 +44,12 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     const auto num_output_tiles = output.volume() / TILE_HW;
 
     log_debug(LogTest, "N {} C {} Ht {} Wt {}", N, C, Ht, Wt);
-    log_debug(
-        LogTest,
-        "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
-        dim,
-        num_reduce_input_tile,
-        input_tile_offset,
-        num_output_tiles);
+    log_debug(LogTest,
+              "dim {} num_reduce_input_tile {} input_tile_offset {}, num_output_tiles {}",
+              dim,
+              num_reduce_input_tile,
+              input_tile_offset,
+              num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -62,27 +61,25 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     const uint32_t in1_t = 1;        // zero
     const uint32_t intermed0_t = 1;  // accumulated sum
     const uint32_t out0_t = 2;       // output
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},              // input
-            {CB::c_in1, in1_t},              // zero
-            {CB::c_intermed0, intermed0_t},  // accumulated sum
-            {CB::c_out0, out0_t},            // output
-        });
+    CreateCircularBuffer(program,
+                         all_cores,
+                         cb_data_format,
+                         {
+                             {CB::c_in0, in0_t},              // input
+                             {CB::c_in1, in1_t},              // zero
+                             {CB::c_intermed0, intermed0_t},  // accumulated sum
+                             {CB::c_out0, out0_t},            // output
+                         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -90,15 +87,17 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
 
     tt_metal::Buffer *input_buffer_type = input.buffer();
     bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) input_is_dram, static_cast<uint32_t>(dim)};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
     tt_metal::Buffer *output_buffer_type = output.buffer();
     constexpr uint32_t cb_id_out = 16;
     bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) cb_id_out, (std::uint32_t) output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, (std::uint32_t)output_is_dram};
 
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    const auto reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
     const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
@@ -115,11 +114,10 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines);
+        compute_kernel_2_id = CreateComputeKernel(program,
+                                                  compute_kernel_file,
+                                                  {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
+                                                  compute_defines);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -137,20 +135,18 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_reduce_input_tile,
-             num_tiles_per_core,
-             input_tile_offset,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
-             HtWt,
-             CHtWt,
-             static_cast<uint32_t>(dim)
-             });
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {input.buffer()->address(),
+                        num_reduce_input_tile,
+                        num_tiles_per_core,
+                        input_tile_offset,
+                        tile_offset,
+                        static_cast<uint32_t>(is_dram(input)),
+                        HtWt,
+                        CHtWt,
+                        static_cast<uint32_t>(dim)});
 
         SetRuntimeArgs(
             program,

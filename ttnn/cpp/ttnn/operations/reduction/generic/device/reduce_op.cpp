@@ -96,8 +96,8 @@ std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor>& inp
     }
 }
 
-operation::ProgramWithCallbacks Reduce::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks Reduce::create_program(const std::vector<Tensor>& input_tensors,
+                                                       std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
@@ -137,12 +137,11 @@ ReduceOpParallelizationStrategy Reduce::get_parallelization_strategy(const std::
 
 // reduce min
 // reduce min = - reduce_max( -x )
-Tensor reduce_min(
-    const Tensor& input_tensor,
-    ReduceOpDim reduce_dim,
-    float scaler = 1.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
+Tensor reduce_min(const Tensor& input_tensor,
+                  ReduceOpDim reduce_dim,
+                  float scaler = 1.0f,
+                  const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                  const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
@@ -154,14 +153,13 @@ Tensor reduce_min(
     return min_tensor;
 }
 
-Tensor reduce(
-    const Tensor& input_tensor,
-    ReduceOpMath reduce_math,
-    ReduceOpDim reduce_dim,
-    float scaler,
-    const MemoryConfig& output_mem_config,
-    const std::optional<DataType>& output_dtype,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+Tensor reduce(const Tensor& input_tensor,
+              ReduceOpMath reduce_math,
+              ReduceOpDim reduce_dim,
+              float scaler,
+              const MemoryConfig& output_mem_config,
+              const std::optional<DataType>& output_dtype,
+              const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     if (reduce_math == ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
@@ -191,31 +189,32 @@ Tensor reduce(
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape =
+                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                        input_tensor.get_legacy_shape());
                 auto formatted_input_tensor = input_tensor;
-                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                        input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
+                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
+                        input_tensor, input_tensor_pad_shape)) {
+                    formatted_input_tensor =
+                        ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                            input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
-                const Tensor output_tensor = operation::run_without_autoformat(
-                                                 Reduce{
-                                                     reduce_math,
-                                                     ReduceOpDim::W,
-                                                     1.0,
-                                                     output_mem_config,
-                                                     output_dtype.value_or(input_tensor.get_dtype()),
-                                                     config},
-                                                 {formatted_input_tensor})
-                                                 .at(0);
-                return operation::run_without_autoformat(
-                    Reduce{
-                        reduce_math,
-                        ReduceOpDim::H,
-                        scaler,
-                        output_mem_config,
-                        output_dtype.value_or(input_tensor.get_dtype()),
-                        config},
-                    {output_tensor});
+                const Tensor output_tensor =
+                    operation::run_without_autoformat(Reduce{reduce_math,
+                                                             ReduceOpDim::W,
+                                                             1.0,
+                                                             output_mem_config,
+                                                             output_dtype.value_or(input_tensor.get_dtype()),
+                                                             config},
+                                                      {formatted_input_tensor})
+                        .at(0);
+                return operation::run_without_autoformat(Reduce{reduce_math,
+                                                                ReduceOpDim::H,
+                                                                scaler,
+                                                                output_mem_config,
+                                                                output_dtype.value_or(input_tensor.get_dtype()),
+                                                                config},
+                                                         {output_tensor});
             },
             {input_tensor},
             output_tensors);
@@ -226,18 +225,16 @@ Tensor reduce(
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 const auto& input_tensor = input_tensors.at(0);
-                return operation::run_with_autoformat(
-                    Reduce{
-                        reduce_math,
-                        reduce_dim,
-                        scaler,
-                        output_mem_config,
-                        output_dtype.value_or(input_tensor.get_dtype()),
-                        config},
-                    {input_tensor},
-                    {},
-                    {},
-                    pad_value);
+                return operation::run_with_autoformat(Reduce{reduce_math,
+                                                             reduce_dim,
+                                                             scaler,
+                                                             output_mem_config,
+                                                             output_dtype.value_or(input_tensor.get_dtype()),
+                                                             config},
+                                                      {input_tensor},
+                                                      {},
+                                                      {},
+                                                      pad_value);
             },
             {input_tensor},
             output_tensors);

@@ -2,15 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 
 #include "indexed_fill_pybind.hpp"
 #include "indexed_fill.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
-
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -47,25 +44,24 @@ void bind_indexed_fill(pybind11::module& module) {
         module,
         ttnn::indexed_fill,
         doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& batch_id,
-                const ttnn::Tensor& input_tensor_a,
-                const ttnn::Tensor& input_tensor_b,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                int64_t dim,
-                uint8_t queue_id) {
-                    return self(queue_id, batch_id, input_tensor_a, input_tensor_b, memory_config, dim);
-                },
-                pybind11::arg("batch_id").noconvert(),
-                pybind11::arg("input_tensor_a").noconvert(),
-                pybind11::arg("input_tensor_b").noconvert(),
-                pybind11::kw_only(),
-                pybind11::arg("memory_config") = std::nullopt,
-                pybind11::arg("dim") = 0,
-                pybind11::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const OperationType& self,
+                                   const ttnn::Tensor& batch_id,
+                                   const ttnn::Tensor& input_tensor_a,
+                                   const ttnn::Tensor& input_tensor_b,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   int64_t dim,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, batch_id, input_tensor_a, input_tensor_b, memory_config, dim);
+                                },
+                                pybind11::arg("batch_id").noconvert(),
+                                pybind11::arg("input_tensor_a").noconvert(),
+                                pybind11::arg("input_tensor_b").noconvert(),
+                                pybind11::kw_only(),
+                                pybind11::arg("memory_config") = std::nullopt,
+                                pybind11::arg("dim") = 0,
+                                pybind11::arg("queue_id") = 0});
 }
 
-}  // detail
+}  // namespace detail
 
-} // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement

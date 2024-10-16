@@ -27,16 +27,15 @@ std::vector<std::optional<Tensor>> moreh_layer_norm_backward_gamma_beta_grad(
         return outputs;
     }
 
-    const auto& ret = ttnn::prim::moreh_layer_norm_backward_gamma_beta_grad(
-        output_grad,
-        input,
-        mean,
-        rstd,
-        normalized_dims,
-        gamma_grad,
-        beta_grad,
-        memory_config,
-        compute_kernel_config_val);
+    const auto& ret = ttnn::prim::moreh_layer_norm_backward_gamma_beta_grad(output_grad,
+                                                                            input,
+                                                                            mean,
+                                                                            rstd,
+                                                                            normalized_dims,
+                                                                            gamma_grad,
+                                                                            beta_grad,
+                                                                            memory_config,
+                                                                            compute_kernel_config_val);
     return ret;
 }
 
@@ -71,12 +70,12 @@ std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
 }
 
 std::vector<Tensor> MorehLayerNormBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& output_grad = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({output_grad})),
-        Tensor(operation::get_workers_for_op_output({output_grad})),
-        Tensor(operation::get_workers_for_op_output({output_grad}))};
+    return {Tensor(operation::get_workers_for_op_output({output_grad})),
+            Tensor(operation::get_workers_for_op_output({output_grad})),
+            Tensor(operation::get_workers_for_op_output({output_grad}))};
 }
 
 std::vector<bool> MorehLayerNormBackward::create_async_return_flag(

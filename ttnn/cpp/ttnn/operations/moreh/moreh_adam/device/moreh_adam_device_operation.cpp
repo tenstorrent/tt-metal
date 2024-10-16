@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_adam {
-void MorehAdamOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehAdamOperation::validate_inputs(const operation_attributes_t& operation_attributes,
+                                         const tensor_args_t& tensor_args) {
     auto& params_in = tensor_args.param_in;
     auto& grad = tensor_args.grad;
     auto& exp_avg_in = tensor_args.exp_avg_in;
@@ -47,23 +47,25 @@ void MorehAdamOperation::validate_inputs(
 }
 
 MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     // For now we litteraly don't care and return a single factory. Whatever
     return ProgramFactory{};
 }
 
-void MorehAdamOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehAdamOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                        const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehAdamOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehAdamOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                       const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
 MorehAdamOperation::shape_return_value_t MorehAdamOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input_tensor_shape = tensor_args.param_in.get_shape();
 
     return {
@@ -75,7 +77,8 @@ MorehAdamOperation::shape_return_value_t MorehAdamOperation::compute_output_shap
 };
 
 MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.param_in.get_dtype();
     Layout layout{Layout::TILE};
@@ -148,12 +151,11 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
             memory_config.value_or(param_in.memory_config()),
             init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
         },
-        tensor_args_t{
-            param_in,
-            grad,
-            exp_avg_in,
-            exp_avg_sq_in,
-            max_exp_avg_sq_in,
-            {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}}};
+        tensor_args_t{param_in,
+                      grad,
+                      exp_avg_in,
+                      exp_avg_sq_in,
+                      max_exp_avg_sq_in,
+                      {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}}};
 }
 }  // namespace ttnn::operations::moreh::moreh_adam

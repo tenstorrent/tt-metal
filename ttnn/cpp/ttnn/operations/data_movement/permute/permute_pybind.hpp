@@ -39,23 +39,22 @@ void bind_permute(py::module& module) {
                 [1, 1, 32, 64])doc";
 
     using OperationType = decltype(ttnn::permute);
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::permute,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::vector<int64_t> &dims,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, dims, memory_config, false);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("dims"),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0});
+    ttnn::bind_registered_operation(module,
+                                    ttnn::permute,
+                                    doc,
+                                    ttnn::pybind_overload_t{[](const OperationType& self,
+                                                               const ttnn::Tensor& input_tensor,
+                                                               const std::vector<int64_t>& dims,
+                                                               const std::optional<ttnn::MemoryConfig>& memory_config,
+                                                               uint8_t queue_id) {
+                                                                return self(
+                                                                    queue_id, input_tensor, dims, memory_config, false);
+                                                            },
+                                                            py::arg("input_tensor").noconvert(),
+                                                            py::arg("dims"),
+                                                            py::kw_only(),
+                                                            py::arg("memory_config") = std::nullopt,
+                                                            py::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

@@ -19,19 +19,18 @@ using namespace tt::constants;
 namespace ttnn::operations::transformer::detail {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
-operation::ProgramWithCallbacks sdpa_multi_core(
-    const Tensor& input_tensor_q,
-    const Tensor& input_tensor_k,
-    const Tensor& input_tensor_v,
-    const Tensor& output_tensor,
-    const std::optional<const Tensor> attn_mask,
-    std::optional<float> scale,
-    bool is_causal,
-    std::size_t q_chunk_size,
-    std::size_t k_chunk_size,
-    DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<const uint32_t> valid_seq_len) {
+operation::ProgramWithCallbacks sdpa_multi_core(const Tensor& input_tensor_q,
+                                                const Tensor& input_tensor_k,
+                                                const Tensor& input_tensor_v,
+                                                const Tensor& output_tensor,
+                                                const std::optional<const Tensor> attn_mask,
+                                                std::optional<float> scale,
+                                                bool is_causal,
+                                                std::size_t q_chunk_size,
+                                                std::size_t k_chunk_size,
+                                                DeviceComputeKernelConfig compute_kernel_config,
+                                                std::optional<SDPAProgramConfig> program_config,
+                                                std::optional<const uint32_t> valid_seq_len) {
     /*
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
@@ -94,7 +93,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
 
-    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+    TT_FATAL(num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
+             "Error");
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -288,29 +288,30 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        is_causal ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp"
-                  : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_noncausal_interleaved.cpp",
+        is_causal
+            ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp"
+            : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_noncausal_interleaved.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        is_causal ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp"
-                  : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_noncausal_interleaved.cpp",
+        is_causal
+            ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp"
+            : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_noncausal_interleaved.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
-    auto compute_kernels_id = CreateKernel(
-        program,
-        is_causal ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp"
-                  : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_noncausal.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    auto compute_kernels_id =
+        CreateKernel(program,
+                     is_causal ? "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp"
+                               : "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_noncausal.cpp",
+                     core_grid,
+                     tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                                 .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                 .math_approx_mode = math_approx_mode,
+                                                 .compile_args = compute_compile_time_args,
+                                                 .defines = defines});
 
     // Create circular buffers
 
@@ -390,33 +391,38 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_intermed2_id = CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed3, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed3, stats_tile_size);
+    auto c_intermed3_config =
+        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed3, stats_df}})
+            .set_page_size(tt::CB::c_intermed3, stats_tile_size);
     auto cb_intermed3_id = CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed4, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed4, stats_tile_size);
+    auto c_intermed4_config =
+        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed4, stats_df}})
+            .set_page_size(tt::CB::c_intermed4, stats_tile_size);
     auto cb_intermed4_id = CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed5, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed5, stats_tile_size);
+    auto c_intermed5_config =
+        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed5, stats_df}})
+            .set_page_size(tt::CB::c_intermed5, stats_tile_size);
     auto cb_intermed5_id = CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed6, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed6, stats_tile_size);
+    auto c_intermed6_config =
+        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed6, stats_df}})
+            .set_page_size(tt::CB::c_intermed6, stats_tile_size);
     auto cb_intermed6_id = CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed7, stats_df}})
-                                  .set_page_size(tt::CB::c_intermed7, stats_tile_size);
+    auto c_intermed7_config =
+        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed7, stats_df}})
+            .set_page_size(tt::CB::c_intermed7, stats_tile_size);
     auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
-    auto c_out0_config =
-        CircularBufferConfig(out0_t * out_tile_size, {{tt::CB::c_out0, out_df}}).set_page_size(tt::CB::c_out0, out_tile_size);
+    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CB::c_out0, out_df}})
+                             .set_page_size(tt::CB::c_out0, out_tile_size);
     if (!is_causal) {
         c_out0_config.set_globally_allocated_address(*out0_buffer);
     }
@@ -458,33 +464,31 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         tt::log_debug("local_q_start: {}", local_q_start);
         tt::log_debug("local_q_end: {}", local_q_end);
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
-            core,
-            {q_addr,
-             k_addr,
-             v_addr,
-             mask_addr,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end});
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
-            core,
-            {out_addr,
-             i,
-             local_batch_start,
-             local_batch_end,
-             local_nh_start,
-             local_nh_end,
-             local_q_start,
-             local_q_end});
+        SetRuntimeArgs(program,
+                       reader_kernels_id,
+                       core,
+                       {q_addr,
+                        k_addr,
+                        v_addr,
+                        mask_addr,
+                        i,
+                        local_batch_start,
+                        local_batch_end,
+                        local_nh_start,
+                        local_nh_end,
+                        local_q_start,
+                        local_q_end});
+        SetRuntimeArgs(program,
+                       writer_kernels_id,
+                       core,
+                       {out_addr,
+                        i,
+                        local_batch_start,
+                        local_batch_end,
+                        local_nh_start,
+                        local_nh_end,
+                        local_q_start,
+                        local_q_end});
         SetRuntimeArgs(
             program,
             compute_kernels_id,
@@ -508,12 +512,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
          q_num_chunks,
          is_causal,
          cb_in0_id,
-         cb_out0_id](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+         cb_out0_id](const void* operation,
+                     Program& program,
+                     const std::vector<Tensor>& input_tensors,
+                     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                     const std::vector<Tensor>& output_tensors) {
             auto q_buffer = input_tensors.at(0).buffer();
             auto k_buffer = input_tensors.at(1).buffer();
             auto v_buffer = input_tensors.at(2).buffer();

@@ -15,8 +15,10 @@ using namespace tt::constants;
 
 namespace ttnn::operations::embedding_backward::detail {
 
-operation::ProgramWithCallbacks embedding_backward_multi_core(
-    const Tensor &index_tensor, const Tensor &grad_tensor, Tensor &output, const uint32_t num_embeddings) {
+operation::ProgramWithCallbacks embedding_backward_multi_core(const Tensor &index_tensor,
+                                                              const Tensor &grad_tensor,
+                                                              Tensor &output,
+                                                              const uint32_t num_embeddings) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////

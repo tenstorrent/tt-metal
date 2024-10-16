@@ -66,14 +66,13 @@ void MAIN {
         // compute final result
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
-            sub_tiles_to_cb(
-                cb_dy,
-                cb_sum,
-                cb_dy_m_sum,
-                /*itile0=*/0,
-                /*itile1=*/0,
-                /*pop0=*/1,
-                /*pop1=*/0);
+            sub_tiles_to_cb(cb_dy,
+                            cb_sum,
+                            cb_dy_m_sum,
+                            /*itile0=*/0,
+                            /*itile1=*/0,
+                            /*pop0=*/1,
+                            /*pop1=*/0);
 
 #ifdef SOFTMAX
             // (dy - sum) * y

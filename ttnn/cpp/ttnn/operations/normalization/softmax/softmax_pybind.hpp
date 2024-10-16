@@ -10,5 +10,4 @@ namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_softmax(pybind11::module& module);
 
-
 }  // namespace ttnn::operations::normalization::detail

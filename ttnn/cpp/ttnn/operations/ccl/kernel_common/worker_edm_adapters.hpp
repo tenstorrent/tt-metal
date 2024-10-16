@@ -15,33 +15,34 @@ namespace ccl {
 namespace edm {
 
 template <ttnn::ccl::EriscDataMoverTerminationMode termination_mode>
-struct WorkerToEdmReader{
-    constexpr WorkerToEdmReader (
-        ttnn::ccl::WorkerXY edm_worker_xy,
-        std::size_t edm_buffer_base_addr,
-        std::size_t num_buffers_per_channel,
-        std::size_t edm_l1_sem_addr,
-        std::size_t buffer_size_bytes,
-        volatile uint32_t * const worker_sem_addr
-    ) :
-        edm_buffer_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_buffer_base_addr)),
-        edm_semaphore_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_l1_sem_addr)),
-        worker_sem_addr(worker_sem_addr),
-        edm_buffer_base_addr(edm_buffer_base_addr),
-        num_buffers_per_channel(num_buffers_per_channel),
-        last_buffer_index(num_buffers_per_channel - 1),
-        edm_l1_sem_addr(edm_l1_sem_addr),
-        buffer_size_bytes(buffer_size_bytes),
-        buffer_index(0)
-    {}
+struct WorkerToEdmReader {
+    constexpr WorkerToEdmReader(ttnn::ccl::WorkerXY edm_worker_xy,
+                                std::size_t edm_buffer_base_addr,
+                                std::size_t num_buffers_per_channel,
+                                std::size_t edm_l1_sem_addr,
+                                std::size_t buffer_size_bytes,
+                                volatile uint32_t *const worker_sem_addr)
+        : edm_buffer_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_buffer_base_addr)),
+          edm_semaphore_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_l1_sem_addr)),
+          worker_sem_addr(worker_sem_addr),
+          edm_buffer_base_addr(edm_buffer_base_addr),
+          num_buffers_per_channel(num_buffers_per_channel),
+          last_buffer_index(num_buffers_per_channel - 1),
+          edm_l1_sem_addr(edm_l1_sem_addr),
+          buffer_size_bytes(buffer_size_bytes),
+          buffer_index(0) {}
 
     FORCE_INLINE void wait_for_payload_available() const {
         noc_semaphore_wait(this->worker_sem_addr, 1);
         noc_semaphore_set(this->worker_sem_addr, 0);
     }
 
-    FORCE_INLINE void fetch_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size, bool last_message) {
-        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+    FORCE_INLINE void fetch_payload_blocking(uint32_t cb_id,
+                                             uint32_t num_pages,
+                                             uint32_t page_size,
+                                             bool last_message) {
+        uint64_t buffer_address =
+            this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         fetch_chunk(cb_id, num_pages, page_size, buffer_address);
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             if (!last_message) {
@@ -61,7 +62,7 @@ struct WorkerToEdmReader{
 
     uint64_t edm_buffer_addr;
     uint64_t edm_semaphore_addr;
-    volatile uint32_t * const worker_sem_addr;
+    volatile uint32_t *const worker_sem_addr;
     std::size_t edm_buffer_base_addr;
     std::size_t num_buffers_per_channel;
     std::size_t last_buffer_index;
@@ -70,27 +71,23 @@ struct WorkerToEdmReader{
     std::size_t buffer_index;
 };
 
-
 template <ttnn::ccl::EriscDataMoverTerminationMode termination_mode>
-struct WorkerToEdmSender{
-    constexpr WorkerToEdmSender (
-        ttnn::ccl::WorkerXY edm_worker_xy,
-        std::size_t edm_buffer_base_addr,
-        std::size_t num_buffers_per_channel,
-        std::size_t edm_l1_sem_addr,
-        std::size_t buffer_size_bytes,
-        volatile uint32_t * const worker_sem_addr
-    ) :
-        edm_buffer_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_buffer_base_addr)),
-        edm_semaphore_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_l1_sem_addr)),
-        worker_sem_addr(worker_sem_addr),
-        edm_buffer_base_addr(edm_buffer_base_addr),
-        num_buffers_per_channel(num_buffers_per_channel),
-        last_buffer_index(num_buffers_per_channel - 1),
-        edm_l1_sem_addr(edm_l1_sem_addr),
-        buffer_size_bytes(buffer_size_bytes),
-        buffer_index(0)
-    {
+struct WorkerToEdmSender {
+    constexpr WorkerToEdmSender(ttnn::ccl::WorkerXY edm_worker_xy,
+                                std::size_t edm_buffer_base_addr,
+                                std::size_t num_buffers_per_channel,
+                                std::size_t edm_l1_sem_addr,
+                                std::size_t buffer_size_bytes,
+                                volatile uint32_t *const worker_sem_addr)
+        : edm_buffer_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_buffer_base_addr)),
+          edm_semaphore_addr(get_noc_addr(edm_worker_xy.x, edm_worker_xy.y, edm_l1_sem_addr)),
+          worker_sem_addr(worker_sem_addr),
+          edm_buffer_base_addr(edm_buffer_base_addr),
+          num_buffers_per_channel(num_buffers_per_channel),
+          last_buffer_index(num_buffers_per_channel - 1),
+          edm_l1_sem_addr(edm_l1_sem_addr),
+          buffer_size_bytes(buffer_size_bytes),
+          buffer_index(0) {
         ASSERT(buffer_size_bytes > 0);
     }
 
@@ -111,7 +108,9 @@ struct WorkerToEdmSender{
     /*
      * No CB
      */
-    FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
+    FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address,
+                                                         uint32_t num_pages,
+                                                         uint32_t page_size) {
         send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, num_pages, page_size);
     }
 
@@ -119,8 +118,11 @@ struct WorkerToEdmSender{
      * No CB
      */
     // Does not wait for CB. Assumes caller handles CB data availability
-    FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address,  uint32_t num_pages, uint32_t page_size) {
-        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, num_pages, page_size);
+    FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address,
+                                                             uint32_t num_pages,
+                                                             uint32_t page_size) {
+        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
+            source_address, num_pages, page_size);
     }
 
     FORCE_INLINE void close() {
@@ -132,7 +134,7 @@ struct WorkerToEdmSender{
 
     uint64_t edm_buffer_addr;
     uint64_t edm_semaphore_addr;
-    volatile uint32_t * const worker_sem_addr;
+    volatile uint32_t *const worker_sem_addr;
     std::size_t edm_buffer_base_addr;
     std::size_t num_buffers_per_channel;
     std::size_t last_buffer_index;
@@ -140,19 +142,21 @@ struct WorkerToEdmSender{
     std::size_t buffer_size_bytes;
     std::size_t buffer_index;
 
-   private:
-    template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+private:
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address =
+            this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk_from_address<blocking_mode>(source_address, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
         this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
     }
 
-    template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address =
+            this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
         noc_semaphore_inc(edm_semaphore_addr, 1);
@@ -160,6 +164,5 @@ struct WorkerToEdmSender{
     }
 };
 
-
-} // namespace edm
-} // namespace ccl
+}  // namespace edm
+}  // namespace ccl

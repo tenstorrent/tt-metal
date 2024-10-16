@@ -4,7 +4,9 @@
 
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
-ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
+ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) {
+    return (((tile_idx / wt) + 1) % ht) == 0;
+}
 
 namespace NAMESPACE {
 void MAIN {

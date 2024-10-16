@@ -21,7 +21,7 @@ namespace detail {
 
 inline bool is_on_device(const Tensor& t) {
     return ttnn::has_storage_type_of(t, ttnn::StorageType::DEVICE) or
-    ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
+           ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
 }
 
 inline bool has_tile_padding(const Tensor& t) {
@@ -33,9 +33,11 @@ inline bool has_tile_padding(const Tensor& t) {
     return false;
 }
 
-ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& dims, const MemoryConfig& output_mem_config) {
+ttnn::Tensor permute_impl(const ttnn::Tensor& a,
+                          const std::vector<uint32_t>& dims,
+                          const MemoryConfig& output_mem_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    Device * device;
+    Device* device;
 
     // Get the device
     if (a.storage_type() != StorageType::DEVICE) {
@@ -56,8 +58,10 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     out_shape = {out_shape[N], out_shape[C], out_shape[H], out_shape[W]};
 
     auto formatted_input_tensor = a;
-    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
-    formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
+    bool typecast = formatted_input_tensor.get_dtype() == DataType::BFLOAT8_B and
+                    formatted_input_tensor.get_layout() == Layout::TILE and (pad_n or pad_c) and !a.is_sharded();
+    formatted_input_tensor =
+        typecast ? ttnn::typecast(formatted_input_tensor, DataType::BFLOAT16) : formatted_input_tensor;
 
     if (!AutoFormat::check_input_tensor_format(a, a_pad_shape)) {
         formatted_input_tensor = AutoFormat::format_input_tensor(a, device, a_pad_shape, 0.0, Layout::TILE);
@@ -113,50 +117,57 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const std::vector<uint32_t>& di
     } else if (N == 3 && C == 2 && H == 0 && W == 1) {
         output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)))));
     } else if (N == 3 && C == 2 && H == 1 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))))));
+        output =
+            transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))))));
     } else {
         TT_ASSERT(false, "Illegal permute args");
     }
-    output =  AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
+    output = AutoFormat::format_output_tensor(output, out_shape, device, Layout::TILE);
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
     return output;
 }
 
-ttnn::Tensor permute_launch(const ttnn::Tensor &a, const std::vector<std::int64_t>& dims, const MemoryConfig& output_mem_config) {
+ttnn::Tensor permute_launch(const ttnn::Tensor& a,
+                            const std::vector<std::int64_t>& dims,
+                            const MemoryConfig& output_mem_config) {
     std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
     operation::launch_with_autoformat(
-        [dims, output_mem_config]  (const std::vector<ttnn::Tensor>& input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable -> std::vector<ttnn::Tensor> {
+        [dims, output_mem_config](const std::vector<ttnn::Tensor>& input_tensors,
+                                  const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+                                  const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable
+        -> std::vector<ttnn::Tensor> {
             auto& a = input_tensors.at(0);
             std::vector<uint32_t> normalized_dims(dims.size());
-            std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {return a.get_legacy_shape().get_normalized_index(idx);});
+            std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [a](std::int64_t idx) {
+                return a.get_legacy_shape().get_normalized_index(idx);
+            });
             std::vector<uint32_t> seq_dims(dims.size());
             std::iota(seq_dims.begin(), seq_dims.end(), 0);
             if (normalized_dims == seq_dims) {
-                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(a, output_mem_config)};
+                return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
+                    a, output_mem_config)};
             }
             return {permute_impl(a, normalized_dims, output_mem_config)};
-        }, {a}, output_tensors);
+        },
+        {a},
+        output_tensors);
     return output_tensors.at(0);
 }
 
-Tensor composite_invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::vector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config) {
-
+Tensor composite_invoke(const ttnn::Tensor& input_tensor,
+                        const std::vector<int64_t>& dims,
+                        const std::optional<MemoryConfig>& memory_config) {
     auto output_tensor = permute_launch(input_tensor, dims, memory_config.value_or(input_tensor.memory_config()));
     return output_tensor;
 }
 
-} // detail namespace
+}  // namespace detail
 
-ttnn::Tensor ExecutePermute::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor& input_tensor,
-    const std::vector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config,
-    bool composite) {
-
+ttnn::Tensor ExecutePermute::invoke(uint8_t queue_id,
+                                    const ttnn::Tensor& input_tensor,
+                                    const std::vector<int64_t>& dims,
+                                    const std::optional<MemoryConfig>& memory_config,
+                                    bool composite) {
     if (composite)
         return detail::composite_invoke(input_tensor, dims, memory_config);
 
@@ -165,9 +176,8 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_rank = input_tensor.get_shape().rank();
 
     TT_FATAL(input_rank <= 4, "Error");
-    TT_FATAL(
-        input_rank == dims.size(),
-        "The number of dimensions in the tensor input does not match the length of the desired ordering");
+    TT_FATAL(input_rank == dims.size(),
+             "The number of dimensions in the tensor input does not match the length of the desired ordering");
 
     auto adjust_order = [](const std::vector<int64_t>& dims) {
         std::vector<std::int64_t> new_order;
@@ -207,17 +217,16 @@ ttnn::Tensor ExecutePermute::invoke(
     }
 
     if (initial_input_tensor_on_device and not detail::is_on_device(output_tensor)) {
-        output_tensor = ttnn::to_device(
-            output_tensor, input_tensor.device(), memory_config.value_or(input_tensor.memory_config()));
+        output_tensor =
+            ttnn::to_device(output_tensor, input_tensor.device(), memory_config.value_or(input_tensor.memory_config()));
     }
 
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::vector<int64_t>& dims,
-    const std::optional<MemoryConfig>& memory_config) {
+ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor,
+                                    const std::vector<int64_t>& dims,
+                                    const std::optional<MemoryConfig>& memory_config) {
     return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
@@ -225,4 +234,4 @@ ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, const std:
     return invoke(input_tensor, dims, std::nullopt);
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

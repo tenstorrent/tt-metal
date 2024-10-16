@@ -11,8 +11,10 @@ namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
-    const Tensor& a, Tensor& output, MathFidelity math_fidelity, CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(const Tensor& a,
+                                                             Tensor& output,
+                                                             MathFidelity math_fidelity,
+                                                             CoreCoord compute_with_storage_grid_size) {
     constexpr uint32_t ONE_TILE = 1;
     constexpr uint32_t TILE_WIDTH = 32;
     constexpr uint32_t LATENT_DIM = TILE_WIDTH;
@@ -30,9 +32,13 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
     auto num_output_blocks_total = a.get_legacy_shape()[-1] / (TILE_WIDTH * TILE_WIDTH);
 
     const bool row_major = false;
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total, row_major);
 
     const auto create_circular_buffer = [&program, &cores = all_cores](
                                             uint32_t index,
@@ -117,11 +123,10 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/device/kernels/ssm_1d_sum_reduce.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                    .fp32_dest_acc_en = false,
+                                    .math_approx_mode = false,
+                                    .compile_args = compute_compile_time_args});
 
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
@@ -143,11 +148,11 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
         uint32_t num_blocks_per_core = 0;
 
-        std::vector<std::vector<uint32_t>> reader_runtime_args = {
-            cores.size(), {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
+        std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(),
+                                                                  {0, 0, 0, 0, 0}};  // (src_addr, num_tiles, start_id)
 
-        std::vector<std::vector<uint32_t>> writer_runtime_args = {
-            cores.size(), {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
+        std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(),
+                                                                  {0, 0, 0, 0, 0}};  // (dst_addr, num_tiles, start_id)
 
         std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0, 0}};
 
@@ -185,12 +190,11 @@ operation::ProgramWithCallbacks multi_core_ssm_1d_sum_reduce(
 
     set_runtime_args(program, a, output);
 
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
+    auto override_runtime_arguments_callback = [set_runtime_args](const void* operation,
+                                                                  Program& program,
+                                                                  const std::vector<Tensor>& input_tensors,
+                                                                  const std::vector<std::optional<const Tensor>>&,
+                                                                  const std::vector<Tensor>& output_tensors) {
         const auto& output_tensor = output_tensors.at(0);
         set_runtime_args(program, input_tensors.at(0), output_tensor);
     };

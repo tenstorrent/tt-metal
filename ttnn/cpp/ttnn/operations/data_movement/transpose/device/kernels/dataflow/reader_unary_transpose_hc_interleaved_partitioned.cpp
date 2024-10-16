@@ -22,7 +22,7 @@ void kernel_main() {
     uint32_t CT = get_arg_val<uint32_t>(3);
     uint32_t HW_bytes = get_arg_val<uint32_t>(4);
     uint32_t CHW_bytes = get_arg_val<uint32_t>(5);
-    uint32_t start_id  = get_arg_val<uint32_t>(6);
+    uint32_t start_id = get_arg_val<uint32_t>(6);
     uint32_t num_tiles = get_arg_val<uint32_t>(7);
     uint32_t batch_addr = get_arg_val<uint32_t>(8);
     uint32_t h = get_arg_val<uint32_t>(9);
@@ -52,7 +52,6 @@ void kernel_main() {
     // DPRINT << "ctoffs " << ctoffs <<ENDL();
     // DPRINT << "wt " << wt <<ENDL();
 
-
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
     // we then reverse map this linear dest address to src address
@@ -61,13 +60,10 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
     const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src0_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    for (uint32_t t = 0; t < num_tiles; t++){
-        auto h32 = (h&31);
+    for (uint32_t t = 0; t < num_tiles; t++) {
+        auto h32 = (h & 31);
         // what is the source address for the current tile?
         // c32 = intra-C-tile loop
         // every 32 C's acquire a new output tile address
@@ -101,20 +97,25 @@ void kernel_main() {
                 uint32_t batch_itile;
                 uint32_t rem;
 
-                if constexpr(FLOAT32_DTYPE) {
-                    sub_src_offs = (sub & 1) << 10; // if dest subtile w==16, add 1024 to src subtile offset
-                    sub_src_offs += (((h32 >> 4) << 1) << 10); // if intra-tile source h is > 16, add 2*1024 to subtile offset
-                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 4 bytes per element
-                    src_offs = ctoffs + c16offs + TADDR_FLOAT32(htWT + wt) + sub_src_offs + ((h32&15)<<6); // bytes offset
+                if constexpr (FLOAT32_DTYPE) {
+                    sub_src_offs = (sub & 1) << 10;  // if dest subtile w==16, add 1024 to src subtile offset
+                    sub_src_offs +=
+                        (((h32 >> 4) << 1) << 10);  // if intra-tile source h is > 16, add 2*1024 to subtile offset
+                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 4 bytes per
+                    // element
+                    src_offs =
+                        ctoffs + c16offs + TADDR_FLOAT32(htWT + wt) + sub_src_offs + ((h32 & 15) << 6);  // bytes offset
                     bsrc_offs = batch_addr + src_offs;
                     batch_itile = (bsrc_offs >> 12);
                     rem = (bsrc_offs & 4095);
                 } else {
-
-                    sub_src_offs = (sub & 1) << 9; // if dest subtile w==16, add 512 to src subtile offset
-                    sub_src_offs += (((h32 >> 4) << 1) << 9); // if intra-tile source h is > 16, add 2*512 to subtile offset
-                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes per element
-                    src_offs = ctoffs + c16offs + TADDR_BFLOAT16(htWT + wt) + sub_src_offs + ((h32&15)<<5); // bytes offset
+                    sub_src_offs = (sub & 1) << 9;  // if dest subtile w==16, add 512 to src subtile offset
+                    sub_src_offs +=
+                        (((h32 >> 4) << 1) << 9);  // if intra-tile source h is > 16, add 2*512 to subtile offset
+                    // below we only use the lower 4 bits out of 5-bit range for h, shift by 5 because 2 bytes per
+                    // element
+                    src_offs = ctoffs + c16offs + TADDR_BFLOAT16(htWT + wt) + sub_src_offs +
+                               ((h32 & 15) << 5);  // bytes offset
                     bsrc_offs = batch_addr + src_offs;
                     batch_itile = (bsrc_offs >> 11);
                     rem = (bsrc_offs & 2047);
@@ -122,11 +123,11 @@ void kernel_main() {
 
                 // DPRINT << "rem " << rem <<ENDL();
 
-                //if (h == 0 && ct == 0 && wt == 0) {
-                //    DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();
-                //    DPRINT << "    Reading from src_offs=" << src_offs << ENDL();
-                //    DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
-                //}
+                // if (h == 0 && ct == 0 && wt == 0) {
+                //     DPRINT << "  Sub=" << sub << " c16=" << c16 << ENDL();
+                //     DPRINT << "    Reading from src_offs=" << src_offs << ENDL();
+                //     DPRINT << "    Writing to   dst_offs=" << dest_tr0_l1-save_dest << ENDL();
+                // }
 
                 uint64_t banked_addr = get_noc_addr(batch_itile, s0);
                 banked_addr += rem;
@@ -134,8 +135,8 @@ void kernel_main() {
                 // this starts async NOC dma from DRAM to TR0_L1 buffer
                 noc_async_read(banked_addr, dest_tr0_l1, SUBTILE_LINE_BYTES);
 
-                //if (h == 0 && ct == 0 && wt == 0)
-                //    DPRINT << uint32_t( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
+                // if (h == 0 && ct == 0 && wt == 0)
+                //     DPRINT << uint32_t( reinterpret_cast<uint16_t*>( dest_tr0_l1 )[0] ) << ENDL();
 
                 // the output address is just linearly incremented
                 dest_tr0_l1 += SUBTILE_LINE_BYTES;
@@ -145,9 +146,9 @@ void kernel_main() {
             // 0 1
             // 2 3
             // Here we offset C by 16 starting with subtile=2
-            if (sub == 1) // after we are done with subtile 1, increment for sub=2
-                cSubtileOffs += (HW_bytes<<4); // 16*HWbytes, which is subtile vertical size
-        } // sub<4
+            if (sub == 1)                         // after we are done with subtile 1, increment for sub=2
+                cSubtileOffs += (HW_bytes << 4);  // 16*HWbytes, which is subtile vertical size
+        }  // sub<4
 
         // block on all outstanding noc DMA requests to complete
         noc_async_read_barrier();
@@ -155,20 +156,19 @@ void kernel_main() {
         // notifies the unpacker that the buffer is populated
         cb_push_back(cb_id_in0, onetile);
         wt++;
-        if (wt == WT) { // End of row
+        if (wt == WT) {  // End of row
             wt = 0;
             ct++;
-            ctoffs += (HW_bytes<<5); // since we increment ct, we need to multiply by 32
-            if (ct == CT) { // End of column
+            ctoffs += (HW_bytes << 5);  // since we increment ct, we need to multiply by 32
+            if (ct == CT) {             // End of column
                 ct = 0;
                 ctoffs = 0;
                 h++;
-                if (h == H) { // End of batch
+                if (h == H) {  // End of batch
                     batch_addr += CHW_bytes;
                     h = 0;
                     htWT = 0;
-                }
-                else if (h32 == 31) {
+                } else if (h32 == 31) {
                     htWT += WT;
                 }
             }

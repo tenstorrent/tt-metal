@@ -24,6 +24,7 @@ struct ExecuteLayerNormPreAllGather {
 }  // namespace operations::normalization
 
 constexpr auto layer_norm_pre_all_gather =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm_pre_all_gather", ttnn::operations::normalization::ExecuteLayerNormPreAllGather>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm_pre_all_gather",
+                                                 ttnn::operations::normalization::ExecuteLayerNormPreAllGather>();
 
 }  // namespace ttnn

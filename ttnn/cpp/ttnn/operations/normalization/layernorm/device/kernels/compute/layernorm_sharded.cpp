@@ -17,26 +17,27 @@
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
+    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
+    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
+    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
+    constexpr uint32_t block_w = get_compile_time_arg_val(5);
+    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
+    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
+    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
+    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
+    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
+    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(11);
 
-    constexpr uint32_t is_top_row                     = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma                       = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta                        = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage                     = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w                        = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const                  = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile                = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const               = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile             = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w                = get_compile_time_arg_val(7);
-    const bool is_allgather_worker                    = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block            = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE                      = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t num_blocks_second_stage        = get_compile_time_arg_val(11);
-
-    const uint32_t num_reduce_tiles_per_block_h             = get_arg_val<uint32_t>(0); // This value is the same for all cores, except ones that have padding tiles in it. In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker           = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce                         = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader                       = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
+    const uint32_t num_reduce_tiles_per_block_h =
+        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
+                                   // In that case, skip reduce for padding tiles.
+    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
+    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
+    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -62,22 +63,22 @@ void MAIN {
     constexpr uint32_t cb_scaler_global = tt::CB::c_in4;
     constexpr uint32_t cb_gamma = tt::CB::c_in5;
     constexpr uint32_t cb_beta = tt::CB::c_in6;
-    constexpr uint32_t cb_x = tt::CB::c_intermed0; // x minus mean
-    #if defined RMSNORM and not defined FUSE_PRE_ADD
-    constexpr uint32_t cb_xmm = cb_in0; // x minus mean
-    #else
-    constexpr uint32_t cb_xmm = tt::CB::c_intermed1; // x minus mean
-    #endif
-    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0; // E[x] partial reduce
-    constexpr uint32_t cb_ex = tt::CB::dataflow1; // E[x] global reduce
+    constexpr uint32_t cb_x = tt::CB::c_intermed0;  // x minus mean
+#if defined RMSNORM and not defined FUSE_PRE_ADD
+    constexpr uint32_t cb_xmm = cb_in0;  // x minus mean
+#else
+    constexpr uint32_t cb_xmm = tt::CB::c_intermed1;  // x minus mean
+#endif
+    constexpr uint32_t cb_ex_partial = tt::CB::dataflow0;  // E[x] partial reduce
+    constexpr uint32_t cb_ex = tt::CB::dataflow1;          // E[x] global reduce
     constexpr uint32_t cb_ex_external = tt::CB::dataflow2;
-    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3; // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CB::dataflow4; // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_partial2 = tt::CB::dataflow3;  // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = tt::CB::dataflow4;          // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = tt::CB::dataflow5;
-    constexpr uint32_t cb_ex_global = tt::CB::dataflow7; // E[x] global reduce
-    constexpr uint32_t cb_xmm2 = cb_x; // xmm^2
-    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3; // E[(x-E[x])^2]+eps
-    constexpr uint32_t cb_fusion = tt::CB::c_intermed1; // stream gamma/beta
+    constexpr uint32_t cb_ex_global = tt::CB::dataflow7;  // E[x] global reduce
+    constexpr uint32_t cb_xmm2 = cb_x;                    // xmm^2
+    constexpr uint32_t cb_ex2pe = tt::CB::c_intermed3;    // E[(x-E[x])^2]+eps
+    constexpr uint32_t cb_fusion = tt::CB::c_intermed1;   // stream gamma/beta
     constexpr uint32_t cb_out = tt::CB::c_out0;
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
@@ -90,20 +91,20 @@ void MAIN {
     int index_h_offset = 0;
     int index = 0;
 
-    #ifdef FUSE_PRE_ADD
-    #ifdef RMSNORM
+#ifdef FUSE_PRE_ADD
+#ifdef RMSNORM
     constexpr uint32_t cb_in = cb_xmm;
-    #else
+#else
     constexpr uint32_t cb_in = cb_x;
-    #endif
-    #else
+#endif
+#else
     constexpr uint32_t cb_in = cb_in0;
-    #endif
+#endif
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
 
-    // pre-add x + y
-    #ifdef FUSE_PRE_ADD
+// pre-add x + y
+#ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init();
     cb_reserve_back(cb_in, num_tiles_per_block);
@@ -126,19 +127,19 @@ void MAIN {
         index_h_offset += block_w;
     }
     cb_push_back(cb_in, num_tiles_per_block);
-    #ifndef RMSNORM
+#ifndef RMSNORM
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
-    #else
+#else
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
-    #endif
+#endif
     cb_wait_front(cb_in, num_tiles_per_block);
-    #else
-    #ifndef RMSNORM
+#else
+#ifndef RMSNORM
     reconfig_data_format_srcb(cb_in0, cb_scaler);
-    #endif // RMSNORM
-    #endif // FUSE_PRE_ADD
+#endif  // RMSNORM
+#endif  // FUSE_PRE_ADD
 
-    #ifndef RMSNORM
+#ifndef RMSNORM
     // E[x],
     index_h_offset = 0;
     reduce_init_delta<false>();
@@ -147,7 +148,7 @@ void MAIN {
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in, cb_scaler, w+index_h_offset, scaler0, dst0);
+            reduce_tile(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -161,7 +162,7 @@ void MAIN {
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
-    if constexpr(is_allgather_worker) {
+    if constexpr (is_allgather_worker) {
         reduce_init_delta<false>();
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
@@ -212,11 +213,11 @@ void MAIN {
         cb_pop_front(cb_in, block_w);
     }
     cb_push_back(cb_xmm, num_tiles_per_block);
-    #ifndef FUSE_PRE_ADD
+#ifndef FUSE_PRE_ADD
     reconfig_data_format_srca(cb_in, cb_xmm);
-    #endif
+#endif
     cb_wait_front(cb_xmm, num_tiles_per_block);
-    #endif
+#endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
     mul_tiles_init();
@@ -242,27 +243,27 @@ void MAIN {
     }
     cb_push_back(cb_xmm2, num_tiles_per_block);
 
-    #if defined RMSNORM and not defined FUSED_PRE_ADD
+#if defined RMSNORM and not defined FUSED_PRE_ADD
     reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
-    #else
+#else
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
     }
-    #endif
+#endif
 
     cb_wait_front(cb_xmm2, num_tiles_per_block);
 
-    // Var(x)
-    #ifdef RMSNORM
+// Var(x)
+#ifdef RMSNORM
     cb_wait_front(cb_scaler, 1);
-    #endif
+#endif
     cb_reserve_back(cb_ex_partial2, block_h);
     reduce_init_delta<false>();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_xmm2, cb_scaler, w+index_h_offset, scaler0, dst0);
+            reduce_tile(cb_xmm2, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -275,7 +276,7 @@ void MAIN {
     cb_push_back(cb_ex_partial2, block_h);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
-    if constexpr(is_allgather_worker) {
+    if constexpr (is_allgather_worker) {
         reduce_init_delta<false>();
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
@@ -321,22 +322,21 @@ void MAIN {
         }
     }
 
-
-    if constexpr(do_gamma == 0 && do_beta == 0) {
+    if constexpr (do_gamma == 0 && do_beta == 0) {
         pack_reconfig_data_format(cb_out);
     }
-    // (x - Ex) * 1/[sqrt(Var + eps)]
-    #if defined RMSNORM and not defined FUSE_PRE_ADD
+// (x - Ex) * 1/[sqrt(Var + eps)]
+#if defined RMSNORM and not defined FUSE_PRE_ADD
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(cb_xmm, cb_ex_global);
     } else {
         reconfig_data_format_srca(cb_ex2, cb_xmm);
     }
-    #else
+#else
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(cb_xmm, cb_ex_global);
     }
-    #endif
+#endif
     mul_bcast_cols_init_short();
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
@@ -367,9 +367,9 @@ void MAIN {
     cb_pop_front(cb_xmm, num_tiles_per_block);
     cb_wait_front(cb_im, num_tiles_per_block);
 
-    if constexpr(do_gamma) {
+    if constexpr (do_gamma) {
         reconfig_data_format(cb_im, cb_gamma);
-        if constexpr(do_beta == 0) {
+        if constexpr (do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
         mul_bcast_rows_init_short();
@@ -382,7 +382,7 @@ void MAIN {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
-                    mul_tiles_bcast_rows(cb_im, cb_gamma, index+index_h_offset, index, w);
+                    mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -399,7 +399,7 @@ void MAIN {
         cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
 
-    if constexpr(do_beta) {
+    if constexpr (do_beta) {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short();
@@ -428,7 +428,6 @@ void MAIN {
         cb_pop_front(cb_fusion, num_tiles_per_block);
         cb_wait_front(cb_out, num_tiles_per_block);
     }
-
 }
 
-}
+}  // namespace NAMESPACE

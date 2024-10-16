@@ -9,11 +9,10 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 namespace {
-std::string get_binary_doc_string(
-    std::string_view op_name,
-    std::string_view input_a,
-    std::string_view input_b,
-    fmt::format_string<std::string_view&, std::string_view&> op_desc) {
+std::string get_binary_doc_string(std::string_view op_name,
+                                  std::string_view input_a,
+                                  std::string_view input_b,
+                                  fmt::format_string<std::string_view&, std::string_view&> op_desc) {
     return fmt::format(
         R"doc(
         {0}
@@ -31,8 +30,9 @@ std::string get_binary_doc_string(
         input_b);
 }
 
-std::string get_unary_doc_string(
-    std::string_view op_name, std::string_view input, fmt::format_string<std::string_view&> op_desc) {
+std::string get_unary_doc_string(std::string_view op_name,
+                                 std::string_view input,
+                                 fmt::format_string<std::string_view&> op_desc) {
     return fmt::format(
         R"doc(
         {0}
@@ -56,25 +56,25 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void py_bind_copy(py::module& module) {
-    auto doc = get_binary_doc_string(
-        "copy",
-        "input_a",
-        "input_b",
-        R"doc(Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
+    auto doc =
+        get_binary_doc_string("copy",
+                              "input_a",
+                              "input_b",
+                              R"doc(Copies the elements from ``{0}`` into ``{1}``. ``{1}`` is modified in place.)doc");
 
-    bind_registered_operation(
-        module,
-        ttnn::copy,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::copy)& self,
-               const ttnn::Tensor& input_a,
-               const ttnn::Tensor& input_b,
-               uint8_t queue_id) { return self(queue_id, input_a, input_b); },
-            py::arg("input_a").noconvert(),
-            py::arg("input_b").noconvert(),
-            py::kw_only(),
-            py::arg("queue_id") = 0});
+    bind_registered_operation(module,
+                              ttnn::copy,
+                              doc,
+                              ttnn::pybind_overload_t{[](const decltype(ttnn::copy)& self,
+                                                         const ttnn::Tensor& input_a,
+                                                         const ttnn::Tensor& input_b,
+                                                         uint8_t queue_id) {
+                                                          return self(queue_id, input_a, input_b);
+                                                      },
+                                                      py::arg("input_a").noconvert(),
+                                                      py::arg("input_b").noconvert(),
+                                                      py::kw_only(),
+                                                      py::arg("queue_id") = 0});
 }
 
 void py_bind_assign(py::module& module) {
@@ -102,27 +102,29 @@ void py_bind_assign(py::module& module) {
         module,
         ttnn::assign,
         doc,
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::assign)& self,
-               const ttnn::Tensor& input,
-               const ttnn::MemoryConfig memory_config,
-               const std::optional<const ttnn::DataType> dtype,
-               std::optional<ttnn::Tensor>& optional_output_tensor,
-               uint8_t queue_id) { return self(queue_id, input, memory_config, dtype, optional_output_tensor); },
-            py::arg("input_tensor").noconvert(),
-            py::kw_only(),
-            py::arg("memory_config"),
-            py::arg("dtype") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::assign)& self,
-               const ttnn::Tensor& input_a,
-               const ttnn::Tensor& input_b,
-               uint8_t queue_id) { return self(queue_id, input_a, input_b); },
-            py::arg("input_a").noconvert(),
-            py::arg("input_b").noconvert(),
-            py::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const decltype(ttnn::assign)& self,
+                                   const ttnn::Tensor& input,
+                                   const ttnn::MemoryConfig memory_config,
+                                   const std::optional<const ttnn::DataType> dtype,
+                                   std::optional<ttnn::Tensor>& optional_output_tensor,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, input, memory_config, dtype, optional_output_tensor);
+                                },
+                                py::arg("input_tensor").noconvert(),
+                                py::kw_only(),
+                                py::arg("memory_config"),
+                                py::arg("dtype") = std::nullopt,
+                                py::arg("output_tensor") = std::nullopt,
+                                py::arg("queue_id") = 0},
+        ttnn::pybind_overload_t{[](const decltype(ttnn::assign)& self,
+                                   const ttnn::Tensor& input_a,
+                                   const ttnn::Tensor& input_b,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, input_a, input_b);
+                                },
+                                py::arg("input_a").noconvert(),
+                                py::arg("input_b").noconvert(),
+                                py::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

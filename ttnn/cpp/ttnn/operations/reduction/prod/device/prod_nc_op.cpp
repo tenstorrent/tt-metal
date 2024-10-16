@@ -47,11 +47,10 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
 std::vector<ttnn::SimpleShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
     // Inplace
     return {};
-
 }
 
-operation::ProgramWithCallbacks Prod::create_program(
-    const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
+operation::ProgramWithCallbacks Prod::create_program(const std::vector<Tensor>& inputs,
+                                                     std::vector<Tensor>& outputs) const {
     auto& input = inputs.at(0);
     auto& output = inputs.at(1);
 
@@ -63,17 +62,18 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
     auto padding = output_shape.padding();
     switch (dim) {
         case 0:
-        case 1: output_shape[dim] = 1;
-        break;
+        case 1: output_shape[dim] = 1; break;
     }
 
     return {tt::tt_metal::LegacyShape(output_shape, padding)};
 }
 
-inline Tensor create_output_tensor(
-    const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_shape, const MemoryConfig& mem_config) {
+inline Tensor create_output_tensor(const Tensor& input_tensor,
+                                   const tt::tt_metal::LegacyShape& output_shape,
+                                   const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(
+        output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
 
 // output as arg
@@ -93,11 +93,10 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
     return output;
 }
 
-Tensor prod_nc(
-    const Tensor& input,
-    const Tensor& output,
-    std::vector<int64_t>& dims,
-    const MemoryConfig& output_mem_config) {
+Tensor prod_nc(const Tensor& input,
+               const Tensor& output,
+               std::vector<int64_t>& dims,
+               const MemoryConfig& output_mem_config) {
     // reduce for all dims
     if (dims.empty()) {
         dims = {0, 1, 2, 3};

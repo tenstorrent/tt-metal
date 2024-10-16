@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "fill_rm_pybind.hpp"
 #include "fill_rm.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
-
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -85,33 +83,32 @@ void bind_fill_rm_op(py::module& module) {
         module,
         ttnn::fill_rm,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-                uint32_t N,
-                uint32_t C,
-                uint32_t H,
-                uint32_t W,
-                uint32_t hOnes,
-                uint32_t wOnes,
-                const Tensor& any,
-                const float val_hi,
-                const float val_lo,
-                const std::optional<MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
-                },
-            py::arg("N"),
-            py::arg("C"),
-            py::arg("H"),
-            py::arg("W"),
-            py::arg("hOnes"),
-            py::arg("wOnes"),
-            py::arg("any"),
-            py::arg("val_hi"),
-            py::arg("val_lo"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const OperationType& self,
+                                   uint32_t N,
+                                   uint32_t C,
+                                   uint32_t H,
+                                   uint32_t W,
+                                   uint32_t hOnes,
+                                   uint32_t wOnes,
+                                   const Tensor& any,
+                                   const float val_hi,
+                                   const float val_lo,
+                                   const std::optional<MemoryConfig>& memory_config,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
+                                },
+                                py::arg("N"),
+                                py::arg("C"),
+                                py::arg("H"),
+                                py::arg("W"),
+                                py::arg("hOnes"),
+                                py::arg("wOnes"),
+                                py::arg("any"),
+                                py::arg("val_hi"),
+                                py::arg("val_lo"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("queue_id") = 0});
 }
 
 void bind_fill_ones_rm_op(py::module& module) {
@@ -161,37 +158,35 @@ void bind_fill_ones_rm_op(py::module& module) {
         module,
         ttnn::fill_ones_rm,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-                uint32_t N,
-                uint32_t C,
-                uint32_t H,
-                uint32_t W,
-                uint32_t hOnes,
-                uint32_t wOnes,
-                const Tensor& any,
-                const std::optional<MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, N, C, H, W, hOnes, wOnes, any, memory_config);
-                },
-            py::arg("N"),
-            py::arg("C"),
-            py::arg("H"),
-            py::arg("W"),
-            py::arg("hOnes"),
-            py::arg("wOnes"),
-            py::arg("any"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
-
+        ttnn::pybind_overload_t{[](const OperationType& self,
+                                   uint32_t N,
+                                   uint32_t C,
+                                   uint32_t H,
+                                   uint32_t W,
+                                   uint32_t hOnes,
+                                   uint32_t wOnes,
+                                   const Tensor& any,
+                                   const std::optional<MemoryConfig>& memory_config,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, N, C, H, W, hOnes, wOnes, any, memory_config);
+                                },
+                                py::arg("N"),
+                                py::arg("C"),
+                                py::arg("H"),
+                                py::arg("W"),
+                                py::arg("hOnes"),
+                                py::arg("wOnes"),
+                                py::arg("any"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("queue_id") = 0});
 }
 
-} //detail
+}  // namespace detail
 
 void bind_fill_rm(py::module& module) {
-   detail::bind_fill_rm_op(module);
-   detail::bind_fill_ones_rm_op(module);
+    detail::bind_fill_rm_op(module);
+    detail::bind_fill_ones_rm_op(module);
 }
 
-}  // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::data_movement

@@ -9,21 +9,20 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-void setup_runtime(
-    const Program &program,
-    const uint32_t &core_offset,
-    const uint32_t &num_cores_r,
-    const uint32_t &num_cores_c,
-    const uint32_t &z,
-    const uint32_t &num_cores_x,
-    const uint32_t &per_core_tiles_y,
-    const uint32_t &per_core_tiles_x,
-    const uint32_t &num_tiles_per_z,
-    tt::tt_metal::Buffer *in0_buffer,
-    tt::tt_metal::Buffer *out0_buffer,
-    tt::tt_metal::Buffer *out1_buffer,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id) {
+void setup_runtime(const Program &program,
+                   const uint32_t &core_offset,
+                   const uint32_t &num_cores_r,
+                   const uint32_t &num_cores_c,
+                   const uint32_t &z,
+                   const uint32_t &num_cores_x,
+                   const uint32_t &per_core_tiles_y,
+                   const uint32_t &per_core_tiles_x,
+                   const uint32_t &num_tiles_per_z,
+                   tt::tt_metal::Buffer *in0_buffer,
+                   tt::tt_metal::Buffer *out0_buffer,
+                   tt::tt_metal::Buffer *out1_buffer,
+                   tt::tt_metal::KernelHandle reader_kernel_id,
+                   tt::tt_metal::KernelHandle writer_kernel_id) {
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
@@ -80,8 +79,9 @@ void setup_runtime(
     }
 }
 
-operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
-    const Tensor &input_tensor, std::vector<Tensor> &output_tensors, const MemoryConfig &mem_config) {
+operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(const Tensor &input_tensor,
+                                                                std::vector<Tensor> &output_tensors,
+                                                                const MemoryConfig &mem_config) {
     uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
@@ -122,8 +122,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto num_cores_z = z;
 
     // parallelize y
-    auto [num_cores_y, per_core_tiles_y] =
-        tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
+    auto [num_cores_y, per_core_tiles_y] = tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(
+        num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
 
     // parallelize x
     auto [num_cores_x, per_core_tiles_x] =
@@ -137,10 +137,8 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t num_cores_c = num_cores_y;
     uint32_t num_cores_r = num_cores_x * num_cores_z;
 
-    CoreRange all_cores(
-        {(std::size_t)start_core_x, (std::size_t)start_core_y},
-        {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1}
-    );
+    CoreRange all_cores({(std::size_t)start_core_x, (std::size_t)start_core_y},
+                        {(std::size_t)start_core_x + num_cores_r - 1, (std::size_t)start_core_y + num_cores_c - 1});
 
     bool tile_dtype_is_bfloat16 = input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -178,17 +176,19 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     };
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/reader_tm_tile_layout_split_two_chunks.cpp",
-        all_cores,
-	tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    auto reader_kernel_id =
+        tt::tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
+                                   "reader_tm_tile_layout_split_two_chunks.cpp",
+                                   all_cores,
+                                   tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/writer_tm_tile_layout_split_two_chunks.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    auto writer_kernel_id =
+        tt::tt_metal::CreateKernel(program,
+                                   "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
+                                   "writer_tm_tile_layout_split_two_chunks.cpp",
+                                   all_cores,
+                                   tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -197,21 +197,20 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    setup_runtime(
-        program,
-        0,
-        num_cores_r,
-        num_cores_c,
-        num_cores_z,
-        num_cores_x,
-        per_core_tiles_y,
-        per_core_tiles_x,
-        num_tiles_per_z,
-        in0_buffer,
-        out0_buffer,
-        out1_buffer,
-        reader_kernel_id,
-        writer_kernel_id);
+    setup_runtime(program,
+                  0,
+                  num_cores_r,
+                  num_cores_c,
+                  num_cores_z,
+                  num_cores_x,
+                  per_core_tiles_y,
+                  per_core_tiles_x,
+                  num_tiles_per_z,
+                  in0_buffer,
+                  out0_buffer,
+                  out1_buffer,
+                  reader_kernel_id,
+                  writer_kernel_id);
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
@@ -244,5 +243,4 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     return {std::move(program), override_runtime_args_callback};
 }
 
-
-}
+}  // namespace ttnn::operations::data_movement::detail

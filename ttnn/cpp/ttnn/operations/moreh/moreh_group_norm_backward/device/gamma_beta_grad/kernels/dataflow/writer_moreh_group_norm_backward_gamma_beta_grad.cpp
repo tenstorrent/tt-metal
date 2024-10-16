@@ -29,15 +29,13 @@ void kernel_main() {
     const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
     const auto gamma_grad_data_format = get_dataformat(cb_id_gamma_grad);
 
-    const InterleavedAddrGenFast<true> dram_gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
+    const InterleavedAddrGenFast<true> dram_gamma_grad_addrg = {.bank_base_address = gamma_grad_addr,
+                                                                .page_size = gamma_grad_tile_bytes,
+                                                                .data_format = gamma_grad_data_format};
 
-    const InterleavedAddrGenFast<false> l1_gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
+    const InterleavedAddrGenFast<false> l1_gamma_grad_addrg = {.bank_base_address = gamma_grad_addr,
+                                                               .page_size = gamma_grad_tile_bytes,
+                                                               .data_format = gamma_grad_data_format};
 
     // beta_grad
     const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
@@ -77,10 +75,9 @@ void kernel_main() {
             const auto gamma_grad_noc_addr = gamma_grad_is_dram
                                                  ? get_noc_addr(gamma_beta_tile_idx, dram_gamma_grad_addrg)
                                                  : get_noc_addr(gamma_beta_tile_idx, l1_gamma_grad_addrg);
-            noc_async_write(
-                gamma_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
-                gamma_grad_noc_addr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
-                gamma_grad_dtype_bytes);
+            noc_async_write(gamma_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
+                            gamma_grad_noc_addr + tilized_gamma_beta_idx_in_tile * gamma_grad_dtype_bytes,
+                            gamma_grad_dtype_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_id_gamma_grad, onetile);
         }
@@ -95,10 +92,9 @@ void kernel_main() {
             }
             const auto beta_grad_noc_addr = beta_grad_is_dram ? get_noc_addr(gamma_beta_tile_idx, dram_beta_grad_addrg)
                                                               : get_noc_addr(gamma_beta_tile_idx, l1_beta_grad_addrg);
-            noc_async_write(
-                beta_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
-                beta_grad_noc_addr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
-                beta_grad_dtype_bytes);
+            noc_async_write(beta_grad_l1_read_ptr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
+                            beta_grad_noc_addr + tilized_gamma_beta_idx_in_tile * beta_grad_dtype_bytes,
+                            beta_grad_dtype_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_id_beta_grad, onetile);
         }

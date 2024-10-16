@@ -9,16 +9,15 @@
 
 namespace ttnn::operations::moreh::moreh_bmm {
 struct MorehBMM {
-    static Tensor invoke(
-        const Tensor& input,
-        const Tensor& mat2,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+    static Tensor invoke(const Tensor& input,
+                         const Tensor& mat2,
+                         const std::optional<Tensor>& output,
+                         const std::optional<MemoryConfig>& memory_config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_bmm
 
 namespace ttnn {
 constexpr auto moreh_bmm =
     ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_bmm", ttnn::operations::moreh::moreh_bmm::MorehBMM>();
-} // namespace ttnn
+}  // namespace ttnn

@@ -15,7 +15,6 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
@@ -23,14 +22,13 @@
 
 namespace NAMESPACE {
 
-FORCE_INLINE void reload_from_cb_to_dst(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_w,
-    uint32_t out_subblock_h,
-    uint32_t in0_block_w) {
+FORCE_INLINE void reload_from_cb_to_dst(uint32_t in0_cb_id,
+                                        uint32_t in1_cb_id,
+                                        uint32_t mm_partials_cb_id,
+                                        uint32_t out_subblock_num_tiles,
+                                        uint32_t out_subblock_w,
+                                        uint32_t out_subblock_h,
+                                        uint32_t in0_block_w) {
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
@@ -46,12 +44,11 @@ FORCE_INLINE void reload_from_cb_to_dst(
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
-inline void reblock_and_untilize(
-    uint32_t num_out_subblocks_in_col,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_cb_id,
-    uint32_t out_cb_id) {
+inline void reblock_and_untilize(uint32_t num_out_subblocks_in_col,
+                                 uint32_t out_subblock_num_tiles,
+                                 uint32_t out_subblock_h,
+                                 uint32_t interm_cb_id,
+                                 uint32_t out_cb_id) {
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
@@ -164,14 +161,13 @@ void MAIN {
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
-                        reload_from_cb_to_dst(
-                            in0_cb_id,
-                            in1_cb_id,
-                            mm_partials_cb_id,
-                            out_subblock_num_tiles,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reload_from_cb_to_dst(in0_cb_id,
+                                              in1_cb_id,
+                                              mm_partials_cb_id,
+                                              out_subblock_num_tiles,
+                                              out_subblock_w,
+                                              out_subblock_h,
+                                              in0_block_w);
                     }
 
 #ifndef SKIP_COMPUTE
@@ -184,16 +180,15 @@ void MAIN {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
-                        matmul_block(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_index,
-                            in1_index,
-                            dst_index,
-                            false,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        matmul_block(in0_cb_id,
+                                     in1_cb_id,
+                                     in0_index,
+                                     in1_index,
+                                     dst_index,
+                                     false,
+                                     out_subblock_w,
+                                     out_subblock_h,
+                                     in0_block_w);
                         in0_index++;                  // stride right by 1
                         in1_index += in1_per_core_w;  // to stride down by 1 need to stride by in_per_core_w (should be
                                                       // called in1_block_w)

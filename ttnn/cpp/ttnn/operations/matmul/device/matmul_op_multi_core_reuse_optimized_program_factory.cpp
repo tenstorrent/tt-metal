@@ -17,31 +17,29 @@ namespace reuse_optimized_helpers {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
-operation::ProgramWithCallbacks create_program(
-    tt_metal::Device* device,
-    MathFidelity math_fidelity,
-    bool fp32_dest_acc_en,
-    bool math_approx_mode,
-    bool packer_l1_acc,
-    CoreCoord core_range,
-    uint32_t B,
-    uint32_t M,
-    uint32_t N,
-    uint32_t K,
-    bool bcast_batch,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    const Tensor& in0,
-    const Tensor& in1,
-    const Tensor& output,
-    tt::DataFormat in0_data_format,
-    tt::DataFormat in1_data_format,
-    tt::DataFormat output_data_format,
-    bool untilize_out
-) {
+operation::ProgramWithCallbacks create_program(tt_metal::Device* device,
+                                               MathFidelity math_fidelity,
+                                               bool fp32_dest_acc_en,
+                                               bool math_approx_mode,
+                                               bool packer_l1_acc,
+                                               CoreCoord core_range,
+                                               uint32_t B,
+                                               uint32_t M,
+                                               uint32_t N,
+                                               uint32_t K,
+                                               bool bcast_batch,
+                                               uint32_t in0_block_w,
+                                               uint32_t out_subblock_h,
+                                               uint32_t out_subblock_w,
+                                               uint32_t per_core_M,
+                                               uint32_t per_core_N,
+                                               const Tensor& in0,
+                                               const Tensor& in1,
+                                               const Tensor& output,
+                                               tt::DataFormat in0_data_format,
+                                               tt::DataFormat in1_data_format,
+                                               tt::DataFormat output_data_format,
+                                               bool untilize_out) {
     tt_metal::Program program{};
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
@@ -131,13 +129,12 @@ operation::ProgramWithCallbacks create_program(
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = num_output_blocks_total / num_cores * batch_scale_factor;
     } else {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(core_range, num_output_blocks_total);
+        std::tie(num_cores,
+                 all_cores,
+                 core_group_1,
+                 core_group_2,
+                 num_blocks_per_core_group_1,
+                 num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(core_range, num_output_blocks_total);
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
@@ -176,41 +173,36 @@ operation::ProgramWithCallbacks create_program(
         mm_kernel_in1_reader_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
-        all_cores,
-        ReaderDataMovementConfig(
-            reader_compile_time_args,
-            mm_kernel_in0_reader_defines));
+    KernelHandle mm_kernel_in0_reader_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
+                               all_cores,
+                               ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
 
     KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            reader_writer_compile_time_args,
-            mm_kernel_in1_reader_writer_defines));
+        WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
-        in0_block_w,             // in0_block_w
-        in0_num_subblocks,       // in0_num_subblocks
-        in0_block_num_tiles,     // in0_block_num_tiles
-        in0_subblock_num_tiles,  // in0_subblock_num_tiles
+    vector<uint32_t> compute_kernel_args_group_1 = {in0_block_w,             // in0_block_w
+                                                    in0_num_subblocks,       // in0_num_subblocks
+                                                    in0_block_num_tiles,     // in0_block_num_tiles
+                                                    in0_subblock_num_tiles,  // in0_subblock_num_tiles
 
-        in1_num_subblocks,    // in1_num_subblocks
-        in1_block_num_tiles,  // in1_block_num_tiles
-        in1_per_core_w,       // in1_per_core_w
+                                                    in1_num_subblocks,    // in1_num_subblocks
+                                                    in1_block_num_tiles,  // in1_block_num_tiles
+                                                    in1_per_core_w,       // in1_per_core_w
 
-        num_blocks,  // num_blocks
+                                                    num_blocks,  // num_blocks
 
-        out_subblock_h,               // out_subblock_h
-        out_subblock_w,               // out_subblock_w
-        out_subblock_num_tiles,       // out_subblock_num_tiles
-        num_blocks_per_core_group_1,  // batch
-        out_block_tiles,
+                                                    out_subblock_h,               // out_subblock_h
+                                                    out_subblock_w,               // out_subblock_w
+                                                    out_subblock_num_tiles,       // out_subblock_num_tiles
+                                                    num_blocks_per_core_group_1,  // batch
+                                                    out_block_tiles,
 
-        untilize_out};
+                                                    untilize_out};
 
     std::map<string, string> mm_kernel_defines;
     if (packer_l1_acc_en) {
@@ -227,42 +219,39 @@ operation::ProgramWithCallbacks create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = mm_kernel_defines});
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                .fp32_dest_acc_en = fp32_dest_acc_en,
+                                .math_approx_mode = math_approx_mode,
+                                .compile_args = compute_kernel_args_group_1,
+                                .defines = mm_kernel_defines});
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
-            in0_block_w,             // in0_block_w
-            in0_num_subblocks,       // in0_num_subblocks
-            in0_block_num_tiles,     // in0_block_num_tiles
-            in0_subblock_num_tiles,  // in0_subblock_num_tiles
+        vector<uint32_t> compute_kernel_args_group_2 = {in0_block_w,             // in0_block_w
+                                                        in0_num_subblocks,       // in0_num_subblocks
+                                                        in0_block_num_tiles,     // in0_block_num_tiles
+                                                        in0_subblock_num_tiles,  // in0_subblock_num_tiles
 
-            in1_num_subblocks,    // in1_num_subblocks
-            in1_block_num_tiles,  // in1_block_num_tiles
-            in1_per_core_w,       // in1_per_core_w
+                                                        in1_num_subblocks,    // in1_num_subblocks
+                                                        in1_block_num_tiles,  // in1_block_num_tiles
+                                                        in1_per_core_w,       // in1_per_core_w
 
-            num_blocks,  // num_blocks
+                                                        num_blocks,  // num_blocks
 
-            out_subblock_h,               // out_subblock_h
-            out_subblock_w,               // out_subblock_w
-            out_subblock_num_tiles,       // out_subblock_num_tiles
-            num_blocks_per_core_group_2,  // batch
-            out_block_tiles,
+                                                        out_subblock_h,               // out_subblock_h
+                                                        out_subblock_w,               // out_subblock_w
+                                                        out_subblock_num_tiles,       // out_subblock_num_tiles
+                                                        num_blocks_per_core_group_2,  // batch
+                                                        out_block_tiles,
 
-            untilize_out};
+                                                        untilize_out};
         auto mm_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = mm_kernel_defines});
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                                    .math_approx_mode = math_approx_mode,
+                                    .compile_args = compute_kernel_args_group_2,
+                                    .defines = mm_kernel_defines});
     }
 
     // Create circular buffers
@@ -312,8 +301,8 @@ operation::ProgramWithCallbacks create_program(
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
     } else {
         // share buffer
-        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-            {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{{output_cb_index, output_data_format},
+                                                                     {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
@@ -471,29 +460,27 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
-    const Tensor& a,
-    const Tensor& b,
-    Tensor& output,
-    bool bcast_batch,
-    CoreCoord compute_with_storage_grid_size,
-    tt::tt_metal::DataType output_dtype,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool untilize_out) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(const Tensor& a,
+                                                                   const Tensor& b,
+                                                                   Tensor& output,
+                                                                   bool bcast_batch,
+                                                                   CoreCoord compute_with_storage_grid_size,
+                                                                   tt::tt_metal::DataType output_dtype,
+                                                                   DeviceComputeKernelConfig compute_kernel_config,
+                                                                   uint32_t in0_block_w,
+                                                                   uint32_t out_subblock_h,
+                                                                   uint32_t out_subblock_w,
+                                                                   uint32_t per_core_M,
+                                                                   uint32_t per_core_N,
+                                                                   bool fuse_batch,
+                                                                   bool untilize_out) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
     auto in0_tile_shape = a.get_tile().get_tile_shape();
     auto in1_tile_shape = b.get_tile().get_tile_shape();
 
-    TT_FATAL(
-        (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
-        "Bcast batch not supported for this parallelization");
+    TT_FATAL((bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
+             "Bcast batch not supported for this parallelization");
 
     // CB dataformats
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());    // in0
@@ -509,9 +496,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     if (fp32_dest_acc_en) {
-        TT_FATAL(
-            out_subblock_h * out_subblock_w <= 4,
-            "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+        TT_FATAL(out_subblock_h * out_subblock_w <= 4,
+                 "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -545,49 +531,47 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    return reuse_optimized_helpers::create_program(
-        device,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode,
-        packer_l1_acc,
-        core_range,
-        B,
-        Mt,
-        Nt,
-        Kt,
-        bcast_batch,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        a,
-        b,
-        output,
-        in0_data_format,
-        in1_data_format,
-        output_data_format,
-        untilize_out);
+    return reuse_optimized_helpers::create_program(device,
+                                                   math_fidelity,
+                                                   fp32_dest_acc_en,
+                                                   math_approx_mode,
+                                                   packer_l1_acc,
+                                                   core_range,
+                                                   B,
+                                                   Mt,
+                                                   Nt,
+                                                   Kt,
+                                                   bcast_batch,
+                                                   in0_block_w,
+                                                   out_subblock_h,
+                                                   out_subblock_w,
+                                                   per_core_M,
+                                                   per_core_N,
+                                                   a,
+                                                   b,
+                                                   output,
+                                                   in0_data_format,
+                                                   in1_data_format,
+                                                   output_data_format,
+                                                   untilize_out);
 }
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
-    const Tensor& a,
-    const Tensor& b,
-    Tensor& output,
-    bool bcast_batch,
-    CoreCoord compute_with_storage_grid_size,
-    tt::tt_metal::DataType output_dtype,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    bool fuse_batch,
-    bool untilize_out) {
+operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(const Tensor& a,
+                                                               const Tensor& b,
+                                                               Tensor& output,
+                                                               bool bcast_batch,
+                                                               CoreCoord compute_with_storage_grid_size,
+                                                               tt::tt_metal::DataType output_dtype,
+                                                               DeviceComputeKernelConfig compute_kernel_config,
+                                                               uint32_t in0_block_w,
+                                                               uint32_t out_subblock_h,
+                                                               uint32_t out_subblock_w,
+                                                               uint32_t per_core_M,
+                                                               uint32_t per_core_N,
+                                                               bool fuse_batch,
+                                                               bool untilize_out) {
     /*
      * For pre-softmax and post-softmax bmm, do an additional no-op reshape by changing cshape and ashape
      * - pre-softmax: [9, 16, 384, 64] x [9, 16, 64, 384] = ([9, 16, 384, 384] -> [9, 1, 6144, 384])
@@ -595,21 +579,20 @@ operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
      * NOTE: Only need to pass in the right cshape and ashape for these no-op reshapes.
      * The actual bmm op works on [9, 16, 384, 64] x [9, 16, 64, 384] and [9, 16, 384, 384] x [9, 16, 384, 64].
      */
-    return matmul_multi_core_reuse_optimized_(
-        a,
-        b,
-        output,
-        bcast_batch,
-        compute_with_storage_grid_size,
-        output_dtype,
-        compute_kernel_config,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        fuse_batch,
-        untilize_out);
+    return matmul_multi_core_reuse_optimized_(a,
+                                              b,
+                                              output,
+                                              bcast_batch,
+                                              compute_with_storage_grid_size,
+                                              output_dtype,
+                                              compute_kernel_config,
+                                              in0_block_w,
+                                              out_subblock_h,
+                                              out_subblock_w,
+                                              per_core_M,
+                                              per_core_N,
+                                              fuse_batch,
+                                              untilize_out);
 }
 
 }  // namespace matmul

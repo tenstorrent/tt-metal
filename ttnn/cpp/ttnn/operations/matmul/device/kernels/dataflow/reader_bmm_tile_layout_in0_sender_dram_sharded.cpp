@@ -59,12 +59,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
+    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(in0_mcast_dest_noc_start_x,
+                                                                                  in0_mcast_dest_noc_start_y,
+                                                                                  in0_mcast_dest_noc_end_x,
+                                                                                  in0_mcast_dest_noc_end_y,
+                                                                                  in0_mcast_receiver_semaphore_addr);
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
@@ -131,10 +130,9 @@ void kernel_main() {
                 local_read_addr += in0_block_size_bytes;
 
             } else {
-                uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(
-                    in0_mcast_sender_noc_x[block_id],
-                    in0_mcast_sender_noc_y[block_id],
-                    in0_mcast_sender_semaphore_addr);
+                uint64_t in0_mcast_sender_semaphore_noc_addr = get_noc_addr(in0_mcast_sender_noc_x[block_id],
+                                                                            in0_mcast_sender_noc_y[block_id],
+                                                                            in0_mcast_sender_semaphore_addr);
 
                 // Atomic increment source core counter
                 noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);

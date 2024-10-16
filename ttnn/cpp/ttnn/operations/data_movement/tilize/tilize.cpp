@@ -10,29 +10,25 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ExecuteTilize::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return operation::run(
-               Tilize{
-                   memory_config.value_or(input_tensor.memory_config()),
-                   output_dtype.value_or(input_tensor.get_dtype()),
-                   use_multicore},
-               {input_tensor},
-               {},
-               {},
-               queue_id)
+ttnn::Tensor ExecuteTilize::invoke(uint8_t queue_id,
+                                   const ttnn::Tensor &input_tensor,
+                                   const std::optional<MemoryConfig> &memory_config,
+                                   std::optional<DataType> output_dtype,
+                                   bool use_multicore) {
+    return operation::run(Tilize{memory_config.value_or(input_tensor.memory_config()),
+                                 output_dtype.value_or(input_tensor.get_dtype()),
+                                 use_multicore},
+                          {input_tensor},
+                          {},
+                          {},
+                          queue_id)
         .at(0);
 }
 
-ttnn::Tensor ExecuteTilize::invoke(
-    const ttnn::Tensor &input_tensor,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
+ttnn::Tensor ExecuteTilize::invoke(const ttnn::Tensor &input_tensor,
+                                   const std::optional<MemoryConfig> &memory_config,
+                                   std::optional<DataType> output_dtype,
+                                   bool use_multicore) {
     return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
 }
 

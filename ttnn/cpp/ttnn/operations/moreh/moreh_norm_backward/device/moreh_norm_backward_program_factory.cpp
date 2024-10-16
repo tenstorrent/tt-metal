@@ -28,8 +28,10 @@ void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape&
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const std::vector<int64_t>& dims, const bool& keepdim) {
+tt::tt_metal::LegacyShape get_output_grad_shape(const Tensor& output_grad,
+                                                const Tensor& input_grad,
+                                                const std::vector<int64_t>& dims,
+                                                const bool& keepdim) {
     if (keepdim)
         return output_grad.get_legacy_shape();
 
@@ -104,13 +106,12 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -135,25 +136,24 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     const uint32_t im6_t{1};
     const uint32_t im7_t{1};
 
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CB::c_in0, in0_t},    // input
-            {tt::CB::c_in1, in1_t},    // output
-            {tt::CB::c_in2, in2_t},    // output_grad
-            {tt::CB::c_in3, in3_t},    // decimal
-            {tt::CB::c_out0, out0_t},  // input_grad
-            {tt::CB::c_intermed0, im0_t, intermed_data_format},
-            {tt::CB::c_intermed1, im1_t, intermed_data_format},
-            {tt::CB::c_intermed2, im2_t, intermed_data_format},
-            {tt::CB::c_intermed3, im3_t, intermed_data_format},
-            {tt::CB::c_intermed4, im4_t, intermed_data_format},
-            {tt::CB::c_intermed5, im5_t, intermed_data_format},
-            {tt::CB::c_intermed6, im6_t, intermed_data_format},
-            {tt::CB::c_intermed7, im7_t, intermed_data_format},
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  cb_data_format,
+                                                  {
+                                                      {tt::CB::c_in0, in0_t},    // input
+                                                      {tt::CB::c_in1, in1_t},    // output
+                                                      {tt::CB::c_in2, in2_t},    // output_grad
+                                                      {tt::CB::c_in3, in3_t},    // decimal
+                                                      {tt::CB::c_out0, out0_t},  // input_grad
+                                                      {tt::CB::c_intermed0, im0_t, intermed_data_format},
+                                                      {tt::CB::c_intermed1, im1_t, intermed_data_format},
+                                                      {tt::CB::c_intermed2, im2_t, intermed_data_format},
+                                                      {tt::CB::c_intermed3, im3_t, intermed_data_format},
+                                                      {tt::CB::c_intermed4, im4_t, intermed_data_format},
+                                                      {tt::CB::c_intermed5, im5_t, intermed_data_format},
+                                                      {tt::CB::c_intermed6, im6_t, intermed_data_format},
+                                                      {tt::CB::c_intermed7, im7_t, intermed_data_format},
+                                                  });
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
@@ -193,14 +193,14 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     }
 
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    const auto compute_kernels_id_1 = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernels_id_1 =
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
 
     KernelHandle compute_kernels_id_2{0};
     if (!core_group_2.ranges().empty()) {
@@ -235,13 +235,12 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         }
 
         // reader
-        std::vector<uint32_t> reader_rt_args{
-            input.buffer()->address(),
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
-            *reinterpret_cast<uint32_t*>(&decimal),
-            num_tiles_per_core,
-            tile_offset};
+        std::vector<uint32_t> reader_rt_args{input.buffer()->address(),
+                                             output.buffer()->address(),
+                                             output_grad.buffer()->address(),
+                                             *reinterpret_cast<uint32_t*>(&decimal),
+                                             num_tiles_per_core,
+                                             tile_offset};
         reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
         reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
@@ -257,12 +256,11 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
-        const std::vector<uint32_t> compute_runtime_args{
-            num_tiles_per_core,
-            floored_p,
-            static_cast<uint32_t>(p_is_negative),
-            floored_p_minus_one,
-            static_cast<uint32_t>(p_minus_one_is_negative)};
+        const std::vector<uint32_t> compute_runtime_args{num_tiles_per_core,
+                                                         floored_p,
+                                                         static_cast<uint32_t>(p_is_negative),
+                                                         floored_p_minus_one,
+                                                         static_cast<uint32_t>(p_minus_one_is_negative)};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
         tile_offset += num_tiles_per_core;

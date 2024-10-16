@@ -21,4 +21,4 @@ std::map<std::string, std::string> get_defines(BcastOpDim bcast_dim, BcastOpMath
 
 }  // namespace bcast_op_utils
 
-} // namespace ttnn
+}  // namespace ttnn

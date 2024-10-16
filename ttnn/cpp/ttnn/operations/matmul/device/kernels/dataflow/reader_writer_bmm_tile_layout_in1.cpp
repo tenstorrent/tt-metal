@@ -6,7 +6,6 @@
 
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     // in0/in1 common args
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
@@ -75,10 +74,9 @@ void kernel_main() {
     const DataFormat output_data_format = get_dataformat(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
 
-    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {.bank_base_address = out_tensor_addr,
+                                                                   .page_size = output_single_tile_size_bytes,
+                                                                   .data_format = output_data_format};
 #endif
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED

@@ -9,8 +9,8 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
-void MorehMeanBackwardOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanBackwardOperation::validate_tensors(const operation_attributes_t& operation_attributes,
+                                                  const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input_grad = tensor_args.input_grad;
     TT_FATAL(
@@ -22,22 +22,24 @@ void MorehMeanBackwardOperation::validate_tensors(
 }
 
 MorehMeanBackwardOperation::program_factory_t MorehMeanBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return MorehMeanBackwardFactory{};
 }
 
-void MorehMeanBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanBackwardOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                                const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehMeanBackwardOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanBackwardOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                               const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
 MorehMeanBackwardOperation::shape_return_value_t MorehMeanBackwardOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input_grad_shape = operation_attributes.input_grad_shape.value();
     auto rank = input_grad_shape.rank();
 
@@ -64,29 +66,28 @@ MorehMeanBackwardOperation::shape_return_value_t MorehMeanBackwardOperation::com
 }
 
 MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto& output_grad = tensor_args.output_grad;
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
     }
 
-    return tt::operations::primary::create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        output_grad.get_dtype(),
-        Layout::TILE,
-        output_grad.device(),
-        operation_attributes.memory_config);
+    return tt::operations::primary::create_device_tensor(compute_output_shapes(operation_attributes, tensor_args),
+                                                         output_grad.get_dtype(),
+                                                         Layout::TILE,
+                                                         output_grad.device(),
+                                                         operation_attributes.memory_config);
 }
 
 std::tuple<MorehMeanBackwardOperation::operation_attributes_t, MorehMeanBackwardOperation::tensor_args_t>
-MorehMeanBackwardOperation::invoke(
-    const Tensor& output_grad,
-    const std::vector<int64_t> dims,
-    const bool keepdim,
-    const std::optional<Shape>& input_grad_shape,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+MorehMeanBackwardOperation::invoke(const Tensor& output_grad,
+                                   const std::vector<int64_t> dims,
+                                   const bool keepdim,
+                                   const std::optional<Shape>& input_grad_shape,
+                                   const std::optional<Tensor>& input_grad,
+                                   const std::optional<MemoryConfig>& memory_config,
+                                   const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         {dims,
          keepdim,

@@ -186,31 +186,29 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            param_in_addr,
-            grad_addr,
-            exp_avg_in_addr,
-            exp_avg_sq_in_addr,
-            max_exp_avg_sq_in_addr,
-            f2u_lr.u,
-            f2u_beta1.u,
-            f2u_beta2.u,
-            f2u_eps.u,
-            f2u_weight_decay.u,
-            step,
-            static_cast<uint32_t>(amsgrad),
-            num_tiles_per_core,
-            tile_offset};
+        const std::vector<uint32_t> reader_runtime_args{param_in_addr,
+                                                        grad_addr,
+                                                        exp_avg_in_addr,
+                                                        exp_avg_sq_in_addr,
+                                                        max_exp_avg_sq_in_addr,
+                                                        f2u_lr.u,
+                                                        f2u_beta1.u,
+                                                        f2u_beta2.u,
+                                                        f2u_eps.u,
+                                                        f2u_weight_decay.u,
+                                                        step,
+                                                        static_cast<uint32_t>(amsgrad),
+                                                        num_tiles_per_core,
+                                                        tile_offset};
 
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-        const std::vector<uint32_t> writer_runtime_args{
-            param_out_addr,
-            exp_avg_out_addr,
-            exp_avg_sq_out_addr,
-            max_exp_avg_sq_out_addr,
-            num_tiles_per_core,
-            tile_offset};
+        const std::vector<uint32_t> writer_runtime_args{param_out_addr,
+                                                        exp_avg_out_addr,
+                                                        exp_avg_sq_out_addr,
+                                                        max_exp_avg_sq_out_addr,
+                                                        num_tiles_per_core,
+                                                        tile_offset};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute
@@ -227,12 +225,11 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         tile_offset += num_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = num_cores_y}};
 }
 
 void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(

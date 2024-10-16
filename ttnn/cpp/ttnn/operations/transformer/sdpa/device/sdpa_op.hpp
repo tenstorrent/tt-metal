@@ -21,9 +21,8 @@ struct ScaledDotProductAttention {
     const DeviceComputeKernelConfig compute_kernel_config;
     const std::optional<uint32_t> valid_seq_len;
 
-    void validate(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors,
+                  const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
 

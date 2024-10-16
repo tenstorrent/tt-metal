@@ -22,17 +22,16 @@ struct InterleavedToShardedPartialDeviceOperation {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors,
+                                                   std::vector<Tensor> &output_tensors) const;
 
     static constexpr auto attribute_names =
         std::make_tuple("grid_size", "shard_spec", "output_mem_config", "output_dtype");
     const auto attribute_values() const {
-        return std::make_tuple(
-            std::cref(this->grid_size),
-            std::cref(this->shard_spec),
-            std::cref(this->output_mem_config),
-            std::cref(this->output_dtype));
+        return std::make_tuple(std::cref(this->grid_size),
+                               std::cref(this->shard_spec),
+                               std::cref(this->output_mem_config),
+                               std::cref(this->output_dtype));
     }
 };
-}
+}  // namespace ttnn::operations::data_movement

@@ -82,8 +82,8 @@ struct Fold {
         uint32_t pad_w);
 };
 
-} // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
 constexpr auto fold = ttnn::register_operation<"ttnn::prim::fold", ttnn::operations::data_movement::Fold>();
-} // namespace ttnn::prim
+}  // namespace ttnn::prim

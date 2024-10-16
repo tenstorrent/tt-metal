@@ -88,23 +88,21 @@ void MAIN {
 #ifdef SOFTMAX
                 sub_tiles_bcast_rows_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
 
-                exp_tile_and_mask_tile_to_cb(
-                    cb_tmp,
-                    cb_mask,
-                    cb_exps,
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+                exp_tile_and_mask_tile_to_cb(cb_tmp,
+                                             cb_mask,
+                                             cb_exps,
+                                             /*itile=*/0,
+                                             /*mtile=*/0,
+                                             /*pop=*/1,
+                                             /*popm=*/0);
 #else
-                rexp_tile_and_mask_tile_to_cb(
-                    cb_in0,
-                    cb_mask,
-                    cb_exps,
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+                rexp_tile_and_mask_tile_to_cb(cb_in0,
+                                              cb_mask,
+                                              cb_exps,
+                                              /*itile=*/0,
+                                              /*mtile=*/0,
+                                              /*pop=*/1,
+                                              /*popm=*/0);
 #endif
             } else {
 #ifdef SOFTMAX

@@ -19,9 +19,12 @@ using namespace tt::constants;
 namespace ttnn::operations::upsample {
 using namespace tt;
 
-operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
+operation::ProgramWithCallbacks upsample_multi_core(const Tensor& input,
+                                                    Tensor& output,
+                                                    const uint32_t scale_factor_h,
+                                                    const uint32_t scale_factor_w) {
     Program program = CreateProgram();
-    Device *device = input.device();
+    Device* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -46,14 +49,21 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t ncores_nhw = ncores;
 
     auto out_shard_spec = output.shard_spec().value();
-    TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
+    TT_FATAL(out_shard_spec.num_cores() == ncores,
+             "Output tensor should have same number of cores {} as input tensor {}",
+             out_shard_spec.num_cores(),
+             ncores);
 
     uint32_t in_nsticks_per_core = shard_spec.shape[0];
     uint32_t out_nsticks_per_core = in_nsticks_per_core * scale_factor_h * scale_factor_w;
 
     // extra limitation to avoid post upsample step of resharding
     if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_FATAL(in_nsticks_per_core % in_w == 0, "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this restriction", in_nsticks_per_core, in_w);
+        TT_FATAL(in_nsticks_per_core % in_w == 0,
+                 "Restriction: Input sticks per core {} should be divisible by input width {}. TODO to remove this "
+                 "restriction",
+                 in_nsticks_per_core,
+                 in_w);
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.x + 1;
         ncores_nhw = all_cores.ranges().begin()->end_coord.y + 1;
@@ -67,8 +77,14 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t output_nsticks_per_core = div_up(output_nsticks, ncores_nhw);
 
     // TODO: Support non-multiple case
-    TT_FATAL(in_nsticks_per_core == input_nsticks_per_core, "Input sticks per shard {} should be same as input sticks per core {}", in_nsticks_per_core, input_nsticks_per_core);
-    TT_FATAL(out_nsticks_per_core == output_nsticks_per_core, "Output sticks per shard {} should be same as output sticks per core {}", out_nsticks_per_core, output_nsticks_per_core);
+    TT_FATAL(in_nsticks_per_core == input_nsticks_per_core,
+             "Input sticks per shard {} should be same as input sticks per core {}",
+             in_nsticks_per_core,
+             input_nsticks_per_core);
+    TT_FATAL(out_nsticks_per_core == output_nsticks_per_core,
+             "Output sticks per shard {} should be same as output sticks per core {}",
+             out_nsticks_per_core,
+             output_nsticks_per_core);
     TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
 
     // CBs
@@ -80,11 +96,10 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
-    CircularBufferConfig cb_src0_config = CircularBufferConfig(
-                                            in_cb_pagesize * in_cb_npages,
-                                            {{in_cb_id, input_cb_data_format}})
-                                          .set_page_size(in_cb_id, in_cb_pagesize)
-                                          .set_globally_allocated_address(*input.buffer());
+    CircularBufferConfig cb_src0_config =
+        CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, input_cb_data_format}})
+            .set_page_size(in_cb_id, in_cb_pagesize)
+            .set_globally_allocated_address(*input.buffer());
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // output sharded CB with upsampled data
@@ -92,18 +107,20 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
     uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
-    CircularBufferConfig out_cb_config = CircularBufferConfig(
-                                            out_cb_pagesize * out_cb_npages,
-                                            {{out_cb_id, output_cb_data_format}})
-                                          .set_page_size(out_cb_id, out_cb_pagesize)
-                                          .set_globally_allocated_address(*output.buffer());
+    CircularBufferConfig out_cb_config =
+        CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, output_cb_data_format}})
+            .set_page_size(out_cb_id, out_cb_pagesize)
+            .set_globally_allocated_address(*output.buffer());
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
 
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
     log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
     log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
-    log_debug(LogOp, "input_nsticks_per_core: {}, output_nsticks_per_core: {}", input_nsticks_per_core, output_nsticks_per_core);
+    log_debug(LogOp,
+              "input_nsticks_per_core: {}, output_nsticks_per_core: {}",
+              input_nsticks_per_core,
+              output_nsticks_per_core);
 
     // Kernels
 
@@ -112,7 +129,8 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         out_cb_id,
         false,
     };
-    auto writer_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
+    auto writer_kernel_fname = std::string(
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto writer_kernel =
         CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
 
@@ -121,7 +139,8 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         out_cb_id,
         true,
     };
-    auto reader_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
+    auto reader_kernel_fname = std::string(
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp");
     auto reader_kernel =
         CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
 
@@ -143,7 +162,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             for (int32_t core_x = 0; core_x < ncores_x; ++core_x) {
-                CoreCoord core_coord(core_x, core); // logical
+                CoreCoord core_coord(core_x, core);  // logical
                 writer_rt_args[6] = start_input_stick_id;
                 SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
                 SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
@@ -152,7 +171,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         }
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
-            CoreCoord core_coord(core % ncores_x, core / ncores_x); // logical
+            CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
             writer_rt_args[6] = start_input_stick_id;
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
@@ -163,13 +182,11 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     }
 
     auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb](
-        const void* operation,
-        Program &program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>&,
-        const std::vector<Tensor>& output_tensors
-    ) {
-
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
@@ -177,7 +194,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
     };
 
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace ttnn::operations::upsample

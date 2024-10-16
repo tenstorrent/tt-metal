@@ -77,10 +77,9 @@ void kernel_main() {
     const InterleavedAddrGenFast<exp_avg_is_dram> exp_avg_addrg = {
         .bank_base_address = exp_avg_addr, .page_size = exp_avg_tile_bytes, .data_format = exp_avg_data_format};
 
-    const InterleavedAddrGenFast<exp_avg_sq_is_dram> exp_avg_sq_addrg = {
-        .bank_base_address = exp_avg_sq_addr,
-        .page_size = exp_avg_sq_tile_bytes,
-        .data_format = exp_avg_sq_data_format};
+    const InterleavedAddrGenFast<exp_avg_sq_is_dram> exp_avg_sq_addrg = {.bank_base_address = exp_avg_sq_addr,
+                                                                         .page_size = exp_avg_sq_tile_bytes,
+                                                                         .data_format = exp_avg_sq_data_format};
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_in4;

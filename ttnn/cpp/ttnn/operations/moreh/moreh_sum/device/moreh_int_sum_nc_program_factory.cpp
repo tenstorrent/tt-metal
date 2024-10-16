@@ -41,13 +41,12 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
         tt::LogOp, "reduce_tile_size {} inner_tile_size {} Ht {} Wt {}", reduce_tile_size, inner_tile_size, Ht, Wt);
     log_debug(
         tt::LogOp, "dim {} num_reduce_input_tile {} num_output_tiles {}", dim, num_reduce_input_tile, num_output_tiles);
-    log_debug(
-        tt::LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
+    log_debug(tt::LogOp,
+              "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+              math_fidelity,
+              math_approx_mode,
+              fp32_dest_acc_en,
+              packer_l1_acc);
 
     if (!fp32_dest_acc_en) {
         log_warning(tt::LogOp, "fp32_dest_acc_en should be set for integer sum");
@@ -63,23 +62,21 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     const uint32_t in0_t = 2;        // input
     const uint32_t intermed0_t = 1;  // accumulated sum
     const uint32_t out0_t = 2;       // output
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CB::c_in0, in0_t},              // input
-            {tt::CB::c_intermed0, intermed0_t},  // accumulated sum
-            {tt::CB::c_out0, out0_t},            // output
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  cb_data_format,
+                                                  {
+                                                      {tt::CB::c_in0, in0_t},              // input
+                                                      {tt::CB::c_intermed0, intermed0_t},  // accumulated sum
+                                                      {tt::CB::c_out0, out0_t},            // output
+                                                  });
 
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(input))};
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
@@ -102,14 +99,14 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_int_sum_nc.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernel_1_id =
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -139,17 +136,16 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_reduce_input_tile,
-             num_tiles_per_core,
-             tile_offset,
-             static_cast<uint32_t>(dim),
-             reduce_tile_size,
-             inner_tile_size});
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {input.buffer()->address(),
+                        num_reduce_input_tile,
+                        num_tiles_per_core,
+                        tile_offset,
+                        static_cast<uint32_t>(dim),
+                        reduce_tile_size,
+                        inner_tile_size});
 
         SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_per_core, tile_offset});
 

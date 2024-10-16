@@ -5,13 +5,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
     uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));
     uint32_t sender_semaphore = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t noc_final_x = get_compile_time_arg_val(2);
     constexpr uint32_t noc_final_y = get_compile_time_arg_val(3);
     constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t K =  get_compile_time_arg_val(5);
+    constexpr uint32_t K = get_compile_time_arg_val(5);
     constexpr uint32_t Kt = get_compile_time_arg_val(6);
 
     uint32_t start_ht = get_arg_val<uint32_t>(0);
@@ -20,10 +19,8 @@ void kernel_main() {
     constexpr uint32_t values_cb_index = tt::CB::c_out0;
     constexpr uint32_t output_ind_cb_index = tt::CB::c_out1;
 
-
     constexpr uint32_t topk_local_values_cb_index = tt::CB::c_intermed0;
     constexpr uint32_t topk_local_indices_cb_index = tt::CB::c_intermed1;
-
 
     constexpr uint32_t final_values_cb_index = tt::CB::c_intermed2;
     constexpr uint32_t final_indices_cb_index = tt::CB::c_intermed3;
@@ -36,11 +33,15 @@ void kernel_main() {
     uint32_t final_values_cb_addr = get_write_ptr(final_values_cb_index);
     uint32_t final_indices_cb_addr = get_write_ptr(final_indices_cb_index);
 
-    uint64_t noc_final_addr_values = get_noc_addr(noc_final_x, noc_final_y, final_values_cb_addr) + start_wt * tile_bytes_values;
-    uint64_t noc_value_addr_values = get_noc_addr(noc_final_x, noc_final_y, final_indices_cb_addr) + start_wt * tile_bytes_ind;
+    uint64_t noc_final_addr_values =
+        get_noc_addr(noc_final_x, noc_final_y, final_values_cb_addr) + start_wt * tile_bytes_values;
+    uint64_t noc_value_addr_values =
+        get_noc_addr(noc_final_x, noc_final_y, final_indices_cb_addr) + start_wt * tile_bytes_ind;
 
-    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
-    volatile tt_l1_ptr uint32_t* sender_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore);
+    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
+    volatile tt_l1_ptr uint32_t* sender_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore);
 
     uint64_t noc_remote_sender_semaphore_addr = get_noc_addr(noc_final_x, noc_final_y, (uint32_t)sender_semaphore_addr);
 

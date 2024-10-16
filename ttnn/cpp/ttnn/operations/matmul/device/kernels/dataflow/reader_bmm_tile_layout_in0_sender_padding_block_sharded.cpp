@@ -64,12 +64,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
 
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
+    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(in0_mcast_dest_noc_start_x,
+                                                                                  in0_mcast_dest_noc_start_y,
+                                                                                  in0_mcast_dest_noc_end_x,
+                                                                                  in0_mcast_dest_noc_end_y,
+                                                                                  in0_mcast_receiver_semaphore_addr);
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);

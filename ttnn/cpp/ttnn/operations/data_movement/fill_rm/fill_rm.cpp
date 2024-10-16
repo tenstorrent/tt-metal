@@ -8,23 +8,61 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/constants.hpp"
 
-namespace ttnn::operations::data_movement{
+namespace ttnn::operations::data_movement {
 
-ttnn::Tensor FillRMOperation::invoke(uint8_t queue_id, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const ttnn::Tensor& any, float val_hi, float val_lo, const std::optional<ttnn::MemoryConfig>& memory_config) {
+ttnn::Tensor FillRMOperation::invoke(uint8_t queue_id,
+                                     uint32_t N,
+                                     uint32_t C,
+                                     uint32_t H,
+                                     uint32_t W,
+                                     uint32_t hFill,
+                                     uint32_t wFill,
+                                     const ttnn::Tensor& any,
+                                     float val_hi,
+                                     float val_lo,
+                                     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {}, queue_id).at(0);
+    return operation::run_without_autoformat(
+               FillRM{N, C, H, W, hFill, wFill, val_hi, val_lo, output_memory_config}, {any}, {}, {}, queue_id)
+        .at(0);
 }
 
-ttnn::Tensor FillRMOperation::invoke(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const ttnn::Tensor& any, float val_hi, float val_lo, const std::optional<ttnn::MemoryConfig>& memory_config_arg) {
+ttnn::Tensor FillRMOperation::invoke(uint32_t N,
+                                     uint32_t C,
+                                     uint32_t H,
+                                     uint32_t W,
+                                     uint32_t hFill,
+                                     uint32_t wFill,
+                                     const ttnn::Tensor& any,
+                                     float val_hi,
+                                     float val_lo,
+                                     const std::optional<ttnn::MemoryConfig>& memory_config_arg) {
     return invoke(DefaultQueueId, N, C, H, W, hFill, wFill, any, val_hi, val_lo, memory_config_arg);
 }
 
-ttnn::Tensor FillOnesRMOperation::invoke(uint8_t queue_id, uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const ttnn::Tensor& any, const std::optional<ttnn::MemoryConfig>& memory_config) {
+ttnn::Tensor FillOnesRMOperation::invoke(uint8_t queue_id,
+                                         uint32_t N,
+                                         uint32_t C,
+                                         uint32_t H,
+                                         uint32_t W,
+                                         uint32_t hFill,
+                                         uint32_t wFill,
+                                         const ttnn::Tensor& any,
+                                         const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(any.memory_config());
-    return operation::run_without_autoformat(FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config},  {any}, {}, {}, queue_id).at(0);
+    return operation::run_without_autoformat(
+               FillRM{N, C, H, W, hFill, wFill, 1.0f, 0.0f, output_memory_config}, {any}, {}, {}, queue_id)
+        .at(0);
 }
 
-ttnn::Tensor FillOnesRMOperation::invoke(uint32_t N, uint32_t C, uint32_t H, uint32_t W, uint32_t hFill, uint32_t wFill, const ttnn::Tensor& any, const std::optional<ttnn::MemoryConfig>& memory_config_arg) {
+ttnn::Tensor FillOnesRMOperation::invoke(uint32_t N,
+                                         uint32_t C,
+                                         uint32_t H,
+                                         uint32_t W,
+                                         uint32_t hFill,
+                                         uint32_t wFill,
+                                         const ttnn::Tensor& any,
+                                         const std::optional<ttnn::MemoryConfig>& memory_config_arg) {
     return invoke(DefaultQueueId, N, C, H, W, hFill, wFill, any, memory_config_arg);
 }
 
