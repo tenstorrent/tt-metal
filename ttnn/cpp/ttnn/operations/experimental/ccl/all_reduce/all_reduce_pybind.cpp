@@ -54,7 +54,7 @@ void py_bind_all_reduce(pybind11::module& module) {
 
     detail::bind_all_reduce(
         module,
-        ttnn::all_reduce,
+        ttnn::experimental::all_reduce,
         R"doc(
 
         Performs an all_reduce operation on multi-device :attr:`input_tensor` across all devices.

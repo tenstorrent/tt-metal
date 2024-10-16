@@ -31,7 +31,10 @@ struct ExecuteAllReduce {
 }  // namespace experimental
 }  // namespace operations
 
+namespace experimental {
 constexpr auto all_reduce =
-    ttnn::register_operation<"ttnn::all_reduce", ttnn::operations::experimental::ccl::ExecuteAllReduce>();
+    ttnn::register_operation<"ttnn::experimental::all_reduce", ttnn::operations::experimental::ccl::ExecuteAllReduce>();
+
+}  // namespace experimental
 
 }  // namespace ttnn
