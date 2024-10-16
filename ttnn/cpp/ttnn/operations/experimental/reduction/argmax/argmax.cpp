@@ -10,6 +10,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
