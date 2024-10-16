@@ -12,7 +12,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_npu,
+    to_ttnn,
 )
 
 
@@ -192,7 +192,7 @@ def test_moreh_matmul_1d_callback(input_shape, dtype, device, use_program_cache)
             .to_torch()
         )
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         if i == 0:
             num_program_cache_entries = device.num_program_cache_entries()
             assert num_program_cache_entries > 0

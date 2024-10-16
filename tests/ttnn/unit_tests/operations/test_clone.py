@@ -13,28 +13,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    get_lib_dtype,
 )
-
-
-def get_lib_dtype(lib, dtype):
-    """
-    Maps string-based data types to their corresponding library-specific dtypes.
-
-    Parameters:
-    lib: library module (e.g., torch, ttnn)
-        The library for which the dtype mapping is required.
-    dtype: str
-        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32').
-
-    Returns:
-    Corresponding library-specific dtype or None if not found.
-    """
-    dtype_map = {
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-        "int32": lib.int32,
-    }
-    return dtype_map.get(dtype, None)
 
 
 def run_clone(
@@ -90,6 +70,7 @@ def run_clone(
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=device,
+        dtype=get_lib_dtype(ttnn, input_dtype),
         layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, input_memory_config)
 
