@@ -47,15 +47,13 @@ void ArgMax::validate_with_output_tensors(
 
 }
 
-std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto input_shape = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::SimpleShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     if (this->dim.has_value()) {
-        tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
-        return {output_shape};
+        auto input_shape = input_tensors[0].get_logical_shape();
+        return {ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]}};
     }
     else {
-        tt::tt_metal::LegacyShape output_shape({1, 1, 1, 1});
-        return {output_shape};
+        return {ttnn::SimpleShape{1, 1, 1, 1}};
     }
 }
 
