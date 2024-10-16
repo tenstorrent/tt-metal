@@ -162,7 +162,8 @@ def run(
     min_val = input_specs.get("min_val")
     max_val = input_specs.get("max_val")
 
-    torch_output_tensor = torch.nn.functional.hardtanh(torch_input_tensor_a, min_val, max_val)
+    golden_function = ttnn.get_golden_function(ttnn.hardtanh)
+    torch_output_tensor = golden_function(torch_input_tensor_a, min_val, max_val)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

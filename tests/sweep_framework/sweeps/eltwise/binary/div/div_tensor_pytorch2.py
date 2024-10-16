@@ -164,7 +164,8 @@ def run(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(other)
 
-    torch_output_tensor = torch.div(torch_input_tensor_a, torch_other_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_other_tensor)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

@@ -57,7 +57,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_specs["shape"])
 
-    torch_output_tensor = torch.clamp(torch_input_tensor_a, input_specs["min"])
+    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    torch_output_tensor = golden_function(torch_input_tensor_a, input_specs["min"])
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

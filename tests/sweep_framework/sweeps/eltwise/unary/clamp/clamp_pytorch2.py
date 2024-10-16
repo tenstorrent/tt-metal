@@ -104,7 +104,8 @@ def run(
     min_val = input_specs.get("min", None)
     max_val = input_specs.get("max", None)
 
-    torch_output_tensor = torch.clamp(torch_input_tensor_a, min_val, max_val)
+    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    torch_output_tensor = golden_function(torch_input_tensor_a, min_val, max_val)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
