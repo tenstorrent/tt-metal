@@ -178,7 +178,7 @@ Tensor to_layout_impl(
                     tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
             }
 
-            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
+            return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
 
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);

@@ -19,8 +19,8 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
 
-    auto input_shape = input_tensor.get_logical_shape();
-    auto rank = input_shape.rank();
+    auto input_shape = input_tensor.get_shape();
+    auto rank = input_shape.size();
     auto dim = dim_arg;
     if (dim < 0) {
         dim = rank + dim;
@@ -47,7 +47,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
 
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor =
@@ -61,7 +61,7 @@ ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
 
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor =
@@ -78,7 +78,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
 
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor =
@@ -94,7 +94,7 @@ ttnn::Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
 
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor =

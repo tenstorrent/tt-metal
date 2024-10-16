@@ -67,7 +67,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         // since handled within the tensor reshape method
         return input_tensor.reshape(N, C, H, W);
     }
-    if (input_tensor.get_logical_shape() == output_shape) {
+    if (input_tensor.get_shape() == ttnn::Shape(output_shape.as_vector())) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;

@@ -84,12 +84,17 @@ namespace data_movement {
         dim = rank < 4 ? dim + 4 - rank : dim;
         auto output_tensor = concat_impl(itensor, dim, mem_config);
         while (output_tensor.get_shape().rank() > rank) {
-            const auto shape = output_tensor.get_logical_shape();
+            const auto shape = output_tensor.get_shape();
+            const auto full_shape = output_tensor.get_shape().with_tile_padding();
             std::vector<uint32_t> shape_vec{};
+            std::vector<uint32_t> full_shape_vec{};
+            // int i = 0;
+            // while(i < 3 and shape[i] == 1) i++;
             for (int i = 1; i < shape.rank(); i++) {
                 shape_vec.push_back(shape[i]);
+                full_shape_vec.push_back(full_shape[i]);
             }
-            output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{std::move(shape_vec)});
+            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(shape_vec, full_shape_vec));
         }
 
         return output_tensor;

@@ -16,23 +16,42 @@ namespace detail {
 std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
     const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
+    const uint32_t sequence_size_padded,
     const bool transpose_key) {
     auto [query, key, value] = outputs;
 
-    auto batch_size = query.get_logical_shape()[0];
-    auto num_heads = query.get_logical_shape()[1];
-    auto head_size = query.get_logical_shape()[-1];
+   auto batch_size = query.get_shape()[0];
+    auto num_heads = query.get_shape()[1];
+    auto head_size = query.get_shape()[-1];
+    auto head_size_padded = query.get_shape().with_tile_padding()[-1];
 
-    auto num_kv_heads = value.get_logical_shape()[1];
+    auto num_kv_heads = value.get_shape()[1];
 
-    query = ttnn::reshape(query, ttnn::SimpleShape({batch_size, num_heads, sequence_size, head_size}));
+    query = ttnn::reshape(
+        query,
+        ttnn::Shape(tt::tt_metal::LegacyShape(
+            std::array{batch_size, num_heads, sequence_size, head_size},
+            std::array{batch_size, num_heads, sequence_size_padded, head_size_padded})));
+
     if (transpose_key) {
-        key = ttnn::reshape(key, ttnn::SimpleShape({batch_size, num_kv_heads, head_size, sequence_size}));
+        key = ttnn::reshape(
+            key,
+            ttnn::Shape(tt::tt_metal::LegacyShape(
+                std::array{batch_size, num_kv_heads, head_size, sequence_size},
+                std::array{batch_size, num_kv_heads, head_size_padded, sequence_size_padded})));
     } else {
-        key = ttnn::reshape(key, ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size, head_size}));
+         key = ttnn::reshape(
+            key,
+            ttnn::Shape(tt::tt_metal::LegacyShape(
+                std::array{batch_size, num_kv_heads, sequence_size, head_size},
+                std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     }
 
-    value = ttnn::reshape(value, ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size, head_size}));
+    value = ttnn::reshape(
+        value,
+        ttnn::Shape(tt::tt_metal::LegacyShape(
+            std::array{batch_size, num_kv_heads, sequence_size, head_size},
+            std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
     return {query, key, value};
 }
 }  // namespace detail
@@ -58,6 +77,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
 
     const uint32_t sequence_size = input_shape[1];
+    const uint32_t sequence_size_padded = input_shape.with_tile_padding()[1];
 
     if (num_kv_heads.has_value()) {
         TT_FATAL(!transpose_key,
@@ -85,7 +105,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         auto outputs =
             ttnn::experimental::nlp_create_qkv_heads_falcon7b(input_4d, memory_config.value_or(input_tensor.memory_config()));
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-            {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)}, sequence_size, transpose_key);
+            {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)}, sequence_size, sequence_size_padded, transpose_key);
     }
 
     uint32_t hidden_dim_padded = 0, hidden_dim = 0;
@@ -138,6 +158,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
                 transpose_key,
                 memory_config.value_or(input_tensor.memory_config())),
             sequence_size,
+            sequence_size_padded,
             transpose_key);
     } else {
         const auto input_tensor_4d = input_tensor.reshape(
@@ -158,7 +179,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             num_kv_heads.value_or(num_heads),
             transpose_key,
             memory_config.value_or(input_tensor.memory_config()));
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(outputs, sequence_size, transpose_key);
+        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(outputs, sequence_size, sequence_size_padded, transpose_key);
     }
 }
 

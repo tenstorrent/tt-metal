@@ -60,8 +60,6 @@ public:
 
     const std::vector<uint32_t>& as_vector() const { return this->value; }
 
-    SimpleShape to_rank(size_t new_rank) const;
-
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value); }

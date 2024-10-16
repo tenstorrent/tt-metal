@@ -8,11 +8,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor UnsqueezeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int dim
-    ) {
-
+ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto tensor_shape = input_tensor.get_shape();
     const auto rank = tensor_shape.rank();
     std::vector<uint32_t> output_shape_vector;
@@ -39,8 +35,6 @@ ttnn::Tensor UnsqueezeOperation::invoke(
     }
 
     return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
-
-
 }
 
 } // ttnn::operations::data_movement namespace
