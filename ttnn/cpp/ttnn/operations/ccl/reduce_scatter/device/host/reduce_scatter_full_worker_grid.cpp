@@ -611,7 +611,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
     constexpr bool enable_bidirectional = true;
-    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(topology == Topology::Linear ? 2 : 8), input_tensor_num_units_per_tensor_slice);
+    constexpr std::size_t default_num_workers = 8;
+    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(default_num_workers), input_tensor_num_units_per_tensor_slice);
     if (topology == ttnn::ccl::Topology::Linear) {
         max_num_workers = std::max<std::size_t>(max_num_workers, 2);
     }
