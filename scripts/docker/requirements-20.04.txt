@@ -8,7 +8,7 @@ pandoc
 libtbb-dev
 libcapstone-dev
 pkg-config
-cmake=3.16.3-1ubuntu1.20.04.1
+cmake
 curl
 wget
 python3-pip
