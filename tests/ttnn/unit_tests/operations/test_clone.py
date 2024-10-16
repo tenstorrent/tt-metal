@@ -16,74 +16,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 
 
-def to_ttnn(
-    torch_tensor,
-    device,
-    *,
-    ttnn_layout=ttnn.TILE_LAYOUT,
-):
-    """
-    Converts a PyTorch tensor to a TTNN tensor with the specified device and layout.
-
-    This function handles tensors with 0 or 1 dimensions by reshaping them to have at least 2 dimensions:
-    - If the input tensor is a scalar (0-dimensional), it is reshaped to shape `[1, 1]`.
-    - If the input tensor is 1-dimensional, it is reshaped to shape `[1, length]`.
-
-    Parameters:
-    torch_tensor: torch.Tensor or None
-        The PyTorch tensor to convert. If None, the function returns None.
-    device: ttnn.device
-        The device to which the TTNN tensor will be moved.
-    ttnn_layout: ttnn.TILE_LAYOUT or ttnn.ROW_MAJOR_LAYOUT, optional
-        The desired layout for the TTNN tensor. Defaults to `ttnn.TILE_LAYOUT`.
-
-    Returns:
-    ttnn.Tensor or None
-        The converted TTNN tensor, with the specified layout and moved to the specified device.
-    """
-    if torch_tensor is None:
-        return None
-    if len(torch_tensor.shape) == 0:
-        torch_tensor = torch.reshape(torch_tensor, shape=[1, 1])
-    if len(torch_tensor.shape) == 1:
-        torch_tensor = torch.reshape(torch_tensor, shape=[1, len(torch_tensor)])
-    ttnn_tensor = ttnn.from_torch(torch_tensor)
-    if ttnn_layout == ttnn.TILE_LAYOUT:
-        ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=ttnn.TILE_LAYOUT)
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, device=device)
-    return ttnn_tensor
-
-
-def to_torch(
-    ttnn_tensor,
-    shape,
-):
-    """
-    Converts a TTNN tensor back to a PyTorch tensor with the specified shape.
-
-    The TTNN tensor is converted to `ROW_MAJOR_LAYOUT` and unpadded.
-    It is then converted to a PyTorch tensor and reshaped to the specified shape.
-
-    Parameters:
-    ttnn_tensor: ttnn.Tensor or None
-        The TTNN tensor to convert. If None, the function returns None.
-    shape: list
-        The desired shape of the output PyTorch tensor.
-
-    Returns:
-    torch.Tensor or None
-        The converted PyTorch tensor reshaped to the specified shape.
-    """
-    if ttnn_tensor is None:
-        return None
-    ttnn_tensor = ttnn_tensor.cpu()
-    if ttnn_tensor.layout == ttnn.TILE_LAYOUT:
-        ttnn_tensor = ttnn.to_layout(ttnn_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-    torch_tensor = ttnn.to_torch(ttnn_tensor)
-    torch_tensor = torch.reshape(torch_tensor, shape=shape)
-    return torch_tensor
-
-
 def get_lib_dtype(lib, dtype):
     """
     Maps string-based data types to their corresponding library-specific dtypes.
@@ -155,10 +87,10 @@ def run_clone(
     if not tilized and shape and shape[-1] % 2 == 1:
         pytest.skip("TTNN failed to create a ROW_MAJOR_LAYOUT tensor from a PyTorch tensor with an odd last dimension.")
 
-    ttnn_input = to_ttnn(
+    ttnn_input = ttnn.from_torch(
         torch_input,
-        device,
-        ttnn_layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
     ).to(device, input_memory_config)
 
     ttnn_output = ttnn.clone(
@@ -168,7 +100,7 @@ def run_clone(
         compute_kernel_config=get_compute_kernel_options(compute_kernel_options),
     )
 
-    torch_output = to_torch(ttnn_output, shape)
+    torch_output = ttnn.to_torch(ttnn_output).reshape(shape)
 
     passing, out = comp_allclose_and_pcc(torch.ops.aten.clone(torch_input), torch_output, rtol=0.01, atol=0.01)
     logger.info(out)
@@ -329,7 +261,7 @@ def test_clone_callback(
             device,
         )
         torch_dummy = torch.randn([32, 32])
-        ttnn_dummy = to_ttnn(torch_dummy, device)
+        ttnn_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
