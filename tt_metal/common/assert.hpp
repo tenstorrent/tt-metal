@@ -151,10 +151,10 @@ void tt_assert(
 #ifdef DEBUG
 #ifndef TT_ASSERT
 #define TT_ASSERT(condition, ...)                                                                           \
-    do {                                                                                                    \
+    {                                                                                                    \
         if (not(condition)) [[unlikely]]                                                                    \
             tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); \
-    } while (0)
+    }
 #endif
 #else
 #define TT_ASSERT(condition, ...)
@@ -166,10 +166,10 @@ void tt_assert(
 
 #ifndef TT_FATAL
 #define TT_FATAL(condition, message, ...)                                                             \
-    do {                                                                                              \
+    {                                                                                              \
         if (not(condition)) [[unlikely]] {                                                            \
             tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, message, ##__VA_ARGS__); \
             __builtin_unreachable();                                                                  \
         }                                                                                             \
-    } while (0)
+    }
 #endif
