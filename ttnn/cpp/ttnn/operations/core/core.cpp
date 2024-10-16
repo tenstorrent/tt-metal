@@ -19,7 +19,7 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
         return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
     }
 
-    const auto tensor_shape = tensor.get_logical_shape();
+    const auto tensor_shape = tensor.get_shape();
     const auto rank = tensor_shape.rank();
     if (rank == 4) {
         return tensor;
@@ -33,7 +33,7 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
 }
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
-    auto shape = tensor.get_logical_shape();
+    auto shape = tensor.get_shape();
     if (shape.rank() != 4) {
         TT_THROW("Tensor has to be of rank 4!");
     }

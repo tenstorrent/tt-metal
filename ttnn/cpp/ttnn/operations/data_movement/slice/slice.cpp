@@ -110,9 +110,9 @@ ttnn::Tensor SliceOperation::invoke(
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
             auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
-            return ttnn::reshape(res, output_shape.logical_shape());
+            return ttnn::reshape(res, output_shape);
         }
-        return ttnn::reshape(input_tensor, output_shape.logical_shape());
+        return ttnn::reshape(input_tensor, output_shape);
     }
 
     if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -124,7 +124,7 @@ ttnn::Tensor SliceOperation::invoke(
             auto input_4d_rm = ttnn::to_layout(input_4d, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
             auto output_4d =  input_4d_rm.unpad(ttnn::SimpleShape(modified_begins), ttnn::SimpleShape(modified_ends));
             auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
-            return ttnn::reshape(output_4d_rm, output_shape.logical_shape());
+            return ttnn::reshape(output_4d_rm, output_shape);
         }
     }
     else {
@@ -147,7 +147,7 @@ ttnn::Tensor SliceOperation::invoke(
             i++;
             in_place_unpad &= modified_begins[i] == 0 && modified_ends[i] == input_tensor_shape[i];
             if (in_place_unpad) {
-                return ttnn::reshape(input_tensor, output_shape.logical_shape());
+                return ttnn::reshape(input_tensor, output_shape);
             }
         }
 
@@ -159,7 +159,7 @@ ttnn::Tensor SliceOperation::invoke(
                     memory_config},
                     {input_4d}, {}, {optional_output_tensor}, queue_id)
             .at(0);
-        return ttnn::reshape(res, output_shape.logical_shape());
+        return ttnn::reshape(res, output_shape);
     }
 }
 template<typename T>
@@ -229,9 +229,9 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
             auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
-            return ttnn::reshape(res, output_shape.logical_shape());
+            return ttnn::reshape(res, output_shape);
         }
-        return ttnn::reshape(input_tensor, output_shape.logical_shape()); // change to view
+        return ttnn::reshape(input_tensor, output_shape); // change to view
     }
 
     if (on_device) {
@@ -249,7 +249,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
                                     tt::div_up(padded_input_shape[2], input_tensor.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_input_shape[3];
             if (in_place_unpad) {
-                return ttnn::reshape(input_tensor, output_shape.logical_shape());
+                return ttnn::reshape(input_tensor, output_shape);
             }
         }
 
@@ -260,7 +260,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
                     step,
                     memory_config},
                     {input_tensor}, {}, {optional_output_tensor}, queue_id)[0];
-        return ttnn::reshape(res, output_shape.logical_shape());
+        return ttnn::reshape(res, output_shape);
     }
 
     TT_FATAL(no_step, "Host tensor slice does not support strides");
@@ -271,7 +271,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         auto input_4d_rm = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
         auto output_4d =  input_4d_rm.unpad(ttnn::SimpleShape(begins), ttnn::SimpleShape(ends));
         auto output_4d_rm = ttnn::to_layout(output_4d, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
-        return ttnn::reshape(output_4d_rm, output_shape.logical_shape());
+        return ttnn::reshape(output_4d_rm, output_shape);
     }
 }
 

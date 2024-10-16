@@ -99,7 +99,9 @@ Tensor to_layout_impl(
         output_shape.push_back(1);
         tensor = ttnn::reshape(
             tensor,
-            ttnn::SimpleShape(std::vector<std::uint32_t>{1, intended_shape[0]}));
+            ttnn::Shape(
+                std::vector<std::uint32_t>{1, intended_shape[0]},
+                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
     }
     for (auto index = 0; index < intended_shape.rank(); ++index) {
         output_shape.push_back(intended_shape[index]);
@@ -202,8 +204,7 @@ Tensor to_layout_impl(
             }
             tensor = tensor.pad(padded_output_shape, ttnn::SimpleShape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
-
+            return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

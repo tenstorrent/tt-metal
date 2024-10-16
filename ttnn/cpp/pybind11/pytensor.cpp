@@ -1603,7 +1603,7 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape.logical_shape()); },
+            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(ttnn::Shape(shape)); },
             R"doc(
                 Reshapes TT tensor
 

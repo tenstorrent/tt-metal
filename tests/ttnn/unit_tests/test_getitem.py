@@ -113,8 +113,6 @@ def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_lay
     assert output_tensor.shape.with_tile_padding()[-1] == 32
 
     output_tensor = ttnn.to_torch(output_tensor)
-    print(torch_output_tensor)
-    print(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)

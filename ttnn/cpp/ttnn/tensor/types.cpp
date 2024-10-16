@@ -51,6 +51,31 @@ SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_t
     return physical_shape;
 }
 
+namespace types {
+
+const Shape Shape::to_rank(size_t new_rank) const {
+    auto padded_shape = value;
+    auto shape = value.without_padding();
+
+    std::vector<uint32_t> new_shape(new_rank, 1);
+    std::vector<uint32_t> new_padded_shape(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for(;cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        new_shape[new_idx] = shape[cur_idx];
+        new_padded_shape[new_idx] = padded_shape[cur_idx];
+    }
+    for(;cur_idx >= 0; cur_idx--) {
+        TT_FATAL(shape[cur_idx] == 1, "Can't convert shape rank");
+        TT_FATAL(padded_shape[cur_idx] == 1, "Can't convert shape rank");
+    }
+
+    return Shape(std::move(new_shape), std::move(new_padded_shape));
+}
+
+}
+
 }
 
 namespace tt {

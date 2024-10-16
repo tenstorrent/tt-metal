@@ -582,41 +582,7 @@ struct Shape {
     // Returns value without padding
     uint32_t operator[](std::int64_t index) const;
 
-    template <std::size_t NewRank>
-    const Shape to_rank() const {
-        auto rank = this->rank();
-        auto &shape = *this;
-        auto shape_with_tile_padding = shape.with_tile_padding();
-
-        std::array<uint32_t, NewRank> new_shape{};
-        std::array<uint32_t, NewRank> new_padded_shape{};
-        if (rank == NewRank) {
-            return Shape(shape);
-        } else if (rank > NewRank) {
-            auto num_extra_dims = rank - NewRank;
-
-            for (auto index = 0; index < num_extra_dims; index++) {
-                TT_ASSERT(shape[index] == 1);
-                TT_ASSERT(shape_with_tile_padding[index] == 1);
-            }
-
-            for (auto index = 0; index < NewRank; index++) {
-                new_shape[index] = shape[index + num_extra_dims];
-                new_padded_shape[index] = shape_with_tile_padding[index + num_extra_dims];
-            }
-        } else {
-            auto num_missing_dims = NewRank - rank;
-
-            new_shape.fill(1);
-            new_padded_shape.fill(1);
-
-            for (auto index = 0; index < rank; index++) {
-                new_shape[index + num_missing_dims] = shape[index];
-                new_padded_shape[index + num_missing_dims] = shape_with_tile_padding[index];
-            }
-        }
-        return Shape(new_shape, new_padded_shape);
-    }
+    const Shape to_rank(size_t new_rank) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     const auto attribute_values() const { return std::forward_as_tuple(this->value); }
