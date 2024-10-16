@@ -69,6 +69,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
         "ALL_GATHER_NUM_LINKS": 1,
         "MAX_BATCH_SIZE": max_batch_size,
         "MAX_CONTEXT_LEN": max_context_len,
+        "MAX_PREFILL_SEQ_LEN": 32768,  # TODO: remove once larger seq lens can be prefilled via decode in TtLlamaModelForGeneration
         "NUM_DEVICES": num_devices,
         "llama3-tg": MAX_SEQ_LEN_LLAMA3,
         "llama3.1-tg": MAX_SEQ_LEN_LLAMA3_1,

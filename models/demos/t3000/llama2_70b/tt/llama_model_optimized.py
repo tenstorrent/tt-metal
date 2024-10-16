@@ -158,7 +158,7 @@ class TtLlamaModel_optimized:
         )
         self.norm_sharded = ttnn.to_device(norm_sharded_ttnn, self.mesh_device)
 
-    def validate_input_shape(self, inp_ids):
+    def validate_input_shape(self, inp_ids, mode):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
         assert (
@@ -167,6 +167,11 @@ class TtLlamaModel_optimized:
         assert (
             seq_len <= self.model_config["MAX_CONTEXT_LEN"]
         ), f"Sequence length {seq_len} exceeds MAX_CONTEXT_LEN {self.model_config['MAX_CONTEXT_LEN']}"
+
+        if mode == "prefill":
+            assert (
+                seq_len < self.model_config["MAX_PREFILL_SEQ_LEN"]
+            ), f"Prefill only supports seq_len < {self.model_config['MAX_PREFILL_SEQ_LEN']}"
 
     def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, mode="decode", page_table=None):
         """
@@ -182,7 +187,7 @@ class TtLlamaModel_optimized:
         rot_mats: [(1, 1, head_dim, head_dim)] * num_devices  for decode
                   [(1, 1, seq, head_dim), (1, 1, seq, head_dim)] * num_devices  for prefill
         """
-        self.validate_input_shape(inp_ids)
+        self.validate_input_shape(inp_ids, mode)
         batch, seq_len = inp_ids.shape
 
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
