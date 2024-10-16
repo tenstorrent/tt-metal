@@ -49,7 +49,7 @@ void kernel_main() {
 
     const int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes, multiple of 32
+    // channel size in bytes
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels

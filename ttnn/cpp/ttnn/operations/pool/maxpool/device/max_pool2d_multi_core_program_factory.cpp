@@ -49,9 +49,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
 
     uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;                                      // row of input (channels)
     uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;                                // row of output (channels)
-    TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
-    TT_ASSERT(
-        (out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2");  // out_nbytes_c is power of 2
 
     tt::DataFormat indices_df = tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
@@ -289,7 +286,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         kernel_size_w,
         pad_w,
         in_nbytes_c,
-        in_nbytes_c_log2,
+        in_nbytes_c_log2,   // not used
         in_w,
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
@@ -307,7 +304,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         kernel_size_w,
         pad_w,
         in_nbytes_c,
-        in_nbytes_c_log2,
+        in_nbytes_c_log2,   // not used
         in_w,
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
