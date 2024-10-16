@@ -9,7 +9,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
-
 using ttnn::ccl::ShardType;
 using ttnn::ccl::UNINITIALIZED_VALUE_U16;
 using ttnn::ccl::UNINITIALIZED_VALUE_U32;
@@ -431,7 +430,7 @@ FORCE_INLINE void write_chunk_v2(
 }
 
 template <typename AddrGen>
-FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
+FORCE_INLINE void read_wrapped_chunk_from_output_tensor_to_address(
     uint32_t& curr_page_idx,
     uint32_t& offset_into_worker_slice,
     const ttnn::ccl::coord_t& offset_worker_slice,
@@ -440,16 +439,14 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
     // In tiles for tile layout
     const ttnn::ccl::coord_t& tensor_shape,
     const ttnn::ccl::coord_t& tensor_slice_shape,
-    const uint32_t cb_id,
+    const uint32_t local_l1_scratch_buffer_address,
     const AddrGen& s,
     const uint32_t num_pages,
     const uint32_t page_size,
     bool& last_page_of_worker) {
 
     // we expected caller to reset this and the last curr_page_idx when we set it true
-    ASSERT(last_page_of_worker == false);
-    cb_reserve_back(cb_id, num_pages);
-    uint32_t local_l1_read_addr = get_write_ptr(cb_id);
+    uint32_t local_l1_read_addr = local_l1_scratch_buffer_address;
 
     int32_t contig_pages = 1;
     for (uint32_t i = 0; i < num_pages; i+= contig_pages) {
@@ -498,6 +495,40 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
         local_l1_read_addr += page_size * contig_pages;
     }
     noc_async_read_barrier();
+}
+
+template <typename AddrGen>
+FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
+    uint32_t& curr_page_idx,
+    uint32_t& offset_into_worker_slice,
+    const ttnn::ccl::coord_t& offset_worker_slice,
+    const ttnn::ccl::coord_t& worker_slice_shape,
+
+    // In tiles for tile layout
+    const ttnn::ccl::coord_t& tensor_shape,
+    const ttnn::ccl::coord_t& tensor_slice_shape,
+    const uint32_t cb_id,
+    const AddrGen& s,
+    const uint32_t num_pages,
+    const uint32_t page_size,
+    bool& last_page_of_worker) {
+
+    // we expected caller to reset this and the last curr_page_idx when we set it true
+    ASSERT(last_page_of_worker == false);
+    cb_reserve_back(cb_id, num_pages);
+
+    read_wrapped_chunk_from_output_tensor_to_address(
+        curr_page_idx,
+        offset_into_worker_slice,
+        offset_worker_slice,
+        worker_slice_shape,
+        tensor_shape,
+        tensor_slice_shape,
+        get_write_ptr(cb_id),
+        s,
+        num_pages,
+        page_size,
+        last_page_of_worker);
     cb_push_back(cb_id, num_pages);
 }
 

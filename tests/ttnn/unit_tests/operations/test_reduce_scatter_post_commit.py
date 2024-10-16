@@ -111,6 +111,8 @@ def run_reduce_scatter_test(
     if enable_async:
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, scatter_dim: {scatter_dim}")
+
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
     canonical_input_shape[scatter_dim] *= num_devices
@@ -121,7 +123,6 @@ def run_reduce_scatter_test(
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
         for _ in range(num_devices)
     ]
-
     if debug:
         input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
     for i, canonical_input_tensor in enumerate(input_tensors):
@@ -149,6 +150,7 @@ def run_reduce_scatter_test(
             ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
+    # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
     # Compute golden
     # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
     golden_canonical_out_tensor = torch.zeros(canonical_input_shape).bfloat16()
@@ -167,7 +169,7 @@ def run_reduce_scatter_test(
         eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {t3k_mesh_device.get_devices()[i].id()}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -263,6 +265,10 @@ def test_ring_reduce_scatter_post_commit(
     "per_chip_output_shape, scatter_dim, layout",
     [
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(

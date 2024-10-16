@@ -108,6 +108,21 @@ struct WorkerToEdmSender{
         send_payload_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(cb_id, num_pages, page_size);
     }
 
+    /*
+     * No CB
+     */
+    FORCE_INLINE void send_payload_blocking_from_address(uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
+        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>(source_address, num_pages, page_size);
+    }
+
+    /*
+     * No CB
+     */
+    // Does not wait for CB. Assumes caller handles CB data availability
+    FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address,  uint32_t num_pages, uint32_t page_size) {
+        send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, num_pages, page_size);
+    }
+
     FORCE_INLINE void close() {
         if constexpr (termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
             this->wait_for_empty_write_slot();
@@ -126,6 +141,15 @@ struct WorkerToEdmSender{
     std::size_t buffer_index;
 
    private:
+    template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, uint32_t num_pages, uint32_t page_size) {
+        uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        ASSERT(num_pages * page_size <= this->buffer_size_bytes);
+        send_chunk_from_address<blocking_mode>(source_address, num_pages, page_size, buffer_address);
+        noc_semaphore_inc(edm_semaphore_addr, 1);
+        this->buffer_index = (this->buffer_index == this->last_buffer_index) ? 0 : this->buffer_index + 1;
+    }
+
     template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
         uint64_t buffer_address = this->edm_buffer_addr + (this->buffer_index * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
