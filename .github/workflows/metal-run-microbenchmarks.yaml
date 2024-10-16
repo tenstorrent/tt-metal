@@ -34,10 +34,8 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./build_metal.sh --enable-profiler --build-programming-examples --build-tests
           ./create_venv.sh
-      - name: Build tests
-        run: cmake --build build -- -j`nproc`
       - name: Run microbenchmark tests
         timeout-minutes: 90
         run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
