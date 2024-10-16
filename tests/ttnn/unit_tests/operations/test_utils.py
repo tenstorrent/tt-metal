@@ -43,6 +43,10 @@ def get_compute_kernel_options(compute_kernel_options):
 
 
 def to_torch(ttnn_tensor, *, shape=None):
+    """
+    Converts a ttnn tensor to a torch tensor. If ttnn tensor is None, returns None.
+    If shape specified, reshapes the resulting torch tensor to the given shape.
+    """
     if ttnn_tensor is None:
         return None
     torch_tensor = ttnn.to_torch(ttnn_tensor)
@@ -60,6 +64,12 @@ def to_ttnn(
     memory_config=None,
     shape=None,
 ):
+    """
+    Converts a torch tensor to a ttnn tensor, with optional arguments to control
+    the device, data type, memory layout, and memory configuration. The tensor can
+    also be reshaped if a shape is provided. If the torch tensor is a scalar (a tensor
+    with zero dimensions), it will be automatically reshaped to have a shape of [1, 1].
+    """
     if torch_tensor is None:
         return None
     if shape is not None:
