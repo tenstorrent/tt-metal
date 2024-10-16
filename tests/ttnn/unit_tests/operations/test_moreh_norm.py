@@ -353,6 +353,7 @@ def test_moreh_norm_callback(input_shape, p, dim_rtol_atol, keepdim, device, use
         tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
@@ -500,4 +501,5 @@ def test_moreh_norm_backward_callback(input_shape, p, dim_rtol_atol, keepdim, de
         tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

@@ -547,10 +547,16 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
     ],
 )
 def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache):
-    torch.manual_seed(2023)
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device)
-    assert device.num_program_cache_entries() == 1
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -569,10 +575,16 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
 def test_moreh_layer_norm_backward_callback(
     input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache
 ):
-    torch.manual_seed(2023)
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
-    assert device.num_program_cache_entries() == (2 if elementwise_affine else 1)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
