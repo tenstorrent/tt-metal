@@ -303,14 +303,7 @@ class LegacyShape {
     }
     friend std::ostream &operator<<(std::ostream &os, const LegacyShape &shape);
 
-    Array4D to_array_4D() const {
-        TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
-        Array4D ret_array;
-        for (int i = 0; i < rank(); i++) {
-            ret_array[i] = this->operator[](i);
-        }
-        return ret_array;
-    }
+    Array4D to_array_4D() const;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const tt::tt_metal::LegacyShape &shape) {

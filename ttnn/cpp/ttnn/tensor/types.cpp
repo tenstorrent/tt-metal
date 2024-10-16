@@ -215,6 +215,15 @@ const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     return normalized_index;
 }
 
+Array4D LegacyShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    Array4D ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
+}
+
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
     return a.replication_factor == b.replication_factor; // All instances are considered equal because there are no data members.
 }
