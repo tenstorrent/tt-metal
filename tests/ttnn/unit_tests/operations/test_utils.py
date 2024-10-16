@@ -42,47 +42,37 @@ def get_compute_kernel_options(compute_kernel_options):
     return compute_kernel_config
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
-    if npu_tensor is None:
+def to_torch(ttnn_tensor, *, shape=None):
+    if ttnn_tensor is None:
         return None
-
-    shape = list(shape)
-
-    unpad_shape = copy.copy(shape)
-
-    if shape == []:
-        unpad_shape = [1, 1]
-
-    if len(shape) == 1:
-        unpad_shape = [1] + shape
-
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(unpad_shape).to_torch().reshape(shape)
-
-    return cpu_tensor
+    torch_tensor = ttnn.to_torch(ttnn_tensor)
+    if shape is not None:
+        torch_tensor = torch_tensor.reshape(shape)
+    return torch_tensor
 
 
-def to_npu(
-    cpu_tensor,
-    device,
+def to_ttnn(
+    torch_tensor,
     *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
+    device=None,
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=None,
     shape=None,
 ):
-    if cpu_tensor is None:
+    if torch_tensor is None:
         return None
-
     if shape is not None:
-        cpu_tensor = cpu_tensor.view(shape)
-
-    if len(cpu_tensor.shape) == 1:
-        cpu_tensor = cpu_tensor.reshape([1, len(cpu_tensor)])
-
-    if len(cpu_tensor.shape) == 0:
-        cpu_tensor = cpu_tensor.reshape([1, 1])
-
-    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    return npu_tensor
+        torch_tensor = torch_tensor.reshape(shape)
+    if len(torch_tensor.shape) == 0:
+        torch_tensor = torch_tensor.reshape([1, 1])
+    return ttnn.from_torch(
+        torch_tensor,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+    )
 
 
 # For keepdim in torch

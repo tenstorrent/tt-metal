@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import to_npu
+from tests.ttnn.unit_tests.operations.test_utils import to_ttnn
 
 
 def get_lib_dtype(lib, dtype):
@@ -137,7 +137,7 @@ def test_arange_callback(start_end_step, optional_output, dtype, device, use_pro
         else:
             run_moreh_arange(start_end_step, optional_output, dtype, False, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list == [1, 2, 2, 2]

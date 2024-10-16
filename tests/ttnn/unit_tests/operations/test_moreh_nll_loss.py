@@ -13,8 +13,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_cpu,
-    to_npu,
+    to_torch,
+    to_ttnn,
 )
 
 
@@ -37,11 +37,11 @@ def get_torch_tensors(shape):
 def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
     npu_index_dtype = ttnn.int32
 
-    tt_input = to_npu(torch_input, device)
-    tt_target = to_npu(torch_target, device, npu_dtype=npu_index_dtype)
-    tt_weight = to_npu(torch_weight, device)
-    tt_divisor = to_npu(torch_divisor, device)
-    tt_output = to_npu(torch_output, device)
+    tt_input = to_ttnn(torch_input, device=device)
+    tt_target = to_ttnn(torch_target, device=device, dtype=npu_index_dtype)
+    tt_weight = to_ttnn(torch_weight, device=device)
+    tt_divisor = to_ttnn(torch_divisor, device=device)
+    tt_output = to_ttnn(torch_output, device=device)
 
     return tt_input, tt_target, tt_weight, tt_divisor, tt_output
 
@@ -74,9 +74,9 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
         compute_kernel_config=compute_kernel_config,
     )
 
-    tt_loss_to_cpu = to_cpu(tt_loss, [1])
+    tt_loss = to_torch(tt_loss, shape=[1])
     rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(torch_loss, tt_loss_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    passing, out = comp_allclose_and_pcc(torch_loss, tt_loss, pcc=0.999, rtol=rtol, atol=atol)
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
     assert passing
@@ -116,8 +116,8 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     output_grad = torch.randn_like(torch_loss)
     torch_loss.backward(output_grad)
 
-    tt_output_grad = to_npu(output_grad, device)
-    tt_input_grad = to_npu(torch_input, device)
+    tt_output_grad = to_ttnn(output_grad, device=device)
+    tt_input_grad = to_ttnn(torch_input, device=device)
 
     tt_input_grad = ttnn.operations.moreh.nll_loss_backward(
         target_tensor=tt_target,
@@ -129,10 +129,10 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
         reduction_mean=reduction_mean,
         compute_kernel_config=compute_kernel_config,
     )
-    tt_input_grad_to_cpu = to_cpu(tt_input_grad, shape)
+    tt_input_grad = to_torch(tt_input_grad, shape=shape)
 
     rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad_to_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    passing, out = comp_allclose_and_pcc(torch_input.grad, tt_input_grad, pcc=0.999, rtol=rtol, atol=atol)
 
     logger.debug(f"Out passing (param)={passing}")
     logger.debug(f"Output pcc={out}")
@@ -180,7 +180,7 @@ def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
 
         run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
 
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
@@ -254,7 +254,7 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, us
 
         run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
 
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
