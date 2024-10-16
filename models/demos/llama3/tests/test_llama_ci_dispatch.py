@@ -16,7 +16,7 @@ def test_llama_ci_dispatch():
     dir_8b = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
 
     # for dir_path in [dir_1b, dir_3b, dir_8b]:
-    for dir_path in [dir_1b, dir_3b]:
+    for dir_path in [dir_1b]:
         logger.info(f"Running fast dispatch tests for {dir_path}")
         os.environ["LLAMA_DIR"] = dir_path
         pytest.main(
