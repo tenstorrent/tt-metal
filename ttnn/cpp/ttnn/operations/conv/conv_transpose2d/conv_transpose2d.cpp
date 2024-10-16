@@ -107,7 +107,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = conv2d::shard_or_reshard_tensor_if_required(
             device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride);
 
-        sliding_window_config.num_cores_nhw = input_tensor_post_tm.memory_config().shard_spec.value().grid.num_cores();
+        sliding_window_config.num_cores_nhw = conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
         sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
 
         if (tensor_manipulated) {

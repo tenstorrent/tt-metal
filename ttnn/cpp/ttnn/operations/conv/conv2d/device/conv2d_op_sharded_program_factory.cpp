@@ -518,6 +518,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
         conv_act_size_h = input_shape[1];
         conv_act_size_w = input_shape[2];
+        pad_h = 0;
+        pad_w = 0;
     }
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
@@ -718,6 +720,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         log_debug(LogOp, "filter_w: {}", filter_w);
         log_debug(LogOp, "dilation_h: {}", dilation_h);
         log_debug(LogOp, "dilation_w: {}", dilation_w);
+        log_debug(LogOp, "stride_h: {}", stride_h);
+        log_debug(LogOp, "stride_w: {}", stride_w);
+        log_debug(LogOp, "pad_h: {}", pad_h);
+        log_debug(LogOp, "pad_w: {}", pad_w);
     }
 
     // For debug

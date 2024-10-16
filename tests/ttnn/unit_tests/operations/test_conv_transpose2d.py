@@ -17,6 +17,8 @@ import ttnn
 import readline  # optional, will allow Up/Down/History in the console
 import code
 
+torch.set_printoptions(linewidth=400, profile="full", sci_mode=False)
+
 
 def drop_to_interpreter():
     variables = globals().copy()
@@ -64,18 +66,19 @@ def run_conv_transpose2d(
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [input_channels, output_channels // groups, filter_height, filter_width]
     conv_bias_shape = [1, 1, 1, output_channels]
-    # torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    # torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
-    torch_input_tensor_nchw = (
-        torch.tensor(range(input_height * input_width)).reshape([1, 1, input_height, input_width]).float()
-    )
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor_nchw = torch.ones(conv_input_shape, dtype=torch.bfloat16).float()
+    # torch_input_tensor_nchw = (
+    #     torch.tensor(range(input_height * input_width)).reshape([1, 1, input_height, input_width]).float()
+    # )
     torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    torch_weight_tensor = (
-        torch.randn((1, output_channels, 1, 1), dtype=torch.bfloat16).broadcast_to(conv_weight_shape).float()
-    )
-    # torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
+    # torch_weight_tensor = (
+    #     torch.randn((1, output_channels, 1, 1), dtype=torch.bfloat16).broadcast_to(conv_weight_shape).float()
+    # )
+    # torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv_transpose2d(
@@ -189,9 +192,15 @@ def run_conv_transpose2d(
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
     (
+        # Stride = 1
+        (1, 8, 8, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        # Stride = 2
         (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        # (1,   8,  8,   256,  256, 3, 3, 1, 1, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
     ),
 )
 @pytest.mark.parametrize(
