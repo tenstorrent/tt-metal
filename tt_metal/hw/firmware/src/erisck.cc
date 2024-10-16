@@ -23,7 +23,7 @@
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
-void __attribute__((section("erisc_l1_code"))) kernel_launch() {
+void kernel_launch() {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 

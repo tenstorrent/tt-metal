@@ -11,7 +11,7 @@
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
-ENTRY(ApplicationHandler)
+ENTRY(_start)
 SECTIONS
 {
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
