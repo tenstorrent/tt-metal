@@ -18,8 +18,8 @@ void kernel_main() {
 #define dst_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
 #if (dst_stick_size_is_pow2)
     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<dst0_is_dram> s0 = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = dst_log_base_2_of_page_size};
+    const InterleavedPow2AddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr,
+                                                     .log_base_2_of_page_size = dst_log_base_2_of_page_size};
 #else
     const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = stick_size};
 #endif

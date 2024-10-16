@@ -36,7 +36,8 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     uint32_t X = input_tensor.get_legacy_shape()[-1];
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
-    TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X, "Cos dims must match input dims");
+    TT_FATAL(cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X,
+             "Cos dims must match input dims");
     if (this->token_idx.has_value()) {
         TT_FATAL(cos.get_legacy_shape()[-2] >= token_idx, "Cos dims must match input dims");
     } else {
@@ -46,8 +47,10 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
         // Require even work division for now
-        TT_FATAL(
-            (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % input_tensor.shard_spec().value().shape[0] == 0, "Error");
+        TT_FATAL((input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) %
+                         input_tensor.shard_spec().value().shape[0] ==
+                     0,
+                 "Error");
         if (this->output_mem_config.is_sharded()) {
             TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
         }
@@ -59,7 +62,8 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> RotaryEmbedding::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> RotaryEmbedding::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.get_legacy_shape();
     if (!this->token_idx.has_value()) {
@@ -94,19 +98,18 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
         return {create_device_tensor(
-            output_shape,
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            mem_config)};
+            output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), mem_config)};
     } else {
-        return {create_device_tensor(
-            output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+        return {create_device_tensor(output_shape,
+                                     input_tensor.get_dtype(),
+                                     input_tensor.get_layout(),
+                                     input_tensor.device(),
+                                     this->output_mem_config)};
     }
 }
 
-operation::ProgramWithCallbacks RotaryEmbedding::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks RotaryEmbedding::create_program(const std::vector<Tensor>& input_tensors,
+                                                                std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
@@ -115,7 +118,8 @@ operation::ProgramWithCallbacks RotaryEmbedding::create_program(
     switch (this->get_parallelization_strategy(input_tensors)) {
         case RotaryEmbeddingOpParallelizationStrategy::MULTI_CORE:
         default:
-            return rotary_embedding_multi_core(input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
+            return rotary_embedding_multi_core(
+                input_tensor, cos, sin, output_tensor, this->token_idx, this->compute_kernel_config);
     }
 }
 

@@ -23,7 +23,8 @@ struct MorehGroupNorm {
         const std::optional<MemoryConfig>& rstd_memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
     static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_inputs);
     static std::vector<bool> create_async_return_flag(
         const Tensor& input,
         const uint32_t num_groups,
@@ -42,7 +43,7 @@ struct MorehGroupNorm {
 }  // namespace ttnn::operations::moreh::moreh_group_norm
 
 namespace ttnn {
-constexpr auto moreh_group_norm = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_group_norm",
-    ttnn::operations::moreh::moreh_group_norm::MorehGroupNorm>();
+constexpr auto moreh_group_norm =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_group_norm",
+                                                 ttnn::operations::moreh::moreh_group_norm::MorehGroupNorm>();
 }

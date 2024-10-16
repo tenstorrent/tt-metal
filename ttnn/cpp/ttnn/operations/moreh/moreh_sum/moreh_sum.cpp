@@ -8,13 +8,12 @@
 #include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {
-Tensor MorehSum::invoke(
-    const Tensor& input,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    const bool keepdim,
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+Tensor MorehSum::invoke(const Tensor& input,
+                        std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+                        const bool keepdim,
+                        const std::optional<Tensor>& output,
+                        const std::optional<MemoryConfig>& memory_config,
+                        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     std::vector<int64_t> dims = tt::operations::primary::get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
 

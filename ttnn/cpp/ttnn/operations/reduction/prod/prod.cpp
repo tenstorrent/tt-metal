@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "prod.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
@@ -20,10 +19,11 @@ namespace ttnn::operations::reduction {
 inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = temp;
-    if(formatted_input_tensor.get_layout()==Layout::ROW_MAJOR){
+    if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
-            formatted_input_tensor = AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
+            formatted_input_tensor =
+                AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
         }
     }
     return formatted_input_tensor;
@@ -48,7 +48,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     using ttnn::operations::experimental::auto_format::AutoFormat;
     // layout conversion
     auto formatted_input_tensor = temp;
-    if(formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
+    if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
         auto out_shape = temp.get_legacy_shape();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
@@ -60,29 +60,29 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     // Apply prod
     std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
-    std::array<uint32_t, 4> required = {
-        ((dim == 1 || dim == -3) ? input_shape[0] : 1),
-        ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
-        input_shape[2],
-        input_shape[3]};
+    std::array<uint32_t, 4> required = {((dim == 1 || dim == -3) ? input_shape[0] : 1),
+                                        ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
+                                        input_shape[2],
+                                        input_shape[3]};
 
     auto ttnn_shape = ttnn::Shape(required);
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
         formatted_input_tensor,
-        ttnn::zeros(
-            ttnn_shape,
-            formatted_input_tensor.get_dtype(),
-            formatted_input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
-            output_mem_config),
+        ttnn::zeros(ttnn_shape,
+                    formatted_input_tensor.get_dtype(),
+                    formatted_input_tensor.get_layout(),
+                    std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+                    output_mem_config),
         dimension,
         output_mem_config);
 }
 
-
-Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& memory_config) {
+Tensor ProdOperation::invoke(const Tensor& input_a,
+                             bool all_dimensions,
+                             int64_t dim,
+                             const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
@@ -121,7 +121,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
-        if(res_host.storage_type() != StorageType::DEVICE or res_host.storage_type() != StorageType::MULTI_DEVICE) {
+        if (res_host.storage_type() != StorageType::DEVICE or res_host.storage_type() != StorageType::MULTI_DEVICE) {
             res_host = res_host.pad_to_tile(0.0f);
             res_host = res_host.to(Layout::TILE);
             res_host = res_host.to(input_a.device());
@@ -130,9 +130,12 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     }
 }
 
-Tensor ProdOperation::invoke(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
-        auto mem_cfg = memory_config.value_or(input.memory_config());
-        return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
+Tensor ProdOperation::invoke(const Tensor& input,
+                             const Tensor& output,
+                             std::vector<int64_t>& dims,
+                             const std::optional<MemoryConfig>& memory_config) {
+    auto mem_cfg = memory_config.value_or(input.memory_config());
+    return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }
 
-} // namespace ttnn::operations::reduction
+}  // namespace ttnn::operations::reduction

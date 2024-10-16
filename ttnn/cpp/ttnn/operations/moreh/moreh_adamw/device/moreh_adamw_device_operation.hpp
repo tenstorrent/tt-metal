@@ -54,16 +54,14 @@ struct MorehAdamWDeviceOperation {
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<MultiCore>;
@@ -109,6 +107,7 @@ struct MorehAdamWDeviceOperation {
 // Register the operation with the ttnn::register_operation API to make it available to the user as
 // ttnn::prim::adamw
 namespace ttnn::prim {
-constexpr auto moreh_adamw = ttnn::
-    register_operation<"ttnn::prim::moreh_adamw", ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation>();
+constexpr auto moreh_adamw =
+    ttnn::register_operation<"ttnn::prim::moreh_adamw",
+                             ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation>();
 }  // namespace ttnn::prim

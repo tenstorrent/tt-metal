@@ -4,10 +4,9 @@
 
 #pragma once
 
-
 #include "pybind11/pybind_fwd.hpp"
 
-namespace ttnn::operations::experimental::copy::detail  {
+namespace ttnn::operations::experimental::copy::detail {
 
 void py_bind_typecast(pybind11::module& m);
 

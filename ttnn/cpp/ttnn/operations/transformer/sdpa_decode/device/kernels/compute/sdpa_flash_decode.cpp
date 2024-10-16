@@ -62,7 +62,13 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
-template<PoolType pool_type, ReduceDim reduce_dim, uint32_t in0_cb, uint32_t scale_cb, uint32_t out_cb, uint32_t rows, uint32_t cols>
+template <PoolType pool_type,
+          ReduceDim reduce_dim,
+          uint32_t in0_cb,
+          uint32_t scale_cb,
+          uint32_t out_cb,
+          uint32_t rows,
+          uint32_t cols>
 void reduce_c() {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -83,7 +89,7 @@ void reduce_c() {
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i*cols+j, 0, reduce_dst_idx);
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
 
         cb_reserve_back(out_cb, 1);
@@ -122,14 +128,13 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
 
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
-    cb_wait_front(in0_cb, rows*cols);
+    cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
-
 
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
     for (uint32_t i = 0; i < rows; ++i) {
-        for(uint32_t u = 0; u < granularity; u++) {
+        for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
@@ -199,7 +204,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb, uint32_t in1_scalar_cb, uin
     }
 }
 
-template<bool pop_in1>
+template <bool pop_in1>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -217,7 +222,8 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_push_back(in0_cb, 1);
         release_dst();
     }
-    if (pop_in1) cb_pop_front(in1_cb, num_tiles);
+    if (pop_in1)
+        cb_pop_front(in1_cb, num_tiles);
 }
 
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -291,10 +297,10 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        copy_tile(in_cb, i, 0/*dst*/);
+        copy_tile(in_cb, i, 0 /*dst*/);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
         release_dst();
@@ -302,15 +308,26 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-ALWI void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_t& out_cb, const uint32_t& M, const uint32_t& N, const uint32_t& K, const uint32_t& num_blocks, const uint32_t& in0_num_subblocks, const uint32_t& in1_num_subblocks,
-                    const uint32_t& in0_block_w, const uint32_t& subblock_h, const uint32_t& subblock_w, const bool& transpose) {
+ALWI void cb_matmul_blocks(const uint32_t& in0_cb,
+                           const uint32_t& in1_cb,
+                           const uint32_t& out_cb,
+                           const uint32_t& M,
+                           const uint32_t& N,
+                           const uint32_t& K,
+                           const uint32_t& num_blocks,
+                           const uint32_t& in0_num_subblocks,
+                           const uint32_t& in1_num_subblocks,
+                           const uint32_t& in0_block_w,
+                           const uint32_t& subblock_h,
+                           const uint32_t& subblock_w,
+                           const bool& transpose) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-
-    mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    mm_block_init_short(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
@@ -318,7 +335,6 @@ ALWI void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -330,10 +346,10 @@ ALWI void cb_matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
                 in0_index++;
                 in1_index += N;
-
             }
             tile_regs_commit();
 
@@ -417,23 +433,23 @@ void MAIN {
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // idle core
-    // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates an idle_core
-    if (get_arg_val<uint32_t>(0)==65){
+    // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
+    // an idle_core
+    if (get_arg_val<uint32_t>(0) == 65) {
         return;
     }
 
     // Get cur_pos
     uint32_t cur_pos = 0;
     // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg != UINT32_MAX){
+    if (cur_pos_arg != UINT32_MAX) {
         cur_pos = cur_pos_arg;
-    }
-    else {
+    } else {
         constexpr uint32_t cb_index_id = tt::CB::dataflow0;
         cb_wait_front(cb_index_id, 1);
-        volatile uint32_t *index_addr_ptr;
+        volatile uint32_t* index_addr_ptr;
         cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-        cur_pos = index_addr_ptr[4+cur_batch];
+        cur_pos = index_addr_ptr[4 + cur_batch];
         cb_release_tile(cb_index_id);
     }
 
@@ -442,12 +458,14 @@ void MAIN {
         return;
     }
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
+        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
     if (k_chunk_start == k_chunk_end) {
-        return; // early exit because no computes needs to be done
+        return;  // early exit because no computes needs to be done
     }
-    uint32_t num_cores_to_wait = num_cores_per_head-1;
-    if (num_cores_per_head>k_num_chunks) num_cores_to_wait = k_num_chunks-1;
+    uint32_t num_cores_to_wait = num_cores_per_head - 1;
+    if (num_cores_per_head > k_num_chunks)
+        num_cores_to_wait = k_num_chunks - 1;
 
     mm_init();
     cb_wait_front(cb_q_in, q_chunk_tiles);
@@ -455,11 +473,22 @@ void MAIN {
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // loop while k_low < q_high
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
-
             /* QK = Q_CHUNK @ K_CHUNK */
-            reconfig_data_format(cb_q_in, cb_k_in); // DEBUG
+            reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
             pack_reconfig_data_format(cb_qk_im);
-            cb_matmul_blocks(cb_q_in, cb_k_in, cb_qk_im, Sq_chunk_t, Sk_chunk_t, DHt, qk_num_blocks, qk_in0_num_subblocks, qk_in1_num_subblocks, qk_in0_block_w, qk_subblock_h, qk_subblock_w, true /*transpose*/);
+            cb_matmul_blocks(cb_q_in,
+                             cb_k_in,
+                             cb_qk_im,
+                             Sq_chunk_t,
+                             Sk_chunk_t,
+                             DHt,
+                             qk_num_blocks,
+                             qk_in0_num_subblocks,
+                             qk_in1_num_subblocks,
+                             qk_in0_block_w,
+                             qk_subblock_h,
+                             qk_subblock_w,
+                             true /*transpose*/);
 
             /* QK *= SCALE */
             mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
@@ -473,7 +502,13 @@ void MAIN {
 
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             pack_reconfig_data_format(cb_cur_max);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+            reduce_c<PoolType::MAX,
+                     ReduceDim::REDUCE_ROW,
+                     cb_qk_im,
+                     cb_identity_scale_in,
+                     cb_cur_max,
+                     Sq_chunk_t,
+                     Sk_chunk_t>();
 
             if (k_chunk > k_chunk_start) {
                 reconfig_data_format(cb_cur_max, cb_prev_max);
@@ -488,12 +523,30 @@ void MAIN {
             /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             pack_reconfig_data_format(cb_cur_sum);
-            reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_sum, Sq_chunk_t, Sk_chunk_t>();
+            reduce_c<PoolType::SUM,
+                     ReduceDim::REDUCE_ROW,
+                     cb_qk_im,
+                     cb_identity_scale_in,
+                     cb_cur_sum,
+                     Sq_chunk_t,
+                     Sk_chunk_t>();
 
             /* OUT_IM = QK @ V_CHUNK */
-            reconfig_data_format(cb_qk_im, cb_v_in); // DEBUG
+            reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
             pack_reconfig_data_format(cb_out_im);
-            cb_matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
+            cb_matmul_blocks(cb_qk_im,
+                             cb_v_in,
+                             cb_out_im,
+                             Sq_chunk_t,
+                             DHt,
+                             Sk_chunk_t,
+                             out_num_blocks,
+                             out_in0_num_subblocks,
+                             out_in1_num_subblocks,
+                             out_in0_block_w,
+                             out_subblock_h,
+                             out_subblock_w,
+                             false /*transpose*/);
             reconfig_data_format_srca(cb_out_im);
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
@@ -503,7 +556,7 @@ void MAIN {
                 pack_reconfig_data_format(cb_out_accumulate_im);
                 copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
             } else {
-                reconfig_data_format(cb_prev_max, cb_cur_max); // DEBUG
+                reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
                 pack_reconfig_data_format(cb_exp_max_diff);
                 /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                 sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
@@ -513,29 +566,29 @@ void MAIN {
                 mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_exp_max_diff */
-                reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff); // DEBUG
+                reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG
                 pack_reconfig_data_format(cb_out_accumulate_im);
                 mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
 
                 /* cb_cur_sum += cb_prev_sum */
-                reconfig_data_format(cb_cur_sum, cb_prev_sum); // DEBUG
+                reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                 pack_reconfig_data_format(cb_cur_sum);
                 add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im += cb_out_im */
-                reconfig_data_format(cb_out_accumulate_im, cb_out_im); // DEBUG
+                reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
                 pack_reconfig_data_format(cb_out_accumulate_im);
                 add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
             }
 
             if (k_chunk < k_chunk_end - 1 || do_reduce) {
                 // Set cb_prev_sum and cb_prev_max
-                reconfig_data_format(cb_cur_max, cb_cur_max); // DEBUG
+                reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
                 pack_reconfig_data_format(cb_prev_max);
                 copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                 copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
 
-            } else{
+            } else {
                 // Write o, m, l into cb_out
                 copy_block(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                 copy_block(cb_cur_max, cb_out_m, Sq_chunk_t);
@@ -548,18 +601,19 @@ void MAIN {
             // cb_out_accumulate_im should contain o_1
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1
 
-            if (k_chunk_end - k_chunk_start < k_num_chunks){
-                // This indicates that there are computes done by other workers. Needs to wait for them and send to reducer's compute
-                for (uint32_t i = 0; i < num_cores_to_wait ; i++) {
-                    cb_wait_front(cb_out_o, q_chunk_tiles);  //o_2
-                    cb_wait_front(cb_m_in, Sq_chunk_t);  //m_2
-                    cb_wait_front(cb_l_in, Sq_chunk_t);  //l_2
+            if (k_chunk_end - k_chunk_start < k_num_chunks) {
+                // This indicates that there are computes done by other workers. Needs to wait for them and send to
+                // reducer's compute
+                for (uint32_t i = 0; i < num_cores_to_wait; i++) {
+                    cb_wait_front(cb_out_o, q_chunk_tiles);  // o_2
+                    cb_wait_front(cb_m_in, Sq_chunk_t);      // m_2
+                    cb_wait_front(cb_l_in, Sq_chunk_t);      // l_2
 
                     // reconfig_data_format(cb_q_in, cb_q_in); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im_2);
                     copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);
                     copy_block(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
-                    max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t); // pushed, pushed, popped
+                    max_block(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
 
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
                     /// l1 = torch.exp(m_2 - m) * l_2
@@ -598,12 +652,12 @@ void MAIN {
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
 
-            reconfig_data_format(cb_cur_sum, cb_cur_sum); // DEBUG
+            reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace(cb_cur_sum, Sq_chunk_t);
 
             /* cb_out_accumulate_im *= cb_cur_sum */
-            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum); // DEBUG
+            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
             pack_reconfig_data_format(cb_out_final);
@@ -613,8 +667,7 @@ void MAIN {
             cb_pop_front(cb_prev_max, Sq_chunk_t);
             cb_pop_front(cb_prev_sum, Sq_chunk_t);
         }
-
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
 }
-}
+}  // namespace NAMESPACE

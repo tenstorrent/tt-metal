@@ -6,17 +6,17 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t src0_addr  = get_arg_val<uint32_t>(0);
-    uint32_t src0_num_tiles  = get_arg_val<uint32_t>(3);
-    uint32_t src1_addr  = get_arg_val<uint32_t>(4);
+    uint32_t src0_addr = get_arg_val<uint32_t>(0);
+    uint32_t src0_num_tiles = get_arg_val<uint32_t>(3);
+    uint32_t src1_addr = get_arg_val<uint32_t>(4);
     // skip args 1,2,5,6,7 for compat with single bank readers and reader_diff_lengths
-    uint32_t NCHtWt     = get_arg_val<uint32_t>(8);
-    uint32_t NC         = get_arg_val<uint32_t>(9);
-    uint32_t Ht         = get_arg_val<uint32_t>(10);
-    uint32_t Wt         = get_arg_val<uint32_t>(11);
-    uint32_t nc1        = get_arg_val<uint32_t>(12); // if 1 we expect the bcast tensor to have NC=1
-    uint32_t start_id   = get_arg_val<uint32_t>(13);
-    uint32_t HtWt       = get_arg_val<uint32_t>(14); // HtWt of input tensor
+    uint32_t NCHtWt = get_arg_val<uint32_t>(8);
+    uint32_t NC = get_arg_val<uint32_t>(9);
+    uint32_t Ht = get_arg_val<uint32_t>(10);
+    uint32_t Wt = get_arg_val<uint32_t>(11);
+    uint32_t nc1 = get_arg_val<uint32_t>(12);  // if 1 we expect the bcast tensor to have NC=1
+    uint32_t start_id = get_arg_val<uint32_t>(13);
+    uint32_t HtWt = get_arg_val<uint32_t>(14);  // HtWt of input tensor
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
@@ -32,16 +32,10 @@ void kernel_main() {
     const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr,
-        .page_size = in0_tile_bytes,
-        .data_format = in0_data_format
-    };
+        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
 
     const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr,
-        .page_size = in1_tile_bytes,
-        .data_format = in1_data_format
-    };
+        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
@@ -67,8 +61,8 @@ void kernel_main() {
                 noc_async_read_tile(i1, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
-                i1 ++;
-                i ++; // input tile iterates over NC Ht Wt
+                i1++;
+                i++;  // input tile iterates over NC Ht Wt
             }
 
             // bcast tensor should be NC1W (actually NC32W padded with 0s in H)
@@ -76,7 +70,7 @@ void kernel_main() {
             i1 -= Wt;
         }
         // we reused Wt tiles out of NCWt bcast tensor Ht times, now advance for next NC
-        if (nc1 == 0) // if bcast NC==1 we don't advance but reuse the tensor
+        if (nc1 == 0)  // if bcast NC==1 we don't advance but reuse the tensor
             i1 += Wt;
         i_nc += HtWt;
     }

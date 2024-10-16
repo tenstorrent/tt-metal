@@ -6,7 +6,6 @@
 // Contains utility functions for partitioning shards work between multiple cores.
 //
 
-
 #include "sharding_utilities.hpp"
 
 namespace tt::tt_metal {
@@ -17,17 +16,15 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
 
     if (nsticks_per_core < 1) {
         // range is 0
-        return NewShardingConfig{
-                .first_partial_right_aligned_row_width = 0,
-                .first_partial_image_num_rows = 0,
-                .num_full_images = 0,
-                .last_partial_image_num_rows = 0,
-                .last_partial_left_aligned_row_width = 0,
-                .skip_after_partial_right_aligned_row = 0,
-                .skip_after_first_partial_image_row = 0,
-                .skip_after_full_image = 0,
-                .initial_skip = 0
-            };
+        return NewShardingConfig{.first_partial_right_aligned_row_width = 0,
+                                 .first_partial_image_num_rows = 0,
+                                 .num_full_images = 0,
+                                 .last_partial_image_num_rows = 0,
+                                 .last_partial_left_aligned_row_width = 0,
+                                 .skip_after_partial_right_aligned_row = 0,
+                                 .skip_after_first_partial_image_row = 0,
+                                 .skip_after_full_image = 0,
+                                 .initial_skip = 0};
     }
     if (nsticks_per_core < pc.in_w) {
         int32_t in_w_i = start_stick % pc.in_w;
@@ -39,9 +36,10 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
             int32_t halo_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;
             initial_skip = halo_nsticks;
         }
-        switch(nsticks_per_core) {
+        switch (nsticks_per_core) {
             case 1:
-                // only one stick in the range. need to figure out if there are padding to be attached to it, and in which place
+                // only one stick in the range. need to figure out if there are padding to be attached to it, and in
+                // which place
                 if (in_w_i == pc.in_w - 1) {
                     // this is the last stick in the row
                     // there needs to be padding sticks attached
@@ -49,44 +47,39 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
                         // this is the last stick in the image
                         // there needs to be full padding rows
                         return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 1,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 0,
-                                .skip_after_partial_right_aligned_row = (int32_t) (pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
-                    } else {
-                        // this is just the last stick in the row and not the image
-                        // there are just width padding
-                        return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 1,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 0,
-                                .skip_after_partial_right_aligned_row = 2 * (int32_t) pc.pad_w,
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
-                    }
-                } else {
-                    // this is just one stick without any padding
-                    return NewShardingConfig{
                             .first_partial_right_aligned_row_width = 1,
                             .first_partial_image_num_rows = 0,
                             .num_full_images = 0,
                             .last_partial_image_num_rows = 0,
                             .last_partial_left_aligned_row_width = 0,
-                            .skip_after_partial_right_aligned_row = 0,
+                            .skip_after_partial_right_aligned_row = (int32_t)(pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
                             .skip_after_first_partial_image_row = 0,
                             .skip_after_full_image = 0,
-                            .initial_skip = initial_skip
-                        };
+                            .initial_skip = initial_skip};
+                    } else {
+                        // this is just the last stick in the row and not the image
+                        // there are just width padding
+                        return NewShardingConfig{.first_partial_right_aligned_row_width = 1,
+                                                 .first_partial_image_num_rows = 0,
+                                                 .num_full_images = 0,
+                                                 .last_partial_image_num_rows = 0,
+                                                 .last_partial_left_aligned_row_width = 0,
+                                                 .skip_after_partial_right_aligned_row = 2 * (int32_t)pc.pad_w,
+                                                 .skip_after_first_partial_image_row = 0,
+                                                 .skip_after_full_image = 0,
+                                                 .initial_skip = initial_skip};
+                    }
+                } else {
+                    // this is just one stick without any padding
+                    return NewShardingConfig{.first_partial_right_aligned_row_width = 1,
+                                             .first_partial_image_num_rows = 0,
+                                             .num_full_images = 0,
+                                             .last_partial_image_num_rows = 0,
+                                             .last_partial_left_aligned_row_width = 0,
+                                             .skip_after_partial_right_aligned_row = 0,
+                                             .skip_after_first_partial_image_row = 0,
+                                             .skip_after_full_image = 0,
+                                             .initial_skip = initial_skip};
                 }
             case 2:
                 // two sticks in the range. figure out if there are any padding attached
@@ -97,29 +90,26 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
                         // these are the last sticks in the last row of the image
                         // insert full padding rows
                         return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 2,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 0,
-                                .skip_after_partial_right_aligned_row = (int32_t) (pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
+                            .first_partial_right_aligned_row_width = 2,
+                            .first_partial_image_num_rows = 0,
+                            .num_full_images = 0,
+                            .last_partial_image_num_rows = 0,
+                            .last_partial_left_aligned_row_width = 0,
+                            .skip_after_partial_right_aligned_row = (int32_t)(pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
+                            .skip_after_first_partial_image_row = 0,
+                            .skip_after_full_image = 0,
+                            .initial_skip = initial_skip};
                     } else {
                         // just need width padding
-                        return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 2,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 0,
-                                .skip_after_partial_right_aligned_row = 2 * (int32_t) pc.pad_w,
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
+                        return NewShardingConfig{.first_partial_right_aligned_row_width = 2,
+                                                 .first_partial_image_num_rows = 0,
+                                                 .num_full_images = 0,
+                                                 .last_partial_image_num_rows = 0,
+                                                 .last_partial_left_aligned_row_width = 0,
+                                                 .skip_after_partial_right_aligned_row = 2 * (int32_t)pc.pad_w,
+                                                 .skip_after_first_partial_image_row = 0,
+                                                 .skip_after_full_image = 0,
+                                                 .initial_skip = initial_skip};
                     }
                 } else if (in_w_i == pc.in_w - 1) {
                     // these are one last stick of the row and one first stick of next row
@@ -128,43 +118,38 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
                         // these two sticks belong to different images
                         // insert full padding rows between them
                         return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 1,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 1,
-                                .skip_after_partial_right_aligned_row = (int32_t) (pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
-                    } else {
-                        // just width padding between then
-                        return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 1,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = 1,
-                                .skip_after_partial_right_aligned_row = (int32_t) (2 * pc.pad_w),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
-                    }
-                } else {
-                    // no padding needs to be attached
-                    return NewShardingConfig{
-                            .first_partial_right_aligned_row_width = 2,
+                            .first_partial_right_aligned_row_width = 1,
                             .first_partial_image_num_rows = 0,
                             .num_full_images = 0,
                             .last_partial_image_num_rows = 0,
-                            .last_partial_left_aligned_row_width = 0,
-                            .skip_after_partial_right_aligned_row = 0,
+                            .last_partial_left_aligned_row_width = 1,
+                            .skip_after_partial_right_aligned_row = (int32_t)(pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
                             .skip_after_first_partial_image_row = 0,
                             .skip_after_full_image = 0,
-                            .initial_skip = initial_skip
-                        };
+                            .initial_skip = initial_skip};
+                    } else {
+                        // just width padding between then
+                        return NewShardingConfig{.first_partial_right_aligned_row_width = 1,
+                                                 .first_partial_image_num_rows = 0,
+                                                 .num_full_images = 0,
+                                                 .last_partial_image_num_rows = 0,
+                                                 .last_partial_left_aligned_row_width = 1,
+                                                 .skip_after_partial_right_aligned_row = (int32_t)(2 * pc.pad_w),
+                                                 .skip_after_first_partial_image_row = 0,
+                                                 .skip_after_full_image = 0,
+                                                 .initial_skip = initial_skip};
+                    }
+                } else {
+                    // no padding needs to be attached
+                    return NewShardingConfig{.first_partial_right_aligned_row_width = 2,
+                                             .first_partial_image_num_rows = 0,
+                                             .num_full_images = 0,
+                                             .last_partial_image_num_rows = 0,
+                                             .last_partial_left_aligned_row_width = 0,
+                                             .skip_after_partial_right_aligned_row = 0,
+                                             .skip_after_first_partial_image_row = 0,
+                                             .skip_after_full_image = 0,
+                                             .initial_skip = initial_skip};
                 }
 
             default:
@@ -177,43 +162,38 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
                             // this is the last row
                             // need full padding rows
                             return NewShardingConfig{
-                                    .first_partial_right_aligned_row_width = nsticks_per_core,
-                                    .first_partial_image_num_rows = 0,
-                                    .num_full_images = 0,
-                                    .last_partial_image_num_rows = 0,
-                                    .last_partial_left_aligned_row_width = 0,
-                                    .skip_after_partial_right_aligned_row = (int32_t) (pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
-                                    .skip_after_first_partial_image_row = 0,
-                                    .skip_after_full_image = 0,
-                                    .initial_skip = initial_skip
-                                };
-                        } else {
-                            // just width padding needed
-                            return NewShardingConfig{
-                                    .first_partial_right_aligned_row_width = nsticks_per_core,
-                                    .first_partial_image_num_rows = 0,
-                                    .num_full_images = 0,
-                                    .last_partial_image_num_rows = 0,
-                                    .last_partial_left_aligned_row_width = 0,
-                                    .skip_after_partial_right_aligned_row = (int32_t) (2 * pc.pad_w),
-                                    .skip_after_first_partial_image_row = 0,
-                                    .skip_after_full_image = 0,
-                                    .initial_skip = initial_skip
-                                };
-                        }
-                    } else {
-                        // no padding is needed
-                        return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = 0,
+                                .first_partial_right_aligned_row_width = nsticks_per_core,
                                 .first_partial_image_num_rows = 0,
                                 .num_full_images = 0,
                                 .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = nsticks_per_core,
-                                .skip_after_partial_right_aligned_row = 0,
+                                .last_partial_left_aligned_row_width = 0,
+                                .skip_after_partial_right_aligned_row = (int32_t)(pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
                                 .skip_after_first_partial_image_row = 0,
                                 .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
+                                .initial_skip = initial_skip};
+                        } else {
+                            // just width padding needed
+                            return NewShardingConfig{.first_partial_right_aligned_row_width = nsticks_per_core,
+                                                     .first_partial_image_num_rows = 0,
+                                                     .num_full_images = 0,
+                                                     .last_partial_image_num_rows = 0,
+                                                     .last_partial_left_aligned_row_width = 0,
+                                                     .skip_after_partial_right_aligned_row = (int32_t)(2 * pc.pad_w),
+                                                     .skip_after_first_partial_image_row = 0,
+                                                     .skip_after_full_image = 0,
+                                                     .initial_skip = initial_skip};
+                        }
+                    } else {
+                        // no padding is needed
+                        return NewShardingConfig{.first_partial_right_aligned_row_width = 0,
+                                                 .first_partial_image_num_rows = 0,
+                                                 .num_full_images = 0,
+                                                 .last_partial_image_num_rows = 0,
+                                                 .last_partial_left_aligned_row_width = nsticks_per_core,
+                                                 .skip_after_partial_right_aligned_row = 0,
+                                                 .skip_after_first_partial_image_row = 0,
+                                                 .skip_after_full_image = 0,
+                                                 .initial_skip = initial_skip};
                     }
                 } else {
                     // sticks span two different rows. figure out where does the padding go.
@@ -224,30 +204,28 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
                         // sticks span across different images
                         // full padding rows need to be inserted
                         return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = insert_padding_at,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = nsticks_per_core - insert_padding_at,
-                                .skip_after_partial_right_aligned_row = (int32_t) (pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
+                            .first_partial_right_aligned_row_width = insert_padding_at,
+                            .first_partial_image_num_rows = 0,
+                            .num_full_images = 0,
+                            .last_partial_image_num_rows = 0,
+                            .last_partial_left_aligned_row_width = nsticks_per_core - insert_padding_at,
+                            .skip_after_partial_right_aligned_row = (int32_t)(pc.pad_h * (pc.in_w + 2 * pc.pad_w)),
+                            .skip_after_first_partial_image_row = 0,
+                            .skip_after_full_image = 0,
+                            .initial_skip = initial_skip};
                     } else {
                         // sticks belong to same image
                         // only width padding needed
                         return NewShardingConfig{
-                                .first_partial_right_aligned_row_width = insert_padding_at,
-                                .first_partial_image_num_rows = 0,
-                                .num_full_images = 0,
-                                .last_partial_image_num_rows = 0,
-                                .last_partial_left_aligned_row_width = nsticks_per_core - insert_padding_at,
-                                .skip_after_partial_right_aligned_row = (int32_t) (2 * pc.pad_w),
-                                .skip_after_first_partial_image_row = 0,
-                                .skip_after_full_image = 0,
-                                .initial_skip = initial_skip
-                            };
+                            .first_partial_right_aligned_row_width = insert_padding_at,
+                            .first_partial_image_num_rows = 0,
+                            .num_full_images = 0,
+                            .last_partial_image_num_rows = 0,
+                            .last_partial_left_aligned_row_width = nsticks_per_core - insert_padding_at,
+                            .skip_after_partial_right_aligned_row = (int32_t)(2 * pc.pad_w),
+                            .skip_after_first_partial_image_row = 0,
+                            .skip_after_full_image = 0,
+                            .initial_skip = initial_skip};
                     }
                 }
         }
@@ -255,103 +233,115 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
 
     // First partial right-aligned row
     int32_t image_row_start_left_width = start_stick % pc.in_w;
-    if (to_print) log_debug("image_row_start_left_width: {}", image_row_start_left_width);
-    int32_t first_partial_right_aligned_row_width = image_row_start_left_width > 0 ? pc.in_w - image_row_start_left_width : 0;
-    if (to_print) log_debug("first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
+    if (to_print)
+        log_debug("image_row_start_left_width: {}", image_row_start_left_width);
+    int32_t first_partial_right_aligned_row_width =
+        image_row_start_left_width > 0 ? pc.in_w - image_row_start_left_width : 0;
+    if (to_print)
+        log_debug("first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
 
     if (first_partial_right_aligned_row_width > nsticks_per_core) {
-        return NewShardingConfig{
-                .first_partial_right_aligned_row_width = nsticks_per_core,
-                .first_partial_image_num_rows = 0,
-                .num_full_images = 0,
-                .last_partial_image_num_rows = 0,
-                .last_partial_left_aligned_row_width = 0,
-                .skip_after_partial_right_aligned_row = 0,
-                .skip_after_first_partial_image_row = 0,
-                .skip_after_full_image = 0
-            };
+        return NewShardingConfig{.first_partial_right_aligned_row_width = nsticks_per_core,
+                                 .first_partial_image_num_rows = 0,
+                                 .num_full_images = 0,
+                                 .last_partial_image_num_rows = 0,
+                                 .last_partial_left_aligned_row_width = 0,
+                                 .skip_after_partial_right_aligned_row = 0,
+                                 .skip_after_first_partial_image_row = 0,
+                                 .skip_after_full_image = 0};
     }
 
     // Last partial left-aligned row
     int32_t sticks_after_first_partial_row = nsticks_per_core - first_partial_right_aligned_row_width;
-    if (to_print) log_debug("sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
+    if (to_print)
+        log_debug("sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
     int32_t last_partial_left_aligned_row_width = sticks_after_first_partial_row % pc.in_w;
-    if (to_print) log_debug("last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
+    if (to_print)
+        log_debug("last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
 
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
     // This also affects skip after first_partial_right_aligned_row
     int32_t image_row_start_idx = start_stick / pc.in_w;
-    int32_t image_row_start_idx_after_partial_right_aligned_row = (start_stick + first_partial_right_aligned_row_width) / pc.in_w;
+    int32_t image_row_start_idx_after_partial_right_aligned_row =
+        (start_stick + first_partial_right_aligned_row_width) / pc.in_w;
     int32_t image_row_end_idx = (end_stick - 1) / pc.in_w;
     int32_t image_start_idx = image_row_start_idx / pc.in_h;
-    int32_t image_start_idx_after_partial_right_aligned_row = image_row_start_idx_after_partial_right_aligned_row / pc.in_h;
-    int32_t image_start_height_after_partial_right_aligned_row = image_row_start_idx_after_partial_right_aligned_row % pc.in_h;
+    int32_t image_start_idx_after_partial_right_aligned_row =
+        image_row_start_idx_after_partial_right_aligned_row / pc.in_h;
+    int32_t image_start_height_after_partial_right_aligned_row =
+        image_row_start_idx_after_partial_right_aligned_row % pc.in_h;
     int32_t image_end_idx = image_row_end_idx / pc.in_h;
 
-    // Default case: We don't have a partial right aligned row; so we start with either full images, last partial image, or partial left aligned row
+    // Default case: We don't have a partial right aligned row; so we start with either full images, last partial image,
+    // or partial left aligned row
     int32_t skip_after_partial_right_aligned_row = 0;
     // Case: partial_right_aligned_row > 0 and completes an image
     if (first_partial_right_aligned_row_width > 0 && image_start_height_after_partial_right_aligned_row == 0) {
         skip_after_partial_right_aligned_row = pc.window_w - 1 + pc.pad_h * (pc.in_w + 2 * pc.pad_w);
-    // Case: partial_right_aligned_row > 0 and doesn't complete an image
+        // Case: partial_right_aligned_row > 0 and doesn't complete an image
     } else if (first_partial_right_aligned_row_width > 0) {
         skip_after_partial_right_aligned_row = pc.window_w - 1;
     }
 
     int32_t first_partial_image_num_rows = 0;
     int32_t skip_after_first_partial_image_row = 0;
-    // Only case where we have first_partial_image_rows: We have at at least 1 completed image and the starting image row is in the middle of an image
-    if (image_end_idx - image_start_idx_after_partial_right_aligned_row > 0 && image_start_height_after_partial_right_aligned_row > 0) {
+    // Only case where we have first_partial_image_rows: We have at at least 1 completed image and the starting image
+    // row is in the middle of an image
+    if (image_end_idx - image_start_idx_after_partial_right_aligned_row > 0 &&
+        image_start_height_after_partial_right_aligned_row > 0) {
         first_partial_image_num_rows = pc.in_h - image_start_height_after_partial_right_aligned_row;
         skip_after_first_partial_image_row = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
     }
 
     // Full images
-    int32_t image_rows_after_first_partial_image = sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
-    if (to_print) log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
+    int32_t image_rows_after_first_partial_image =
+        sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
+    if (to_print)
+        log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
     int32_t num_full_images = image_rows_after_first_partial_image / pc.in_h;
     int32_t skip_after_full_image = num_full_images > 0 ? pc.pad_h * (pc.in_w + 2 * pc.pad_w) : 0;
 
     // Last partial image rows
     int32_t last_partial_image_num_rows = image_rows_after_first_partial_image % pc.in_h;
 
-    return NewShardingConfig{
-               .first_partial_right_aligned_row_width = first_partial_right_aligned_row_width,
-               .first_partial_image_num_rows = first_partial_image_num_rows,
-               .num_full_images = num_full_images,
-               .last_partial_image_num_rows = last_partial_image_num_rows,
-               .last_partial_left_aligned_row_width = last_partial_left_aligned_row_width,
-               .skip_after_partial_right_aligned_row = skip_after_partial_right_aligned_row,
-               .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
-               .skip_after_full_image = skip_after_full_image
-           };
+    return NewShardingConfig{.first_partial_right_aligned_row_width = first_partial_right_aligned_row_width,
+                             .first_partial_image_num_rows = first_partial_image_num_rows,
+                             .num_full_images = num_full_images,
+                             .last_partial_image_num_rows = last_partial_image_num_rows,
+                             .last_partial_left_aligned_row_width = last_partial_left_aligned_row_width,
+                             .skip_after_partial_right_aligned_row = skip_after_partial_right_aligned_row,
+                             .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
+                             .skip_after_full_image = skip_after_full_image};
 }
 
 // Calculate the sharding config for input sticks with padding and halo data included
-NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_stick, const PoolConfig& pc, bool to_print) {
+NewShardingConfig get_shard_specs_with_halo(int32_t start_stick,
+                                            int32_t end_stick,
+                                            const PoolConfig& pc,
+                                            bool to_print) {
     int32_t nsticks = end_stick - start_stick;
 
     if (nsticks < 1) {
         // range is 0. set everything to 0
-        return NewShardingConfig{
-                .first_partial_right_aligned_row_width = 0,
-                .first_partial_image_num_rows = 0,
-                .num_full_images = 0,
-                .last_partial_image_num_rows = 0,
-                .last_partial_left_aligned_row_width = 0,
-                .skip_after_partial_right_aligned_row = 0,
-                .skip_after_first_partial_image_row = 0,
-                .skip_after_full_image = 0,
-                .initial_skip = 0,
-                .start_stick = 0
-            };
+        return NewShardingConfig{.first_partial_right_aligned_row_width = 0,
+                                 .first_partial_image_num_rows = 0,
+                                 .num_full_images = 0,
+                                 .last_partial_image_num_rows = 0,
+                                 .last_partial_left_aligned_row_width = 0,
+                                 .skip_after_partial_right_aligned_row = 0,
+                                 .skip_after_first_partial_image_row = 0,
+                                 .skip_after_full_image = 0,
+                                 .initial_skip = 0,
+                                 .start_stick = 0};
     }
 
-    // NOTE: all cores have the exact same sized halo, including the left cores' left halo, which is initial_skip (padding), and right cores' right halo
+    // NOTE: all cores have the exact same sized halo, including the left cores' left halo, which is initial_skip
+    // (padding), and right cores' right halo
     int32_t halo_nsticks = (pc.in_w + 2 * pc.pad_w) * pc.pad_h + pc.window_w / 2;
 
     int32_t halo_nsticks_nopad = pc.in_w + pc.window_w / 2;
-    int32_t halo_start_stick = start_stick - halo_nsticks_nopad;  // this will be -ve for initial cores where start_stick < halo_nsticks
+    int32_t halo_start_stick =
+        start_stick - halo_nsticks_nopad;  // this will be -ve for initial cores where start_stick < halo_nsticks
     int32_t halo_end_stick = end_stick + halo_nsticks_nopad;
     int32_t nsticks_with_halo = halo_end_stick - halo_start_stick;
 
@@ -364,7 +354,7 @@ NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_sti
     // start with the first valid stick incl. halo
     // start_stick = halo_start_stick < 0 ? 0 : halo_start_stick;
     start_stick = halo_start_stick < batch_start ? batch_start : halo_start_stick;
-    end_stick = halo_end_stick; // TODO: take care of max, which would be (in_h * in_w * nbatch + halo_nsticks)
+    end_stick = halo_end_stick;  // TODO: take care of max, which would be (in_h * in_w * nbatch + halo_nsticks)
 
     // log_debug(" -- range with halo: [{},{})", start_stick, end_stick);
 
@@ -383,18 +373,16 @@ NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_sti
 
     if (in_h_i == last_in_h_i) {
         // all sticks belong to the same row (neither first partial, nor last partial)
-        return NewShardingConfig{
-                .first_partial_right_aligned_row_width = 0,
-                .first_partial_image_num_rows = 0,
-                .num_full_images = 0,
-                .last_partial_image_num_rows = 0,
-                .last_partial_left_aligned_row_width = nsticks,
-                .skip_after_partial_right_aligned_row = 0,
-                .skip_after_first_partial_image_row = 0,
-                .skip_after_full_image = 0,
-                .initial_skip = initial_skip,
-                .start_stick = start_stick_padded
-            };
+        return NewShardingConfig{.first_partial_right_aligned_row_width = 0,
+                                 .first_partial_image_num_rows = 0,
+                                 .num_full_images = 0,
+                                 .last_partial_image_num_rows = 0,
+                                 .last_partial_left_aligned_row_width = nsticks,
+                                 .skip_after_partial_right_aligned_row = 0,
+                                 .skip_after_first_partial_image_row = 0,
+                                 .skip_after_full_image = 0,
+                                 .initial_skip = initial_skip,
+                                 .start_stick = start_stick_padded};
     }
 
     int32_t partial_first_row_nsticks = 0;
@@ -434,7 +422,7 @@ NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_sti
             // yes it does
             int32_t stick_counter = curr_stick;
             while (stick_counter / (pc.in_h * pc.in_w) == batch_i) {
-                ++ stick_counter;
+                ++stick_counter;
             }
             partial_top_image_nrows = (stick_counter - curr_stick) / pc.in_w;
             curr_stick += partial_top_image_nrows * pc.in_w;
@@ -468,18 +456,16 @@ NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_sti
 
     int32_t partial_last_row_nsticks = (end_stick - curr_stick) % pc.in_w;  // TODO: take care of padding and edges etc
 
-    auto sc = NewShardingConfig{
-        .first_partial_right_aligned_row_width = partial_first_row_nsticks,
-        .first_partial_image_num_rows = partial_top_image_nrows,
-        .num_full_images = full_nimages,
-        .last_partial_image_num_rows = partial_bottom_image_nrows,
-        .last_partial_left_aligned_row_width = partial_last_row_nsticks,
-        .skip_after_partial_right_aligned_row = skip_after_partial_first_row,
-        .skip_after_first_partial_image_row = skip_after_partial_top_image,
-        .skip_after_full_image = skip_after_full_image,
-        .initial_skip = initial_skip,
-        .start_stick = start_stick_padded
-    };
+    auto sc = NewShardingConfig{.first_partial_right_aligned_row_width = partial_first_row_nsticks,
+                                .first_partial_image_num_rows = partial_top_image_nrows,
+                                .num_full_images = full_nimages,
+                                .last_partial_image_num_rows = partial_bottom_image_nrows,
+                                .last_partial_left_aligned_row_width = partial_last_row_nsticks,
+                                .skip_after_partial_right_aligned_row = skip_after_partial_first_row,
+                                .skip_after_first_partial_image_row = skip_after_partial_top_image,
+                                .skip_after_full_image = skip_after_full_image,
+                                .initial_skip = initial_skip,
+                                .start_stick = start_stick_padded};
 
     // log_debug(LogOp, "initial_skip: {}", sc.initial_skip);
     // log_debug(LogOp, "partial_first_row_nsticks: {}", sc.first_partial_right_aligned_row_width);
@@ -495,8 +481,10 @@ NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_sti
 }
 
 // For given pool config output, calculate the out sticks sharding config and the corresponding input shard config
-std::tuple<InOutShardingConfig, InOutShardingConfig>
-get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& pc, bool to_print) {
+std::tuple<InOutShardingConfig, InOutShardingConfig> get_inout_shard_specs(int32_t start_stick,
+                                                                           int32_t end_stick,
+                                                                           const PoolConfig& pc,
+                                                                           bool to_print) {
     InOutShardingConfig out_sc = InOutShardingConfig{
         .start_stick = 0,
         .first_partial_right_aligned_row_width = 0,
@@ -611,7 +599,8 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
             out_sc.skip_after_first_partial_image_row = 0;
             in_sc.first_partial_image_num_rows = (in_stick_counter - curr_in_stick) / pc.in_w;
             in_sc.skip_after_first_partial_image_row = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
-            curr_out_stick += out_sc.first_partial_image_num_rows * pc.out_w + out_sc.skip_after_first_partial_image_row;
+            curr_out_stick +=
+                out_sc.first_partial_image_num_rows * pc.out_w + out_sc.skip_after_first_partial_image_row;
             curr_in_stick += in_sc.first_partial_image_num_rows * pc.in_w + in_sc.skip_after_first_partial_image_row;
         } else {
             // no it does not
@@ -629,7 +618,7 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
     int32_t rem_full_in_rows = (end_in_stick - curr_in_stick) / (pc.in_w + 2 * pc.pad_w);
     out_sc.num_full_images = rem_full_out_rows / pc.out_h;
     out_sc.skip_after_full_image = 0;
-    in_sc.num_full_images = out_sc.num_full_images; // should be the same
+    in_sc.num_full_images = out_sc.num_full_images;  // should be the same
     in_sc.skip_after_full_image = pc.pad_h * (pc.in_w + 2 * pc.pad_w);
     curr_out_stick += out_sc.num_full_images * (pc.out_h * pc.out_w) + out_sc.skip_after_full_image;
     curr_in_stick += in_sc.num_full_images * (pc.in_h * (pc.in_w + 2 * pc.pad_w)) + in_sc.skip_after_full_image;
@@ -649,7 +638,13 @@ get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& 
     return std::make_tuple(in_sc, out_sc);
 }
 
-ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick, uint32_t end_stick, uint32_t in_h, uint32_t in_w, uint32_t window_w, uint32_t pad_h, uint32_t pad_w) {
+ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick,
+                                                uint32_t end_stick,
+                                                uint32_t in_h,
+                                                uint32_t in_w,
+                                                uint32_t window_w,
+                                                uint32_t pad_h,
+                                                uint32_t pad_w) {
     /* Logic to compute:
      * NOTE: This logic is wrong if stride !=1
      *   - Input:
@@ -676,7 +671,8 @@ ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick, uint32_t e
 
     // First partial right-aligned row
     uint32_t image_row_start_left_width = start_stick % in_w;
-    uint32_t first_partial_right_aligned_row_width = image_row_start_left_width > 0 ? in_w - image_row_start_left_width : 0;
+    uint32_t first_partial_right_aligned_row_width =
+        image_row_start_left_width > 0 ? in_w - image_row_start_left_width : 0;
 
     // Last partial left-aligned row
     uint32_t sticks_after_first_partial_row = nsticks_per_core - first_partial_right_aligned_row_width;
@@ -685,49 +681,54 @@ ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick, uint32_t e
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
     // This also affects skip after first_partial_right_aligned_row
     uint32_t image_row_start_idx = start_stick / in_w;
-    uint32_t image_row_start_idx_after_partial_right_aligned_row = (start_stick + first_partial_right_aligned_row_width) / in_w;
+    uint32_t image_row_start_idx_after_partial_right_aligned_row =
+        (start_stick + first_partial_right_aligned_row_width) / in_w;
     uint32_t image_row_end_idx = end_stick / in_w;
     uint32_t image_start_idx = image_row_start_idx / in_h;
-    uint32_t image_start_idx_after_partial_right_aligned_row = image_row_start_idx_after_partial_right_aligned_row / in_h;
-    uint32_t image_start_height_after_partial_right_aligned_row = image_row_start_idx_after_partial_right_aligned_row % in_h;
+    uint32_t image_start_idx_after_partial_right_aligned_row =
+        image_row_start_idx_after_partial_right_aligned_row / in_h;
+    uint32_t image_start_height_after_partial_right_aligned_row =
+        image_row_start_idx_after_partial_right_aligned_row % in_h;
     uint32_t image_end_idx = image_row_end_idx / in_h;
 
-    // Default case: We don't have a partial right aligned row; so we start with either full images, last partial image, or partial left aligned row
+    // Default case: We don't have a partial right aligned row; so we start with either full images, last partial image,
+    // or partial left aligned row
     uint32_t skip_after_partial_right_aligned_row = 0;
     // Case: partial_right_aligned_row > 0 and completes an image
     if (first_partial_right_aligned_row_width > 0 and image_start_height_after_partial_right_aligned_row == 0) {
         skip_after_partial_right_aligned_row = window_w - 1 + pad_h * (in_w + 2 * pad_w);
-    // Case: partial_right_aligned_row > 0 and doesn't complete an image
+        // Case: partial_right_aligned_row > 0 and doesn't complete an image
     } else if (first_partial_right_aligned_row_width > 0) {
         skip_after_partial_right_aligned_row = window_w - 1;
     }
 
     uint32_t first_partial_image_num_rows = 0;
     uint32_t skip_after_first_partial_image_row = 0;
-    // Only case where we have first_partial_image_rows: We have at at least 1 completed image and the starting image row is in the middle of an image
-    if (image_end_idx - image_start_idx_after_partial_right_aligned_row > 0 and image_start_height_after_partial_right_aligned_row > 0) {
+    // Only case where we have first_partial_image_rows: We have at at least 1 completed image and the starting image
+    // row is in the middle of an image
+    if (image_end_idx - image_start_idx_after_partial_right_aligned_row > 0 and
+        image_start_height_after_partial_right_aligned_row > 0) {
         first_partial_image_num_rows = in_h - image_start_height_after_partial_right_aligned_row;
         skip_after_first_partial_image_row = pad_h * (in_w + 2 * pad_w);
     }
 
     // Full images
-    uint32_t image_rows_after_first_partial_image = sticks_after_first_partial_row / in_w - first_partial_image_num_rows;
+    uint32_t image_rows_after_first_partial_image =
+        sticks_after_first_partial_row / in_w - first_partial_image_num_rows;
     uint32_t num_full_images = image_rows_after_first_partial_image / in_h;
     uint32_t skip_after_full_image = num_full_images > 0 ? pad_h * (in_w + 2 * pad_w) : 0;
 
     // Last partial image rows
     uint32_t last_partial_image_num_rows = image_rows_after_first_partial_image % in_h;
 
-    return ShardingConfig{
-               .first_partial_right_aligned_row_width = first_partial_right_aligned_row_width,
-               .first_partial_image_num_rows = first_partial_image_num_rows,
-               .num_full_images = num_full_images,
-               .last_partial_image_num_rows = last_partial_image_num_rows,
-               .last_partial_left_aligned_row_width = last_partial_left_aligned_row_width,
-               .skip_after_partial_right_aligned_row = skip_after_partial_right_aligned_row,
-               .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
-               .skip_after_full_image = skip_after_full_image
-           };
+    return ShardingConfig{.first_partial_right_aligned_row_width = first_partial_right_aligned_row_width,
+                          .first_partial_image_num_rows = first_partial_image_num_rows,
+                          .num_full_images = num_full_images,
+                          .last_partial_image_num_rows = last_partial_image_num_rows,
+                          .last_partial_left_aligned_row_width = last_partial_left_aligned_row_width,
+                          .skip_after_partial_right_aligned_row = skip_after_partial_right_aligned_row,
+                          .skip_after_first_partial_image_row = skip_after_first_partial_image_row,
+                          .skip_after_full_image = skip_after_full_image};
 }
 
-}// namespace tt::tt_metal
+}  // namespace tt::tt_metal

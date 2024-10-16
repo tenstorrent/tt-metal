@@ -14,24 +14,24 @@
 
 namespace ttnn::operations::sliding_window {
 
-owned_buffer::Buffer<bfloat16> ref_conv_op(
-    const Tensor &input_padded_tensor,
-    const Shape &input_nchw_shape,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    const std::vector<float> &filter_vector,
-    const Shape &filter_pyt_tensor_shape,
-    const Shape &out_golden_pyt_tensor_shape) {
+owned_buffer::Buffer<bfloat16> ref_conv_op(const Tensor &input_padded_tensor,
+                                           const Shape &input_nchw_shape,
+                                           uint32_t stride_h,
+                                           uint32_t stride_w,
+                                           const std::vector<float> &filter_vector,
+                                           const Shape &filter_pyt_tensor_shape,
+                                           const Shape &out_golden_pyt_tensor_shape) {
     uint32_t input_n, input_h, input_w;
     uint32_t filter_h, filter_w;
     uint32_t output_n, output_h, output_w;
     uint32_t out_idx = 0;
     auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
 
-    std::tie(output_n, output_h, output_w) =
-        std::forward_as_tuple(out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
+    std::tie(output_n, output_h, output_w) = std::forward_as_tuple(
+        out_golden_pyt_tensor_shape[0], out_golden_pyt_tensor_shape[1], out_golden_pyt_tensor_shape[2]);
     std::tie(filter_h, filter_w) = std::forward_as_tuple(filter_pyt_tensor_shape[0], filter_pyt_tensor_shape[1]);
-    std::tie(input_n, input_h, input_w) = std::forward_as_tuple(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
+    std::tie(input_n, input_h, input_w) =
+        std::forward_as_tuple(input_nchw_shape[0], input_nchw_shape[1], input_nchw_shape[2]);
     auto out_golden_pyt_tensor = owned_buffer::create<bfloat16>(output_n * output_h * output_w);
 
     std::vector<float> input_window;
@@ -175,7 +175,8 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     return conv_tensor_buf;
 }
 
-std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
+std::vector<bool> pad_metadata_from_tensor_metadata(
+    const std::vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
     vector<bool> ref_pad_metadata;
     for (auto i = 0; i < tensor_metadata.size(); i++) {
         auto is_pad_stick = tensor_metadata[i].first;
@@ -272,4 +273,4 @@ std::vector<uint32_t> input_indices_from_flattened_remote_config(
     return abs_indices;
 }
 
-}  // namespace tt::tt_metal::sliding_window
+}  // namespace ttnn::operations::sliding_window

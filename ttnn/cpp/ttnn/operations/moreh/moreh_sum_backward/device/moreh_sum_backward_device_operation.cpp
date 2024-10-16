@@ -8,8 +8,8 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
-void MorehSumBackwardOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSumBackwardOperation::validate_inputs(const operation_attributes_t& operation_attributes,
+                                                const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
     auto& input_grad = tensor_args.input_grad;
@@ -64,12 +64,11 @@ void MorehSumBackwardOperation::validate_inputs(
         TT_FATAL(expected_rank == rank, "expected_rank {} == rank {}", expected_rank, rank);
         for (int i = 0; i < rank; ++i) {
             TT_FATAL(expected_output_grad_shape[i] >= output_grad_shape_wo_padding[i], "Error");
-            log_debug(
-                tt::LogOp,
-                "rank {} expected_output_grad_shape {}, output_grad_shape_wo_padding {}",
-                i,
-                expected_output_grad_shape[i],
-                output_grad_shape_wo_padding[i]);
+            log_debug(tt::LogOp,
+                      "rank {} expected_output_grad_shape {}, output_grad_shape_wo_padding {}",
+                      i,
+                      expected_output_grad_shape[i],
+                      output_grad_shape_wo_padding[i]);
         }
     }
 
@@ -81,27 +80,30 @@ void MorehSumBackwardOperation::validate_inputs(
 }
 
 MorehSumBackwardOperation::program_factory_t MorehSumBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return ProgramFactory{};
 }
 
-void MorehSumBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSumBackwardOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                               const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehSumBackwardOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSumBackwardOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                              const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
 MorehSumBackwardOperation::shape_return_value_t MorehSumBackwardOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return tensor_args.output_grad.get_shape();
 };
 
 MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input_grad = tensor_args.input_grad;
     auto input = tensor_args.input;
     auto dtype = input->dtype();
@@ -112,21 +114,18 @@ MorehSumBackwardOperation::tensor_return_value_t MorehSumBackwardOperation::crea
 }
 
 std::tuple<MorehSumBackwardOperation::operation_attributes_t, MorehSumBackwardOperation::tensor_args_t>
-MorehSumBackwardOperation::invoke(
-    const Tensor& output_grad,
-    const std::optional<Tensor>& input,
-    const std::vector<int64_t>& dims,
-    bool keepdim,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            dims,
-            keepdim,
-            memory_config.value_or(output_grad.memory_config()),
-            init_device_compute_kernel_config(
-                output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{output_grad, input, input_grad}};
+MorehSumBackwardOperation::invoke(const Tensor& output_grad,
+                                  const std::optional<Tensor>& input,
+                                  const std::vector<int64_t>& dims,
+                                  bool keepdim,
+                                  const std::optional<Tensor>& input_grad,
+                                  const std::optional<MemoryConfig>& memory_config,
+                                  const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return {operation_attributes_t{dims,
+                                   keepdim,
+                                   memory_config.value_or(output_grad.memory_config()),
+                                   init_device_compute_kernel_config(
+                                       output_grad.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            tensor_args_t{output_grad, input, input_grad}};
 }
 }  // namespace ttnn::operations::moreh::moreh_sum_backward

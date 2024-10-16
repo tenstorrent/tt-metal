@@ -13,12 +13,11 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks reduce_single_core_hw(
-    const Tensor &a,
-    Tensor &output,
-    ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
-    float scaler) {
+operation::ProgramWithCallbacks reduce_single_core_hw(const Tensor &a,
+                                                      Tensor &output,
+                                                      ReduceOpMath reduce_op,
+                                                      const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
+                                                      float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
     uint32_t HW = H * W;
@@ -83,12 +82,12 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, (std::uint32_t)dst_is_dram};
     std::map<string, string> reader_defines;
 
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
-        "reader_unary_reduce_interleaved_start_id.cpp",
-        core,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+    tt_metal::KernelHandle reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
+                               "reader_unary_reduce_interleaved_start_id.cpp",
+                               core,
+                               tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -106,11 +105,10 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw.cpp",
         core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .compile_args = compute_kernel_args,
-            .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)});
+        tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                .fp32_dest_acc_en = fp32_dest_acc_en,
+                                .compile_args = compute_kernel_args,
+                                .defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::HW)});
 
     tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {a.buffer()->address(), num_tensor_tiles, 0});
 

@@ -39,16 +39,14 @@ struct MorehMeanBackwardOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& output);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<MorehMeanBackwardFactory>;
@@ -72,7 +70,7 @@ struct MorehMeanBackwardOperation {
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
 
 namespace ttnn::prim {
-constexpr auto moreh_mean_backward = ttnn::register_operation<
-    "ttnn::prim::moreh_mean_backward",
-    ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation>();
+constexpr auto moreh_mean_backward =
+    ttnn::register_operation<"ttnn::prim::moreh_mean_backward",
+                             ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation>();
 }

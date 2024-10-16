@@ -27,6 +27,7 @@ struct ExecuteLayerNorm {
 }  // namespace operations::normalization
 
 constexpr auto layer_norm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm", ttnn::operations::normalization::ExecuteLayerNorm>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm",
+                                                 ttnn::operations::normalization::ExecuteLayerNorm>();
 
 }  // namespace ttnn

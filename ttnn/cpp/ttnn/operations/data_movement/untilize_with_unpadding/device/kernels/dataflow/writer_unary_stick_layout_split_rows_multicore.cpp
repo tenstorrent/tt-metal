@@ -26,8 +26,8 @@ void kernel_main() {
 
 #if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    const InterleavedPow2AddrGen<dst_is_dram> s = {.bank_base_address = dst_addr,
+                                                   .log_base_2_of_page_size = log_base_2_of_page_size};
 #else
     const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = unpadded_X_size};
 #endif

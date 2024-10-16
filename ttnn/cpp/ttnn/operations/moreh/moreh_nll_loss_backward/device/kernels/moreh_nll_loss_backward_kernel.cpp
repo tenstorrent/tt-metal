@@ -26,21 +26,21 @@ void MAIN {
     init_sfpu(cb_output_grad);
 
 #if defined(DIVISOR)
-        cb_wait_front(cb_divisor, onetile);
-        cb_reserve_back(cb_tmp1, onetile);
+    cb_wait_front(cb_divisor, onetile);
+    cb_reserve_back(cb_tmp1, onetile);
 
-        tile_regs_acquire();
-        copy_tile_init_with_dt(cb_divisor);
-        copy_tile(cb_divisor, 0, dst0);
-        recip_tile_init();
-        recip_tile(dst0);
-        tile_regs_commit();
+    tile_regs_acquire();
+    copy_tile_init_with_dt(cb_divisor);
+    copy_tile(cb_divisor, 0, dst0);
+    recip_tile_init();
+    recip_tile(dst0);
+    tile_regs_commit();
 
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        tile_regs_release();
+    tile_regs_wait();
+    pack_tile_with_dt(dst0, cb_tmp1);
+    tile_regs_release();
 
-        cb_push_back(cb_tmp1, onetile);
+    cb_push_back(cb_tmp1, onetile);
 #endif
 
     cb_wait_front(cb_output_grad, onetile);
@@ -63,7 +63,6 @@ void MAIN {
 
         cb_push_back(cb_tmp2, onetile);
         cb_pop_front(cb_tmp_weight, onetile);
-
 
         cb_reserve_back(cb_input_grad, onetile);
         cb_wait_front(cb_tmp2, onetile);
@@ -107,6 +106,5 @@ void MAIN {
 #if defined(DIVISOR)
     cb_pop_front(cb_divisor, onetile);
 #endif
-
 }
 }  // namespace NAMESPACE

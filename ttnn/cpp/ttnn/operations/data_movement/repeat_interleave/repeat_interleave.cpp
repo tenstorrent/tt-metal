@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "repeat_interleave.hpp"
 
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -11,9 +10,11 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-
 // repeat interleave supports repeats as 1 to inf, dim between 0 to 2
-ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32_t repeat, int32_t dim, std::optional<MemoryConfig> output_mem_config) {
+ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a,
+                                             uint32_t repeat,
+                                             int32_t dim,
+                                             std::optional<MemoryConfig> output_mem_config) {
     std::vector<Tensor> combined_tensors;
     combined_tensors.reserve(repeat);
     auto shape_wh = input_a.get_legacy_shape();
@@ -42,7 +43,8 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32
             return ttnn::reshape_on_device(concat_out, shape_wh[0] * repeat, shape_wh[1], shape_wh[2], shape_wh[3]);
         }
     } else {
-        Tensor reshape_out = ttnn::reshape_on_device(input_a, 1, 1, shape_wh[0] * shape_wh[1] * shape_wh[2], shape_wh[3]);
+        Tensor reshape_out =
+            ttnn::reshape_on_device(input_a, 1, 1, shape_wh[0] * shape_wh[1] * shape_wh[2], shape_wh[3]);
         for (int i = 0; i < repeat; i++) {
             combined_tensors.push_back(reshape_out);
         }

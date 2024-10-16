@@ -16,17 +16,16 @@ inline void check_tensor(const Tensor& tensor, const std::string& op_name) {
         tensor.get_layout() == Layout::TILE, "{} only supports tiled layout. Got: {}", op_name, tensor.get_layout());
     TT_FATAL(
         tensor.get_dtype() == DataType::BFLOAT16, "{} only supports bfloat16. Got: {}", op_name, tensor.get_dtype());
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE,
-        "Operands to {} need to be on device! Got: {}",
-        op_name,
-        tensor.storage_type());
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE,
+             "Operands to {} need to be on device! Got: {}",
+             op_name,
+             tensor.storage_type());
     TT_FATAL(tensor.buffer() != nullptr, "Operands to {} need to be allocated in buffers on device!", op_name);
 }
 }  // namespace
 
-void MorehLayerNormOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehLayerNormOperation::validate_inputs(const operation_attributes_t& operation_attributes,
+                                              const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     const auto& gamma = tensor_args.gamma;
@@ -37,11 +36,10 @@ void MorehLayerNormOperation::validate_inputs(
     const auto normalized_dims = operation_attributes.normalized_dims;
 
     TT_FATAL(normalized_dims > 0, "normalized_dims should > 0. Got {}", normalized_dims);
-    TT_FATAL(
-        normalized_dims <= input.get_legacy_shape().rank(),
-        "normalized_dims should <= input rank ({}). Got: {}",
-        input.get_legacy_shape().rank(),
-        normalized_dims);
+    TT_FATAL(normalized_dims <= input.get_legacy_shape().rank(),
+             "normalized_dims should <= input rank ({}). Got: {}",
+             input.get_legacy_shape().rank(),
+             normalized_dims);
 
     if (gamma.has_value()) {
         check_tensor(gamma.value(), "moreh_layer_norm");
@@ -66,22 +64,24 @@ void MorehLayerNormOperation::validate_inputs(
 }
 
 MorehLayerNormOperation::program_factory_t MorehLayerNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return ProgramFactory{};
 }
 
-void MorehLayerNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehLayerNormOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                             const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehLayerNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehLayerNormOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                            const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
 MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input = tensor_args.input;
     auto normalized_dims = operation_attributes.normalized_dims;
     auto input_shape = input.get_shape();
@@ -115,7 +115,8 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
 };
 
 MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     auto input = tensor_args.input;
     auto dtype = input.get_dtype();
@@ -145,24 +146,22 @@ MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_o
 }
 
 std::tuple<MorehLayerNormOperation::operation_attributes_t, MorehLayerNormOperation::tensor_args_t>
-MorehLayerNormOperation::invoke(
-    const Tensor& input,
-    uint32_t normalized_dims,
-    float eps,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
-    const std::optional<const Tensor>& output,
-    const std::optional<const Tensor>& mean,
-    const std::optional<const Tensor>& rstd,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            normalized_dims,
-            eps,
-            memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
-        },
-        tensor_args_t{input, gamma, beta, output, mean, rstd}};
+MorehLayerNormOperation::invoke(const Tensor& input,
+                                uint32_t normalized_dims,
+                                float eps,
+                                const std::optional<const Tensor>& gamma,
+                                const std::optional<const Tensor>& beta,
+                                const std::optional<const Tensor>& output,
+                                const std::optional<const Tensor>& mean,
+                                const std::optional<const Tensor>& rstd,
+                                const std::optional<MemoryConfig>& memory_config,
+                                const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    return {operation_attributes_t{
+                normalized_dims,
+                eps,
+                memory_config.value_or(input.memory_config()),
+                init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4),
+            },
+            tensor_args_t{input, gamma, beta, output, mean, rstd}};
 }
 }  // namespace ttnn::operations::moreh::moreh_layer_norm

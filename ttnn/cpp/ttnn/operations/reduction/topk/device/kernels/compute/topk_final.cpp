@@ -24,7 +24,7 @@ void MAIN {
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(4);
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
     constexpr uint32_t Ht = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7); // Leftover row size after multicore processing
+    constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Leftover row size after multicore processing
     constexpr uint32_t K = get_compile_time_arg_val(8);
     constexpr uint32_t Kt = get_compile_time_arg_val(9);
     constexpr uint32_t logk = get_compile_time_arg_val(10);
@@ -38,17 +38,16 @@ void MAIN {
     constexpr uint32_t index_dest_end = 3;
     // init pack, compute and unpack
 
-
     init_sfpu(input_cb_index);
     ckernel::topk_tile_init();
 
-
-    for(uint32_t ht = 0; ht < Ht; ++ht) {
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
         cb_wait_front(input_cb_index, Wt);
         cb_wait_front(index_cb_index, Wt);
 
-        // have to use a different buffer than input_cb_index and index_cb_index as we pop/reserve/wait/push on tiles for all the in-place operations
-        // we will end up racing with reader if both kernels use cb apis on the same buffer (input_cb_index/index_cb_index)
+        // have to use a different buffer than input_cb_index and index_cb_index as we pop/reserve/wait/push on tiles
+        // for all the in-place operations we will end up racing with reader if both kernels use cb apis on the same
+        // buffer (input_cb_index/index_cb_index)
         pack_reconfig_data_format(input_transposed_cb_index);
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt++) {
@@ -79,12 +78,10 @@ void MAIN {
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_cb_index, Wt);
 
-
         // iterative divide and conquer on pairs of tiles (bitonic topk merge and rebuild)
-        // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each pair.
-        // second iteration we compare 0th and 2nd tile, then 4th and 6th, etc.
-        // logWt iteration we compare 0th and Wt/2 tile
-        // single buffer as we can pack tiles back in-place
+        // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
+        // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
+        // Wt/2 tile single buffer as we can pack tiles back in-place
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             bool direction = false;
             cb_wait_front(input_transposed_cb_index, Wt);
@@ -107,13 +104,15 @@ void MAIN {
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
                 ckernel::topk_merge(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t) direction, m_iter, K, logk, true);
+                ckernel::topk_rebuild(0, (uint32_t)direction, m_iter, K, logk, true);
 
-                // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for topk, which was in input_dest_start
+                // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for
+                // topk, which was in input_dest_start
                 pack_reconfig_data_format(input_transposed_cb_index);
                 pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
 
-                // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values for topk, which was in index_dest_start
+                // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values for
+                // topk, which was in index_dest_start
                 pack_reconfig_data_format(index_transposed_cb_index);
                 pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
                 release_dst();
@@ -162,4 +161,4 @@ void MAIN {
         cb_pop_front(index_transposed_cb_index, Wt);
     }
 }
-}
+}  // namespace NAMESPACE

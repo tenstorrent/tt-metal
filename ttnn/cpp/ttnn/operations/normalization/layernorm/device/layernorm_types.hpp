@@ -10,16 +10,11 @@
 
 namespace ttnn::operations::normalization {
 
-enum class LayerNormType {
-    LAYERNORM, RMSNORM
-};
+enum class LayerNormType { LAYERNORM, RMSNORM };
 
-enum class DistributedLayerNormStage {
-    NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER
-};
+enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL_GATHER };
 
-struct LayerNormDefaultProgramConfig{
-};
+struct LayerNormDefaultProgramConfig {};
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
@@ -28,9 +23,6 @@ struct LayerNormShardedMultiCoreProgramConfig {
     bool inplace;
 };
 
-using LayerNormProgramConfig = std::variant<
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig
->;
+using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
 
 }  // namespace ttnn::operations::normalization

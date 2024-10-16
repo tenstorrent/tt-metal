@@ -75,27 +75,25 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        tt::operations::primary::CreateCircularBuffer(
-            program,
-            all_cores,
-            data_format,
-            {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, 1},                              // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
-            });
+        tt::operations::primary::CreateCircularBuffer(program,
+                                                      all_cores,
+                                                      data_format,
+                                                      {
+                                                          {CB::c_in0, 1, tt::DataFormat::Int32},       // target
+                                                          {CB::c_in1, 1},                              // weight
+                                                          {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
+                                                          {CB::c_out0, 1},                             // output
+                                                      });
     } else {
-        tt::operations::primary::CreateCircularBuffer(
-            program,
-            all_cores,
-            data_format,
-            {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, weight_num_tile},                // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
-            });
+        tt::operations::primary::CreateCircularBuffer(program,
+                                                      all_cores,
+                                                      data_format,
+                                                      {
+                                                          {CB::c_in0, 1, tt::DataFormat::Int32},       // target
+                                                          {CB::c_in1, weight_num_tile},                // weight
+                                                          {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
+                                                          {CB::c_out0, 1},                             // output
+                                                      });
     }
 
     // create read/wrtie kernel
@@ -172,12 +170,11 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         tile_offset += num_units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 void MorehNllLossStep1DeviceOperation::Factory::override_runtime_arguments(

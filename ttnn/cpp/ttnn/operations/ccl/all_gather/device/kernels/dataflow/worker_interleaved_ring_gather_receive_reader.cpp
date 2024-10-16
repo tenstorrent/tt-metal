@@ -7,10 +7,10 @@
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
-
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
-    volatile uint32_t *receiver_read_sem_addr = reinterpret_cast<volatile uint32_t *>(get_semaphore(get_compile_time_arg_val(1)));
+    volatile uint32_t *receiver_read_sem_addr =
+        reinterpret_cast<volatile uint32_t *>(get_semaphore(get_compile_time_arg_val(1)));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
 

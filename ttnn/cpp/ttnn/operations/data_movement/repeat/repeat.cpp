@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -16,13 +15,10 @@
 
 namespace ttnn::operations::data_movement {
 
-
-ttnn::Tensor RepeatOperation::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor& input_tensor,
-    const Shape & repeat_dims,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-
+ttnn::Tensor RepeatOperation::invoke(uint8_t queue_id,
+                                     const ttnn::Tensor& input_tensor,
+                                     const Shape& repeat_dims,
+                                     const std::optional<MemoryConfig>& memory_config_arg) {
     auto padded_input_shape = input_tensor.get_padded_shape();
     auto logical_input_shape = input_tensor.get_logical_shape();
     auto input_rank = logical_input_shape.rank();
@@ -34,11 +30,10 @@ ttnn::Tensor RepeatOperation::invoke(
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [&input_rank,
-         &input_tensor,
-         &repeat_dims,
-         &memory_config_arg,
-         &padded_input_shape] (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
+        [&input_rank, &input_tensor, &repeat_dims, &memory_config_arg, &padded_input_shape](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) -> std::vector<Tensor> {
             auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
             TT_FATAL(repeat_dims.rank() == input_rank, "Number of repeat dims must be equal to number of tensor dims");
             Tensor output = input_tensor;
@@ -49,18 +44,23 @@ ttnn::Tensor RepeatOperation::invoke(
                 TT_FATAL(repeat_dims[dim] > 0, "Number of repetitions along a dim must be greater than 0");
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR && dim == input_rank - 1) {
                     TT_FATAL(
-                        (padded_input_shape[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() == 0,
+                        (padded_input_shape[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() ==
+                            0,
                         "Current repeat implementation requires aligned last dim when repeating on last dim");
                 }
-                auto outputs = operation::run_without_autoformat(RepeatDeviceOperation{dim, repeat_dims[dim], memory_config}, {output});
-                TT_FATAL(outputs.size() == 1, "ttnn.repeat: expected 1 output tensor from run_without_autoformat, but got {}", outputs.size());
+                auto outputs = operation::run_without_autoformat(
+                    RepeatDeviceOperation{dim, repeat_dims[dim], memory_config}, {output});
+                TT_FATAL(outputs.size() == 1,
+                         "ttnn.repeat: expected 1 output tensor from run_without_autoformat, but got {}",
+                         outputs.size());
                 output = outputs[0];
             }
             return {output};
-        }, {}, output_tensors);
+        },
+        {},
+        output_tensors);
     TT_FATAL(output_tensors.size() == 1, "ttnn.repeat: expected 1 output tensor, but got {}", output_tensors.size());
-    if (input_tensor.get_layout() != Layout::ROW_MAJOR
-        && logical_input_shape != padded_input_shape) {
+    if (input_tensor.get_layout() != Layout::ROW_MAJOR && logical_input_shape != padded_input_shape) {
         auto zero_indices = std::vector<uint32_t>(input_rank, 0);
         auto end_indices = repeated_logical_shape.as_vector();
         auto step = std::vector<uint32_t>(input_rank, 1);
@@ -71,7 +71,8 @@ ttnn::Tensor RepeatOperation::invoke(
             // now, so we need to perform the slice in row-major then re-tilize
             // ourselves.
             auto rm_output = ttnn::untilize(output_tensors[0]);
-            auto sliced_output = ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
+            auto sliced_output =
+                ttnn::slice(rm_output, zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
 
             auto sliced_logical_shape = sliced_output.get_logical_shape();
             auto sliced_padded_shape = sliced_output.get_padded_shape();
@@ -95,27 +96,26 @@ ttnn::Tensor RepeatOperation::invoke(
             auto padded_output = ttnn::pad(queue_id, sliced_output, padding_vec, 0.0f, pad_use_multicore, std::nullopt);
             auto tiled_output = ttnn::tilize(padded_output, input_tensor.memory_config());
 
-            auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.as_vector(),
-                                                     tiled_output.get_padded_shape().as_vector());
+            auto padded_to_tiled_shape =
+                ttnn::Shape(sliced_logical_shape.as_vector(), tiled_output.get_padded_shape().as_vector());
             tiled_output.set_shape(padded_to_tiled_shape);
             return tiled_output;
         } else {
-            return ttnn::slice(output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
+            return ttnn::slice(
+                output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);
         }
     }
     return output_tensors[0];
-
 }
 
-ttnn::Tensor RepeatOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const Shape & repeat_dims,
-    const std::optional<MemoryConfig>& memory_config) {
+ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor,
+                                     const Shape& repeat_dims,
+                                     const std::optional<MemoryConfig>& memory_config) {
     return invoke(DefaultQueueId, input_tensor, repeat_dims, memory_config);
 }
 
-ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const Shape & repeat_dims) {
+ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const Shape& repeat_dims) {
     return invoke(DefaultQueueId, input_tensor, repeat_dims, std::nullopt);
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

@@ -39,25 +39,22 @@ void bind_argmax_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::experimental::argmax);
-    bind_registered_operation(
-        module,
-        ttnn::experimental::argmax,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                int64_t dim,
-                bool all,
-                const std::optional<ttnn::MemoryConfig>& memory_config) {
-                    return self(input_tensor, dim, all, memory_config);
-            },
-                py::arg("input_tensor").noconvert(),
-                py::arg("dim"),
-                py::kw_only(),
-                py::arg("all") = false,
-                py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              ttnn::experimental::argmax,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         int64_t dim,
+                                                         bool all,
+                                                         const std::optional<ttnn::MemoryConfig>& memory_config) {
+                                                          return self(input_tensor, dim, all, memory_config);
+                                                      },
+                                                      py::arg("input_tensor").noconvert(),
+                                                      py::arg("dim"),
+                                                      py::kw_only(),
+                                                      py::arg("all") = false,
+                                                      py::arg("memory_config") = std::nullopt});
 }
-
 
 void bind_argmin_operation(py::module& module) {
     auto doc =
@@ -80,23 +77,21 @@ void bind_argmin_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::experimental::argmin);
-    bind_registered_operation(
-        module,
-        ttnn::experimental::argmin,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int64_t dim,
-               bool all,
-               const std::optional<MemoryConfig>& memory_config)  {
-                return self(input_tensor, dim, all, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("dim"),
-            py::kw_only(),
-            py::arg("all") = false,
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              ttnn::experimental::argmin,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         int64_t dim,
+                                                         bool all,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor, dim, all, memory_config);
+                                                      },
+                                                      py::arg("input_tensor"),
+                                                      py::arg("dim"),
+                                                      py::kw_only(),
+                                                      py::arg("all") = false,
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

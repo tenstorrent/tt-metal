@@ -34,16 +34,14 @@ struct MorehCumsumDeviceOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& output);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -65,6 +63,7 @@ struct MorehCumsumDeviceOperation {
 }  // namespace ttnn::operations::moreh::moreh_cumsum
 
 namespace ttnn::prim {
-constexpr auto moreh_cumsum = ttnn::
-    register_operation<"ttnn::prim::moreh_cumsum", ttnn::operations::moreh::moreh_cumsum::MorehCumsumDeviceOperation>();
+constexpr auto moreh_cumsum =
+    ttnn::register_operation<"ttnn::prim::moreh_cumsum",
+                             ttnn::operations::moreh::moreh_cumsum::MorehCumsumDeviceOperation>();
 }

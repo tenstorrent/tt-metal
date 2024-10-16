@@ -28,11 +28,12 @@ struct TensorInfo {
     bool operator==(const TensorInfo& other) const = default;
 };
 
-std::ostream &operator<<(std::ostream &os, const TensorInfo &info) {
-    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type) << "}";
+std::ostream& operator<<(std::ostream& os, const TensorInfo& info) {
+    os << "TensorInfo{shape: " << info.shape << ", size: " << info.size << ", type: " << static_cast<int>(info.type)
+       << "}";
     return os;
 }
 
 std::vector<TensorInfo> extract_output_info(const nlohmann::json& trace);
 
-} // namespace ttnn::graph
+}  // namespace ttnn::graph

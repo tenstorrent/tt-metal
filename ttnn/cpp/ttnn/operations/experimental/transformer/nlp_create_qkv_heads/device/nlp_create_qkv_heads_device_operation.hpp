@@ -17,7 +17,6 @@
 namespace ttnn::operations::experimental::transformer {
 
 struct NlpCreateHeadsDeviceOperation {
-
     struct operation_attributes_t {
         uint32_t num_q_heads;
         uint32_t num_kv_heads;
@@ -28,7 +27,7 @@ struct NlpCreateHeadsDeviceOperation {
 
     struct tensor_args_t {
         const Tensor& input_tensor_q;
-        const std::optional<Tensor> &input_tensor_kv;
+        const std::optional<Tensor>& input_tensor_kv;
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
@@ -46,16 +45,14 @@ struct NlpCreateHeadsDeviceOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     struct Sharded {
@@ -82,16 +79,14 @@ struct NlpCreateHeadsDeviceOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<Interleaved, Sharded>;
@@ -124,8 +119,10 @@ struct NlpCreateHeadsDeviceOperation {
         std::optional<std::vector<std::optional<Tensor>>> optional_output_tensors);
 };
 
-} // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer
 
 namespace ttnn::prim {
-constexpr auto nlp_create_qkv_heads = ttnn::register_operation<"ttnn::prim::nlp_create_qkv_heads", ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation>();
-} // namespace ttnn::prim
+constexpr auto nlp_create_qkv_heads =
+    ttnn::register_operation<"ttnn::prim::nlp_create_qkv_heads",
+                             ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation>();
+}  // namespace ttnn::prim

@@ -46,10 +46,8 @@ float bfloat16_to_float32(uint16_t bfloat16_data) {
 }
 #endif
 
-
 void kernel_main() {
-
-    constexpr bool src0_is_dram          = (bool) get_compile_time_arg_val(0);
+    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
     constexpr uint32_t H = get_compile_time_arg_val(2);
     constexpr uint32_t C = get_compile_time_arg_val(3);
@@ -72,25 +70,21 @@ void kernel_main() {
     const uint32_t end_C = get_arg_val<uint32_t>(7);
     const uint32_t end_N = get_arg_val<uint32_t>(8);
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .page_size = page_size
-    };
+    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = page_size};
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_out0 = 24;
     uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     volatile tt_l1_ptr uint16_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
-    constexpr uint32_t CH = C*H;
+    constexpr uint32_t CH = C * H;
     // TODO: optimize this kernel to read in multiple sticks at once
     // TODO: add support for negative strides
     // TODO: add axis support
-    for (uint32_t i = start_N; i < end_N; i+=stride_N) {
-        uint32_t iCH = i*CH;
-        for (uint32_t j = start_C; j < end_C; j+=stride_C) {
-            uint32_t jHplusiCH = j*H + iCH;
-            for (uint32_t k = start_H; k < end_H; k+=stride_H) {
-
+    for (uint32_t i = start_N; i < end_N; i += stride_N) {
+        uint32_t iCH = i * CH;
+        for (uint32_t j = start_C; j < end_C; j += stride_C) {
+            uint32_t jHplusiCH = j * H + iCH;
+            for (uint32_t k = start_H; k < end_H; k += stride_H) {
                 // relevant page/stick id
                 uint32_t src_stick_id = k + jHplusiCH;
 
@@ -98,14 +92,14 @@ void kernel_main() {
                 noc_async_read_page(src_stick_id, s0, src_buffer_l1_addr);
                 noc_async_read_barrier();
 
-
-                // TODO: optimize when there's no slice or stride along W. In that case, we can just do a single read and write.
-                // reserve space in output buffer
+                // TODO: optimize when there's no slice or stride along W. In that case, we can just do a single read
+                // and write. reserve space in output buffer
                 cb_reserve_back(cb_id_out0, 1);
                 // write out element by element into output buffer
-                volatile tt_l1_ptr uint16_t* out_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_out0));
+                volatile tt_l1_ptr uint16_t* out_stick =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id_out0));
                 uint32_t out_stick_id = 0;
-                for (uint32_t l = start_W; l < end_W; l+=stride_W) {
+                for (uint32_t l = start_W; l < end_W; l += stride_W) {
                     out_stick[out_stick_id] = in_stick[l];
                     out_stick_id++;
                 }
@@ -113,6 +107,4 @@ void kernel_main() {
             }
         }
     }
-
-
 }

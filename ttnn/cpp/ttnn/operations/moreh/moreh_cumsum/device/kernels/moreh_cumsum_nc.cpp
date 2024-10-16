@@ -7,8 +7,12 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    acquire_dst();
+}
+ALWI void REL() {
+    release_dst();
+}
 
 namespace NAMESPACE {
 void MAIN {

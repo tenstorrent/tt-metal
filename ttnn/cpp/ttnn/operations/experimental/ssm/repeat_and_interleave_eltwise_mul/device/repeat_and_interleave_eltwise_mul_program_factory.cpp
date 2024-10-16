@@ -11,13 +11,12 @@ namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
-    const Tensor& a,
-    const Tensor& b,
-    Tensor& output,
-    const uint32_t hidden_size,
-    MathFidelity math_fidelity,
-    CoreCoord compute_with_storage_grid_size) {
+operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(const Tensor& a,
+                                                           const Tensor& b,
+                                                           Tensor& output,
+                                                           const uint32_t hidden_size,
+                                                           MathFidelity math_fidelity,
+                                                           CoreCoord compute_with_storage_grid_size) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     tt::tt_metal::Device* device = a.device();
@@ -72,8 +71,8 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     uint32_t output_cb_index = 16;
     uint32_t output_cb_tiles = ONE_TILE * 2;  // double buffer
     tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            output_cb_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
+        tt::tt_metal::CircularBufferConfig(output_cb_tiles * output_single_tile_size,
+                                           {{output_cb_index, output_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
@@ -157,12 +156,11 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         "ttnn/cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/device/kernels/"
         "ssm_eltwise_mul.cpp",
         all_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_args,
-            .defines = ssm_eltwise_defines});
+        tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                    .fp32_dest_acc_en = false,
+                                    .math_approx_mode = false,
+                                    .compile_args = compute_args,
+                                    .defines = ssm_eltwise_defines});
 
     // Update runtime args function
     auto set_runtime_args = [reader_kernel_id,
@@ -262,12 +260,11 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     set_runtime_args(program, a, b, output);
 
-    auto override_runtime_arguments_callback = [set_runtime_args](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
+    auto override_runtime_arguments_callback = [set_runtime_args](const void* operation,
+                                                                  Program& program,
+                                                                  const std::vector<Tensor>& input_tensors,
+                                                                  const std::vector<std::optional<const Tensor>>&,
+                                                                  const std::vector<Tensor>& output_tensors) {
         const auto& output_tensor = output_tensors.at(0);
 
         set_runtime_args(program, input_tensors.at(0), input_tensors.at(1), output_tensor);

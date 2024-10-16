@@ -6,14 +6,13 @@
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
-MorehNllLossUnreducedBackwardDeviceOperation::program_factory_t
-MorehNllLossUnreducedBackwardDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehNllLossUnreducedBackwardDeviceOperation::program_factory_t MorehNllLossUnreducedBackwardDeviceOperation::
+    select_program_factory(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return Factory{};
 }
 
-void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(const operation_attributes_t& attributes,
+                                                                   const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
     const auto& output_grad_tensor = tensor_args.output_grad_tensor;
 
@@ -21,80 +20,69 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_inputs(
 
     const auto& input_grad_tensor = tensor_args.input_grad_tensor;
 
-    TT_FATAL(
-        target_tensor.storage_type() == StorageType::DEVICE, "Operands to nll_loss_unreduced need to be on device!");
-    TT_FATAL(
-        target_tensor.buffer() != nullptr, "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
+    TT_FATAL(target_tensor.storage_type() == StorageType::DEVICE,
+             "Operands to nll_loss_unreduced need to be on device!");
+    TT_FATAL(target_tensor.buffer() != nullptr,
+             "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((target_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
     TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "Invalid target_tensor dtype {}", target_tensor.get_dtype());
 
-    TT_FATAL(
-        output_grad_tensor.storage_type() == StorageType::DEVICE,
-        "Operands to nll_loss_unreduced need to be on device!");
-    TT_FATAL(
-        output_grad_tensor.buffer() != nullptr,
-        "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
+    TT_FATAL(output_grad_tensor.storage_type() == StorageType::DEVICE,
+             "Operands to nll_loss_unreduced need to be on device!");
+    TT_FATAL(output_grad_tensor.buffer() != nullptr,
+             "Operands to nll_loss_unreduced need to be allocated in buffers on device!");
     TT_FATAL((output_grad_tensor.get_layout() == Layout::TILE), "target_tensor to nll_loss_unreduced must be tilized");
-    TT_FATAL(
-        output_grad_tensor.get_dtype() == DataType::BFLOAT16,
-        "Invalid output_grad_tensor dtype {}",
-        output_grad_tensor.get_dtype());
+    TT_FATAL(output_grad_tensor.get_dtype() == DataType::BFLOAT16,
+             "Invalid output_grad_tensor dtype {}",
+             output_grad_tensor.get_dtype());
 
     if (input_grad_tensor.has_value()) {
-        TT_FATAL(
-            input_grad_tensor.value().storage_type() == StorageType::DEVICE,
-            "Operands to nll_loss need to be on device!");
-        TT_FATAL(
-            input_grad_tensor.value().buffer() != nullptr,
-            "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(
-            (input_grad_tensor.value().get_layout() == Layout::TILE),
-            "target_tensor to nll_loss_unreduced must be tilized");
-        TT_FATAL(
-            input_grad_tensor.value().get_dtype() == DataType::BFLOAT16,
-            "Invalid input_grad_tensor dtype {}",
-            input_grad_tensor.value().get_dtype());
+        TT_FATAL(input_grad_tensor.value().storage_type() == StorageType::DEVICE,
+                 "Operands to nll_loss need to be on device!");
+        TT_FATAL(input_grad_tensor.value().buffer() != nullptr,
+                 "Operands to nll_loss need to be allocated in buffers on device!");
+        TT_FATAL((input_grad_tensor.value().get_layout() == Layout::TILE),
+                 "target_tensor to nll_loss_unreduced must be tilized");
+        TT_FATAL(input_grad_tensor.value().get_dtype() == DataType::BFLOAT16,
+                 "Invalid input_grad_tensor dtype {}",
+                 input_grad_tensor.value().get_dtype());
     }
 
     if (weight_tensor.has_value()) {
-        TT_FATAL(
-            weight_tensor.value().storage_type() == StorageType::DEVICE,
-            "weight_tensor to nll_loss need to be on device!");
-        TT_FATAL(
-            weight_tensor.value().buffer() != nullptr,
-            "weight_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(
-            (weight_tensor.value().get_layout() == Layout::TILE),
-            "weight_tensor to nll_loss_unreduced must be in tilized");
-        TT_FATAL(
-            weight_tensor.value().get_dtype() == DataType::BFLOAT16,
-            "Invalid weight_tensor dtype {}",
-            weight_tensor.value().get_dtype());
+        TT_FATAL(weight_tensor.value().storage_type() == StorageType::DEVICE,
+                 "weight_tensor to nll_loss need to be on device!");
+        TT_FATAL(weight_tensor.value().buffer() != nullptr,
+                 "weight_tensor to nll_loss need to be allocated in buffers on device!");
+        TT_FATAL((weight_tensor.value().get_layout() == Layout::TILE),
+                 "weight_tensor to nll_loss_unreduced must be in tilized");
+        TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16,
+                 "Invalid weight_tensor dtype {}",
+                 weight_tensor.value().get_dtype());
     }
 }
 
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
 void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::shape_return_value_t
-MorehNllLossUnreducedBackwardDeviceOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehNllLossUnreducedBackwardDeviceOperation::shape_return_value_t MorehNllLossUnreducedBackwardDeviceOperation::
+    compute_output_shapes(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
     TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support create output tensors.");
     return tensor_args.target_tensor.get_shape();
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::tensor_return_value_t
-MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehNllLossUnreducedBackwardDeviceOperation::tensor_return_value_t MorehNllLossUnreducedBackwardDeviceOperation::
+    create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.input_grad_tensor.has_value()) {
         return {tensor_args.input_grad_tensor.value()};
     }
@@ -106,9 +94,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
     return create_device_tensor(output_shapes, dtype, layout, device, operation_attributes.memory_config);
 }
 
-std::tuple<
-    MorehNllLossUnreducedBackwardDeviceOperation::operation_attributes_t,
-    MorehNllLossUnreducedBackwardDeviceOperation::tensor_args_t>
+std::tuple<MorehNllLossUnreducedBackwardDeviceOperation::operation_attributes_t,
+           MorehNllLossUnreducedBackwardDeviceOperation::tensor_args_t>
 MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     const Tensor& target_tensor,
     const Tensor& output_grad_tensor,
@@ -117,17 +104,14 @@ MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
-            memory_config.value_or(target_tensor.memory_config()),
-            init_device_compute_kernel_config(
-                target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{
-            target_tensor,
-            output_grad_tensor,
-            weight_tensor,
-            input_grad_tensor}};  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
+    return {operation_attributes_t{ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
+                                   memory_config.value_or(target_tensor.memory_config()),
+                                   init_device_compute_kernel_config(
+                                       target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            tensor_args_t{target_tensor,
+                          output_grad_tensor,
+                          weight_tensor,
+                          input_grad_tensor}};  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward

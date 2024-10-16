@@ -10,8 +10,8 @@
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
-void MorehMatmulOperation::validate_inputs(
-    const operation_attributes_t &operation_attributes, const tensor_args_t &tensor_args) {
+void MorehMatmulOperation::validate_inputs(const operation_attributes_t &operation_attributes,
+                                           const tensor_args_t &tensor_args) {
     const bool transpose_input = operation_attributes.transpose_input;
     const bool transpose_other = operation_attributes.transpose_other;
 
@@ -47,12 +47,11 @@ void MorehMatmulOperation::validate_inputs(
     get_tensor_dim(other_dim, other_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
         if (input_dim[i] != other_dim[i]) {
-            TT_FATAL(
-                input_dim[i] == 1 || other_dim[i] == 1,
-                "one of dim must be one. {}th dim input_dim {}, other_dim {}",
-                i,
-                input_dim[i],
-                other_dim[i]);
+            TT_FATAL(input_dim[i] == 1 || other_dim[i] == 1,
+                     "one of dim must be one. {}th dim input_dim {}, other_dim {}",
+                     i,
+                     input_dim[i],
+                     other_dim[i]);
         }
     }
 
@@ -69,12 +68,11 @@ void MorehMatmulOperation::validate_inputs(
         get_tensor_dim(output_dim, output_shape);
 
         for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
-            TT_FATAL(
-                std::max(input_dim[i], other_dim[i]) == output_dim[i],
-                "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}",
-                i,
-                std::max(input_dim[i], other_dim[i]),
-                output_dim[i]);
+            TT_FATAL(std::max(input_dim[i], other_dim[i]) == output_dim[i],
+                     "{}th max(input_dim[i], other_dim[i]) {} must be the same as output_dim[i] {}",
+                     i,
+                     std::max(input_dim[i], other_dim[i]),
+                     output_dim[i]);
         }
     }
 
@@ -84,21 +82,20 @@ void MorehMatmulOperation::validate_inputs(
         uint32_t bias_rank = bias_wo_shape.rank();
         uint32_t bias_w = bias_wo_shape[-1];
         TT_FATAL(bias_rank == 2, "bias rank {} must be 2 (tilized).", bias_rank);
-        TT_FATAL(
-            bias_w == 1 || bias_w == other_n,
-            "bias_w must be one or the same as other_n. bias_w {}, other_n {}",
-            bias_w,
-            other_n);
+        TT_FATAL(bias_w == 1 || bias_w == other_n,
+                 "bias_w must be one or the same as other_n. bias_w {}, other_n {}",
+                 bias_w,
+                 other_n);
     }
 }
 
-void MorehMatmulOperation::validate_on_program_cache_hit(
-    const operation_attributes_t &operation_attributes, const tensor_args_t &tensor_args) {
+void MorehMatmulOperation::validate_on_program_cache_hit(const operation_attributes_t &operation_attributes,
+                                                         const tensor_args_t &tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void MorehMatmulOperation::validate_on_program_cache_miss(
-    const operation_attributes_t &operation_attributes, const tensor_args_t &tensor_args) {
+void MorehMatmulOperation::validate_on_program_cache_miss(const operation_attributes_t &operation_attributes,
+                                                          const tensor_args_t &tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
@@ -125,14 +122,13 @@ MorehMatmulOperation::shape_return_value_t compute_output_shapes(
     get_tensor_dim(other_dim, other_shape);
 
     int32_t output_rank = std::max(input_shape.rank(), other_shape.rank());
-    log_debug(
-        tt::LogOp,
-        "{}:{} input, other, output rank {}, {}, {}",
-        __func__,
-        __LINE__,
-        input_shape.rank(),
-        other_shape.rank(),
-        output_rank);
+    log_debug(tt::LogOp,
+              "{}:{} input, other, output rank {}, {}, {}",
+              __func__,
+              __LINE__,
+              input_shape.rank(),
+              other_shape.rank(),
+              output_rank);
 
     std::vector<uint32_t> output_dim(output_rank);
     // batch dims
@@ -160,21 +156,21 @@ MorehMatmulOperation::tensor_return_value_t MorehMatmulOperation::create_output_
         return tensor_args.output.value();
     }
 
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        Layout::TILE,
-        tensor_args.input.device(),
-        operation_attributes.output_memory_config);
+    return create_device_tensor(compute_output_shapes(operation_attributes, tensor_args),
+                                tensor_args.input.get_dtype(),
+                                Layout::TILE,
+                                tensor_args.input.device(),
+                                operation_attributes.output_memory_config);
 };
 
-MorehMatmulOperation::program_factory_t MorehMatmulOperation::select_program_factory(
-    const operation_attributes_t &, const tensor_args_t &) {
+MorehMatmulOperation::program_factory_t MorehMatmulOperation::select_program_factory(const operation_attributes_t &,
+                                                                                     const tensor_args_t &) {
     return MultiCoreProgramFactory{};
 }
 
 MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_shapes(
-    const operation_attributes_t &operation_attributes, const tensor_args_t &tensor_args) {
+    const operation_attributes_t &operation_attributes,
+    const tensor_args_t &tensor_args) {
     const auto &input_shape = tensor_args.input.get_shape().value;
     const auto &other_shape = tensor_args.other.get_shape().value;
     bool transpose_input = operation_attributes.transpose_input;
@@ -193,14 +189,13 @@ MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_
     get_tensor_dim(other_dim, other_shape);
 
     int32_t output_rank = std::max(input_shape.rank(), other_shape.rank());
-    log_debug(
-        tt::LogOp,
-        "{}:{} input, other, output rank {}, {}, {}",
-        __func__,
-        __LINE__,
-        input_shape.rank(),
-        other_shape.rank(),
-        output_rank);
+    log_debug(tt::LogOp,
+              "{}:{} input, other, output rank {}, {}, {}",
+              __func__,
+              __LINE__,
+              input_shape.rank(),
+              other_shape.rank(),
+              output_rank);
 
     std::vector<uint32_t> output_dim(output_rank);
     // batch dims
@@ -222,22 +217,20 @@ MorehMatmulOperation::shape_return_value_t MorehMatmulOperation::compute_output_
     return Shape({tt::tt_metal::LegacyShape(output_shape, padding)});
 }
 
-std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t>
-MorehMatmulOperation::invoke(
-    const Tensor &input,
-    const Tensor &other,
-    bool transpose_input,
-    bool transpose_other,
-    const std::optional<Tensor> &output,
-    const std::optional<const Tensor> &bias,
-    const std::optional<MemoryConfig> &output_memory_config,
-    const std::optional<DeviceComputeKernelConfig> &compute_kernel_config) {
-    return {
-        MorehMatmulOperation::operation_attributes_t{
-            transpose_input,
-            transpose_other,
-            output_memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)},
-        MorehMatmulOperation::tensor_args_t{input, other, output, bias}};
+std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t> MorehMatmulOperation::
+    invoke(const Tensor &input,
+           const Tensor &other,
+           bool transpose_input,
+           bool transpose_other,
+           const std::optional<Tensor> &output,
+           const std::optional<const Tensor> &bias,
+           const std::optional<MemoryConfig> &output_memory_config,
+           const std::optional<DeviceComputeKernelConfig> &compute_kernel_config) {
+    return {MorehMatmulOperation::operation_attributes_t{
+                transpose_input,
+                transpose_other,
+                output_memory_config.value_or(input.memory_config()),
+                init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)},
+            MorehMatmulOperation::tensor_args_t{input, other, output, bias}};
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul

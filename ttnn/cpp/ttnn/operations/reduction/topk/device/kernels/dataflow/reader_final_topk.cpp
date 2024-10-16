@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     uint32_t receiver_semaphore = get_semaphore(get_compile_time_arg_val(0));
     uint32_t sender_semaphore = get_semaphore(get_compile_time_arg_val(1));
@@ -22,15 +21,13 @@ void kernel_main() {
     constexpr uint32_t final_values_cb_index = tt::CB::c_intermed2;
     constexpr uint32_t final_indices_cb_index = tt::CB::c_intermed3;
 
-    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
-    volatile tt_l1_ptr uint32_t* sender_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore);
+    volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);
+    volatile tt_l1_ptr uint32_t* sender_semaphore_addr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore);
 
-    uint64_t mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-    noc_start_x,
-    noc_start_y,
-    noc_end_x,
-    noc_end_y,
-    receiver_semaphore);
+    uint64_t mcast_receiver_semaphore_noc_addr =
+        get_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, receiver_semaphore);
 
     for (uint32_t i = 0; i < Ht; ++i) {
         // Look for space in buffer

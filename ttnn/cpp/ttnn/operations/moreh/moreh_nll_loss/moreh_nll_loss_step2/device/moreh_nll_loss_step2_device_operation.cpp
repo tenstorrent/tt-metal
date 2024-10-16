@@ -7,12 +7,13 @@
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 MorehNllLossStep2DeviceOperation::program_factory_t MorehNllLossStep2DeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return Factory{};
 }
 
-void MorehNllLossStep2DeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehNllLossStep2DeviceOperation::validate_inputs(const operation_attributes_t& attributes,
+                                                       const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& target_tensor = tensor_args.target_tensor;
     const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;
@@ -29,42 +30,38 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
     TT_FATAL(target_tensor.get_dtype() == DataType::INT32, "target tensor type must be int32");
 
     if (weight_tensor.has_value()) {
-        TT_FATAL(
-            weight_tensor.value().storage_type() == StorageType::DEVICE,
-            "weight_tensor to nll_loss need to be on device!");
-        TT_FATAL(
-            weight_tensor.value().buffer() != nullptr,
-            "weight_tensor to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(
-            (weight_tensor.value().get_layout() == Layout::TILE),
-            "weight_tensor to nll_loss must be in row major layout");
+        TT_FATAL(weight_tensor.value().storage_type() == StorageType::DEVICE,
+                 "weight_tensor to nll_loss need to be on device!");
+        TT_FATAL(weight_tensor.value().buffer() != nullptr,
+                 "weight_tensor to nll_loss need to be allocated in buffers on device!");
+        TT_FATAL((weight_tensor.value().get_layout() == Layout::TILE),
+                 "weight_tensor to nll_loss must be in row major layout");
         TT_FATAL(weight_tensor.value().get_dtype() == DataType::BFLOAT16, "weight tensor type must be bfloat16");
     }
 
     if (divisor_tensor.has_value()) {
-        TT_FATAL(
-            divisor_tensor.value().storage_type() == StorageType::DEVICE,
-            "divisor_tensor to nll_loss need to be on device!");
-        TT_FATAL(
-            divisor_tensor.value().buffer() != nullptr,
-            "divisor_tensor to nll_loss need to be allocated in buffers on device!");
+        TT_FATAL(divisor_tensor.value().storage_type() == StorageType::DEVICE,
+                 "divisor_tensor to nll_loss need to be on device!");
+        TT_FATAL(divisor_tensor.value().buffer() != nullptr,
+                 "divisor_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((divisor_tensor.value().get_layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
         TT_FATAL(divisor_tensor.value().get_dtype() == DataType::BFLOAT16, "divisor tensor type must be bfloat16");
     }
 }
 
-void MorehNllLossStep2DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehNllLossStep2DeviceOperation::validate_on_program_cache_miss(const operation_attributes_t& attributes,
+                                                                      const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehNllLossStep2DeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehNllLossStep2DeviceOperation::validate_on_program_cache_hit(const operation_attributes_t& attributes,
+                                                                     const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
 MorehNllLossStep2DeviceOperation::shape_return_value_t MorehNllLossStep2DeviceOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.get_shape().value;
     auto input_shape_without_padding = input_shape.without_padding();
@@ -110,7 +107,8 @@ MorehNllLossStep2DeviceOperation::shape_return_value_t MorehNllLossStep2DeviceOp
 }
 
 MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     if (operation_attributes.reduction == NONE && tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value();
     }
@@ -126,23 +124,20 @@ MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceO
 }
 
 std::tuple<MorehNllLossStep2DeviceOperation::operation_attributes_t, MorehNllLossStep2DeviceOperation::tensor_args_t>
-MorehNllLossStep2DeviceOperation::invoke(
-    const Tensor& input_tensor,
-    const Tensor& target_tensor,
-    const std::string reduction,
-    const std::optional<Tensor>& weight_tensor,
-    const std::optional<Tensor>& divisor_tensor,
-    const std::optional<Tensor>& output_tensor,
-    const int32_t ignore_index,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            reduction,
-            ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
-            memory_config.value_or(input_tensor.memory_config()),
-            compute_kernel_config},
-        tensor_args_t{input_tensor, target_tensor, weight_tensor, divisor_tensor, output_tensor}};
+MorehNllLossStep2DeviceOperation::invoke(const Tensor& input_tensor,
+                                         const Tensor& target_tensor,
+                                         const std::string reduction,
+                                         const std::optional<Tensor>& weight_tensor,
+                                         const std::optional<Tensor>& divisor_tensor,
+                                         const std::optional<Tensor>& output_tensor,
+                                         const int32_t ignore_index,
+                                         const std::optional<ttnn::MemoryConfig>& memory_config,
+                                         const DeviceComputeKernelConfig& compute_kernel_config) {
+    return {operation_attributes_t{reduction,
+                                   ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
+                                   memory_config.value_or(input_tensor.memory_config()),
+                                   compute_kernel_config},
+            tensor_args_t{input_tensor, target_tensor, weight_tensor, divisor_tensor, output_tensor}};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step2

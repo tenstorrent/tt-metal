@@ -10,8 +10,6 @@
 
 namespace ttnn::operations::normalization {
 
-enum class LayerNormDistributedType {
-    LAYERNORM, RMSNORM
-};
+enum class LayerNormDistributedType { LAYERNORM, RMSNORM };
 
 }  // namespace ttnn::operations::normalization

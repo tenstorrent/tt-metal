@@ -11,19 +11,12 @@
 
 namespace ttnn::operations::experimental {
 
-ttnn::Tensor PlusOneOperation::invoke(
-    uint8_t queue_id,
-    const Tensor& input_tensor) {
-    return operation::run(
-                PlusOne{},
-                {input_tensor}, {}, {}, queue_id)
-        .at(0);
+ttnn::Tensor PlusOneOperation::invoke(uint8_t queue_id, const Tensor& input_tensor) {
+    return operation::run(PlusOne{}, {input_tensor}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor PlusOneOperation::invoke(
-    const Tensor& input_tensor) {
+ttnn::Tensor PlusOneOperation::invoke(const Tensor& input_tensor) {
     return invoke(DefaultQueueId, input_tensor);
 }
-
 
 }  // namespace ttnn::operations::experimental

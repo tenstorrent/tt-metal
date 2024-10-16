@@ -22,10 +22,9 @@ void kernel_main() {
     const uint32_t gamma_grad_tile_bytes = get_tile_size(cb_id_gamma_grad);
     const auto gamma_grad_data_format = get_dataformat(cb_id_gamma_grad);
 
-    const InterleavedAddrGenFast<gamma_grad_is_dram> gamma_grad_addrg = {
-        .bank_base_address = gamma_grad_addr,
-        .page_size = gamma_grad_tile_bytes,
-        .data_format = gamma_grad_data_format};
+    const InterleavedAddrGenFast<gamma_grad_is_dram> gamma_grad_addrg = {.bank_base_address = gamma_grad_addr,
+                                                                         .page_size = gamma_grad_tile_bytes,
+                                                                         .data_format = gamma_grad_data_format};
 
     const uint32_t beta_grad_tile_bytes = get_tile_size(cb_id_beta_grad);
     const auto beta_grad_data_format = get_dataformat(cb_id_beta_grad);

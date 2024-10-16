@@ -14,7 +14,7 @@ using namespace tt::constants;
 namespace ttnn::operations::embedding {
 
 enum class EmbeddingsType { GENERIC, PADDED, BINARY };
-enum class EmbeddingsIndexType { UINT32, BFP16};
+enum class EmbeddingsIndexType { UINT32, BFP16 };
 
 struct Embeddings {
     const MemoryConfig output_mem_config;
@@ -26,7 +26,7 @@ struct Embeddings {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors,
+                                                   std::vector<Tensor> &output_tensors) const;
 };
 }  // namespace ttnn::operations::embedding

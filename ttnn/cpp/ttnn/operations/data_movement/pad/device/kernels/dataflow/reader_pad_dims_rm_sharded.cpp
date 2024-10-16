@@ -5,20 +5,16 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-
-
-
 void kernel_main() {
+    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t num_sticks_padded = get_compile_time_arg_val(1);
 
-    constexpr uint32_t stick_size_bytes         = get_compile_time_arg_val(0);
-    constexpr uint32_t num_sticks_padded        = get_compile_time_arg_val(1);
-
-    const uint32_t num_cores_read                 = get_arg_val<uint32_t>(0);
-    tt_l1_ptr uint32_t * read_noc_x               = (tt_l1_ptr uint32_t*)(get_arg_addr(1));
-    tt_l1_ptr uint32_t * read_noc_y               = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    tt_l1_ptr uint32_t * num_stick_chunks         = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 2));
-    tt_l1_ptr uint32_t * chunk_start_id           = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
-    tt_l1_ptr uint32_t * chunk_num_sticks         = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
+    const uint32_t num_cores_read = get_arg_val<uint32_t>(0);
+    tt_l1_ptr uint32_t *read_noc_x = (tt_l1_ptr uint32_t *)(get_arg_addr(1));
+    tt_l1_ptr uint32_t *read_noc_y = (tt_l1_ptr uint32_t *)(get_arg_addr(2));
+    tt_l1_ptr uint32_t *num_stick_chunks = (tt_l1_ptr uint32_t *)(get_arg_addr(1 + num_cores_read * 2));
+    tt_l1_ptr uint32_t *chunk_start_id = (tt_l1_ptr uint32_t *)(get_arg_addr(1 + num_cores_read * 3));
+    tt_l1_ptr uint32_t *chunk_num_sticks = (tt_l1_ptr uint32_t *)(chunk_start_id + 1);
 
     constexpr auto cb_in0 = tt::CB::c_in0;
     constexpr auto cb_out0 = tt::CB::c_out0;
@@ -30,15 +26,13 @@ void kernel_main() {
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
 
-
     for (uint32_t curr_core = 0; curr_core < num_cores_read; ++curr_core) {
-
-        uint64_t src_noc_addr = get_noc_addr(read_noc_x[read_noc_xy_ptr_offset], read_noc_y[read_noc_xy_ptr_offset], l1_read_addr);
+        uint64_t src_noc_addr =
+            get_noc_addr(read_noc_x[read_noc_xy_ptr_offset], read_noc_y[read_noc_xy_ptr_offset], l1_read_addr);
 
         uint32_t curr_core_num_chunks = num_stick_chunks[curr_core];
 
         for (uint32_t curr_chunk = 0; curr_chunk < curr_core_num_chunks; ++curr_chunk) {
-
             uint32_t curr_start_id = chunk_start_id[chunk_ptr_offset];
             uint32_t curr_num_sticks = chunk_num_sticks[chunk_ptr_offset];
 

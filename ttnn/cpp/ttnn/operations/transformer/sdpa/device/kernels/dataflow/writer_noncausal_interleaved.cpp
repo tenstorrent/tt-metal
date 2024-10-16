@@ -6,7 +6,7 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
-template<uint32_t tile_bytes, uint32_t num_readers>
+template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
@@ -20,14 +20,14 @@ void kernel_main() {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8); // num chunks in valid_seq_len
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);  // num chunks in valid_seq_len
 
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
     constexpr uint32_t scale_val = get_compile_time_arg_val(10);
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
 
-    const uint32_t out_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t core_id    = get_arg_val<uint32_t>(1);
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t core_id = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(2);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(3);
     const uint32_t local_nh_start = get_arg_val<uint32_t>(4);

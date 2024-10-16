@@ -49,8 +49,8 @@ void kernel_main() {
         .page_size = input_tile_bytes,
     };
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const InterleavedAddrGen<target_is_dram> addrg_target = {.bank_base_address = target_addr,
+                                                             .page_size = target_tile_bytes};
 
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,

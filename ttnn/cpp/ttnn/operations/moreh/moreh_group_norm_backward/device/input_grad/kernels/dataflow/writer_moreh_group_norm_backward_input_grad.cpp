@@ -22,15 +22,13 @@ void kernel_main() {
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
     const auto input_grad_data_format = get_dataformat(cb_id_input_grad);
 
-    const InterleavedAddrGenFast<true> dram_input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<true> dram_input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                                .page_size = input_grad_tile_bytes,
+                                                                .data_format = input_grad_data_format};
 
-    const InterleavedAddrGenFast<false> l1_input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<false> l1_input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                               .page_size = input_grad_tile_bytes,
+                                                               .data_format = input_grad_data_format};
 
     const auto input_grad_l1_read_ptr = get_read_ptr(cb_id_input_grad);
     uint32_t input_grad_tile_idx;

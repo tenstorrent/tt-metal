@@ -22,8 +22,9 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
-    const Tensor& tmp_pow_sum, float norm_type, const Tensor& total_norm) {
+operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(const Tensor& tmp_pow_sum,
+                                                                float norm_type,
+                                                                const Tensor& total_norm) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -58,19 +59,18 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(total_norm.get_dtype());
 
-    CreateCircularBuffer(
-        program,
-        single_core,
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},        // input(==tmp_pow_sum)
-            {CB::c_in1, in1_t},        // decimal
-            {CB::c_out0, out0_t},      // output(==total_norm)
-            {CB::c_intermed0, im0_t},  // Sum[tmp_pow_sum](==x)
-            {CB::c_intermed1, im1_t},  // x^p
-            {CB::c_intermed2, im2_t},  // log(x)
-            {CB::c_intermed3, im3_t},  // exp(log(x) * decimal)
-        });
+    CreateCircularBuffer(program,
+                         single_core,
+                         cb_data_format,
+                         {
+                             {CB::c_in0, in0_t},        // input(==tmp_pow_sum)
+                             {CB::c_in1, in1_t},        // decimal
+                             {CB::c_out0, out0_t},      // output(==total_norm)
+                             {CB::c_intermed0, im0_t},  // Sum[tmp_pow_sum](==x)
+                             {CB::c_intermed1, im1_t},  // x^p
+                             {CB::c_intermed2, im2_t},  // log(x)
+                             {CB::c_intermed3, im3_t},  // exp(log(x) * decimal)
+                         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -119,12 +119,11 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     auto override_runtime_args_callback = [reader_kernels_id = reader_kernels_id,
                                            writer_kernels_id = writer_kernels_id,
                                            compute_kernels_id = compute_kernels_id,
-                                           single_core = single_core](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>&) {
+                                           single_core = single_core](const void* operation,
+                                                                      Program& program,
+                                                                      const std::vector<Tensor>& input_tensors,
+                                                                      const std::vector<std::optional<const Tensor>>&,
+                                                                      const std::vector<Tensor>&) {
         const auto norm_type = static_cast<const MorehClipGradNormStep2*>(operation)->norm_type;
 
         auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(1.0f / norm_type);
@@ -133,18 +132,18 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
         const auto output_address = input_tensors.at(1).buffer()->address();
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, single_core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, single_core);
             runtime_args[0] = input_address;
             runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, single_core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, single_core);
             runtime_args[0] = output_address;
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, compute_kernels_id, single_core);
+            auto& runtime_args = GetRuntimeArgs(program, compute_kernels_id, single_core);
             runtime_args[1] = p;
             runtime_args[2] = static_cast<uint32_t>(p_is_negative);
         }

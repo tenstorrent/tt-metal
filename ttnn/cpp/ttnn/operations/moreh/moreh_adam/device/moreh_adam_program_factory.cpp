@@ -143,14 +143,14 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "moreh_adam.cpp";
 
-    auto compute_kernel_1_id = tt ::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_tiles_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    auto compute_kernel_1_id =
+        tt ::operations::primary::CreateComputeKernel(program,
+                                                      compute_kernel_file,
+                                                      {core_group_1, num_tiles_per_core_group_1, compute_args_group_1},
+                                                      compute_defines,
+                                                      math_fidelity,
+                                                      fp32_dest_acc_en,
+                                                      math_approx_mode);
     KernelHandle compute_kernel_2_id = -1;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_tiles_per_core_group_2};
@@ -202,30 +202,28 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
             TT_ASSERT(false, "Core not in specified core ranges.");
         }
 
-        const std::vector<uint32_t> reader_runtime_args{
-            param_in_addr,
-            grad_addr,
-            exp_avg_in_addr,
-            exp_avg_sq_in_addr,
-            max_exp_avg_sq_in_addr,
-            f2u_lr.u,
-            f2u_beta1.u,
-            f2u_beta2.u,
-            f2u_eps.u,
-            f2u_weight_decay.u,
-            step,
-            static_cast<uint32_t>(amsgrad),
-            num_tiles_per_core,
-            tile_offset};
+        const std::vector<uint32_t> reader_runtime_args{param_in_addr,
+                                                        grad_addr,
+                                                        exp_avg_in_addr,
+                                                        exp_avg_sq_in_addr,
+                                                        max_exp_avg_sq_in_addr,
+                                                        f2u_lr.u,
+                                                        f2u_beta1.u,
+                                                        f2u_beta2.u,
+                                                        f2u_eps.u,
+                                                        f2u_weight_decay.u,
+                                                        step,
+                                                        static_cast<uint32_t>(amsgrad),
+                                                        num_tiles_per_core,
+                                                        tile_offset};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-        const std::vector<uint32_t> writer_runtime_args{
-            param_out_addr,
-            exp_avg_out_addr,
-            exp_avg_sq_out_addr,
-            max_exp_avg_sq_out_addr,
-            num_tiles_per_core,
-            tile_offset};
+        const std::vector<uint32_t> writer_runtime_args{param_out_addr,
+                                                        exp_avg_out_addr,
+                                                        exp_avg_sq_out_addr,
+                                                        max_exp_avg_sq_out_addr,
+                                                        num_tiles_per_core,
+                                                        tile_offset};
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
@@ -242,11 +240,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
-void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+void MorehAdamOperation::ProgramFactory::override_runtime_arguments(cached_program_t& cached_program,
+                                                                    const operation_attributes_t& operation_attributes,
+                                                                    const tensor_args_t& tensor_args,
+                                                                    tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

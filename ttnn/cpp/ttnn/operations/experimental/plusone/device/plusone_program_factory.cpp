@@ -14,12 +14,11 @@ namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor &input) {
+operation::ProgramWithCallbacks plusone_single_core(const Tensor &input) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_unit_size =  input.element_size();
+    uint32_t input_unit_size = input.element_size();
 
     tt::tt_metal::Device *device = input.device();
 
@@ -68,10 +67,9 @@ operation::ProgramWithCallbacks plusone_single_core(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address()});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &) {
+    auto override_runtime_args_callback = [reader_kernel_id, cores](const Program &program,
+                                                                    const std::vector<Buffer *> &input_buffers,
+                                                                    const std::vector<Buffer *> &) {
         auto src_buffer = input_buffers.at(0);
 
         for (const auto &core : cores) {

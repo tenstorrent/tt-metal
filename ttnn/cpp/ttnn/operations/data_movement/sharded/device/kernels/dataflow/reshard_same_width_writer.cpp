@@ -6,12 +6,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t read_offset = get_arg_val<uint32_t>(1);
     uint32_t num_writes = get_arg_val<uint32_t>(2);
-    tt_l1_ptr uint32_t * args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
+    tt_l1_ptr uint32_t *args = (tt_l1_ptr uint32_t *)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
     uint32_t l1_read_addr = get_read_ptr(shard_cb_id) + read_offset;

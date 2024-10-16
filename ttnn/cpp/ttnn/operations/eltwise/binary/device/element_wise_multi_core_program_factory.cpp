@@ -194,16 +194,15 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
                 }
             }
             if constexpr (initialize_args) {
-                unary_writer_args[i] = {
-                    dst_buffer->address(),
-                    block_height,
-                    block_width,
-                    unpadded_block_height,
-                    unpadded_block_width,
-                    output_width,
-                    block_size,
-                    block_start_height_offset * output_width + block_start_width_offset,
-                    0};
+                unary_writer_args[i] = {dst_buffer->address(),
+                                        block_height,
+                                        block_width,
+                                        unpadded_block_height,
+                                        unpadded_block_width,
+                                        output_width,
+                                        block_size,
+                                        block_start_height_offset * output_width + block_start_width_offset,
+                                        0};
             } else {
                 auto& writer_args = cached_writer_args.at(core.x).at(core.y);
                 writer_args[0] = dst_buffer->address();
@@ -335,28 +334,30 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines =
-        utils::get_defines(op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
+    std::map<string, string> eltwise_defines = utils::get_defines(
+        op_type, a.get_dtype(), output.get_dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
-         op_type == BinaryOpType::LOGADDEXP2){
+            op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb0_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim0_single_tile_size = tt_metal::detail::TileSize(interim_cb0_format);
         tt_metal::CircularBufferConfig cb_interm_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size, {{CB::c_intermed0, interim_cb0_format}})
+            tt_metal::CircularBufferConfig(max_block_size * interim0_single_tile_size,
+                                           {{CB::c_intermed0, interim_cb0_format}})
                 .set_page_size(CB::c_intermed0, interim0_single_tile_size);
         auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
-         op_type == BinaryOpType::LOGADDEXP2){
+            op_type == BinaryOpType::LOGADDEXP2) {
             interim_cb1_format = tt::DataFormat::Float16_b;
         }
         uint32_t interim1_single_tile_size = tt_metal::detail::TileSize(interim_cb1_format);
         tt_metal::CircularBufferConfig cb_interm2_config =
-            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size, {{CB::c_intermed1, interim_cb1_format}})
+            tt_metal::CircularBufferConfig(max_block_size * interim1_single_tile_size,
+                                           {{CB::c_intermed1, interim_cb1_format}})
                 .set_page_size(CB::c_intermed1, interim1_single_tile_size);
         auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
@@ -398,9 +399,10 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        (block_sharded and not out_sharded) ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                              "writer_unary_sharded_blocks_interleaved_start_id.cpp"
-                                            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        (block_sharded and not out_sharded)
+            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
+              "writer_unary_sharded_blocks_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
@@ -413,34 +415,32 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         all_device_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = eltwise_defines});
 
-    set_eltwise_binary_runtime_args<true>(
-        program,
-        a,
-        b,
-        output,
-        binary_reader_kernel_id,
-        unary_writer_kernel_id,
-        eltwise_binary_kernel_id,
-        cb_src0,
-        cb_src1,
-        cb_output,
-        compute_with_storage_grid_size,
-        src0_single_tile_size,
-        src1_single_tile_size,
-        dst_single_tile_size);
+    set_eltwise_binary_runtime_args<true>(program,
+                                          a,
+                                          b,
+                                          output,
+                                          binary_reader_kernel_id,
+                                          unary_writer_kernel_id,
+                                          eltwise_binary_kernel_id,
+                                          cb_src0,
+                                          cb_src1,
+                                          cb_output,
+                                          compute_with_storage_grid_size,
+                                          src0_single_tile_size,
+                                          src1_single_tile_size,
+                                          dst_single_tile_size);
 
-    return {
-        std::move(program),
-        {binary_reader_kernel_id,
-         unary_writer_kernel_id,
-         eltwise_binary_kernel_id,
-         cb_src0,
-         cb_src1,
-         cb_output,
-         compute_with_storage_grid_size,
-         src0_single_tile_size,
-         src1_single_tile_size,
-         dst_single_tile_size}};
+    return {std::move(program),
+            {binary_reader_kernel_id,
+             unary_writer_kernel_id,
+             eltwise_binary_kernel_id,
+             cb_src0,
+             cb_src1,
+             cb_output,
+             compute_with_storage_grid_size,
+             src0_single_tile_size,
+             src1_single_tile_size,
+             dst_single_tile_size}};
 }
 
 void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
@@ -454,21 +454,20 @@ void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
 
     const auto& shared_variables = cached_program.shared_variables;
 
-    set_eltwise_binary_runtime_args<false>(
-        cached_program.program,
-        input_tensor_a,
-        input_tensor_b,
-        output_tensor,
-        shared_variables.binary_reader_kernel_id,
-        shared_variables.unary_writer_kernel_id,
-        shared_variables.eltwise_binary_kernel_id,
-        shared_variables.cb_src0,
-        shared_variables.cb_src1,
-        shared_variables.cb_output,
-        shared_variables.compute_with_storage_grid_size,
-        shared_variables.src0_single_tile_size,
-        shared_variables.src1_single_tile_size,
-        shared_variables.dst_single_tile_size);
+    set_eltwise_binary_runtime_args<false>(cached_program.program,
+                                           input_tensor_a,
+                                           input_tensor_b,
+                                           output_tensor,
+                                           shared_variables.binary_reader_kernel_id,
+                                           shared_variables.unary_writer_kernel_id,
+                                           shared_variables.eltwise_binary_kernel_id,
+                                           shared_variables.cb_src0,
+                                           shared_variables.cb_src1,
+                                           shared_variables.cb_output,
+                                           shared_variables.compute_with_storage_grid_size,
+                                           shared_variables.src0_single_tile_size,
+                                           shared_variables.src1_single_tile_size,
+                                           shared_variables.dst_single_tile_size);
 }
 
 }  // namespace ttnn::operations::binary

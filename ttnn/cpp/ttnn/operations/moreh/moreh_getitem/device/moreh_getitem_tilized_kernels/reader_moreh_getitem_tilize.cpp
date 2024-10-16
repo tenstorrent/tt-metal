@@ -236,12 +236,11 @@ void kernel_main() {
         cb_reserve_back(cb_in0, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_in0);
 
-        Idx5d stick_index_5d = get_stick_indices(
-            input_stick_idx,
-            input_size_c_without_padding,
-            input_size_d_without_padding,
-            input_size_h_without_padding,
-            input_num_stick_width);
+        Idx5d stick_index_5d = get_stick_indices(input_stick_idx,
+                                                 input_size_c_without_padding,
+                                                 input_size_d_without_padding,
+                                                 input_size_h_without_padding,
+                                                 input_num_stick_width);
         Idx5d tile_index_5d = get_tile_indices(stick_index_5d);
 
         uint32_t noc_id = tile_index_5d.n * input_noc_id_stride_n + tile_index_5d.c * input_noc_id_stride_c +

@@ -38,26 +38,24 @@ void bind_split(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::split);
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::split,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                int64_t & num_splits,
-                int64_t & dim,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, num_splits, dim, memory_config);
-                },
-                py::arg("input_tensor"),
-                py::arg("num_splits"),
-                py::arg("dim") = 0,
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0,
-                }
-        );
+    ttnn::bind_registered_operation(module,
+                                    ttnn::split,
+                                    doc,
+                                    ttnn::pybind_overload_t{
+                                        [](const OperationType& self,
+                                           const ttnn::Tensor& input_tensor,
+                                           int64_t& num_splits,
+                                           int64_t& dim,
+                                           const std::optional<ttnn::MemoryConfig>& memory_config,
+                                           uint8_t queue_id) {
+                                            return self(queue_id, input_tensor, num_splits, dim, memory_config);
+                                        },
+                                        py::arg("input_tensor"),
+                                        py::arg("num_splits"),
+                                        py::arg("dim") = 0,
+                                        py::kw_only(),
+                                        py::arg("memory_config") = std::nullopt,
+                                        py::arg("queue_id") = 0,
+                                    });
 }
 }  // namespace ttnn::operations::data_movement::detail

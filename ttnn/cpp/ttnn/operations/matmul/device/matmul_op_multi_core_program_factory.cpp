@@ -21,7 +21,7 @@ namespace matmul {
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const tt::tt_metal::LegacyShape& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const tt::tt_metal::LegacyShape &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -36,21 +36,20 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::Device *device = a.device();
-    const tt::tt_metal::LegacyShape& cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
+    const tt::tt_metal::LegacyShape &cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
-    auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
+    auto [num_cores,
+          all_cores,
+          core_group_1,
+          core_group_2,
+          num_output_tiles_per_core_group_1,
+          num_output_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
     tt_metal::Buffer *dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -85,8 +84,8 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig output_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
+        tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size,
+                                       {{output_cb_index, output_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
@@ -122,9 +121,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .dst_full_sync_en = true,
-            .compile_args = compute_args_group_1});
+            .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
         vector<uint32_t> compute_args_group_2 = {
@@ -140,9 +137,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .dst_full_sync_en = true,
-                .compile_args = compute_args_group_2});
+                .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_2});
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -156,22 +151,21 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_id,
-            core,
-            {src0_addr,
-             src1_addr,
-             Mt,
-             Kt,
-             Nt,
-             MtKt,
-             KtNt,
-             B,
-             uint32_t(bcast_batch),
-             num_tiles_written,
-             num_output_tiles_per_core,
-             MtNt});
+        tt_metal::SetRuntimeArgs(program,
+                                 reader_id,
+                                 core,
+                                 {src0_addr,
+                                  src1_addr,
+                                  Mt,
+                                  Kt,
+                                  Nt,
+                                  MtKt,
+                                  KtNt,
+                                  B,
+                                  uint32_t(bcast_batch),
+                                  num_tiles_written,
+                                  num_output_tiles_per_core,
+                                  MtNt});
         tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }

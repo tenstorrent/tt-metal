@@ -28,8 +28,8 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape 
     }
 }
 
-std::vector<int64_t> find_reduce_dim(
-    const tt::tt_metal::LegacyShape &a_shape, const tt::tt_metal::LegacyShape &b_shape) {
+std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape &a_shape,
+                                     const tt::tt_metal::LegacyShape &b_shape) {
     std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -78,11 +78,10 @@ void get_tensor_stride(std::vector<uint32_t> &stride, std::vector<uint32_t> &dim
     }
 }
 
-void get_not_bcast(
-    std::vector<uint32_t> &input_not_bcast,
-    std::vector<uint32_t> &input_dim,
-    std::vector<uint32_t> &other_not_bcast,
-    std::vector<uint32_t> &other_dim) {
+void get_not_bcast(std::vector<uint32_t> &input_not_bcast,
+                   std::vector<uint32_t> &input_dim,
+                   std::vector<uint32_t> &other_not_bcast,
+                   std::vector<uint32_t> &other_dim) {
     // first 2-dims are M,K and K,N
     // TODO: refaactoring
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -219,56 +218,51 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         other_mask_w = tt::constants::TILE_WIDTH;
     }
 
-    log_debug(
-        tt::LogOp,
-        "{}:{} {} {} mask_h {} mask_w {}",
-        __func__,
-        __LINE__,
-        need_input_mask_h,
-        need_input_mask_w,
-        input_mask_h,
-        input_mask_w);
-    log_debug(
-        tt::LogOp,
-        "{}:{} {} {} mask_h {} mask_w {}",
-        __func__,
-        __LINE__,
-        need_other_mask_h,
-        need_other_mask_w,
-        other_mask_h,
-        other_mask_w);
+    log_debug(tt::LogOp,
+              "{}:{} {} {} mask_h {} mask_w {}",
+              __func__,
+              __LINE__,
+              need_input_mask_h,
+              need_input_mask_w,
+              input_mask_h,
+              input_mask_w);
+    log_debug(tt::LogOp,
+              "{}:{} {} {} mask_h {} mask_w {}",
+              __func__,
+              __LINE__,
+              need_other_mask_h,
+              need_other_mask_w,
+              other_mask_h,
+              other_mask_w);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    log_debug(
-        tt::LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
+    log_debug(tt::LogOp,
+              "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+              math_fidelity,
+              math_approx_mode,
+              fp32_dest_acc_en,
+              packer_l1_acc);
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Grid Configuration For Workload
     ////////////////////////////////////////////////////////////////////////////
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_output_tiles_per_core_group_1,
-         num_output_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_output_tiles_per_core_group_1,
+                num_output_tiles_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
 
     log_debug(tt::LogOp, "{}:{} num_output_tiles: {}", __func__, __LINE__, num_output_tiles);
-    log_debug(
-        tt::LogOp,
-        "{}:{} num_output_tiles_per_core_group1: {}, 2: {} ",
-        __func__,
-        __LINE__,
-        num_output_tiles_per_core_group_1,
-        num_output_tiles_per_core_group_2);
+    log_debug(tt::LogOp,
+              "{}:{} num_output_tiles_per_core_group1: {}, 2: {} ",
+              __func__,
+              __LINE__,
+              num_output_tiles_per_core_group_1,
+              num_output_tiles_per_core_group_2);
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -320,12 +314,11 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         reader_defines["FUSE_BIAS"] = "1";
         reader_compile_time_args.push_back(static_cast<uint32_t>(tt::operations::primary::is_dram(bias)));
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
-        log_debug(
-            tt::LogOp,
-            "{}:{} bias tensor. is bias dram {}",
-            __func__,
-            __LINE__,
-            tt::operations::primary::is_dram(bias));
+        log_debug(tt::LogOp,
+                  "{}:{} bias tensor. is bias dram {}",
+                  __func__,
+                  __LINE__,
+                  tt::operations::primary::is_dram(bias));
     }
 
     const std::vector<uint32_t> writer_compile_time_args = {
@@ -340,14 +333,13 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id =
         tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
-    log_debug(
-        tt::LogOp,
-        "{}:{} DMVK is_dram(input): {}, is_dram(other): {}, is_dram(output): {}",
-        __func__,
-        __LINE__,
-        tt::operations::primary::is_dram(input),
-        tt::operations::primary::is_dram(other),
-        tt::operations::primary::is_dram(output));
+    log_debug(tt::LogOp,
+              "{}:{} DMVK is_dram(input): {}, is_dram(other): {}, is_dram(output): {}",
+              __func__,
+              __LINE__,
+              tt::operations::primary::is_dram(input),
+              tt::operations::primary::is_dram(other),
+              tt::operations::primary::is_dram(output));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -355,17 +347,16 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/moreh_matmul.cpp";
-    std::vector<uint32_t> compute_args_group_1 = {
-        num_output_tiles_per_core_group_1,  // num_output_tiles
-        Mt,
-        Nt,
-        Kt,
-        static_cast<uint32_t>(transpose_input),
-        static_cast<uint32_t>(transpose_other),
-        input_mask_h,
-        input_mask_w,
-        other_mask_h,
-        other_mask_w};
+    std::vector<uint32_t> compute_args_group_1 = {num_output_tiles_per_core_group_1,  // num_output_tiles
+                                                  Mt,
+                                                  Nt,
+                                                  Kt,
+                                                  static_cast<uint32_t>(transpose_input),
+                                                  static_cast<uint32_t>(transpose_other),
+                                                  input_mask_h,
+                                                  input_mask_w,
+                                                  other_mask_h,
+                                                  other_mask_w};
 
     if (bias.has_value()) {
         compute_defines["FUSE_BIAS"] = "1";
@@ -390,17 +381,16 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_args_group_2 = {
-            num_output_tiles_per_core_group_2,  // num_output_tiles
-            Mt,
-            Nt,
-            Kt,
-            static_cast<uint32_t>(transpose_input),
-            static_cast<uint32_t>(transpose_other),
-            input_mask_h,
-            input_mask_w,
-            other_mask_h,
-            other_mask_w};
+        std::vector<uint32_t> compute_args_group_2 = {num_output_tiles_per_core_group_2,  // num_output_tiles
+                                                      Mt,
+                                                      Nt,
+                                                      Kt,
+                                                      static_cast<uint32_t>(transpose_input),
+                                                      static_cast<uint32_t>(transpose_other),
+                                                      input_mask_h,
+                                                      input_mask_w,
+                                                      other_mask_h,
+                                                      other_mask_w};
 
         if (bias.has_value()) {
             compute_args_group_2.push_back(static_cast<uint32_t>(is_scalar_bias));
@@ -416,13 +406,12 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             math_approx_mode,
             unpack_to_dest_mode);
     }
-    log_debug(
-        tt::LogOp,
-        "{}:{} Compute ",
-        __func__,
-        __LINE__,
-        static_cast<uint32_t>(transpose_input),
-        static_cast<uint32_t>(transpose_other));
+    log_debug(tt::LogOp,
+              "{}:{} Compute ",
+              __func__,
+              __LINE__,
+              static_cast<uint32_t>(transpose_input),
+              static_cast<uint32_t>(transpose_other));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
@@ -466,11 +455,10 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), num_tiles_written, num_output_tiles_per_core});
+        tt::tt_metal::SetRuntimeArgs(program,
+                                     writer_kernel_id,
+                                     core,
+                                     {output.buffer()->address(), num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
 

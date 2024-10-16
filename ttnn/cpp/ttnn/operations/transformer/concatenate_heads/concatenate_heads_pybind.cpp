@@ -31,10 +31,7 @@ void py_bind_concatenate_heads(pybind11::module& module) {
                 ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor"), py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::transformer

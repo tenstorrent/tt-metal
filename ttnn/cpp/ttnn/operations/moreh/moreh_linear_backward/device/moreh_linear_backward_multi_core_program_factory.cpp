@@ -12,11 +12,10 @@
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-MorehBiasAddBackwardOperation::MultiCoreProgramFactory::cached_program_t
-MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& bias_grad) {
+MorehBiasAddBackwardOperation::MultiCoreProgramFactory::cached_program_t MorehBiasAddBackwardOperation::
+    MultiCoreProgramFactory::create(const operation_attributes_t& operation_attributes,
+                                    const tensor_args_t& tensor_args,
+                                    tensor_return_value_t& bias_grad) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -50,14 +49,14 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     auto grid = device->compute_with_storage_grid_size();
     auto arch = device->arch();
     const auto num_cores_y = grid.y;
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] = get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = split_work_to_cores(grid, Wt);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = split_work_to_cores(grid, Wt);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
@@ -118,15 +117,15 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";
 
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode,
-        unpack_to_dest_mode);
+    const auto compute_kernel_1_id =
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode,
+                                                     unpack_to_dest_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
@@ -158,44 +157,41 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         }
 
         bool core_has_last_wt = (tile_offset + num_cols_per_core == Wt) ? (true) : (false);
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {output_grad.buffer()->address(),
-             num_tiles,
-             Wt,
-             num_cols_per_core,
-             tile_offset,
-             mask_h,
-             mask_w,
-             static_cast<uint32_t>(do_mask_h),
-             static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {output_grad.buffer()->address(),
+                        num_tiles,
+                        Wt,
+                        num_cols_per_core,
+                        tile_offset,
+                        mask_h,
+                        mask_w,
+                        static_cast<uint32_t>(do_mask_h),
+                        static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
 
         SetRuntimeArgs(
             program, writer_kernel_id, core, {bias_grad.buffer()->address(), num_cols_per_core, tile_offset});
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
-            SetRuntimeArgs(
-                program,
-                compute_kernel_1_id,
-                core,
-                {batch_num,
-                 Ht,
-                 num_cols_per_core,  // Wt_per_core
-                 static_cast<uint32_t>(do_mask_h),
-                 static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
+            SetRuntimeArgs(program,
+                           compute_kernel_1_id,
+                           core,
+                           {batch_num,
+                            Ht,
+                            num_cols_per_core,  // Wt_per_core
+                            static_cast<uint32_t>(do_mask_h),
+                            static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(
-                program,
-                compute_kernel_2_id.value(),
-                core,
-                {batch_num,
-                 Ht,
-                 num_cols_per_core,  // Wt_per_core
-                 static_cast<uint32_t>(do_mask_h),
-                 static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
+            SetRuntimeArgs(program,
+                           compute_kernel_2_id.value(),
+                           core,
+                           {batch_num,
+                            Ht,
+                            num_cols_per_core,  // Wt_per_core
+                            static_cast<uint32_t>(do_mask_h),
+                            static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
         }

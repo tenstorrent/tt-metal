@@ -6,14 +6,13 @@
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
-inline uint32_t get_output_grad_tile(
-    uint32_t idx,
-    uint32_t rank,
-    uint32_t* output_grad_dim,
-    uint32_t* output_grad_stride,
-    uint32_t* input_grad_dim,
-    uint32_t* input_grad_stride,
-    bool* need_bcast_dim) {
+inline uint32_t get_output_grad_tile(uint32_t idx,
+                                     uint32_t rank,
+                                     uint32_t* output_grad_dim,
+                                     uint32_t* output_grad_stride,
+                                     uint32_t* input_grad_dim,
+                                     uint32_t* input_grad_stride,
+                                     bool* need_bcast_dim) {
     uint32_t cur_idx[MAX_NUM_DIMENSIONS];
 
     for (uint32_t i = 0; i < rank; ++i) {
@@ -97,10 +96,9 @@ void kernel_main() {
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
 
-    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGenFast<output_grad_is_dram> output_grad_addrg = {.bank_base_address = output_grad_addr,
+                                                                           .page_size = output_grad_tile_bytes,
+                                                                           .data_format = output_grad_data_format};
 
     fill_cb_with_value(cb_id_decimal, decimal);
 

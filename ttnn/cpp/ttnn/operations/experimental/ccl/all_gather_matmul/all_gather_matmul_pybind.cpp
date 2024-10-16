@@ -49,24 +49,23 @@ void py_bind_all_gather_matmul(pybind11::module& module) {
             >>> all_gathered_mm_in, mm_out = ttnn.all_gather_matmul(tensor, weight_tensor, dim=0, (0, 0))
 
         )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::arg("weight_tensor"),
-            py::arg("dim"),
-            py::arg("all_gather_core_grid_offset"),
-            py::kw_only(),
-            py::arg("num_links") = 1,
-            py::arg("memory_config_ag") = std::nullopt,
-            py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt,
-            py::arg("memory_config_mm") = std::nullopt,
-            py::arg("transpose_a") = false,
-            py::arg("transpose_b") = false,
-            py::arg("dtype") = std::nullopt,
-            py::arg("program_config") = std::nullopt,
-            py::arg("activation") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("core_grid") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input_tensor"),
+                                 py::arg("weight_tensor"),
+                                 py::arg("dim"),
+                                 py::arg("all_gather_core_grid_offset"),
+                                 py::kw_only(),
+                                 py::arg("num_links") = 1,
+                                 py::arg("memory_config_ag") = std::nullopt,
+                                 py::arg("num_workers") = std::nullopt,
+                                 py::arg("num_buffers_per_channel") = std::nullopt,
+                                 py::arg("memory_config_mm") = std::nullopt,
+                                 py::arg("transpose_a") = false,
+                                 py::arg("transpose_b") = false,
+                                 py::arg("dtype") = std::nullopt,
+                                 py::arg("program_config") = std::nullopt,
+                                 py::arg("activation") = std::nullopt,
+                                 py::arg("compute_kernel_config") = std::nullopt,
+                                 py::arg("core_grid") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

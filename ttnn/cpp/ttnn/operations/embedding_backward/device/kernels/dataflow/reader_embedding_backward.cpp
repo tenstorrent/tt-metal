@@ -13,13 +13,13 @@ FORCE_INLINE uint64_t get_index_noc_address(uint32_t tile_idx, uint32_t offset =
 
     if constexpr (index_stick_size_is_power_of_two) {
         constexpr uint32_t index_log2_stick_size = get_compile_time_arg_val(5);
-        InterleavedPow2AddrGen<index_is_dram> index = {
-            .bank_base_address = index_tensor_addr, .log_base_2_of_page_size = index_log2_stick_size};
+        InterleavedPow2AddrGen<index_is_dram> index = {.bank_base_address = index_tensor_addr,
+                                                       .log_base_2_of_page_size = index_log2_stick_size};
         return get_noc_addr(tile_idx, index, offset);
     } else {
         constexpr uint32_t index_page_size = get_compile_time_arg_val(3);
-        InterleavedAddrGen<index_is_dram> index = {
-            .bank_base_address = index_tensor_addr, .page_size = index_page_size};
+        InterleavedAddrGen<index_is_dram> index = {.bank_base_address = index_tensor_addr,
+                                                   .page_size = index_page_size};
         return get_noc_addr(tile_idx, index, offset);
     }
 }

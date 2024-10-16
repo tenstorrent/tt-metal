@@ -7,6 +7,6 @@
 #include "common/unary_op_types.hpp"
 
 namespace ttnn {
-    using UnaryWithParam = ttnn::operations::unary::UnaryWithParam;
-    using UnaryOpType = ttnn::operations::unary::UnaryOpType;
-}
+using UnaryWithParam = ttnn::operations::unary::UnaryWithParam;
+using UnaryOpType = ttnn::operations::unary::UnaryOpType;
+}  // namespace ttnn

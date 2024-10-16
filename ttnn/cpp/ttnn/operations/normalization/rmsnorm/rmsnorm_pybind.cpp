@@ -15,11 +15,9 @@ namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
 void bind_normalization_rms_norm(py::module& module) {
-
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::rms_norm,
-        R"doc(
+    ttnn::bind_registered_operation(module,
+                                    ttnn::rms_norm,
+                                    R"doc(
             Compute rms_norm over :attr:`input_tensor`.
 
 
@@ -42,16 +40,15 @@ void bind_normalization_rms_norm(py::module& module) {
 
 
         )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("epsilon") = 1e-12,
-            py::arg("weight") = std::nullopt,
-            py::arg("bias") = std::nullopt,
-            py::arg("residual_input_tensor") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("program_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+                                    ttnn::pybind_arguments_t{py::arg("input_tensor"),
+                                                             py::kw_only(),
+                                                             py::arg("epsilon") = 1e-12,
+                                                             py::arg("weight") = std::nullopt,
+                                                             py::arg("bias") = std::nullopt,
+                                                             py::arg("residual_input_tensor") = std::nullopt,
+                                                             py::arg("memory_config") = std::nullopt,
+                                                             py::arg("program_config") = std::nullopt,
+                                                             py::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::normalization::detail

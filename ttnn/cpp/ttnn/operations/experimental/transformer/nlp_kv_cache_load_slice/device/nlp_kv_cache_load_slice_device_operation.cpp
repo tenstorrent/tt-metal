@@ -8,11 +8,11 @@
 namespace ttnn::operations::experimental::transformer {
 
 // NLP KV Cache Unpad To Sharded op
-void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &input_tensors) const {
+void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
-    TT_FATAL(input_tensor_a.buffer() != nullptr , "Operands to unpad need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
 
     for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
@@ -34,14 +34,13 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
     // Need at least fused_batch_heads cores to unpad into sharded tensor
     TT_FATAL(fused_batch_heads <= core_grid.x * core_grid.y, "Error");
     TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
-    TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0) &&
-                (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
-            "Can only unpad tilized tensor with full tiles");
-    TT_FATAL((output_tensor_shape[-1] % TILE_WIDTH == 0) &&
-                (this->output_tensor_start[-1] % TILE_WIDTH == 0),
-            "Can only unpad tilized tensor with full tiles");
+    TT_FATAL((output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->output_tensor_start[-2] % TILE_HEIGHT == 0),
+             "Can only unpad tilized tensor with full tiles");
+    TT_FATAL((output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->output_tensor_start[-1] % TILE_WIDTH == 0),
+             "Can only unpad tilized tensor with full tiles");
 }
-std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     std::vector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
@@ -51,7 +50,8 @@ std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compu
     tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
     return {output_tensor_shape};
 }
-std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
+std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto input_shape = input_tensor_a.get_legacy_shape();
     auto dim0 = input_shape[0];
@@ -66,19 +66,18 @@ std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(co
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout(),
-        input_tensor_a.device(),
-        mem_config
-        )};
+    return {create_device_tensor(this->compute_output_shapes(input_tensors).at(0),
+                                 input_tensor_a.get_dtype(),
+                                 input_tensor_a.get_layout(),
+                                 input_tensor_a.device(),
+                                 mem_config)};
 }
-operation::ProgramWithCallbacks NlpKVCacheLoadSliceDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks NlpKVCacheLoadSliceDeviceOperation::create_program(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     return multi_core_nlp_kv_cache_load_slice(input_tensor_a, output_tensor, output_tensor_start, output_tensor_end);
 }
-
 
 }  // namespace ttnn::operations::experimental::transformer

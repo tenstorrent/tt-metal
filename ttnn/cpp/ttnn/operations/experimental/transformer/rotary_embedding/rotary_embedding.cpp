@@ -17,41 +17,36 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
     const std::optional<uint32_t> token_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    TT_FATAL(
-        input_tensor.get_legacy_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
-        "Input X dimension ({}) must be divisible by {} for tiling.",
-        input_tensor.get_legacy_shape()[-1],
-        tt::constants::TILE_WIDTH * 2);
+    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
+             "Input X dimension ({}) must be divisible by {} for tiling.",
+             input_tensor.get_legacy_shape()[-1],
+             tt::constants::TILE_WIDTH * 2);
 
     uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
     uint32_t B = input_tensor.get_legacy_shape()[0];
     uint32_t X = input_tensor.get_legacy_shape()[-1];
 
-    TT_FATAL(
-        cos_cache.get_legacy_shape() == sin_cache.get_legacy_shape(),
-        "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
-        cos_cache.get_legacy_shape(),
-        sin_cache.get_legacy_shape());
+    TT_FATAL(cos_cache.get_legacy_shape() == sin_cache.get_legacy_shape(),
+             "Cosine and Sine cache dimensions must match. Cos cache dimensions: {}, Sin cache dimensions: {}.",
+             cos_cache.get_legacy_shape(),
+             sin_cache.get_legacy_shape());
 
-    TT_FATAL(
-        cos_cache.get_legacy_shape()[0] == 1 && cos_cache.get_legacy_shape()[1] == 1 &&
-            cos_cache.get_legacy_shape()[-1] == X,
-        "Cosine cache dimensions must match input dimensions. Expected (1, 1, {}), but got {}.",
-        X,
-        cos_cache.get_legacy_shape());
+    TT_FATAL(cos_cache.get_legacy_shape()[0] == 1 && cos_cache.get_legacy_shape()[1] == 1 &&
+                 cos_cache.get_legacy_shape()[-1] == X,
+             "Cosine cache dimensions must match input dimensions. Expected (1, 1, {}), but got {}.",
+             X,
+             cos_cache.get_legacy_shape());
 
     if (token_index.has_value()) {
         seq_len = input_tensor.get_legacy_shape()[0];
-        TT_FATAL(
-            seq_len == 1,
-            "When token index is provided, sequence length must be 1. Current sequence length: {}.",
-            seq_len);
+        TT_FATAL(seq_len == 1,
+                 "When token index is provided, sequence length must be 1. Current sequence length: {}.",
+                 seq_len);
 
-        TT_FATAL(
-            cos_cache.get_legacy_shape()[-2] >= token_index,
-            "Cosine cache dimensions must cover the token index. Token index: {}, Cos cache dimension: {}.",
-            token_index.value(),
-            cos_cache.get_legacy_shape()[-2]);
+        TT_FATAL(cos_cache.get_legacy_shape()[-2] >= token_index,
+                 "Cosine cache dimensions must cover the token index. Token index: {}, Cos cache dimension: {}.",
+                 token_index.value(),
+                 cos_cache.get_legacy_shape()[-2]);
     } else {
         TT_FATAL(
             cos_cache.get_legacy_shape()[-2] >= seq_len,

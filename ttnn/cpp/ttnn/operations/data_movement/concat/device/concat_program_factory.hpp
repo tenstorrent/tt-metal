@@ -23,16 +23,20 @@ struct CorePageRange {
     PageRange range;
 };
 
-operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(const std::vector<Tensor> &input_tensors,
+                                                                     uint32_t dim,
+                                                                     Tensor &output);
 
-operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+operation::ProgramWithCallbacks s2i_rm_concat_multi_core(const std::vector<Tensor> &input_tensors,
+                                                         uint32_t dim,
+                                                         Tensor &output);
 
-operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+operation::ProgramWithCallbacks sharded_concat_multi_core(const std::vector<Tensor> &input_tensors,
+                                                          uint32_t dim,
+                                                          Tensor &output);
 
-operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
+operation::ProgramWithCallbacks concat_multi_core(const std::vector<Tensor> &input_tensors,
+                                                  const uint32_t dim,
+                                                  const Tensor &output);
 
 }  // namespace ttnn::operations::data_movement::detail

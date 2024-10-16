@@ -14,22 +14,27 @@ MaxPool2D::program_factory_t MaxPool2D::select_program_factory(const operation_a
     return MultiCore{};
 }
 
-void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowConfig& sliding_window_config, const MemoryConfig& out_mem_config) {
+void validate_maxpool(const Tensor& input,
+                      const sliding_window::SlidingWindowConfig& sliding_window_config,
+                      const MemoryConfig& out_mem_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
-    TT_FATAL(input.buffer() != nullptr , "Operands to reshape need to be allocated in buffers on device!");
+    TT_FATAL(input.buffer() != nullptr, "Operands to reshape need to be allocated in buffers on device!");
     TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 supported for now");
     TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR supported for now");
 
-    // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in reader to generic one.
+    // NOTE: This is not a hard requirement. If need to support non-power-of-2, simply change the address generator in
+    // reader to generic one.
     uint32_t in_nbytes_c = (input.get_legacy_shape()[3]) * (input.get_dtype() == DataType::BFLOAT16 ? 2 : 1);
     bool is_pow2 = (in_nbytes_c & (in_nbytes_c - 1)) == 0;
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
-    TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+    TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+             "Only height sharded tensors are supported.");
 
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
-    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+             "Only height sharded tensors are supported.");
 }
 
 void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -40,7 +45,8 @@ void MaxPool2D::validate_on_program_cache_hit(const operation_attributes_t& op_a
     return validate_maxpool(tensors.input_tensor_, op_attr.sliding_window_config_, op_attr.memory_config_);
 }
 
-MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation_attributes_t& op_attr,
+                                                                 const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
@@ -63,18 +69,19 @@ MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation
     uint32_t out_pagesize = out_c_padded * datum_size(datatype_to_dataformat_converter(input.get_dtype()));
     uint32_t out_nhw = sliding_window_config.batch_size * out_h * out_w;
 
-    uint32_t out_nhw_padded = tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
+    uint32_t out_nhw_padded =
+        tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
     const auto out_dims = std::vector<uint32_t>({1, 1, out_nhw_padded, out_c_padded});
-    const auto padding = Padding(
-        {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
-        Padding::PadValue::NegativeInfinity);
+    const auto padding = Padding({{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
+                                 Padding::PadValue::NegativeInfinity);
     auto out_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
     return out_shape;
 }
 
-MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operation_attributes_t& op_attr,
+                                                                  const tensor_args_t& tensors) {
     auto& input = tensors.input_tensor_;
     auto& sliding_window_config = op_attr.sliding_window_config_;
     auto& out_mem_config = op_attr.memory_config_;
@@ -99,13 +106,17 @@ MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operatio
     return create_device_tensor(output_shape, output_dtype, input.get_layout(), input.device(), mem_config);
 }
 
-tt::stl::hash::hash_t MaxPool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
+tt::stl::hash::hash_t MaxPool2D::compute_program_hash(const operation_attributes_t& op_attr,
+                                                      const tensor_args_t& tensors) {
     auto input_mem_config = tensors.input_tensor_.memory_config();
     auto dtype = tensors.input_tensor_.dtype();
-    return operation::hash_operation<MaxPool2D>(op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
+    return operation::hash_operation<MaxPool2D>(
+        op_attr.sliding_window_config_.get_hash(), op_attr.memory_config_, input_mem_config, dtype);
 }
 
-operation::OpPerformanceModel MaxPool2D::create_op_performance_model(const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+operation::OpPerformanceModel MaxPool2D::create_op_performance_model(const operation_attributes_t& op_attr,
+                                                                     const tensor_args_t& inputs,
+                                                                     const Tensor& output) {
     const auto& input = inputs.input_tensor_;
     const auto& input_shape = input.get_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
@@ -131,7 +142,7 @@ operation::OpPerformanceModel MaxPool2D::create_op_performance_model(const opera
     int output_width = std::floor((activation_w - filter_w + 2 * pad_w) / stride_w + 1);
 
     // Calculate number of mul/add / compare operations
-    int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w; // 1 multiply and 1 add per element
+    int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element
     int64_t num_mul_adds = num_mul_adds_per_elem * output_height * output_width * output_channels * batch_size;
 
     int ideal_dev_clock_cycles = std::ceil((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi));
@@ -140,16 +151,12 @@ operation::OpPerformanceModel MaxPool2D::create_op_performance_model(const opera
     return result;
 }
 
-
 std::tuple<MaxPool2D::operation_attributes_t, MaxPool2D::tensor_args_t> MaxPool2D::invoke(
     const Tensor& input_tensor,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     DataType output_dtype,
     MemoryConfig memory_config) {
-    return {
-        operation_attributes_t{sliding_window_config, output_dtype, memory_config},
-        tensor_args_t{input_tensor}
-    };
+    return {operation_attributes_t{sliding_window_config, output_dtype, memory_config}, tensor_args_t{input_tensor}};
 }
 
-} // namespace ttnn::operations::pool
+}  // namespace ttnn::operations::pool

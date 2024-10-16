@@ -14,25 +14,27 @@ namespace tt {
 namespace tt_metal {
 // Converts convolution weights to tilized 2d matrix layout.
 // Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    Tensor conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
+Tensor convert_conv_weight_tensor_to_tiled_layout(Tensor conv_weight_tensor,
+                                                  uint32_t in1_block_h,
+                                                  uint32_t in1_block_w,
+                                                  std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to tilized 2d matrix layout with special block height padding
 // Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    Tensor conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
+Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(Tensor conv_weight_tensor,
+                                                                  uint32_t in1_block_h,
+                                                                  uint32_t in1_block_w,
+                                                                  std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor,
+                                                    uint32_t num_groups,
+                                                    DataType output_dtype);
 
 // Converts convolution weights to depthwise layout with broadcasted weights
-Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
+Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor,
+                                                      uint32_t act_block_h_ntiles,
+                                                      DataType output_dtype);
 
 const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume);
 
@@ -117,14 +119,14 @@ std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor);
 
-Tensor get_shard_for_device(
-    const Tensor& tensor, Device* target_device, std::optional<int> buffer_index = std::nullopt);
+Tensor get_shard_for_device(const Tensor& tensor,
+                            Device* target_device,
+                            std::optional<int> buffer_index = std::nullopt);
 
-void insert_buffer_and_shape_for_device(
-    Device* target_device,
-    const Tensor& shard,
-    Tensor& tensor_to_modify,
-    std::optional<int> buffer_index = std::nullopt);
+void insert_buffer_and_shape_for_device(Device* target_device,
+                                        const Tensor& shard,
+                                        Tensor& tensor_to_modify,
+                                        std::optional<int> buffer_index = std::nullopt);
 
 Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
 
@@ -135,14 +137,14 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
 
     // We need a way to extract the underlying Tensor type (const or non-const) from ValueType
     // and to decide whether we are dealing with an optional type.
-    using IsOptional = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, std::optional<const Tensor>>,
-        std::true_type,
-        std::false_type>;
-    using TensorType = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, Tensor>,
-        Tensor,
-        const Tensor>;
+    using IsOptional = std::conditional_t<std::is_same_v<ValueType, std::optional<Tensor>> ||
+                                              std::is_same_v<ValueType, std::optional<const Tensor>>,
+                                          std::true_type,
+                                          std::false_type>;
+    using TensorType =
+        std::conditional_t<std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, Tensor>,
+                           Tensor,
+                           const Tensor>;
 
     // Result container type adjustment based on input type
     using ResultType = std::conditional_t<IsOptional::value, std::optional<TensorType>, TensorType>;
@@ -162,7 +164,9 @@ auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
     return transformed_tensors;
 }
 
-inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
+inline bool is_tensor_on_device(const ttnn::Tensor& tensor) {
+    return tensor.storage_type() == StorageType::DEVICE;
+}
 
 inline bool is_tensor_on_multi_device(const ttnn::Tensor& tensor) {
     return tensor.storage_type() == StorageType::MULTI_DEVICE;
@@ -172,7 +176,7 @@ inline bool is_tensor_on_device_or_multidevice(const ttnn::Tensor& tensor) {
     return is_tensor_on_device(tensor) or is_tensor_on_multi_device(tensor);
 }
 
-template<class T>
+template <class T>
 inline uint32_t get_batch_size(const T& shape) {
     uint32_t result = 1;
     for (auto i = 0; i < shape.rank() - 2; i++) {

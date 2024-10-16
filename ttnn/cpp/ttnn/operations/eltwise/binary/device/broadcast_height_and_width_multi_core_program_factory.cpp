@@ -15,7 +15,6 @@
 #include "ttnn/device_operation.hpp"
 #include "tt_metal/common/constants.hpp"
 
-
 namespace ttnn::operations::binary {
 
 static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
@@ -27,11 +26,10 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
     }
 }
 
-BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::cached_program_t
-BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::cached_program_t BinaryDeviceOperation::
+    BroadcastHeightAndWidthMultiCore::create(const operation_attributes_t& operation_attributes,
+                                             const tensor_args_t& tensor_args,
+                                             tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
@@ -117,8 +115,8 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
 
     tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles_cb0 * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_input_tiles_cb0 * src0_single_tile_size,
+                                       {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
     if (src0_sharded) {
         src0_cb_config = src0_cb_config.set_globally_allocated_address(*a.buffer());
@@ -157,11 +155,12 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
     }
-    KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_hw_interleaved_partitioned.cpp",
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+    KernelHandle binary_reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+                               "reader_bcast_hw_interleaved_partitioned.cpp",
+                               all_device_cores,
+                               tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     std::map<string, string> writer_defines;
     if (output_sharded) {
@@ -173,11 +172,11 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
-    auto bcast_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
-        all_device_cores,
-        tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines});
+    auto bcast_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
+                               all_device_cores,
+                               tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines});
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         const CoreCoord& core = cores.at(i);
@@ -193,51 +192,47 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
             continue;
         }
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            binary_reader_kernel_id,
-            core,
-            {a.buffer()->address(),  // 0
-             b.buffer()->address(),
-             num_tensor_tiles_per_core,
-             HtWt,
-             num_tiles_read / HtWt * HtWt,
-             num_tiles_read % HtWt,
-             bnc1 ? 0 : num_tiles_read / HtWt});
+        tt_metal::SetRuntimeArgs(program,
+                                 binary_reader_kernel_id,
+                                 core,
+                                 {a.buffer()->address(),  // 0
+                                  b.buffer()->address(),
+                                  num_tensor_tiles_per_core,
+                                  HtWt,
+                                  num_tiles_read / HtWt * HtWt,
+                                  num_tiles_read % HtWt,
+                                  bnc1 ? 0 : num_tiles_read / HtWt});
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            bcast_kernel_id,
-            core,
-            {
-                1,                         // B
-                1,                         // Ht
-                num_tensor_tiles_per_core  // Wt
-            });
+        tt_metal::SetRuntimeArgs(program,
+                                 bcast_kernel_id,
+                                 core,
+                                 {
+                                     1,                         // B
+                                     1,                         // Ht
+                                     num_tensor_tiles_per_core  // Wt
+                                 });
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
-            core,
-            {
-                output.buffer()->address(),
-                num_tensor_tiles_per_core,
-                num_tiles_read,
-            });
+        tt_metal::SetRuntimeArgs(program,
+                                 unary_writer_kernel_id,
+                                 core,
+                                 {
+                                     output.buffer()->address(),
+                                     num_tensor_tiles_per_core,
+                                     num_tiles_read,
+                                 });
         num_tiles_read += num_tensor_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        {binary_reader_kernel_id,
-         unary_writer_kernel_id,
-         bcast_kernel_id,
-         compute_with_storage_grid_size,
-         cb_src0,
-         src0_single_tile_size,
-         src1_single_tile_size,
-         dst_single_tile_size,
-         cb_output}};
+    return {std::move(program),
+            {binary_reader_kernel_id,
+             unary_writer_kernel_id,
+             bcast_kernel_id,
+             compute_with_storage_grid_size,
+             cb_src0,
+             src0_single_tile_size,
+             src1_single_tile_size,
+             dst_single_tile_size,
+             cb_output}};
 }
 
 void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_arguments(
@@ -353,7 +348,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         binary_reader_args[5] = num_tiles_read % HtWt;
         binary_reader_args[6] = bnc1 ? 0 : num_tiles_read / HtWt;
 
-        bcast_kernel_args[2] = num_tensor_tiles_per_core; // Wt
+        bcast_kernel_args[2] = num_tensor_tiles_per_core;  // Wt
 
         unary_writer_args[0] = dst_buffer->address();
         unary_writer_args[1] = num_tensor_tiles_per_core;

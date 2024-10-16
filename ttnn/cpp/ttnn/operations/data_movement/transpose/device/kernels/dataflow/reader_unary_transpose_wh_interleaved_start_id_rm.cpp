@@ -6,9 +6,8 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
-    uint32_t src_addr  = get_arg_val<uint32_t>(0);
-    uint32_t start_id  = get_arg_val<uint32_t>(1);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    uint32_t start_id = get_arg_val<uint32_t>(1);
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
@@ -25,23 +24,18 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    #define stick_size_is_pow2 get_compile_time_arg_val(9) == 1
-    #if (stick_size_is_pow2)
+#define stick_size_is_pow2 get_compile_time_arg_val(9) == 1
+#if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(10);
-    #else
+#else
     constexpr uint32_t page_size = get_compile_time_arg_val(10);
-    #endif
-    #if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size
-    };
-    #else
-    const InterleavedAddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr,
-        .page_size = page_size
-    };
-    #endif
+#endif
+#if (stick_size_is_pow2)
+    const InterleavedPow2AddrGen<src_is_dram> s = {.bank_base_address = src_addr,
+                                                   .log_base_2_of_page_size = log_base_2_of_page_size};
+#else
+    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
+#endif
 
     uint32_t i_stick = start_id;
 
@@ -50,7 +44,7 @@ void kernel_main() {
         for (uint32_t h = 0; h < Ht; ++h) {
             cb_reserve_back(cb_in0, Wt);
             uint32_t l1_write_addr = get_write_ptr(cb_in0);
-            uint32_t H_curr = h == Ht-1 ? H_per_tile_last : H_per_tile;
+            uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
                 uint64_t read_noc_addr = get_noc_addr(i_stick, s);
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);

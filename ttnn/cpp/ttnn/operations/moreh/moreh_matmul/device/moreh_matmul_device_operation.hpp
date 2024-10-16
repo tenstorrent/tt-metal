@@ -41,16 +41,14 @@ struct MorehMatmulOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variable_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<MultiCoreProgramFactory>;
@@ -73,8 +71,8 @@ struct MorehMatmulOperation {
 };
 
 void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape);
-std::vector<int64_t> find_reduce_dim(
-    const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape);
+std::vector<int64_t> find_reduce_dim(const tt::tt_metal::LegacyShape& a_shape,
+                                     const tt::tt_metal::LegacyShape& b_shape);
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

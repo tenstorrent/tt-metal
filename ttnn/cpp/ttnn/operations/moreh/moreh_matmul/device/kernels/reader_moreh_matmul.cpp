@@ -6,7 +6,11 @@
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
 
-inline uint32_t get_tidx(uint32_t* output_idxes, uint32_t* stride, uint32_t* not_bcast, bool transpose, bool use_h_dim) {
+inline uint32_t get_tidx(uint32_t* output_idxes,
+                         uint32_t* stride,
+                         uint32_t* not_bcast,
+                         bool transpose,
+                         bool use_h_dim) {
     uint32_t tidx = 0;
     // batch dim
     for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 2; --i) {
@@ -19,8 +23,8 @@ inline uint32_t get_tidx(uint32_t* output_idxes, uint32_t* stride, uint32_t* not
     return tidx;
 }
 
-inline void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes,  uint32_t* output_stride) {
-    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 0;--i) {
+inline void unravel_output_tidx(uint32_t output_tidx, uint32_t* output_idxes, uint32_t* output_stride) {
+    for (int32_t i = MAX_NUM_DIMENSIONS - 1; i >= 0; --i) {
         uint32_t dim = output_tidx / output_stride[i];
         output_idxes[i] = dim;
         output_tidx -= (output_idxes[i] * output_stride[i]);
@@ -38,11 +42,11 @@ void kernel_main() {
     uint32_t input_mask_w = get_compile_time_arg_val(6);
     uint32_t other_mask_h = get_compile_time_arg_val(7);
     uint32_t other_mask_w = get_compile_time_arg_val(8);
-    #ifdef FUSE_BIAS
+#ifdef FUSE_BIAS
     constexpr bool bias_is_dram = (get_compile_time_arg_val(9) == 1);
     bool is_scalar_bias = (get_compile_time_arg_val(10) == 1);
     bool scalar_bias_loaded = false;
-    #endif
+#endif
 
     // runtime args
     ArgFetcher arg_fetcher;
@@ -57,25 +61,25 @@ void kernel_main() {
     uint32_t input_not_bcast[MAX_NUM_DIMENSIONS];
     uint32_t other_not_bcast[MAX_NUM_DIMENSIONS];
 
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         input_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         other_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         output_stride[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         input_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
-    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS;++i) {
+    for (int32_t i = 0; i < MAX_NUM_DIMENSIONS; ++i) {
         other_not_bcast[i] = arg_fetcher.get_next_arg_val<uint32_t>();
     }
 
-    #ifdef FUSE_BIAS
-        uint32_t bias_addr = arg_fetcher.get_next_arg_val<uint32_t>();
-    #endif
+#ifdef FUSE_BIAS
+    uint32_t bias_addr = arg_fetcher.get_next_arg_val<uint32_t>();
+#endif
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -95,12 +99,12 @@ void kernel_main() {
     const InterleavedAddrGenFast<other_is_dram> s1 = {
         .bank_base_address = other_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
 
-    #ifdef FUSE_BIAS
+#ifdef FUSE_BIAS
     const uint32_t in4_tile_bytes = get_tile_size(cb_id_in4);
     const DataFormat in4_data_format = get_dataformat(cb_id_in4);
     const InterleavedAddrGenFast<bias_is_dram> s_bias = {
         .bank_base_address = bias_addr, .page_size = in4_tile_bytes, .data_format = in4_data_format};
-    #endif
+#endif
 
     // mask
     bool need_input_mask_h = (input_mask_h != 32);
@@ -144,26 +148,25 @@ void kernel_main() {
             input_tidx += input_step_count;
             other_tidx += other_step_count;
         }
-        #ifdef FUSE_BIAS
-            if (!is_scalar_bias) {
-                uint32_t bias_tidx = output_idxes[0];
+#ifdef FUSE_BIAS
+        if (!is_scalar_bias) {
+            uint32_t bias_tidx = output_idxes[0];
+            cb_reserve_back(cb_id_in4, onetile);
+            uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
+            noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
+            noc_async_read_barrier();
+            cb_push_back(cb_id_in4, onetile);
+        } else {
+            if (!scalar_bias_loaded) {
                 cb_reserve_back(cb_id_in4, onetile);
                 uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-                noc_async_read_tile(bias_tidx, s_bias, l1_write_addr_in4);
+                noc_async_read_tile(0, s_bias, l1_write_addr_in4);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in4, onetile);
-            } else {
-                if (!scalar_bias_loaded) {
-                    cb_reserve_back(cb_id_in4, onetile);
-                    uint32_t l1_write_addr_in4 = get_write_ptr(cb_id_in4);
-                    noc_async_read_tile(0, s_bias, l1_write_addr_in4);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in4, onetile);
-                    scalar_bias_loaded = true;
-                }
+                scalar_bias_loaded = true;
             }
-        #endif
-
+        }
+#endif
 
         output_tidx++;
     }

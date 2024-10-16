@@ -29,35 +29,34 @@ std::vector<std::optional<Tensor>> MorehAdamw::invoke(
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return ttnn::prim::moreh_adamw(
-        param_in,
-        grad,
-        exp_avg_in,
-        exp_avg_sq_in,
-        lr,
-        beta1,
-        beta2,
-        eps,
-        weight_decay,
-        step,
-        amsgrad,
-        max_exp_avg_sq_in,
-        param_out,
-        exp_avg_out,
-        exp_avg_sq_out,
-        max_exp_avg_sq_out,
-        memory_config,
-        compute_kernel_config);
+    return ttnn::prim::moreh_adamw(param_in,
+                                   grad,
+                                   exp_avg_in,
+                                   exp_avg_sq_in,
+                                   lr,
+                                   beta1,
+                                   beta2,
+                                   eps,
+                                   weight_decay,
+                                   step,
+                                   amsgrad,
+                                   max_exp_avg_sq_in,
+                                   param_out,
+                                   exp_avg_out,
+                                   exp_avg_sq_out,
+                                   max_exp_avg_sq_out,
+                                   memory_config,
+                                   compute_kernel_config);
 }
 
 std::vector<Tensor> MorehAdamw::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& input_tensor = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    return {Tensor(operation::get_workers_for_op_output({input_tensor})),
+            Tensor(operation::get_workers_for_op_output({input_tensor})),
+            Tensor(operation::get_workers_for_op_output({input_tensor})),
+            Tensor(operation::get_workers_for_op_output({input_tensor}))};
 }
 
 std::vector<bool> MorehAdamw::create_async_return_flag(

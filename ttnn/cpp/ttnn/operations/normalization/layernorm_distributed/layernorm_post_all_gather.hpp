@@ -27,6 +27,7 @@ struct ExecuteLayerNormPostAllGather {
 }  // namespace operations::normalization
 
 constexpr auto layer_norm_post_all_gather =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm_post_all_gather", ttnn::operations::normalization::ExecuteLayerNormPostAllGather>();
+    ttnn::register_operation_with_auto_launch_op<"ttnn::layer_norm_post_all_gather",
+                                                 ttnn::operations::normalization::ExecuteLayerNormPostAllGather>();
 
 }  // namespace ttnn

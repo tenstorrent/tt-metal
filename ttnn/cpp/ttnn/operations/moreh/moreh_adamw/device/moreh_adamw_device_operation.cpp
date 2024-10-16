@@ -12,12 +12,13 @@
 namespace ttnn::operations::moreh::moreh_adamw {
 
 MorehAdamWDeviceOperation::program_factory_t MorehAdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return MultiCore{};
 }
 
-void MorehAdamWDeviceOperation::validate_inputs(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehAdamWDeviceOperation::validate_inputs(const operation_attributes_t& attributes,
+                                                const tensor_args_t& tensor_args) {
     tt::operations::primary::check_tensor(tensor_args.param_in, "moreh_adamw", "param_in");
     tt::operations::primary::check_tensor(tensor_args.grad, "moreh_adamw", "grad");
     tt::operations::primary::check_tensor(tensor_args.exp_avg_in, "moreh_adamw", "exp_avg_in");
@@ -43,18 +44,19 @@ void MorehAdamWDeviceOperation::validate_inputs(
     }
 }
 
-void MorehAdamWDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehAdamWDeviceOperation::validate_on_program_cache_miss(const operation_attributes_t& attributes,
+                                                               const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
-void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+void MorehAdamWDeviceOperation::validate_on_program_cache_hit(const operation_attributes_t& attributes,
+                                                              const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
 
 MorehAdamWDeviceOperation::shape_return_value_t MorehAdamWDeviceOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input_tensor_shape = tensor_args.param_in.get_shape();
 
     return {
@@ -66,7 +68,8 @@ MorehAdamWDeviceOperation::shape_return_value_t MorehAdamWDeviceOperation::compu
 }
 
 MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.param_in.get_dtype();
     Layout layout{Layout::TILE};
@@ -106,48 +109,45 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
 }
 
 std::tuple<MorehAdamWDeviceOperation::operation_attributes_t, MorehAdamWDeviceOperation::tensor_args_t>
-MorehAdamWDeviceOperation::invoke(
-    const Tensor& param_in,
-    const Tensor& grad,
-    const Tensor& exp_avg_in,
-    const Tensor& exp_avg_sq_in,
+MorehAdamWDeviceOperation::invoke(const Tensor& param_in,
+                                  const Tensor& grad,
+                                  const Tensor& exp_avg_in,
+                                  const Tensor& exp_avg_sq_in,
 
-    const std::optional<float> lr,
-    const std::optional<float> beta1,
-    const std::optional<float> beta2,
-    const std::optional<float> eps,
-    const std::optional<float> weight_decay,
-    const std::optional<uint32_t> step,
-    const std::optional<bool> amsgrad,
+                                  const std::optional<float> lr,
+                                  const std::optional<float> beta1,
+                                  const std::optional<float> beta2,
+                                  const std::optional<float> eps,
+                                  const std::optional<float> weight_decay,
+                                  const std::optional<uint32_t> step,
+                                  const std::optional<bool> amsgrad,
 
-    const std::optional<Tensor>& max_exp_avg_sq_in,
-    const std::optional<Tensor>& param_out,
-    const std::optional<Tensor>& exp_avg_out,
-    const std::optional<Tensor>& exp_avg_sq_out,
-    const std::optional<Tensor>& max_exp_avg_sq_out,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return {
-        operation_attributes_t{
-            lr.value_or(0.001f),
-            beta1.value_or(0.9f),
-            beta2.value_or(0.999f),
-            eps.value_or(1e-8f),
-            weight_decay.value_or(1e-2f),
-            step.value_or(0),
-            amsgrad.value_or(false),
-            memory_config.value_or(param_in.memory_config()),
-            init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{
-            param_in,
-            grad,
-            exp_avg_in,
-            exp_avg_sq_in,
-            max_exp_avg_sq_in,
-            param_out,
-            exp_avg_out,
-            exp_avg_sq_out,
-            max_exp_avg_sq_out}};
+                                  const std::optional<Tensor>& max_exp_avg_sq_in,
+                                  const std::optional<Tensor>& param_out,
+                                  const std::optional<Tensor>& exp_avg_out,
+                                  const std::optional<Tensor>& exp_avg_sq_out,
+                                  const std::optional<Tensor>& max_exp_avg_sq_out,
+                                  const std::optional<ttnn::MemoryConfig>& memory_config,
+                                  const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    return {operation_attributes_t{lr.value_or(0.001f),
+                                   beta1.value_or(0.9f),
+                                   beta2.value_or(0.999f),
+                                   eps.value_or(1e-8f),
+                                   weight_decay.value_or(1e-2f),
+                                   step.value_or(0),
+                                   amsgrad.value_or(false),
+                                   memory_config.value_or(param_in.memory_config()),
+                                   init_device_compute_kernel_config(
+                                       param_in.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            tensor_args_t{param_in,
+                          grad,
+                          exp_avg_in,
+                          exp_avg_sq_in,
+                          max_exp_avg_sq_in,
+                          param_out,
+                          exp_avg_out,
+                          exp_avg_sq_out,
+                          max_exp_avg_sq_out}};
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adamw

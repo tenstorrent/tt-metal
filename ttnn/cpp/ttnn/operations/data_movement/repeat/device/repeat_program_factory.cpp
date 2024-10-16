@@ -9,11 +9,12 @@
 
 using namespace tt::constants;
 
-
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks repeat_multi_core(
-    const Tensor &input_tensor, const uint32_t repeat_dim, const uint32_t num_repeats, const Tensor &output) {
+operation::ProgramWithCallbacks repeat_multi_core(const Tensor &input_tensor,
+                                                  const uint32_t repeat_dim,
+                                                  const uint32_t num_repeats,
+                                                  const Tensor &output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::tt_metal::Device *device = output.device();
@@ -120,18 +121,20 @@ operation::ProgramWithCallbacks repeat_multi_core(
                                                       (std::uint32_t)src0_cb_index,
                                                       (std::uint32_t)dst_is_dram};
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        rm_layout
-            ? "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/reader_repeat_stick_layout_interleaved_start_id.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/reader_repeat_interleaved_start_id.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, repeat_defines));
+    tt::tt_metal::KernelHandle unary_reader_kernel_id =
+        tt::tt_metal::CreateKernel(program,
+                                   rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/"
+                                               "reader_repeat_stick_layout_interleaved_start_id.cpp"
+                                             : "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/dataflow/"
+                                               "reader_repeat_interleaved_start_id.cpp",
+                                   all_cores,
+                                   tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, repeat_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        rm_layout ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
-                  : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        rm_layout
+            ? "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp"
+            : "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -201,4 +204,4 @@ operation::ProgramWithCallbacks repeat_multi_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
-}
+}  // namespace ttnn::operations::data_movement::detail

@@ -77,15 +77,13 @@ void kernel_main() {
     const uint32_t output_grad_tile_bytes = get_tile_size(cb_id_output_grad);
     const auto output_grad_data_format = get_dataformat(cb_id_output_grad);
 
-    const InterleavedAddrGenFast<true> dram_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGenFast<true> dram_output_grad_addrg = {.bank_base_address = output_grad_addr,
+                                                                 .page_size = output_grad_tile_bytes,
+                                                                 .data_format = output_grad_data_format};
 
-    const InterleavedAddrGenFast<false> l1_output_grad_addrg = {
-        .bank_base_address = output_grad_addr,
-        .page_size = output_grad_tile_bytes,
-        .data_format = output_grad_data_format};
+    const InterleavedAddrGenFast<false> l1_output_grad_addrg = {.bank_base_address = output_grad_addr,
+                                                                .page_size = output_grad_tile_bytes,
+                                                                .data_format = output_grad_data_format};
 
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);

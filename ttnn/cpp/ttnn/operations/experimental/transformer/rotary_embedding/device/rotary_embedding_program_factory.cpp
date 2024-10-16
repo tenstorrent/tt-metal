@@ -19,14 +19,12 @@ namespace tt {
 
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input,
-    const Tensor &cos,
-    const Tensor &sin,
-    Tensor &output,
-    std::optional<uint32_t> token_idx,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config
-) {
+operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
+                                                            const Tensor &cos,
+                                                            const Tensor &sin,
+                                                            Tensor &output,
+                                                            std::optional<uint32_t> token_idx,
+                                                            ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -80,10 +78,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         core_group_2 = CoreRangeSet({});
         num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_rows_per_core_group_2 = 0;
-        num_input_tiles =
-            in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles =
-            out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end_coord.x + 1;
         num_cores_y = bbox.end_coord.y + 1;
@@ -98,8 +94,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     uint32_t input_cb_index = CB::c_in0;
     tt_metal::CircularBufferConfig cb_input_config =
-        tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_input_tiles * input_single_tile_size,
+                                       {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, input_single_tile_size);
     if (in_sharded) {
         cb_input_config = cb_input_config.set_globally_allocated_address(*input.buffer());
@@ -109,8 +105,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t rotated_input_cb_index = CB::c_in1;
     uint32_t num_rotated_input_tiles = 2 * Wt;
     tt_metal::CircularBufferConfig cb_rotated_input_config =
-        tt_metal::CircularBufferConfig(
-            num_rotated_input_tiles * input_single_tile_size, {{rotated_input_cb_index, input_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_rotated_input_tiles * input_single_tile_size,
+                                       {{rotated_input_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_cb_index, input_single_tile_size);
     auto cb_rotated_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_config);
 
@@ -131,37 +127,37 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t src_scalar_cb_index = CB::c_in4;
     uint32_t num_scalar_tiles = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
-        tt_metal::CircularBufferConfig(
-            num_scalar_tiles * scalar_single_tile_size, {{src_scalar_cb_index, scalar_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_scalar_tiles * scalar_single_tile_size,
+                                       {{src_scalar_cb_index, scalar_cb_data_format}})
             .set_page_size(src_scalar_cb_index, scalar_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t num_interm_tiles = 1;
     uint32_t rotated_input_interm_cb_index = CB::c_intermed0;
     tt_metal::CircularBufferConfig cb_rotated_input_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_interm_tiles * input_single_tile_size,
+                                       {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
     auto cb_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CB::c_intermed1;
     tt_metal::CircularBufferConfig cb_cos_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_interm_tiles * cos_single_tile_size,
+                                       {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size);
     auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CB::c_intermed2;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
-        tt_metal::CircularBufferConfig(
-            num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_interm_tiles * sin_single_tile_size,
+                                       {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
     auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
     uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
+        tt_metal::CircularBufferConfig(num_output_tiles * output_single_tile_size,
+                                       {{output_cb_index, output_cb_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
     if (out_sharded) {
         cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
@@ -257,14 +253,13 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     if (token_idx.has_value()) {
-        writer_compile_time_args.insert(
-            writer_compile_time_args.end(),
-            {untilized_cos_interm_cb_index,
-             untilized_cos_sync_cb_index,
-             untilized_sin_interm_cb_index,
-             untilized_sin_sync_cb_index,
-             Wt,
-             Wbytes});
+        writer_compile_time_args.insert(writer_compile_time_args.end(),
+                                        {untilized_cos_interm_cb_index,
+                                         untilized_cos_sync_cb_index,
+                                         untilized_sin_interm_cb_index,
+                                         untilized_sin_sync_cb_index,
+                                         Wt,
+                                         Wbytes});
     }
 
     if (out_sharded) {
@@ -282,37 +277,37 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/writer_rotary_embedding_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/"
+        "writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
-    vector<uint32_t> compute_kernel_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)rotated_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)src_scalar_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core_group_1,
-        (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
+    vector<uint32_t> compute_kernel_args = {(std::uint32_t)input_cb_index,
+                                            (std::uint32_t)rotated_input_cb_index,
+                                            (std::uint32_t)cos_cb_index,
+                                            (std::uint32_t)sin_cb_index,
+                                            (std::uint32_t)src_scalar_cb_index,
+                                            (std::uint32_t)rotated_input_interm_cb_index,
+                                            (std::uint32_t)cos_interm_cb_index,
+                                            (std::uint32_t)sin_interm_cb_index,
+                                            (std::uint32_t)output_cb_index,
+                                            (std::uint32_t)num_rows_per_core_group_1,
+                                            (std::uint32_t)Wt,
+                                            (std::uint32_t)half_Wt};
     if (token_idx.has_value()) {
-        compute_kernel_args.insert(
-            compute_kernel_args.end(),
-            {(std::uint32_t)untilized_cos_interm_cb_index,
-             (std::uint32_t)untilized_cos_sync_cb_index,
-             (std::uint32_t)untilized_sin_interm_cb_index,
-             (std::uint32_t)untilized_sin_sync_cb_index,
-             (std::uint32_t)retilized_cos_cb_index,
-             (std::uint32_t)retilized_sin_cb_index});
+        compute_kernel_args.insert(compute_kernel_args.end(),
+                                   {(std::uint32_t)untilized_cos_interm_cb_index,
+                                    (std::uint32_t)untilized_cos_sync_cb_index,
+                                    (std::uint32_t)untilized_sin_interm_cb_index,
+                                    (std::uint32_t)untilized_sin_sync_cb_index,
+                                    (std::uint32_t)retilized_cos_cb_index,
+                                    (std::uint32_t)retilized_sin_cb_index});
     }
 
     auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+        "rotary_embedding.cpp",
         core_group_1,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_kernel_defines});
     if (!core_group_2.ranges().empty()) {
@@ -320,9 +315,13 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
 
         auto rotary_embedding_kernel_group_2_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/rotary_embedding.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+            "rotary_embedding.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_kernel_defines});
+            tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                                    .compile_args = compute_kernel_args,
+                                    .defines = compute_kernel_defines});
     }
     uint32_t cos_sin_offset = 0;
     uint32_t cos_sin_start_id = 0;
@@ -350,21 +349,19 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         }
         std::vector<uint32_t> reader_rt_args;
         if (in_sharded) {
-            reader_rt_args = {
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id};
+            reader_rt_args = {cos_buffer->address(),
+                              sin_buffer->address(),
+                              num_rows_per_core,
+                              num_tiles_written / Wt % Ht,
+                              cos_sin_start_id};
         } else {
-            reader_rt_args = {
-                src_buffer->address(),
-                cos_buffer->address(),
-                sin_buffer->address(),
-                num_rows_per_core,
-                num_tiles_written,
-                num_tiles_written / Wt % Ht,
-                cos_sin_start_id};
+            reader_rt_args = {src_buffer->address(),
+                              cos_buffer->address(),
+                              sin_buffer->address(),
+                              num_rows_per_core,
+                              num_tiles_written,
+                              num_tiles_written / Wt % Ht,
+                              cos_sin_start_id};
         }
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
 
@@ -387,12 +384,11 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
                                                 num_rows_per_core_group_2,
                                                 Wbytes,
                                                 Wt,
-                                                HtWt](
-                                                   const void *operation,
-                                                   Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
+                                                HtWt](const void *operation,
+                                                      Program &program,
+                                                      const std::vector<Tensor> &input_tensors,
+                                                      const std::vector<std::optional<const Tensor>> &,
+                                                      const std::vector<Tensor> &output_tensors) {
         const auto token_idx = static_cast<const RotaryEmbedding *>(operation)->token_idx;
 
         auto src_buffer = input_tensors.at(0).buffer();

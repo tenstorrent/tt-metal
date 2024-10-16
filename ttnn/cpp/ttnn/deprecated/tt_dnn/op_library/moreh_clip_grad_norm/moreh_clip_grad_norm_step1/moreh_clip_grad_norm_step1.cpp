@@ -23,11 +23,10 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
-    const std::vector<Tensor>& inputs,
-    float norm_type,
-    uint32_t tile_offset_of_tmp_pow_sum,
-    const Tensor& tmp_pow_sum) {
+operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(const std::vector<Tensor>& inputs,
+                                                                float norm_type,
+                                                                uint32_t tile_offset_of_tmp_pow_sum,
+                                                                const Tensor& tmp_pow_sum) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -54,13 +53,12 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
     ////////////////////////////////////////////////////////////////////////////
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_inputs_per_core_group_1,
-         num_inputs_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_inputs);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_inputs_per_core_group_1,
+                num_inputs_per_core_group_2] = tt_metal::split_work_to_cores(grid, num_inputs);
     TT_ASSERT(core_group_2.ranges().empty());
     TT_ASSERT(num_inputs_per_core_group_1 == 1);
     TT_ASSERT(num_inputs_per_core_group_2 == 0);
@@ -84,23 +82,22 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
 
-    CreateCircularBuffer(
-        program,
-        core_group_1,
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},        // input(==x)
-            {CB::c_in1, in1_t},        // one
-            {CB::c_in2, in2_t},        // decimal
-            {CB::c_in3, in3_t},        // mask_h_w
-            {CB::c_out0, out0_t},      // output(==y)
-            {CB::c_intermed0, im0_t},  // |x|
-            {CB::c_intermed1, im1_t},  // |x|^p
-            {CB::c_intermed2, im2_t},  // Add[|x|^p * exp(log(|x|) * decimal)]
-            {CB::c_intermed3, im3_t},  // log(|x|)
-            {CB::c_intermed4, im4_t},  // exp(log(|x|) * decimal)
-            {CB::c_intermed5, im5_t},  // |x|^p * exp(log(|x|) * decimal)
-        });
+    CreateCircularBuffer(program,
+                         core_group_1,
+                         cb_data_format,
+                         {
+                             {CB::c_in0, in0_t},        // input(==x)
+                             {CB::c_in1, in1_t},        // one
+                             {CB::c_in2, in2_t},        // decimal
+                             {CB::c_in3, in3_t},        // mask_h_w
+                             {CB::c_out0, out0_t},      // output(==y)
+                             {CB::c_intermed0, im0_t},  // |x|
+                             {CB::c_intermed1, im1_t},  // |x|^p
+                             {CB::c_intermed2, im2_t},  // Add[|x|^p * exp(log(|x|) * decimal)]
+                             {CB::c_intermed3, im3_t},  // log(|x|)
+                             {CB::c_intermed4, im4_t},  // exp(log(|x|) * decimal)
+                             {CB::c_intermed5, im5_t},  // |x|^p * exp(log(|x|) * decimal)
+                         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -144,13 +141,12 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
-            input_addr,
-            static_cast<uint32_t>(is_dram(input)),
-            num_tiles,
-            *reinterpret_cast<uint32_t*>(&decimal),
-            origin_h,
-            origin_w};
+        const std::vector<uint32_t> reader_runtime_args{input_addr,
+                                                        static_cast<uint32_t>(is_dram(input)),
+                                                        num_tiles,
+                                                        *reinterpret_cast<uint32_t*>(&decimal),
+                                                        origin_h,
+                                                        origin_w};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         // writer
@@ -195,18 +191,18 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernels_id, core);
                 runtime_args[0] = input_tensors.at(i).buffer()->address();
                 runtime_args[3] = *reinterpret_cast<uint32_t*>(&decimal);
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernels_id, core);
                 runtime_args[0] = output_address;
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, compute_kernels_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, compute_kernels_id, core);
                 runtime_args[1] = p;
                 runtime_args[2] = static_cast<uint32_t>(p_is_negative);
             }

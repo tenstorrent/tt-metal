@@ -11,19 +11,17 @@
 
 namespace ttnn::operations::moreh::moreh_matmul {
 void bind_moreh_matmul_operation(py::module& module) {
-    bind_registered_operation(
-        module,
-        ttnn::moreh_matmul,
-        "Moreh Matmul Operation",
-        ttnn::pybind_arguments_t{
-            py::arg("input").noconvert(),
-            py::arg("other").noconvert(),
-            py::kw_only(),
-            py::arg("transpose_input").noconvert() = false,
-            py::arg("transpose_other").noconvert() = false,
-            py::arg("output").noconvert() = std::nullopt,
-            py::arg("bias").noconvert() = std::nullopt,
-            py::arg("memory_config").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt});
+    bind_registered_operation(module,
+                              ttnn::moreh_matmul,
+                              "Moreh Matmul Operation",
+                              ttnn::pybind_arguments_t{py::arg("input").noconvert(),
+                                                       py::arg("other").noconvert(),
+                                                       py::kw_only(),
+                                                       py::arg("transpose_input").noconvert() = false,
+                                                       py::arg("transpose_other").noconvert() = false,
+                                                       py::arg("output").noconvert() = std::nullopt,
+                                                       py::arg("bias").noconvert() = std::nullopt,
+                                                       py::arg("memory_config").noconvert() = std::nullopt,
+                                                       py::arg("compute_kernel_config").noconvert() = std::nullopt});
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul

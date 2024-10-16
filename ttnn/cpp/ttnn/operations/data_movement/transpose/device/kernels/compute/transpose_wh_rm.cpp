@@ -10,9 +10,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-
-
-template<uint32_t Wt, uint32_t Ht, uint32_t HtWt>
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
@@ -33,8 +31,8 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
 
         // tilize
         // need to add this hw config here, otherwise pcc is bad
-        UNPACK(( llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_untilize) ));
-        MATH(( llk_math_hw_configure_disaggregated(cb_untilize, cb_untilize) ));
+        UNPACK((llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_untilize)));
+        MATH((llk_math_hw_configure_disaggregated(cb_untilize, cb_untilize)));
         untilize_init_short(cb_untilize);
         cb_wait_front(cb_untilize, Ht);
         cb_reserve_back(cb_out, Ht);
@@ -45,7 +43,13 @@ ALWI void transpose_with_untilize(uint32_t cb_tilize, uint32_t cb_untilize, uint
     }
 }
 
-template<uint32_t Wt, uint32_t Ht, uint32_t HtWt, bool use_narrow_row, uint32_t row_size, uint32_t pack_num_pages_last_col, uint32_t pack_num_pages_last_row_col>
+template <uint32_t Wt,
+          uint32_t Ht,
+          uint32_t HtWt,
+          bool use_narrow_row,
+          uint32_t row_size,
+          uint32_t pack_num_pages_last_col,
+          uint32_t pack_num_pages_last_row_col>
 ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
@@ -60,7 +64,7 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
 
         tile_regs_commit();
 
-        if (w == Wt - 1) { // last row
+        if (w == Wt - 1) {  // last row
             cb_reserve_back(cb_out, pack_num_pages_last_row_col);
             tile_regs_wait();
             pack_untilize_dst<Ht, Ht, false, use_narrow_row, row_size>(cb_out);
@@ -78,7 +82,7 @@ ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, uint32_t c
     pack_untilize_uninit();
 }
 
-template<uint32_t Wt, uint32_t Ht, uint32_t HtWt>
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt>
 ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     uint32_t tile_idx = 0;
 
@@ -105,13 +109,12 @@ ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, uint32_t cb_out) {
     pack_untilize_uninit();
 }
 
-
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t HtWt = get_compile_time_arg_val(2);
-    #ifdef SHARDED
+#ifdef SHARDED
     constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(3);
     constexpr uint32_t last_output_row_num_datums = get_compile_time_arg_val(4);
     constexpr uint32_t pack_num_pages = get_compile_time_arg_val(5);
@@ -121,22 +124,22 @@ void MAIN {
 
     constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
     constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
-    #else
+#else
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(0);
-    #endif
+#endif
 
-
-    #ifdef SHARDED
+#ifdef SHARDED
     constexpr auto cb_in = tt::CB::c_intermed0;
     constexpr auto cb_tilize = tt::CB::c_intermed1;
     constexpr auto cb_untilize = tt::CB::c_intermed2;
-    constexpr auto cb_out = (Ht > 8) ? tt::CB::c_intermed3 : tt::CB::c_out0; // temporary fix until pack_untilze is fully fixed
-    #else
+    constexpr auto cb_out =
+        (Ht > 8) ? tt::CB::c_intermed3 : tt::CB::c_out0;  // temporary fix until pack_untilze is fully fixed
+#else
     constexpr auto cb_in = tt::CB::c_in0;
     constexpr auto cb_tilize = tt::CB::c_intermed0;
     constexpr auto cb_untilize = tt::CB::c_intermed1;
     constexpr auto cb_out = tt::CB::c_out0;
-    #endif
+#endif
 
     unary_op_init_common(cb_in, cb_out);
 
@@ -155,22 +158,26 @@ void MAIN {
         // transpose
         cb_wait_front(cb_tilize, HtWt);
         uint32_t tile_idx = 0;
-        if constexpr(Ht > 8) { // temporary fix until pack_untilze is fully fixed
+        if constexpr (Ht > 8) {  // temporary fix until pack_untilze is fully fixed
             transpose_with_untilize<Wt, Ht, HtWt>(cb_tilize, cb_untilize, cb_out);
         } else {
-            #ifdef SHARDED
+#ifdef SHARDED
             if constexpr (use_narrow_row) {
-                transpose_with_pack_untilize_narrow_row<Wt, Ht, HtWt, use_narrow_row, row_size, pack_num_pages_last_col, pack_num_pages_last_row_col>(cb_tilize, cb_out);
+                transpose_with_pack_untilize_narrow_row<Wt,
+                                                        Ht,
+                                                        HtWt,
+                                                        use_narrow_row,
+                                                        row_size,
+                                                        pack_num_pages_last_col,
+                                                        pack_num_pages_last_row_col>(cb_tilize, cb_out);
             } else {
                 transpose_with_pack_untilize<Wt, Ht, HtWt>(cb_tilize, cb_out);
             }
-            #else
-                transpose_with_pack_untilize<Wt, Ht, HtWt>(cb_tilize, cb_out);
-            #endif
+#else
+            transpose_with_pack_untilize<Wt, Ht, HtWt>(cb_tilize, cb_out);
+#endif
         }
         cb_pop_front(cb_tilize, HtWt);
-
     }
-
 }
-}
+}  // namespace NAMESPACE

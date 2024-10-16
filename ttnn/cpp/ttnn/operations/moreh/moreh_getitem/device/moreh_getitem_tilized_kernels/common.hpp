@@ -70,8 +70,11 @@ struct Idx5d {
     uint32_t w;
 };
 
-Idx5d get_stick_indices(
-    uint32_t stick_idx, uint32_t size_c, uint32_t size_d, uint32_t size_h, uint32_t num_stick_width) {
+Idx5d get_stick_indices(uint32_t stick_idx,
+                        uint32_t size_c,
+                        uint32_t size_d,
+                        uint32_t size_h,
+                        uint32_t num_stick_width) {
     Idx5d stick_index_5d;
 
     stick_index_5d.w = stick_idx % num_stick_width;

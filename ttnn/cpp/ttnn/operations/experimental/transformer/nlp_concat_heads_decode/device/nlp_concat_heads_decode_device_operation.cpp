@@ -15,7 +15,9 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     // input tensor and shape
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 || input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16, "Unsupported data format");
+    TT_FATAL(input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
+                 input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+             "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
@@ -33,7 +35,8 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_legacy_shape();
 
@@ -51,7 +54,8 @@ std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::comp
     return {{sequence_length, 1, batch, hidden_dim}};
 }
 
-std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto num_heads = this->num_heads;
     const auto input_shape = input_tensor.get_legacy_shape();
@@ -66,17 +70,19 @@ std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(c
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+    return {
+        create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
 }
 
-operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_program(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    return  multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
+    return multi_core_nlp_concat_heads_decode(input_tensor, output_tensor, compute_with_storage_grid_size);
 }
-
 
 }  // namespace ttnn::operations::experimental::transformer

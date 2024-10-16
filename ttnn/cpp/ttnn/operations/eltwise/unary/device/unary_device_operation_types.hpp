@@ -29,4 +29,4 @@ using tensor_return_value_t = Tensor;
 
 using shape_return_value_t = ttnn::Shape;
 
-} // namespace ttnn::operations::unary
+}  // namespace ttnn::operations::unary

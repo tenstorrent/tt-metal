@@ -13,26 +13,25 @@ using namespace tt::constants;
 using namespace tt;
 using tt_metal::Buffer;
 
-tt_metal::operation::ProgramWithCallbacks create_program(
-    tt_metal::Device *device,
-    tt::DataFormat in0_cb_data_format,
-    tt::DataFormat in1_cb_data_format,
-    tt::DataFormat out_cb_data_format,
-    MathFidelity math_fidelity,
-    uint32_t num_cores_x,
-    uint32_t B,
-    uint32_t M,
-    uint32_t N,
-    uint32_t K,
-    bool bcast_batch,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N,
-    tt_metal::Buffer *in0_buffer,
-    tt_metal::Buffer *in1_buffer,
-    tt_metal::Buffer *out_buffer) {
+tt_metal::operation::ProgramWithCallbacks create_program(tt_metal::Device *device,
+                                                         tt::DataFormat in0_cb_data_format,
+                                                         tt::DataFormat in1_cb_data_format,
+                                                         tt::DataFormat out_cb_data_format,
+                                                         MathFidelity math_fidelity,
+                                                         uint32_t num_cores_x,
+                                                         uint32_t B,
+                                                         uint32_t M,
+                                                         uint32_t N,
+                                                         uint32_t K,
+                                                         bool bcast_batch,
+                                                         uint32_t in0_block_w,
+                                                         uint32_t out_subblock_h,
+                                                         uint32_t out_subblock_w,
+                                                         uint32_t per_core_M,
+                                                         uint32_t per_core_N,
+                                                         tt_metal::Buffer *in0_buffer,
+                                                         tt_metal::Buffer *in1_buffer,
+                                                         tt_metal::Buffer *out_buffer) {
     tt_metal::Program program{};
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
@@ -84,8 +83,8 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(num_cores_to_corerange_set(
-        num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
+    CoreRangeSet all_cores(
+        num_cores_to_corerange_set(num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
     uint32_t src0_cb_index = 0;
@@ -102,8 +101,8 @@ tt_metal::operation::ProgramWithCallbacks create_program(
 
     uint32_t output_cb_index = 16;  // output operands start at index 16
     uint32_t interm0_cb_index = 24;
-    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
-        {output_cb_index, out_cb_data_format}, {interm0_cb_index, out_cb_data_format}};
+    std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{{output_cb_index, out_cb_data_format},
+                                                                 {interm0_cb_index, out_cb_data_format}};
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
             .set_page_size(output_cb_index, out_single_tile_size)
@@ -118,17 +117,17 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
 
     // Create reader and writer kernels per core
-    auto mm_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    auto mm_reader_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
+                               all_cores,
+                               tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    auto unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    auto unary_writer_kernel_id =
+        tt_metal::CreateKernel(program,
+                               "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
+                               all_cores,
+                               tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Create compute kernel
     auto mm_kernel_id = tt_metal::CreateKernel(
@@ -202,10 +201,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            writer_kernel_id = unary_writer_kernel_id,
                                            num_cores_x,
                                            num_blocks_y,
-                                           num_blocks_x](
-                                              const tt_metal::Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                           num_blocks_x](const tt_metal::Program &program,
+                                                         const std::vector<Buffer *> &input_buffers,
+                                                         const std::vector<Buffer *> &output_buffers) {
         auto src_dram_buffer_a = input_buffers.at(0);
         auto src_dram_buffer_b = input_buffers.at(1);
 
@@ -242,8 +240,10 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse(
-    const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_multi_core_reuse(const Tensor &a,
+                                                        const Tensor &b,
+                                                        Tensor &output,
+                                                        bool bcast_batch) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -293,26 +293,25 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    return create_program(
-        device,
-        in0_cb_data_format,
-        in1_cb_data_format,
-        out_cb_data_format,
-        math_fidelity,
-        num_cores_x,
-        B,
-        Mt,
-        Nt,
-        Kt,
-        bcast_batch,
-        in0_block_w,
-        out_subblock_h,
-        out_subblock_w,
-        per_core_M,
-        per_core_N,
-        in0_buffer,
-        in1_buffer,
-        out_buffer);
+    return create_program(device,
+                          in0_cb_data_format,
+                          in1_cb_data_format,
+                          out_cb_data_format,
+                          math_fidelity,
+                          num_cores_x,
+                          B,
+                          Mt,
+                          Nt,
+                          Kt,
+                          bcast_batch,
+                          in0_block_w,
+                          out_subblock_h,
+                          out_subblock_w,
+                          per_core_M,
+                          per_core_N,
+                          in0_buffer,
+                          in1_buffer,
+                          out_buffer);
 }
 
 }  // namespace matmul

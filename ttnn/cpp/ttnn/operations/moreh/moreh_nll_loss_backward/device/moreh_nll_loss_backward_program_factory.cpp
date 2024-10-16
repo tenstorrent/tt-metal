@@ -176,12 +176,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_backward_impl_3d(
@@ -353,12 +352,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_backward_impl_4d(
@@ -527,12 +525,11 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t MorehNllLossBackwardDeviceOperation::Factory::create(

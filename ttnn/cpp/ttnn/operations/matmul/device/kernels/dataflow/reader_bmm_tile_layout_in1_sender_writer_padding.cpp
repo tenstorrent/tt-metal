@@ -92,27 +92,24 @@ void kernel_main() {
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
 
-    const InterleavedAddrGenFast<in3_is_dram, in3_tile_hw> s3 = {
-        .bank_base_address = in3_tensor_addr,
-        .page_size = bias_single_tile_size_bytes,
-        .data_format = bias_data_format};
+    const InterleavedAddrGenFast<in3_is_dram, in3_tile_hw> s3 = {.bank_base_address = in3_tensor_addr,
+                                                                 .page_size = bias_single_tile_size_bytes,
+                                                                 .data_format = bias_data_format};
 #endif
 #else
-    rt_args_idx += 2; // Skip over placeholders
+    rt_args_idx += 2;  // Skip over placeholders
 #endif
 
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
 
     MatmulOpReceiver fused_op_receiver;
-    if constexpr(fuse_op) {
-        fused_op_receiver = MatmulOpReceiver(
-            false, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks,
-            in1_block_h /* tiles_per_block (in the same dimension */
+    if constexpr (fuse_op) {
+        fused_op_receiver = MatmulOpReceiver(false, /* wait_for_op_signal */
+                                             rt_args_idx,
+                                             num_blocks,
+                                             in1_block_h /* tiles_per_block (in the same dimension */
         );
     }
-
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_SHARDED
@@ -131,11 +128,10 @@ void kernel_main() {
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 
-
 //  READER
 #ifdef IN1_SHARDED
-    cb_reserve_back(cb_id_in1, in1_block_num_tiles*num_blocks);
-    cb_push_back(cb_id_in1, in1_block_num_tiles*num_blocks);
+    cb_reserve_back(cb_id_in1, in1_block_num_tiles * num_blocks);
+    cb_push_back(cb_id_in1, in1_block_num_tiles * num_blocks);
 #else
     uint32_t l1_write_addr_in1;
 
@@ -149,10 +145,9 @@ void kernel_main() {
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
     constexpr DataFormat output_data_format = get_dataformat(cb_id_out0);
-    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {.bank_base_address = out_tensor_addr,
+                                                                   .page_size = output_single_tile_size_bytes,
+                                                                   .data_format = output_data_format};
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -164,12 +159,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
 
-    const uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in1_mcast_dest_noc_start_x,
-        in1_mcast_dest_noc_start_y,
-        in1_mcast_dest_noc_end_x,
-        in1_mcast_dest_noc_end_y,
-        in1_mcast_receiver_semaphore_addr);
+    const uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(in1_mcast_dest_noc_start_x,
+                                                                                  in1_mcast_dest_noc_start_y,
+                                                                                  in1_mcast_dest_noc_end_x,
+                                                                                  in1_mcast_dest_noc_end_y,
+                                                                                  in1_mcast_receiver_semaphore_addr);
 
     const uint64_t in1_multicast_data_noc = get_noc_multicast_addr(
         in1_mcast_dest_noc_start_x, in1_mcast_dest_noc_start_y, in1_mcast_dest_noc_end_x, in1_mcast_dest_noc_end_y, 0);
@@ -189,12 +183,9 @@ void kernel_main() {
 #endif
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            if constexpr(fuse_op) {
+            if constexpr (fuse_op) {
                 fused_op_receiver.update_current_block_start_tile_id(
-                    block,
-                    in1_tensor_current_block_start_tile_id,
-                    in1_tensor_start_tile_id
-                );
+                    block, in1_tensor_current_block_start_tile_id, in1_tensor_start_tile_id);
             }
 #ifdef IN1_DRAM_SHARDED
             // Operand 1
@@ -283,9 +274,7 @@ void kernel_main() {
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_semaphore_set_multicast(
-                in1_mcast_receiver_semaphore_addr,
-                in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores);
+                in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_cores);
 #endif
 
 #ifndef IN1_SHARDED
@@ -364,18 +353,16 @@ void kernel_main() {
             // We should also multicast the flag to destinations
             // num_dests must not include source, since we are NOT really doing a local copy!
             noc_semaphore_set_multicast(
-                in1_mcast_receiver_semaphore_addr,
-                in1_mcast_receiver_semaphore_noc_addr,
-                in1_mcast_num_cores);
-#endif // SKIP_MCAST
+                in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_cores);
+#endif  // SKIP_MCAST
 
             cb_push_back(cb_id_in3, in1_block_w);
 #else
             cb_reserve_back(cb_id_in3, in1_block_w);
             cb_push_back(cb_id_in3, in1_block_w);
-#endif // BIAS_SHARDED
+#endif  // BIAS_SHARDED
         }
-#endif // FUSE_BIAS
+#endif  // FUSE_BIAS
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }
@@ -433,8 +420,7 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_wait_front(
-        cb_id_out0,
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    cb_wait_front(cb_id_out0,
+                  batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
 }

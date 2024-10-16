@@ -51,7 +51,8 @@ bool is_moreh_softmax_backward_h_small_available(const Tensor& tensor) {
 }
 
 MorehSoftmaxBackwardOperation::program_factory_t MorehSoftmaxBackwardOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto strategy = get_parallelization_strategy(operation_attributes, tensor_args);
 
     switch (strategy) {
@@ -63,8 +64,8 @@ MorehSoftmaxBackwardOperation::program_factory_t MorehSoftmaxBackwardOperation::
     }
 }
 
-void MorehSoftmaxBackwardOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSoftmaxBackwardOperation::validate_inputs(const operation_attributes_t& operation_attributes,
+                                                    const tensor_args_t& tensor_args) {
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& output_grad_tensor = tensor_args.output_grad_tensor;
     TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -73,9 +74,8 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     TT_FATAL(output_grad_tensor.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((output_tensor.get_layout() == Layout::TILE), "Output to softmax must be tilized");
     TT_FATAL((output_grad_tensor.get_layout() == Layout::TILE), "Output_grad to softmax must be tilized");
-    TT_FATAL(
-        output_tensor.get_dtype() == DataType::BFLOAT16 || output_tensor.get_dtype() == DataType::BFLOAT8_B,
-        "Output_tensor dtype should be bfloat16 or bfloat8_b");
+    TT_FATAL(output_tensor.get_dtype() == DataType::BFLOAT16 || output_tensor.get_dtype() == DataType::BFLOAT8_B,
+             "Output_tensor dtype should be bfloat16 or bfloat8_b");
     TT_FATAL(
         output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Output_tensor_grad dtype should be bfloat16 or bfloat8_b");
@@ -85,60 +85,60 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
 
-void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                                   const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
-void MorehSoftmaxBackwardOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehSoftmaxBackwardOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                                  const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
 
 MorehSoftmaxBackwardOperation::shape_return_value_t MorehSoftmaxBackwardOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     return tensor_args.output_tensor.get_shape();
 }
 
 MorehSoftmaxBackwardOperation::tensor_return_value_t MorehSoftmaxBackwardOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& input_grad_tensor = tensor_args.input_grad_tensor;
     if (input_grad_tensor.has_value())
         return input_grad_tensor.value();
 
     const auto& output_tensor = tensor_args.output_tensor;
     const auto& input_grad_shape = output_tensor.get_shape();
-    return create_device_tensor(
-        input_grad_shape,
-        output_tensor.get_dtype(),
-        output_tensor.get_layout(),
-        output_tensor.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(input_grad_shape,
+                                output_tensor.get_dtype(),
+                                output_tensor.get_layout(),
+                                output_tensor.device(),
+                                operation_attributes.memory_config);
 }
 
 std::tuple<MorehSoftmaxBackwardOperation::operation_attributes_t, MorehSoftmaxBackwardOperation::tensor_args_t>
-MorehSoftmaxBackwardOperation::invoke(
-    const Tensor& output_tensor,
-    const Tensor& output_grad_tensor,
-    uint32_t dim,
-    const std::optional<Tensor>& input_grad_tensor,
-    const MorehSoftmaxBackwardOp op,
-    const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+MorehSoftmaxBackwardOperation::invoke(const Tensor& output_tensor,
+                                      const Tensor& output_grad_tensor,
+                                      uint32_t dim,
+                                      const std::optional<Tensor>& input_grad_tensor,
+                                      const MorehSoftmaxBackwardOp op,
+                                      const MorehSoftmaxBackwardOpParallelizationStrategy strategy,
+                                      const std::optional<MemoryConfig>& memory_config,
+                                      const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
-        operation_attributes_t{
-            dim,
-            op,
-            strategy,
-            memory_config.value_or(output_tensor.memory_config()),
-            init_device_compute_kernel_config(
-                output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        operation_attributes_t{dim,
+                               op,
+                               strategy,
+                               memory_config.value_or(output_tensor.memory_config()),
+                               init_device_compute_kernel_config(
+                                   output_grad_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{output_tensor, output_grad_tensor, input_grad_tensor}};
 }
 
 MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get_parallelization_strategy(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output_tensor;
     const auto strategy = operation_attributes.strategy;
     const auto dim = operation_attributes.dim;
@@ -162,35 +162,30 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
     }
 
     if (rank - 2 == dim) {
-        TT_FATAL(
-            strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H ||
-                strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H,
-            "Invalid parallelization strategy. {} is not for dim H",
-            strategy);
+        TT_FATAL(strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H ||
+                     strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_H,
+                 "Invalid parallelization strategy. {} is not for dim H",
+                 strategy);
 
         if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_H) {
-            TT_FATAL(
-                is_moreh_softmax_backward_h_small_available(output),
-                "not enough circular buffer memory for {}",
-                strategy);
+            TT_FATAL(is_moreh_softmax_backward_h_small_available(output),
+                     "not enough circular buffer memory for {}",
+                     strategy);
         }
     } else if (rank - 1 == dim) {
-        TT_FATAL(
-            strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W ||
-                strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W,
-            "Invalid parallelization strategy. {} is not for dim W",
-            strategy);
+        TT_FATAL(strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W ||
+                     strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_W,
+                 "Invalid parallelization strategy. {} is not for dim W",
+                 strategy);
 
         if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::SMALL_W) {
-            TT_FATAL(
-                is_moreh_softmax_backward_w_small_available(output),
-                "not enough circular buffer memory for {}",
-                strategy);
+            TT_FATAL(is_moreh_softmax_backward_w_small_available(output),
+                     "not enough circular buffer memory for {}",
+                     strategy);
         }
     } else {
-        TT_FATAL(
-            strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C,
-            "Invalid parallelization strategy. large c is for dim 0 - (rank - 3)");
+        TT_FATAL(strategy == MorehSoftmaxBackwardOpParallelizationStrategy::LARGE_C,
+                 "Invalid parallelization strategy. large c is for dim 0 - (rank - 3)");
     }
 
     return strategy;

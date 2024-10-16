@@ -25,8 +25,8 @@ PYBIND11_MODULE(_ttnn, module) {
     /*
     We have to make sure every class and enum is bound before any function that uses it as an argument or a return type.
     So we split the binding calls into two parts: one for classes and enums, and one for functions.
-    Another issue to be aware of is that we have to define each shared submodule only once. Therefore, all def_submodule calls
-    have to be put in here.
+    Another issue to be aware of is that we have to define each shared submodule only once. Therefore, all def_submodule
+    calls have to be put in here.
     */
 
     // MODULES
@@ -52,7 +52,6 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::tensor::pytensor_module_types(m_tensor);
     ttnn::graph::py_graph_module_types(m_graph);
 
-
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
     ttnn::core::py_module_types(m_core);
@@ -66,7 +65,6 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::tensor::pytensor_module(m_tensor);
     ttnn::core::py_module(m_core);
     ttnn::graph::py_graph_module(m_graph);
-
 
 #if defined(TRACY_ENABLE)
     py::function tracy_decorator = py::module::import("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
@@ -91,15 +89,60 @@ PYBIND11_MODULE(_ttnn, module) {
     tt::operations::primary::py_module(m_primary_ops);
 
     module.attr("CONFIG") = &ttnn::CONFIG;
-    module.def("get_python_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_python_operation_id();} , "Get operation id");
-    module.def("set_python_operation_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_python_operation_id(id);}, "Set operation id");
-    module.def("fetch_and_increment_python_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id();}, "Increment tensor id and return the previously held id");
+    module.def(
+        "get_python_operation_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().get_python_operation_id();
+        },
+        "Get operation id");
+    module.def(
+        "set_python_operation_id",
+        [](std::uint64_t id) {
+            ttnn::CoreIDs::instance().set_python_operation_id(id);
+        },
+        "Set operation id");
+    module.def(
+        "fetch_and_increment_python_operation_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id();
+        },
+        "Increment tensor id and return the previously held id");
 
-    module.def("get_tensor_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_tensor_id();}, "Get tensor id");
-    module.def("set_tensor_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_tensor_id(id);}, "Set tensor id");
-    module.def("fetch_and_increment_tensor_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();}, "Increment tensor id and return the previously held id");
+    module.def(
+        "get_tensor_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().get_tensor_id();
+        },
+        "Get tensor id");
+    module.def(
+        "set_tensor_id",
+        [](std::uint64_t id) {
+            ttnn::CoreIDs::instance().set_tensor_id(id);
+        },
+        "Set tensor id");
+    module.def(
+        "fetch_and_increment_tensor_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+        },
+        "Increment tensor id and return the previously held id");
 
-    module.def("get_device_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().get_device_operation_id();}, "Get device operation id");
-    module.def("set_device_operation_id", [](std::uint64_t id){ttnn::CoreIDs::instance().set_device_operation_id(id);}, "Set device operation id");
-    module.def("fetch_and_increment_device_operation_id", []()->std::uint64_t {return ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();}, "Increment device operation id and return the previously held id");
+    module.def(
+        "get_device_operation_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().get_device_operation_id();
+        },
+        "Get device operation id");
+    module.def(
+        "set_device_operation_id",
+        [](std::uint64_t id) {
+            ttnn::CoreIDs::instance().set_device_operation_id(id);
+        },
+        "Set device operation id");
+    module.def(
+        "fetch_and_increment_device_operation_id",
+        []() -> std::uint64_t {
+            return ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+        },
+        "Increment device operation id and return the previously held id");
 }

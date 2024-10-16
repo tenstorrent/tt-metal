@@ -9,17 +9,16 @@
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
-#define DEFINE_MOREH_SOFT_BACKWARD_OP(name)                                         \
-    struct name {                                                                   \
-        static Tensor invoke(                                                       \
-            const Tensor& output_tensor,                                            \
-            const Tensor& output_grad_tensor,                                       \
-            uint32_t dim,                                                           \
-            const std::optional<Tensor>& input_grad_tensor,                         \
-            const MorehSoftmaxBackwardOp op,                                        \
-            const MorehSoftmaxBackwardOpParallelizationStrategy strategy,           \
-            const std::optional<MemoryConfig>& memory_config,                       \
-            const std::optional<DeviceComputeKernelConfig>& compute_kernel_config); \
+#define DEFINE_MOREH_SOFT_BACKWARD_OP(name)                                                          \
+    struct name {                                                                                    \
+        static Tensor invoke(const Tensor& output_tensor,                                            \
+                             const Tensor& output_grad_tensor,                                       \
+                             uint32_t dim,                                                           \
+                             const std::optional<Tensor>& input_grad_tensor,                         \
+                             const MorehSoftmaxBackwardOp op,                                        \
+                             const MorehSoftmaxBackwardOpParallelizationStrategy strategy,           \
+                             const std::optional<MemoryConfig>& memory_config,                       \
+                             const std::optional<DeviceComputeKernelConfig>& compute_kernel_config); \
     }
 
 DEFINE_MOREH_SOFT_BACKWARD_OP(MorehSoftmaxBackward);

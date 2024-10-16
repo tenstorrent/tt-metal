@@ -34,15 +34,14 @@ void kernel_main() {
     const uint32_t input_start_ring_idx = get_arg_val<uint32_t>(arg_idx++);
     const bool is_clockwise_direction = get_arg_val<uint32_t>(arg_idx++) == 1;
 
-
-    #ifdef SHARDED_MEM_LAYOUT
+#ifdef SHARDED_MEM_LAYOUT
     uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t * const output_shard_grid_row_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    const uint32_t *const output_shard_grid_row_map = reinterpret_cast<const uint32_t *const>(get_arg_addr(arg_idx));
     arg_idx += output_shard_grid_nrows;
     uint32_t output_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t * const output_shard_grid_col_map = reinterpret_cast<const uint32_t * const>(get_arg_addr(arg_idx));
+    const uint32_t *const output_shard_grid_col_map = reinterpret_cast<const uint32_t *const>(get_arg_addr(arg_idx));
     arg_idx += output_shard_grid_ncols;
-    #endif
+#endif
 
     // Compile time Args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
@@ -56,8 +55,9 @@ void kernel_main() {
 
     ASSERT(half_cb_n_pages > rem_num_pages);
 
-    #ifdef SHARDED_MEM_LAYOUT
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
+#ifdef SHARDED_MEM_LAYOUT
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout =
+        static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
     constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(8);
     constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(9);
     constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(10);
@@ -65,65 +65,59 @@ void kernel_main() {
     constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(12);
     constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(13);
     constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(14) != 0;
-    #endif
+#endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
-    #ifdef ROW_MAJOR_LAYOUT
-        #ifdef INTERLEAVED_MEM_LAYOUT
-        InterleavedAddrGen<dst_is_dram> d = {
-            .bank_base_address = dst_addr + output_start_addr_offset, .page_size = output_page_size};
-        #elif defined SHARDED_MEM_LAYOUT
-            auto d =
-                tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
-                tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
-                    output_tensor_shard_pages_per_shard_y,
-                    output_tensor_shard_pages_per_shard_x,
-                    output_tensor_shard_grid_height,
-                    output_tensor_shard_grid_width,
-                    output_tensor_shard_grid_start_y_logical,
-                    output_tensor_shard_grid_start_x_logical,
-                    output_tensor_shard_grid_transposed
-                ),
-                output_page_size,
-                dst_addr
-            );
-            ASSERT(false);
-        #endif
-    #elif defined TILED_LAYOUT
-        #ifdef INTERLEAVED_MEM_LAYOUT
-        const DataFormat in0_df = get_dataformat(cb_id_in0);
+#ifdef ROW_MAJOR_LAYOUT
+#ifdef INTERLEAVED_MEM_LAYOUT
+    InterleavedAddrGen<dst_is_dram> d = {.bank_base_address = dst_addr + output_start_addr_offset,
+                                         .page_size = output_page_size};
+#elif defined SHARDED_MEM_LAYOUT
+    auto d = tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
+        tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
+            output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
+        tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
+            output_tensor_shard_pages_per_shard_y,
+            output_tensor_shard_pages_per_shard_x,
+            output_tensor_shard_grid_height,
+            output_tensor_shard_grid_width,
+            output_tensor_shard_grid_start_y_logical,
+            output_tensor_shard_grid_start_x_logical,
+            output_tensor_shard_grid_transposed),
+        output_page_size,
+        dst_addr);
+    ASSERT(false);
+#endif
+#elif defined TILED_LAYOUT
+#ifdef INTERLEAVED_MEM_LAYOUT
+    const DataFormat in0_df = get_dataformat(cb_id_in0);
 
-        InterleavedAddrGenFast<dst_is_dram> d = {
-            .bank_base_address = dst_addr,
-            .page_size = output_page_size,
-            .data_format = in0_df
-        };
+    InterleavedAddrGenFast<dst_is_dram> d = {
+        .bank_base_address = dst_addr, .page_size = output_page_size, .data_format = in0_df};
 
-        #elif defined SHARDED_MEM_LAYOUT
-            auto d =
-                tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
-                tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
-                tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
-                    output_tensor_shard_pages_per_shard_y,
-                    output_tensor_shard_pages_per_shard_x,
-                    output_tensor_shard_grid_height,
-                    output_tensor_shard_grid_width,
-                    output_tensor_shard_grid_start_y_logical,
-                    output_tensor_shard_grid_start_x_logical,
-                    output_tensor_shard_grid_transposed
-                ),
-                output_page_size,
-                dst_addr
-            );
-        #endif
-    #endif
+#elif defined SHARDED_MEM_LAYOUT
+    auto d = tt::tt_metal::address_generators::build_sharded_addr_gen<output_tensor_memory_layout>(
+        tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
+            output_shard_grid_nrows, output_shard_grid_row_map, output_shard_grid_ncols, output_shard_grid_col_map),
+        tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<output_tensor_memory_layout>::type(
+            output_tensor_shard_pages_per_shard_y,
+            output_tensor_shard_pages_per_shard_x,
+            output_tensor_shard_grid_height,
+            output_tensor_shard_grid_width,
+            output_tensor_shard_grid_start_y_logical,
+            output_tensor_shard_grid_start_x_logical,
+            output_tensor_shard_grid_transposed),
+        output_page_size,
+        dst_addr);
+#endif
+#endif
 
     // Each worker receiver writer matches with a specific worker sender reader
     // Used to signal that data has been committed to memory and can be read
     uint64_t worker_send_reader_semaphore_noc_addr = -1;
     if (sender_enabled) {
-        worker_send_reader_semaphore_noc_addr = get_noc_addr(worker_sender_reader_noc_x, worker_sender_reader_noc_y, sem_addr);
+        worker_send_reader_semaphore_noc_addr =
+            get_noc_addr(worker_sender_reader_noc_x, worker_sender_reader_noc_y, sem_addr);
     }
 
     uint32_t input_ring_idx = input_start_ring_idx;
@@ -135,29 +129,49 @@ void kernel_main() {
     /* Args for overlapped all gather */
     OpSignaler op_signaler;
 
-    if constexpr(fuse_op) {
+    if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
     }
-
 
     for (uint32_t i = 0; i < num_transfers; ++i) {
         if (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
-
-                #ifdef SHARDED_MEM_LAYOUT
-                ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
-                #endif
-                write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages, page_size);
+#ifdef SHARDED_MEM_LAYOUT
+                ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
+                                             output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+#endif
+                write_chunk(output_page_idx,
+                            col_idx,
+                            row_idx,
+                            cb_id_in0,
+                            d,
+                            num_cols,
+                            num_rows,
+                            col_offset,
+                            row_offset,
+                            num_pages,
+                            page_size);
                 if (sender_enabled) {
                     noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
                 }
             }
         }
         if (rem_num_pages > 0) {
-            #ifdef SHARDED_MEM_LAYOUT
-            ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x * output_tensor_shard_grid_height * output_tensor_shard_grid_width);
-            #endif
-            write_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size);
+#ifdef SHARDED_MEM_LAYOUT
+            ASSERT(output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
+                                         output_tensor_shard_grid_height * output_tensor_shard_grid_width);
+#endif
+            write_chunk(output_page_idx,
+                        col_idx,
+                        row_idx,
+                        cb_id_in0,
+                        d,
+                        num_cols,
+                        num_rows,
+                        col_offset,
+                        row_offset,
+                        rem_num_pages,
+                        page_size);
             if (sender_enabled) {
                 noc_semaphore_inc(worker_send_reader_semaphore_noc_addr, 1);
             }
@@ -167,7 +181,7 @@ void kernel_main() {
         }
 
         // Synchronize if all gather fusion is enabled
-        if constexpr(fuse_op) {
+        if constexpr (fuse_op) {
             op_signaler.synchronize_workers_and_signal_op(input_ring_idx);
         }
 
@@ -207,7 +221,6 @@ void kernel_main() {
                     output_base_page_idx += output_page_offset;
                 }
             }
-
         }
 
         output_page_idx = output_base_page_idx;

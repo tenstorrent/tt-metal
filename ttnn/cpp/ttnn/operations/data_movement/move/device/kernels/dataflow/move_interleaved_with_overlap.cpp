@@ -39,24 +39,19 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id);
 
     // if controller core then this local address will be incremented by remote cores,
-    // otherwise controller core will set this to signal that write to dst can be done once controller core sees control_value locally
-    volatile uint32_t *semaphore_addr_ptr = reinterpret_cast<volatile uint32_t*>(semaphore_addr);
+    // otherwise controller core will set this to signal that write to dst can be done once controller core sees
+    // control_value locally
+    volatile uint32_t *semaphore_addr_ptr = reinterpret_cast<volatile uint32_t *>(semaphore_addr);
 
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = get_tile_size(cb_id);
 
     const InterleavedAddrGenFast<src_is_dram> src_addrgen = {
-        .bank_base_address = src_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
     const InterleavedAddrGenFast<dst_is_dram> dst_addrgen = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
     // read a ublock of tiles from src to CB
     cb_reserve_back(cb_id, num_tiles);
@@ -72,12 +67,15 @@ void kernel_main() {
         noc_semaphore_wait(semaphore_addr_ptr, control_value);
 
         // signal to cores that write to dst can begin
-        uint64_t range0_multicast_semaphore_addr = get_noc_multicast_addr(range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, semaphore_addr);
+        uint64_t range0_multicast_semaphore_addr = get_noc_multicast_addr(
+            range_0_start_noc_x, range_0_start_noc_y, range_0_end_noc_x, range_0_end_noc_y, semaphore_addr);
         noc_semaphore_set_multicast(semaphore_addr, range0_multicast_semaphore_addr, range_0_size);
-        uint64_t range1_multicast_semaphore_addr = get_noc_multicast_addr(range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, semaphore_addr);
+        uint64_t range1_multicast_semaphore_addr = get_noc_multicast_addr(
+            range_1_start_noc_x, range_1_start_noc_y, range_1_end_noc_x, range_1_end_noc_y, semaphore_addr);
         noc_semaphore_set_multicast(semaphore_addr, range1_multicast_semaphore_addr, range_1_size);
         if (do_third_multicast) {
-            uint64_t range2_multicast_semaphore_addr = get_noc_multicast_addr(range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, semaphore_addr);
+            uint64_t range2_multicast_semaphore_addr = get_noc_multicast_addr(
+                range_2_start_noc_x, range_2_start_noc_y, range_2_end_noc_x, range_2_end_noc_y, semaphore_addr);
             noc_semaphore_set_multicast(semaphore_addr, range2_multicast_semaphore_addr, range_2_size);
         }
     } else {

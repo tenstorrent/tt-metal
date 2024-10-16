@@ -12,39 +12,37 @@ namespace ttnn {
 namespace operations::transformer {
 
 struct ExecuteScaledDotProductAttention {
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor &input_tensor_q,
-        const ttnn::Tensor &input_tensor_k,
-        const ttnn::Tensor &input_tensor_v,
-        std::optional<ttnn::Tensor> causal_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<uint32_t> valid_seq_len = std::nullopt);
+    static ttnn::Tensor invoke(uint8_t queue_id,
+                               const ttnn::Tensor &input_tensor_q,
+                               const ttnn::Tensor &input_tensor_k,
+                               const ttnn::Tensor &input_tensor_v,
+                               std::optional<ttnn::Tensor> causal_mask = std::nullopt,
+                               bool is_causal = true,
+                               std::optional<float> scale = std::nullopt,
+                               const std::optional<MemoryConfig> &memory_config = std::nullopt,
+                               std::optional<SDPAProgramConfig> program_config = std::nullopt,
+                               std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+                               std::optional<uint32_t> valid_seq_len = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor &input_tensor_q,
-        const ttnn::Tensor &input_tensor_k,
-        const ttnn::Tensor &input_tensor_v,
-        std::optional<ttnn::Tensor> causal_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<uint32_t> valid_seq_len = std::nullopt);
+    static ttnn::Tensor invoke(const ttnn::Tensor &input_tensor_q,
+                               const ttnn::Tensor &input_tensor_k,
+                               const ttnn::Tensor &input_tensor_v,
+                               std::optional<ttnn::Tensor> causal_mask = std::nullopt,
+                               bool is_causal = true,
+                               std::optional<float> scale = std::nullopt,
+                               const std::optional<MemoryConfig> &memory_config = std::nullopt,
+                               std::optional<SDPAProgramConfig> program_config = std::nullopt,
+                               std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+                               std::optional<uint32_t> valid_seq_len = std::nullopt);
 };
 
 }  // namespace operations::transformer
 
 namespace transformer {
 
-constexpr auto scaled_dot_product_attention = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::transformer::scaled_dot_product_attention",
-    ttnn::operations::transformer::ExecuteScaledDotProductAttention>();
+constexpr auto scaled_dot_product_attention =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::transformer::scaled_dot_product_attention",
+                                                 ttnn::operations::transformer::ExecuteScaledDotProductAttention>();
 
 }  // namespace transformer
 

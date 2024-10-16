@@ -23,12 +23,12 @@ std::vector<std::optional<Tensor>> MorehLayerNorm::invoke(
 }
 
 std::vector<Tensor> MorehLayerNorm::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& input = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({input})),
-        Tensor(operation::get_workers_for_op_output({input})),
-        Tensor(operation::get_workers_for_op_output({input}))};
+    return {Tensor(operation::get_workers_for_op_output({input})),
+            Tensor(operation::get_workers_for_op_output({input})),
+            Tensor(operation::get_workers_for_op_output({input}))};
 }
 
 std::vector<bool> MorehLayerNorm::create_async_return_flag(

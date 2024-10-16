@@ -130,12 +130,11 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_3d(
@@ -258,12 +257,11 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_unreduced_backward_impl_4d(
@@ -385,19 +383,17 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t
-MorehNllLossUnreducedBackwardDeviceOperation::Factory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t MorehNllLossUnreducedBackwardDeviceOperation::
+    Factory::create(const operation_attributes_t& operation_attributes,
+                    const tensor_args_t& tensor_args,
+                    tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
 

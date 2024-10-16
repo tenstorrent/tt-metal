@@ -11,21 +11,17 @@
 namespace ttnn {
 namespace ccl {
 
-
 args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) {
-    return {
-        edm_interface_args.edm_noc_x,
-        edm_interface_args.edm_noc_y,
-        reinterpret_cast<uint32_t>(edm_interface_args.edm_buffer_base_address),
-        reinterpret_cast<uint32_t>(edm_interface_args.edm_semaphore_address),
-        edm_interface_args.num_buffers_per_channel
-    };
+    return {edm_interface_args.edm_noc_x,
+            edm_interface_args.edm_noc_y,
+            reinterpret_cast<uint32_t>(edm_interface_args.edm_buffer_base_address),
+            reinterpret_cast<uint32_t>(edm_interface_args.edm_semaphore_address),
+            edm_interface_args.num_buffers_per_channel};
 }
 
 args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) {
     return {};
 }
-
 
 args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& t) {
     args_list_t args;
@@ -34,7 +30,7 @@ args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* cons
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
             return ShardedAddrGenArgBuilder::emit_rt_args(d, t);
-        break;
+            break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
             TT_ASSERT(t.buffer()->page_size() != 1024);
@@ -42,30 +38,34 @@ args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* cons
             // This is during some transitionary period
             return {};
 
-        break;
+            break;
 
         case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
-            TT_ASSERT(false, "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved", t.buffer()->buffer_layout());
+            TT_ASSERT(
+                false,
+                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
+                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
+                t.buffer()->buffer_layout());
             return {};
     };
 }
 
 args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& t) {
-        switch (t.buffer()->buffer_layout()) {
+    switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
-            return ShardedAddrGenArgBuilder::emit_ct_args(t);
-        break;
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return ShardedAddrGenArgBuilder::emit_ct_args(t); break;
 
-        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
-            return {};
-        break;
+        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
 
         case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
-            TT_ASSERT(false, "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved", t.buffer()->buffer_layout());
+            TT_ASSERT(
+                false,
+                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
+                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
+                t.buffer()->buffer_layout());
             return {};
     }
     TT_ASSERT(false);
@@ -73,7 +73,12 @@ args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const&
 
 static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
     auto const& core_range = shard_spec.grid.bounding_box();
-    log_trace(tt::LogOp, "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}", core_range.start_coord.x, core_range.start_coord.y, core_range.end_coord.x, core_range.end_coord.y);
+    log_trace(tt::LogOp,
+              "SHARD CORE_RANGE: start_x:{} start_y:{} end_x:{} end_y:{}",
+              core_range.start_coord.x,
+              core_range.start_coord.y,
+              core_range.end_coord.x,
+              core_range.end_coord.y);
     log_trace(tt::LogOp, "grid_size: {}", shard_spec.grid.num_cores());
 
     return {core_range.start_coord, core_range.end_coord};
@@ -81,7 +86,9 @@ static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardS
 
 // non-transposed - always row-major layout
 // vec<logical row -> noc row>, vec<logicacal col -> noc col>
-static std::pair<std::vector<uint32_t>,std::vector<uint32_t>> shard_noc_cores_from_shard_spec(Device const* d, const ShardSpec& shard_spec) {
+static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_from_shard_spec(
+    Device const* d,
+    const ShardSpec& shard_spec) {
     TT_ASSERT(d != nullptr);
     auto const& core_range = shard_spec.grid.bounding_box();
     std::vector<uint32_t> logical_to_noc_row_map;
@@ -121,9 +128,11 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     bool shard_grid_transposed = shard_grid_is_transposed(t);
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-    "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor Memory Layout: {}", t.memory_config().memory_layout);
+            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
+        "Memory Layout: {}",
+        t.memory_config().memory_layout);
     // shard_grid_height (cores)
     args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
     // shard_grid_width (cores)
@@ -145,34 +154,34 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
 bool ShardedAddrGenArgBuilder::shard_grid_is_transposed(Tensor const& t) {
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-        t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
-    "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor Memory Layout: {}", t.memory_config().memory_layout);
-    bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-          t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
-          t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
+            t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+            t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
+        "Memory Layout: {}",
+        t.memory_config().memory_layout);
+    bool shard_grid_transposed = ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                   t.shard_spec()->orientation == ShardOrientation::ROW_MAJOR) ||
+                                  ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                    t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+                                   t.shard_spec()->orientation == ShardOrientation::COL_MAJOR));
     return shard_grid_transposed;
 }
 
 void ShardedAddrGenArgBuilder::log_sharded_tensor_kernel_args(Tensor const& t, std::string const& prefix) {
-
     auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());
     bool shard_grid_transposed = shard_grid_is_transposed(t);
 
     TT_ASSERT(pages_per_shard_y > 0);
     TT_ASSERT(pages_per_shard_x > 0);
-    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix,   shard_grid_end.y - shard_grid_start.y + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix,    shard_grid_end.x - shard_grid_start.x + 1);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix,  shard_grid_start.y);
-    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix,  shard_grid_start.x);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix,     pages_per_shard_y);
-    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix,     pages_per_shard_x);
-    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix,     static_cast<uint32_t>(shard_grid_transposed));
+    log_trace(tt::LogOp, "\t{}_shard_grid_height: {}", prefix, shard_grid_end.y - shard_grid_start.y + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_width: {}", prefix, shard_grid_end.x - shard_grid_start.x + 1);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_y: {}", prefix, shard_grid_start.y);
+    log_trace(tt::LogOp, "\t{}_shard_grid_start_x: {}", prefix, shard_grid_start.x);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_y: {}", prefix, pages_per_shard_y);
+    log_trace(tt::LogOp, "\t{}_pages_per_shard_x: {}", prefix, pages_per_shard_x);
+    log_trace(tt::LogOp, "\t{}_transposed_grid: {}", prefix, static_cast<uint32_t>(shard_grid_transposed));
 }
 
-} // namespace ccl
-} // namespace ttnn
+}  // namespace ccl
+}  // namespace ttnn

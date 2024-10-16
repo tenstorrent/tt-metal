@@ -8,7 +8,10 @@
 
 namespace ttnn {
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
+SimpleShape get_physical_shape(const SimpleShape& logical_shape,
+                               DataType data_type,
+                               Layout layout,
+                               const std::optional<Tile>& tile) {
     SimpleShape physical_shape = logical_shape;
     auto rank = physical_shape.rank();
     if (layout == Layout::TILE) {
@@ -36,19 +39,22 @@ SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_t
     return physical_shape;
 }
 
-}
+}  // namespace ttnn
 
 namespace tt {
 
 namespace tt_metal {
 
-static DistributedTensorConfig create_shard_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+static DistributedTensorConfig create_shard_distributed_tensor_config(
+    const std::unordered_map<std::string, std::string>& metadata) {
     return ShardTensor(std::stoi(metadata.at("shard_dim")));
 }
-static DistributedTensorConfig create_shard_2d_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+static DistributedTensorConfig create_shard_2d_distributed_tensor_config(
+    const std::unordered_map<std::string, std::string>& metadata) {
     return ShardTensor2D(ShardMesh(std::stoi(metadata.at("mesh_shape_y")), std::stoi(metadata.at("mesh_shape_x"))));
 }
-static DistributedTensorConfig create_replicate_distributed_tensor_config(const std::unordered_map<std::string, std::string>& metadata) {
+static DistributedTensorConfig create_replicate_distributed_tensor_config(
+    const std::unordered_map<std::string, std::string>& metadata) {
     if (auto it = metadata.find("replication_factor"); it != metadata.end()) {
         return ReplicateTensor(std::stoi(it->second));
     }
@@ -69,7 +75,6 @@ DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<s
     TT_THROW("Unsupported DistributedTensorConfig strategy:");
 }
 
-
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;
@@ -86,24 +91,23 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
 
 Padding::Padding(const std::size_t rank) : rank_{rank}, pad_dimensions_{}, pad_value_{} {}
 
-Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value) :
-    rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
+Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadValue pad_value)
+    : rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
-Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value) :
-    rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
+Padding::Padding(const std::vector<PadDimension>& pad_dimensions, PadValue pad_value)
+    : rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
 const uint32_t Padding::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
-    TT_FATAL(
-        normalized_index >= 0 and normalized_index < rank,
-            "Index is out of bounds for the rank, should be between 0 and {} however is {}",
-            rank - 1,
-            normalized_index);
+    TT_FATAL(normalized_index >= 0 and normalized_index < rank,
+             "Index is out of bounds for the rank, should be between 0 and {} however is {}",
+             rank - 1,
+             normalized_index);
     return normalized_index;
 }
 
@@ -117,7 +121,9 @@ const Padding::PadDimension Padding::operator[](const std::int64_t index) const 
     return this->pad_dimensions_[normalized_index];
 }
 
-Padding::PadValue Padding::pad_value() const { return this->pad_value_; }
+Padding::PadValue Padding::pad_value() const {
+    return this->pad_value_;
+}
 
 bool operator==(const Padding& padding_a, const Padding& padding_b) {
     if (padding_a.rank_ != padding_b.rank_) {
@@ -135,35 +141,41 @@ bool operator==(const Padding& padding_a, const Padding& padding_b) {
     return padding_a.pad_value_ == padding_b.pad_value_;
 }
 
-bool operator!=(const Padding& padding_a, const Padding& padding_b) { return not(padding_a == padding_b); }
-
-LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions) :
-    rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
-    std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
-}
-LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions) :
-    rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
-    std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+bool operator!=(const Padding& padding_a, const Padding& padding_b) {
+    return not(padding_a == padding_b);
 }
 
-LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions, const Padding& padding) :
-    rank_(dimensions.size()), dimensions_{}, padding_(padding) {
+LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions)
+    : rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
+    std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+}
+LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions)
+    : rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
+    std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
+}
+
+LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions, const Padding& padding)
+    : rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions, const Padding& padding) :
-    rank_(dimensions.size()), dimensions_{}, padding_(padding) {
+LegacyShape::LegacyShape(const std::vector<uint32_t>& dimensions, const Padding& padding)
+    : rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
 
-LegacyShape::LegacyShape(const LegacyShape& other, const Padding& padding) :
-    dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
+LegacyShape::LegacyShape(const LegacyShape& other, const Padding& padding)
+    : dimensions_(other.dimensions_), rank_(other.rank_), padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
 }
 
-std::size_t LegacyShape::rank() const { return this->rank_; }
-std::size_t LegacyShape::size() const { return this->rank_; }
+std::size_t LegacyShape::rank() const {
+    return this->rank_;
+}
+std::size_t LegacyShape::size() const {
+    return this->rank_;
+}
 
 uint32_t& LegacyShape::operator[](const std::int64_t index) {
     auto normalized_index = this->get_normalized_index(index);
@@ -174,8 +186,12 @@ const uint32_t LegacyShape::operator[](const std::int64_t index) const {
     return this->dimensions_[normalized_index];
 }
 
-const uint32_t* LegacyShape::begin() const { return this->dimensions_.data(); }
-const uint32_t* LegacyShape::end() const { return this->dimensions_.data() + this->rank_; }
+const uint32_t* LegacyShape::begin() const {
+    return this->dimensions_.data();
+}
+const uint32_t* LegacyShape::end() const {
+    return this->dimensions_.data() + this->rank_;
+}
 
 const Padding& LegacyShape::padding() const {
     return this->padding_;
@@ -193,8 +209,7 @@ const LegacyShape LegacyShape::without_padding() const {
     return LegacyShape(shape_without_padding);
 }
 
-ttnn::SimpleShape LegacyShape::logical_shape() const
-{
+ttnn::SimpleShape LegacyShape::logical_shape() const {
     const LegacyShape logical = without_padding();
 
     std::vector<uint32_t> values(rank());
@@ -207,25 +222,25 @@ ttnn::SimpleShape LegacyShape::logical_shape() const
 const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
-    TT_FATAL(
-        normalized_index >= 0 and normalized_index < rank,
-            "Index is out of bounds for the rank, should be between 0 and {} however is {}",
-            rank - 1,
-            normalized_index);
+    TT_FATAL(normalized_index >= 0 and normalized_index < rank,
+             "Index is out of bounds for the rank, should be between 0 and {} however is {}",
+             rank - 1,
+             normalized_index);
     return normalized_index;
 }
 
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {
-    return a.replication_factor == b.replication_factor; // All instances are considered equal because there are no data members.
+    return a.replication_factor ==
+           b.replication_factor;  // All instances are considered equal because there are no data members.
 }
 bool operator==(const AllGatherTensor&, const AllGatherTensor&) {
-    return true; // All instances are considered equal because there are no data members.
+    return true;  // All instances are considered equal because there are no data members.
 }
 bool operator==(const ShardTensor& lhs, const ShardTensor& rhs) {
-    return lhs.shard_dimension == rhs.shard_dimension; // Equal if they have the same shard_dimension.
+    return lhs.shard_dimension == rhs.shard_dimension;  // Equal if they have the same shard_dimension.
 }
 bool operator==(const ShardTensor2D& lhs, const ShardTensor2D& rhs) {
-    return lhs.shard_mesh == rhs.shard_mesh; // Equal if they have the same shard_mesh.
+    return lhs.shard_mesh == rhs.shard_mesh;  // Equal if they have the same shard_mesh.
 }
 
 bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
@@ -241,7 +256,9 @@ bool operator==(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::Le
     return true;  // Ignore the padding when comparing shapes
 }
 
-bool operator!=(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) { return not(shape_a == shape_b); }
+bool operator!=(const tt::tt_metal::LegacyShape& shape_a, const tt::tt_metal::LegacyShape& shape_b) {
+    return not(shape_a == shape_b);
+}
 
 bool MemoryConfig::is_sharded() const {
     switch (this->memory_layout) {
@@ -252,15 +269,22 @@ bool MemoryConfig::is_sharded() const {
     }
 }
 
-bool MemoryConfig::is_l1() const { return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL; }
-
-bool MemoryConfig::is_dram() const { return buffer_type == BufferType::DRAM; }
-
-bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
-    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout && config_a.shard_spec == config_b.shard_spec;
+bool MemoryConfig::is_l1() const {
+    return buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL;
 }
 
-bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
+bool MemoryConfig::is_dram() const {
+    return buffer_type == BufferType::DRAM;
+}
+
+bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
+    return config_a.buffer_type == config_b.buffer_type && config_a.memory_layout == config_b.memory_layout &&
+           config_a.shard_spec == config_b.shard_spec;
+}
+
+bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) {
+    return not(config_a == config_b);
+}
 
 void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_config) {
     output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
@@ -354,13 +378,13 @@ int32_t normalized_index(int32_t index, size_t container_size) {
 
     return index;
 }
-}
+}  // namespace
 
-bool SimpleShape::operator==(const SimpleShape &other) const {
+bool SimpleShape::operator==(const SimpleShape& other) const {
     return this->value == other.value;
 }
 
-bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
+bool SimpleShape::operator==(const std::vector<uint32_t>& other) const {
     return this->value == other;
 }
 
@@ -375,14 +399,15 @@ uint32_t& SimpleShape::operator[](int32_t index) {
 }
 
 uint64_t SimpleShape::volume() const {
-    return std::accumulate(this->value.begin(), this->value.end(),
-                           uint64_t{1}, std::multiplies<uint64_t>());
+    return std::accumulate(this->value.begin(), this->value.end(), uint64_t{1}, std::multiplies<uint64_t>());
 }
 
-} // namespace ttnn
+}  // namespace ttnn
 
 namespace ttnn::types {
 
-uint32_t Shape::operator[](std::int64_t index) const { return this->value.without_padding()[index]; }
+uint32_t Shape::operator[](std::int64_t index) const {
+    return this->value.without_padding()[index];
+}
 
 }  // namespace ttnn::types

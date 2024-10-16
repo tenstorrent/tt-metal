@@ -49,29 +49,26 @@ void bind_global_avg_pool2d(py::module& module) {
         ttnn::global_avg_pool2d.base_name(),
         ttnn::global_avg_pool2d.python_fully_qualified_name());
 
-    bind_registered_operation(
-        module,
-        ttnn::global_avg_pool2d,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt});
+    bind_registered_operation(module,
+                              ttnn::global_avg_pool2d,
+                              doc,
+                              ttnn::pybind_arguments_t{py::arg("input_tensor"),
+                                                       py::kw_only(),
+                                                       py::arg("memory_config") = std::nullopt,
+                                                       py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace detail
 
 void py_module(py::module& module) {
     detail::bind_global_avg_pool2d(module);
-    module.def(
-        "avg_pool2d",
-        &avg_pool2d,
-        py::arg().noconvert(),
-        py::kw_only(),
-        py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        py::arg("dtype").noconvert() = std::nullopt,
-        R"doc(
+    module.def("avg_pool2d",
+               &avg_pool2d,
+               py::arg().noconvert(),
+               py::kw_only(),
+               py::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+               py::arg("dtype").noconvert() = std::nullopt,
+               R"doc(
         Average Pool 2D
         It operates on tensors that have channels as the last dimension.
 

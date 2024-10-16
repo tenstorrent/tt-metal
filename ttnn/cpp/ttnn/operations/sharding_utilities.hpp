@@ -13,7 +13,6 @@
 
 #include "tt_metal/host_api.hpp"
 
-
 namespace tt::tt_metal {
 
 struct PoolConfig {
@@ -75,11 +74,23 @@ struct ShardingConfig {
 NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& pc, bool to_print = false);
 
 // Calculate the sharding config for input sticks with padding and halo data included
-inline NewShardingConfig get_shard_specs_with_halo(int32_t start_stick, int32_t end_stick, const PoolConfig& pc, bool to_print = false);
+inline NewShardingConfig get_shard_specs_with_halo(int32_t start_stick,
+                                                   int32_t end_stick,
+                                                   const PoolConfig& pc,
+                                                   bool to_print = false);
 
 // For given pool config output, calculate the out sticks sharding config and the corresponding input shard config
-std::tuple<InOutShardingConfig, InOutShardingConfig> get_inout_shard_specs(int32_t start_stick, int32_t end_stick, const PoolConfig& pc, bool to_print = false);
+std::tuple<InOutShardingConfig, InOutShardingConfig> get_inout_shard_specs(int32_t start_stick,
+                                                                           int32_t end_stick,
+                                                                           const PoolConfig& pc,
+                                                                           bool to_print = false);
 
-ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick, uint32_t end_stick, uint32_t in_h, uint32_t in_w, uint32_t window_w, uint32_t pad_h, uint32_t pad_w);
+ShardingConfig get_specs_for_sharding_partition(uint32_t start_stick,
+                                                uint32_t end_stick,
+                                                uint32_t in_h,
+                                                uint32_t in_w,
+                                                uint32_t window_w,
+                                                uint32_t pad_h,
+                                                uint32_t pad_w);
 
-} // namespace tt::tt_metal
+}  // namespace tt::tt_metal

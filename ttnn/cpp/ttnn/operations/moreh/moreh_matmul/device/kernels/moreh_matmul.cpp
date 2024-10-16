@@ -86,15 +86,14 @@ FORCE_INLINE void pack_onetile_to_cb(uint32_t ocb = 16, uint32_t idst = 0) {
     cb_push_back(ocb, onetile);
 }
 
-FORCE_INLINE void mask_tile_to_cb(
-    uint32_t& mm_src,
-    bool& need_mask,
-    bool need_mask_h,
-    bool need_mask_w,
-    bool last_out,
-    bool last_line,
-    bool transpose,
-    bool is_input) {
+FORCE_INLINE void mask_tile_to_cb(uint32_t& mm_src,
+                                  bool& need_mask,
+                                  bool need_mask_h,
+                                  bool need_mask_w,
+                                  bool last_out,
+                                  bool last_line,
+                                  bool transpose,
+                                  bool is_input) {
     bool need_mask_last_line_and_out = (last_line && last_out);
     bool need_mask_last_line = false;
     bool need_mask_last_out = false;
@@ -183,20 +182,19 @@ FORCE_INLINE void bias_add(bool is_scalar_bias) {
 }
 #endif
 
-FORCE_INLINE void matmul_with_transpose_and_mask(
-    uint32_t output_tidx,
-    uint32_t num_output_tiles,
-    uint32_t Kt,
-    bool transpose_input,
-    bool transpose_other,
-    bool need_input_mask_h,
-    bool need_input_mask_w,
-    uint32_t* output_stride,
-    uint32_t Mt,
-    uint32_t Nt,
-    bool need_other_mask_h,
-    bool need_other_mask_w,
-    bool is_scalar_bias) {
+FORCE_INLINE void matmul_with_transpose_and_mask(uint32_t output_tidx,
+                                                 uint32_t num_output_tiles,
+                                                 uint32_t Kt,
+                                                 bool transpose_input,
+                                                 bool transpose_other,
+                                                 bool need_input_mask_h,
+                                                 bool need_input_mask_w,
+                                                 uint32_t* output_stride,
+                                                 uint32_t Mt,
+                                                 uint32_t Nt,
+                                                 bool need_other_mask_h,
+                                                 bool need_other_mask_w,
+                                                 bool is_scalar_bias) {
     // TODO: checking required when the input cb format and intermediate cb format are different.
     mm_init(cb_in0, cb_in1, cb_out0);
     if (transpose_input || transpose_other) {
@@ -241,26 +239,24 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             // mask: the first two arguments (mm_src0, need_input_mask) are passed by reference.
             // transpose: the first argument (mm_src0) is passed by reference.
             ////////////////////
-            mask_tile_to_cb(
-                mm_src0,
-                need_input_mask,
-                need_input_mask_h,
-                need_input_mask_w,
-                last_out,
-                input_last_row,
-                transpose_input,
-                true);
+            mask_tile_to_cb(mm_src0,
+                            need_input_mask,
+                            need_input_mask_h,
+                            need_input_mask_w,
+                            last_out,
+                            input_last_row,
+                            transpose_input,
+                            true);
             transpose_tile(mm_src0, transpose_input, need_input_mask, true);
 
-            mask_tile_to_cb(
-                mm_src1,
-                need_other_mask,
-                need_other_mask_h,
-                need_other_mask_w,
-                last_out,
-                other_last_col,
-                transpose_other,
-                false);
+            mask_tile_to_cb(mm_src1,
+                            need_other_mask,
+                            need_other_mask_h,
+                            need_other_mask_w,
+                            last_out,
+                            other_last_col,
+                            transpose_other,
+                            false);
             transpose_tile(mm_src1, transpose_other, need_other_mask, false);
 
             ////////////////////
@@ -373,20 +369,19 @@ void MAIN {
     }
 
     if (need_transpose || need_mask || need_bias_add) {
-        matmul_with_transpose_and_mask(
-            output_tile_start_idx,
-            num_output_tiles,
-            Kt,
-            transpose_input,
-            transpose_other,
-            need_input_mask_h,
-            need_input_mask_w,
-            output_stride,
-            Mt,
-            Nt,
-            need_other_mask_h,
-            need_other_mask_w,
-            is_scalar_bias);
+        matmul_with_transpose_and_mask(output_tile_start_idx,
+                                       num_output_tiles,
+                                       Kt,
+                                       transpose_input,
+                                       transpose_other,
+                                       need_input_mask_h,
+                                       need_input_mask_w,
+                                       output_stride,
+                                       Mt,
+                                       Nt,
+                                       need_other_mask_h,
+                                       need_other_mask_w,
+                                       is_scalar_bias);
     } else {
         matmul(num_output_tiles, Kt);
     }

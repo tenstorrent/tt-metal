@@ -9,15 +9,14 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean {
-void MorehMeanOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanOperation::validate_tensors(const operation_attributes_t& operation_attributes,
+                                          const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    TT_FATAL(
-        (operation_attributes.dim >= 0 && operation_attributes.dim <= 7),
-        "Invalid dimension value: {}. Expected a value between 0 and 7.",
-        operation_attributes.dim);
+    TT_FATAL((operation_attributes.dim >= 0 && operation_attributes.dim <= 7),
+             "Invalid dimension value: {}. Expected a value between 0 and 7.",
+             operation_attributes.dim);
     TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
 
     tt::operations::primary::check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
@@ -31,7 +30,8 @@ void MorehMeanOperation::validate_tensors(
     }
 }
 MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
 
     auto rank = input.get_shape().rank();
@@ -44,18 +44,19 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
     return MorehMeanNCFactory{};
 }
 
-void MorehMeanOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                        const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
-void MorehMeanOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehMeanOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                       const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 };
 
 MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto input_shape = tensor_args.input.get_shape();
     auto output_shape = input_shape;
     auto input_rank = input_shape.rank();
@@ -99,18 +100,18 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
 }
 
 MorehMeanOperation::tensor_return_value_t MorehMeanOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     auto& output = tensor_args.output;
     if (output.has_value()) {
         return {output.value()};
     }
 
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_shapes(operation_attributes, tensor_args),
+                                tensor_args.input.get_dtype(),
+                                tensor_args.input.get_layout(),
+                                tensor_args.input.device(),
+                                operation_attributes.memory_config);
 }
 
 std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tensor_args_t> MorehMeanOperation::invoke(
@@ -121,12 +122,11 @@ std::tuple<MorehMeanOperation::operation_attributes_t, MorehMeanOperation::tenso
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {dim,
-         keepdim,
-         divisor,
-         memory_config.value_or(input.memory_config()),
-         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        {input, output}};
+    return {{dim,
+             keepdim,
+             divisor,
+             memory_config.value_or(input.memory_config()),
+             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            {input, output}};
 }
 }  // namespace ttnn::operations::moreh::moreh_mean

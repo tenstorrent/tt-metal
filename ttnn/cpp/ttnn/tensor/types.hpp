@@ -21,26 +21,23 @@
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
 namespace ttnn {
-    /**
-SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
-Context:
-    Both Shape and LegacyShape can carry padding information.
-    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
-    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
-Plan:
-    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
-    We will clearly see where full shape is used vs logical or physical shape is used.
-    Need to split .hpp and .cpp
+/**
+SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding
+information is stripped. Context: Both Shape and LegacyShape can carry padding information. And we use Shape or
+LegacyShape to carry full shape info or separately logical or physical shape. Absence of distinction between full shape
+and logical shape leads to confusion and makes further refactoring harder. Plan: We want to replace `Shape
+Shape::with_tile_padding() const` with `SimpleShape padded_shape() const` We will clearly see where full shape is used
+vs logical or physical shape is used. Need to split .hpp and .cpp
 **/
 class SimpleShape {
 public:
-    explicit SimpleShape(const std::vector<uint32_t>& shape) : value(shape) {}
-    explicit SimpleShape(std::vector<uint32_t>&& shape) : value(std::move(shape)) {}
+    explicit SimpleShape(const std::vector<uint32_t> &shape) : value(shape) {}
+    explicit SimpleShape(std::vector<uint32_t> &&shape) : value(std::move(shape)) {}
     explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
-    template<std::size_t N>
-    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
+    template <std::size_t N>
+    explicit SimpleShape(const std::array<uint32_t, N> &arr) : value(arr.begin(), arr.end()) {}
 
-    template<std::size_t N>
+    template <std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
         bool sameSize = value.size() == N;
         return sameSize && std::equal(value.begin(), value.end(), other.begin());
@@ -52,17 +49,27 @@ public:
     uint32_t operator[](int32_t index) const;
     uint32_t &operator[](int32_t index);
 
-    size_t rank() const { return this->value.size(); }
+    size_t rank() const {
+        return this->value.size();
+    }
     uint64_t volume() const;
 
-    auto cbegin() const { return this->value.cbegin(); }
-    auto cend() const { return this->value.cend(); }
+    auto cbegin() const {
+        return this->value.cbegin();
+    }
+    auto cend() const {
+        return this->value.cend();
+    }
 
-    const std::vector<uint32_t>& as_vector() const { return this->value; }
+    const std::vector<uint32_t> &as_vector() const {
+        return this->value;
+    }
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value); }
+    auto attribute_values() const {
+        return std::forward_as_tuple(this->value);
+    }
 
     friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
 
@@ -82,7 +89,7 @@ inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape
     return os;
 }
 
-} // namespace ttnn
+}  // namespace ttnn
 
 namespace tt {
 
@@ -172,8 +179,8 @@ struct Padding {
     Padding(const std::vector<PadDimension> &pad_dimensions, PadValue pad_value);
 
     template <std::size_t Rank>
-    Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value) :
-        rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
+    Padding(const std::array<std::array<uint32_t, 2>, Rank> pad_dimensions, PadValue pad_value)
+        : rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
         for (auto index = 0; index < Rank; index++) {
             this->pad_dimensions_[index] = {.front = pad_dimensions[index][0], .back = pad_dimensions[index][1]};
         }
@@ -186,7 +193,9 @@ struct Padding {
 
     PadValue pad_value() const;
 
-    size_t rank() const { return rank_; }
+    size_t rank() const {
+        return rank_;
+    }
 
     static constexpr auto attribute_names = std::forward_as_tuple("rank", "pad_dimensions", "pad_value");
     const auto attribute_values() const {
@@ -233,7 +242,7 @@ class LegacyShape {
     std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
     Padding padding_;
 
-   public:
+public:
     LegacyShape(const LegacyShape &) = default;
     LegacyShape &operator=(const LegacyShape &) = default;
     LegacyShape(LegacyShape &&) = default;
@@ -261,19 +270,19 @@ class LegacyShape {
     }
 
     template <std::size_t Rank>
-    explicit LegacyShape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        rank_(Rank), dimensions_{}, padding_{Rank} {
+    explicit LegacyShape(const std::array<uint32_t, Rank> &shape,
+                         const std::array<uint32_t, Rank> &shape_with_tile_padding)
+        : rank_(Rank), dimensions_{}, padding_{Rank} {
         for (auto index = 0; index < Rank; index++) {
             auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
             this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
         }
     }
-    explicit LegacyShape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(
-            shape.size() == shape_with_tile_padding.size(),
-            "Shape and shape_with_tile_padding must have the same size");
+    explicit LegacyShape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding)
+        : rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
+        TT_ASSERT(shape.size() == shape_with_tile_padding.size(),
+                  "Shape and shape_with_tile_padding must have the same size");
         for (auto index = 0; index < shape.size(); index++) {
             auto padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
@@ -351,32 +360,40 @@ void dump_memory_config(const std::string &file_name, const MemoryConfig &memory
 MemoryConfig load_memory_config(std::ifstream &input_stream);
 MemoryConfig load_memory_config(const std::string &file_name);
 
-using OwnedBuffer = std::variant<
-    owned_buffer::Buffer<uint8_t>,
-    owned_buffer::Buffer<uint16_t>,
-    owned_buffer::Buffer<int32_t>,
-    owned_buffer::Buffer<uint32_t>,
-    owned_buffer::Buffer<float>,
-    owned_buffer::Buffer<bfloat16>>;
+using OwnedBuffer = std::variant<owned_buffer::Buffer<uint8_t>,
+                                 owned_buffer::Buffer<uint16_t>,
+                                 owned_buffer::Buffer<int32_t>,
+                                 owned_buffer::Buffer<uint32_t>,
+                                 owned_buffer::Buffer<float>,
+                                 owned_buffer::Buffer<bfloat16>>;
 
 // HostDataType supports all types included in OwnedBuffer as well as void*
-static_assert(
-    std::variant_size_v<OwnedBuffer> + 1 == std::variant_size_v<tt::tt_metal::HostDataType>,
-    "The data types supported in OwnedBuffer must match those in HostDataType.");
+static_assert(std::variant_size_v<OwnedBuffer> + 1 == std::variant_size_v<tt::tt_metal::HostDataType>,
+              "The data types supported in OwnedBuffer must match those in HostDataType.");
 struct OwnedStorage {
     OwnedBuffer buffer;
     OwnedStorage() = default;
     OwnedStorage(OwnedBuffer buffer_) : buffer(std::move(buffer_)) {}
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 
-    inline void insert_buffer(const OwnedBuffer &buffer_) { this->buffer = buffer_; }
+    inline void insert_buffer(const OwnedBuffer &buffer_) {
+        this->buffer = buffer_;
+    }
 
-    inline OwnedBuffer get_buffer() const { return this->buffer; }
+    inline OwnedBuffer get_buffer() const {
+        return this->buffer;
+    }
 
     inline bool is_allocated() const {
-        return std::visit([](auto &&buffer) -> bool { return buffer.is_allocated(); }, buffer);
+        return std::visit(
+            [](auto &&buffer) -> bool {
+                return buffer.is_allocated();
+            },
+            buffer);
     }
 };
 
@@ -395,28 +412,34 @@ struct DeviceStorage {
         if (is_sharded(this->buffer->buffer_layout())) {
             shard_spec = this->buffer->shard_spec().tensor_shard_spec;
         }
-        return MemoryConfig{
-            .memory_layout = this->buffer->buffer_layout(),
-            .buffer_type = this->buffer->buffer_type(),
-            .shard_spec = shard_spec};
+        return MemoryConfig{.memory_layout = this->buffer->buffer_layout(),
+                            .buffer_type = this->buffer->buffer_type(),
+                            .shard_spec = shard_spec};
     }
 
-    inline void insert_buffer(DeviceBuffer buffer_) { this->buffer = buffer_; }
+    inline void insert_buffer(DeviceBuffer buffer_) {
+        this->buffer = buffer_;
+    }
 
-    inline DeviceBuffer get_buffer() const { return this->buffer; }
+    inline DeviceBuffer get_buffer() const {
+        return this->buffer;
+    }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
+    const auto attribute_values() const {
+        return std::make_tuple(this->memory_config());
+    }
 
-    inline bool is_allocated() const { return buffer && buffer->size() > 0; }
+    inline bool is_allocated() const {
+        return buffer && buffer->size() > 0;
+    }
 };
 
-using BorrowedBuffer = std::variant<
-    borrowed_buffer::Buffer<uint8_t>,
-    borrowed_buffer::Buffer<uint16_t>,
-    borrowed_buffer::Buffer<int32_t>,
-    borrowed_buffer::Buffer<uint32_t>,
-    borrowed_buffer::Buffer<float>,
-    borrowed_buffer::Buffer<bfloat16>>;
+using BorrowedBuffer = std::variant<borrowed_buffer::Buffer<uint8_t>,
+                                    borrowed_buffer::Buffer<uint16_t>,
+                                    borrowed_buffer::Buffer<int32_t>,
+                                    borrowed_buffer::Buffer<uint32_t>,
+                                    borrowed_buffer::Buffer<float>,
+                                    borrowed_buffer::Buffer<bfloat16>>;
 struct BorrowedStorage {
     BorrowedBuffer buffer;
 
@@ -424,18 +447,17 @@ struct BorrowedStorage {
     std::function<void()> on_creation_callback = [] {};
     std::function<void()> on_destruction_callback = [] {};
 
-    explicit BorrowedStorage(
-        const BorrowedBuffer &buffer,
-        const std::function<void()> &on_creation_callback,
-        const std::function<void()> &on_destruction_callback) :
-        buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
+    explicit BorrowedStorage(const BorrowedBuffer &buffer,
+                             const std::function<void()> &on_creation_callback,
+                             const std::function<void()> &on_destruction_callback)
+        : buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
         this->on_creation_callback();
     }
 
-    BorrowedStorage(const BorrowedStorage &other) :
-        buffer(other.buffer),
-        on_creation_callback(other.on_creation_callback),
-        on_destruction_callback(other.on_destruction_callback) {
+    BorrowedStorage(const BorrowedStorage &other)
+        : buffer(other.buffer),
+          on_creation_callback(other.on_creation_callback),
+          on_destruction_callback(other.on_destruction_callback) {
         this->on_creation_callback();
     }
 
@@ -447,10 +469,10 @@ struct BorrowedStorage {
         return *this;
     }
 
-    BorrowedStorage(BorrowedStorage &&other) :
-        buffer(other.buffer),
-        on_creation_callback(other.on_creation_callback),
-        on_destruction_callback(other.on_destruction_callback) {
+    BorrowedStorage(BorrowedStorage &&other)
+        : buffer(other.buffer),
+          on_creation_callback(other.on_creation_callback),
+          on_destruction_callback(other.on_destruction_callback) {
         other.on_creation_callback = [] {};
         other.on_destruction_callback = [] {};
     }
@@ -464,12 +486,18 @@ struct BorrowedStorage {
         return *this;
     }
 
-    ~BorrowedStorage() { this->on_destruction_callback(); }
+    ~BorrowedStorage() {
+        this->on_destruction_callback();
+    }
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 
-    inline bool is_allocated() const { return true; }
+    inline bool is_allocated() const {
+        return true;
+    }
 };
 
 struct MultiDeviceHostStorage {
@@ -489,10 +517,13 @@ struct MultiDeviceHostStorage {
     }
 
     MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<LegacyShape> shapes_) :
-        strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
-    MultiDeviceHostStorage(MultiDeviceHostStorage &&other) { swap(*this, other); }
+    MultiDeviceHostStorage(DistributedTensorConfig strategy_,
+                           std::vector<OwnedBuffer> buffers_,
+                           std::vector<LegacyShape> shapes_)
+        : strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
+    MultiDeviceHostStorage(MultiDeviceHostStorage &&other) {
+        swap(*this, other);
+    }
     // unfotunately we need to have this code written manually.
     MultiDeviceHostStorage(const MultiDeviceHostStorage &other) {
         std::scoped_lock lock(other.mtx);
@@ -517,7 +548,9 @@ struct MultiDeviceHostStorage {
     }
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
@@ -529,7 +562,7 @@ struct MultiDeviceHostStorage {
 
     OwnedBuffer get_buffer(int buffer_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}",buffer_index);
+        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
@@ -556,7 +589,11 @@ struct MultiDeviceHostStorage {
         std::lock_guard<std::mutex> lock(mtx);
 
         return std::all_of(buffers.begin(), buffers.end(), [](auto &&buffer) {
-            return std::visit([](auto &&buffer) -> bool { return buffer.is_allocated(); }, buffer);
+            return std::visit(
+                [](auto &&buffer) -> bool {
+                    return buffer.is_allocated();
+                },
+                buffer);
         });
     }
 };
@@ -579,17 +616,18 @@ struct MultiDeviceStorage {
         swap(first.shapes, second.shapes);
     }
 
-    MultiDeviceStorage(
-        DistributedTensorConfig strategy_,
-        std::vector<int> ordered_device_ids_,
-        std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, LegacyShape> shapes_) :
-        strategy(std::move(strategy_)),
-        ordered_device_ids(std::move(ordered_device_ids_)),
-        buffers(std::move(buffers_)),
-        shapes(std::move(shapes_)) {}
+    MultiDeviceStorage(DistributedTensorConfig strategy_,
+                       std::vector<int> ordered_device_ids_,
+                       std::unordered_map<int, DeviceBuffer> buffers_,
+                       std::unordered_map<int, LegacyShape> shapes_)
+        : strategy(std::move(strategy_)),
+          ordered_device_ids(std::move(ordered_device_ids_)),
+          buffers(std::move(buffers_)),
+          shapes(std::move(shapes_)) {}
 
-    MultiDeviceStorage(MultiDeviceStorage &&other) { swap(*this, other); }
+    MultiDeviceStorage(MultiDeviceStorage &&other) {
+        swap(*this, other);
+    }
 
     MultiDeviceStorage(const MultiDeviceStorage &other) {
         std::scoped_lock lock(other.buffer_mtx, other.shape_mtx);
@@ -617,7 +655,8 @@ struct MultiDeviceStorage {
 
     inline const MemoryConfig memory_config() const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_FATAL(!this->ordered_device_ids.empty(), "No device ids in list. Please ensure fields are initialized properly.");
+        TT_FATAL(!this->ordered_device_ids.empty(),
+                 "No device ids in list. Please ensure fields are initialized properly.");
         auto first_device_id = this->ordered_device_ids[0];
         if (this->buffers.at(first_device_id).get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
@@ -626,44 +665,40 @@ struct MultiDeviceStorage {
         if (is_sharded(this->buffers.at(first_device_id)->buffer_layout())) {
             shard_spec = this->buffers.at(first_device_id)->shard_spec().tensor_shard_spec;
         }
-        return MemoryConfig{
-            .memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
-            .buffer_type = this->buffers.at(first_device_id)->buffer_type(),
-            .shard_spec = shard_spec};
+        return MemoryConfig{.memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
+                            .buffer_type = this->buffers.at(first_device_id)->buffer_type(),
+                            .shard_spec = shard_spec};
     }
 
     static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
 
     inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const LegacyShape shape) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
-        TT_ASSERT(
-            device == buffer->device(),
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
+        TT_ASSERT(device == buffer->device(),
+                  "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
         buffers.insert({device->id(), buffer});
         shapes.insert({device->id(), shape});
     }
 
     inline DeviceBuffer get_buffer_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}",device->id());
-        TT_ASSERT(
-            buffers.at(device->id())->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
+        TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
+        TT_ASSERT(buffers.at(device->id())->device() == device,
+                  "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
         return buffers.at(device->id());
     }
 
     inline DeviceBuffer &get_buffer_for_device(Device *device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
-        TT_ASSERT(
-            buffers.at(device->id())->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
+        TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
+        TT_ASSERT(buffers.at(device->id())->device() == device,
+                  "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
         return buffers.at(device->id());
     }
 
@@ -674,8 +709,7 @@ struct MultiDeviceStorage {
 
     inline LegacyShape get_tensor_shape_for_device(Device *device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
-        TT_ASSERT(
-            shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
+        TT_ASSERT(shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
         return shapes.at(device->id());
     }
 
@@ -721,8 +755,8 @@ namespace types {
 
 namespace detail {
 template <std::size_t Rank>
-static tt::tt_metal::LegacyShape compute_ttl_shape(
-    const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &padding) {
+static tt::tt_metal::LegacyShape compute_ttl_shape(const std::array<uint32_t, Rank> &shape,
+                                                   const std::array<std::array<uint32_t, 2>, Rank> &padding) {
     auto ttl_shape = std::array<uint32_t, Rank>{};
     for (auto index = 0; index < Rank; index++) {
         ttl_shape[index] = shape[index] + padding[index][0] + padding[index][1];
@@ -731,7 +765,6 @@ static tt::tt_metal::LegacyShape compute_ttl_shape(
 }
 
 }  // namespace detail
-
 
 struct Shape {
     // ttnn::Shape is a wrapper around tt::tt_metal::LegacyShape
@@ -746,34 +779,42 @@ struct Shape {
     Shape(const std::array<uint32_t, Rank> &shape) : value{shape} {}
 
     template <std::size_t Rank>
-    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding) :
-        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
+    explicit Shape(const std::array<uint32_t, Rank> &shape, const std::array<uint32_t, Rank> &shape_with_tile_padding)
+        : value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
     template <std::size_t Rank>
-    explicit Shape(
-        const std::array<uint32_t, Rank> &shape, const std::array<std::array<uint32_t, 2>, Rank> &tile_padding) :
-        value{detail::compute_ttl_shape(shape, tile_padding)} {}
+    explicit Shape(const std::array<uint32_t, Rank> &shape,
+                   const std::array<std::array<uint32_t, 2>, Rank> &tile_padding)
+        : value{detail::compute_ttl_shape(shape, tile_padding)} {}
 
     Shape(const std::vector<uint32_t> &shape) : value{tt::tt_metal::LegacyShape{shape}} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding) :
-        value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
+    explicit Shape(const std::vector<uint32_t> &shape, const std::vector<uint32_t> &shape_with_tile_padding)
+        : value{tt::tt_metal::LegacyShape{shape, shape_with_tile_padding}} {}
 
-    explicit Shape(const std::vector<uint32_t> &shape, const Padding &padding) :
-        value{tt::tt_metal::LegacyShape{shape, padding}} {}
+    explicit Shape(const std::vector<uint32_t> &shape, const Padding &padding)
+        : value{tt::tt_metal::LegacyShape{shape, padding}} {}
 
-    explicit Shape(const Shape &shape, const Padding &padding) :
-        value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
+    explicit Shape(const Shape &shape, const Padding &padding)
+        : value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
 
-    const auto rank() const { return this->value.rank(); }
+    const auto rank() const {
+        return this->value.rank();
+    }
 
-    const size_t size() const { return this->rank(); }
+    const size_t size() const {
+        return this->rank();
+    }
 
     // Returns the padded shape, padding information is stripped
     [[deprecated("Replaced by padded_shape()")]]
-    const tt::tt_metal::Padding &padding() const { return this->value.padding(); }
+    const tt::tt_metal::Padding &padding() const {
+        return this->value.padding();
+    }
 
-    const uint32_t get_normalized_index(std::int64_t index) const { return this->value.get_normalized_index(index); }
+    const uint32_t get_normalized_index(std::int64_t index) const {
+        return this->value.get_normalized_index(index);
+    }
 
     Shape with_tile_padding() const {
         return Shape{tt::tt_metal::LegacyShape{this->value, tt::tt_metal::Padding{this->value.rank()}}};
@@ -782,7 +823,7 @@ struct Shape {
     SimpleShape padded_shape() const {
         std::vector<uint32_t> values(rank());
         for (size_t i = 0; i < values.size(); i++) {
-            values[i] = this->value[i]; // value stored LegacyShape, its operator[] returns padded value
+            values[i] = this->value[i];  // value stored LegacyShape, its operator[] returns padded value
         }
         return SimpleShape(std::move(values));
     }
@@ -791,7 +832,7 @@ struct Shape {
     SimpleShape logical_shape() const {
         std::vector<uint32_t> values(this->rank());
         for (size_t i = 0; i < values.size(); i++) {
-            values[i] = this->operator[](i); // operator[] returns the shape without padding
+            values[i] = this->operator[](i);  // operator[] returns the shape without padding
         }
         return SimpleShape(std::move(values));
     }
@@ -822,7 +863,9 @@ struct Shape {
         return Shape{this->value.without_padding()} == Shape{other};
     }
 
-    bool operator!=(const Shape &other) const { return not(*this == other); }
+    bool operator!=(const Shape &other) const {
+        return not(*this == other);
+    }
 
     // Returns value without padding
     uint32_t operator[](std::int64_t index) const;
@@ -864,7 +907,9 @@ struct Shape {
     }
 
     static constexpr auto attribute_names = std::forward_as_tuple("value");
-    const auto attribute_values() const { return std::forward_as_tuple(this->value); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->value);
+    }
 };
 
 static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
@@ -888,6 +933,9 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 
 using types::Shape;
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile = std::nullopt);
+SimpleShape get_physical_shape(const SimpleShape &logical_shape,
+                               DataType data_type,
+                               Layout layout,
+                               const std::optional<Tile> &tile = std::nullopt);
 
 }  // namespace ttnn

@@ -40,16 +40,14 @@ struct MorehNllLossStep2DeviceOperation {
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<Factory>;
@@ -81,7 +79,7 @@ struct MorehNllLossStep2DeviceOperation {
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_step2
 
 namespace ttnn::prim {
-constexpr auto moreh_nll_loss_step2 = ttnn::register_operation<
-    "ttnn::prim::moreh_nll_loss_step2",
-    ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation>();
+constexpr auto moreh_nll_loss_step2 =
+    ttnn::register_operation<"ttnn::prim::moreh_nll_loss_step2",
+                             ttnn::operations::moreh::moreh_nll_loss_step2::MorehNllLossStep2DeviceOperation>();
 }  // namespace ttnn::prim

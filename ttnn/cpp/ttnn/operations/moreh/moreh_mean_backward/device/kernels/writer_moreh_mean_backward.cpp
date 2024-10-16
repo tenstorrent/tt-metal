@@ -20,10 +20,9 @@ void kernel_main() {
     uint32_t input_grad_tile_bytes = get_tile_size(cb_id_out);
     const auto input_grad_data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                                         .page_size = input_grad_tile_bytes,
+                                                                         .data_format = input_grad_data_format};
 
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         uint32_t write_tile_id = i;

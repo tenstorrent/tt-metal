@@ -33,16 +33,14 @@ struct MorehArangeOperation {
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& output);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
@@ -54,15 +52,14 @@ struct MorehArangeOperation {
     static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        float start,
-        float end,
-        float step,
-        const Tensor& any,
-        const std::optional<Tensor>& output,
-        bool untilize_out,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(float start,
+                                                                    float end,
+                                                                    float step,
+                                                                    const Tensor& any,
+                                                                    const std::optional<Tensor>& output,
+                                                                    bool untilize_out,
+                                                                    const std::optional<DataType>& dtype,
+                                                                    const std::optional<MemoryConfig>& memory_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_arange

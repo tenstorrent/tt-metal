@@ -17,10 +17,9 @@ void kernel_main() {
 
     constexpr bool input_grad_is_dram = get_compile_time_arg_val(0) == 1;
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr,
-        .page_size = input_grad_tile_bytes,
-        .data_format = input_grad_data_format};
+    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {.bank_base_address = input_grad_addr,
+                                                                         .page_size = input_grad_tile_bytes,
+                                                                         .data_format = input_grad_data_format};
 
     constexpr uint32_t onetile = 1;
 

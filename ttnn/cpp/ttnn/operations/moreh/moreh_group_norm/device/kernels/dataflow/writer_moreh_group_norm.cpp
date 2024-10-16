@@ -99,10 +99,9 @@ void kernel_main() {
             }
             const auto mean_noc_addr = mean_is_dram ? get_noc_addr(mean_rstd_tile_idx, dram_mean_addrg)
                                                     : get_noc_addr(mean_rstd_tile_idx, l1_mean_addrg);
-            noc_async_write(
-                mean_l1_read_ptr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
-                mean_noc_addr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
-                mean_dtype_bytes);
+            noc_async_write(mean_l1_read_ptr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
+                            mean_noc_addr + tilized_mean_rstd_idx_in_tile * mean_dtype_bytes,
+                            mean_dtype_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_id_mean, onetile);
         }
@@ -118,10 +117,9 @@ void kernel_main() {
             }
             const auto rstd_noc_addr = rstd_is_dram ? get_noc_addr(mean_rstd_tile_idx, dram_rstd_addrg)
                                                     : get_noc_addr(mean_rstd_tile_idx, l1_rstd_addrg);
-            noc_async_write(
-                rstd_l1_read_ptr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
-                rstd_noc_addr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
-                rstd_dtype_bytes);
+            noc_async_write(rstd_l1_read_ptr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
+                            rstd_noc_addr + tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes,
+                            rstd_dtype_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_id_rstd, onetile);
         }

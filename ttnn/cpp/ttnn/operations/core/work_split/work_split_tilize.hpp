@@ -88,8 +88,8 @@ struct BlockRep {
     // total repeat times
     uint32_t times;
 
-    BlockRep(uint32_t n_data, uint32_t n_mixed, uint32_t n_pads, uint32_t times) :
-        n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times) {
+    BlockRep(uint32_t n_data, uint32_t n_mixed, uint32_t n_pads, uint32_t times)
+        : n_data(n_data), n_mixed(n_mixed), n_pads(n_pads), times(times) {
         if (n_data == 0 && n_mixed == 0) {
             n_pads *= times;
             times = 1;
@@ -99,13 +99,21 @@ struct BlockRep {
         }
     }
 
-    bool has_mixed_block() const { return n_mixed > 0; }
+    bool has_mixed_block() const {
+        return n_mixed > 0;
+    }
 
-    uint32_t single_rep() const { return n_data + has_mixed_block() + n_pads; }
+    uint32_t single_rep() const {
+        return n_data + has_mixed_block() + n_pads;
+    }
 
-    uint32_t block_count() const { return single_rep() * times; }
+    uint32_t block_count() const {
+        return single_rep() * times;
+    }
 
-    uint32_t data_row_count() const { return (n_data * 32 + n_mixed) * times; }
+    uint32_t data_row_count() const {
+        return (n_data * 32 + n_mixed) * times;
+    }
 
     std::pair<std::vector<BlockRep>, std::vector<BlockRep>> split_at(uint32_t idx) const {
         // TT_ASSERT(idx <= block_count());
@@ -151,10 +159,10 @@ struct FullRep {
     BlockRep pad;
     uint32_t times_total;
 
-    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
-        rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
-        times_total(times_total) {
+    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total)
+        : rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
+          pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
+          times_total(times_total) {
         TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
     }
 
@@ -175,9 +183,17 @@ struct FullRep {
     }
 };
 
-inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(logical_shape.rank() >= 2 && logical_shape.rank() <= 4, "Only 2D, 3D, and 4D tensors are supported. Shape: {}", "Error", logical_shape, padding);
+inline std::vector<std::vector<BlockRep>> distribute_work(const ttnn::SimpleShape& logical_shape,
+                                                          const Padding& padding,
+                                                          uint32_t num_cores,
+                                                          uint32_t blocks_per_core,
+                                                          bool has_cliff,
+                                                          uint32_t nblocks_per_core_cliff) {
+    TT_FATAL(logical_shape.rank() >= 2 && logical_shape.rank() <= 4,
+             "Only 2D, 3D, and 4D tensors are supported. Shape: {}",
+             "Error",
+             logical_shape,
+             padding);
 
     auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
     auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
@@ -232,7 +248,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     return core_assignments;
 }
 
-} // namespace operations::core::work_split
+}  // namespace operations::core::work_split
 
 using namespace operations::core::work_split;
 

@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr bool weight_has_value = get_compile_time_arg_val(2) == 1;
 #endif
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const InterleavedAddrGen<target_is_dram> addrg_target = {.bank_base_address = target_addr,
+                                                             .page_size = target_tile_bytes};
 
 #if defined(WEIGHT)
     const uint32_t weight_tile_bytes = get_tile_size(cb_weight);

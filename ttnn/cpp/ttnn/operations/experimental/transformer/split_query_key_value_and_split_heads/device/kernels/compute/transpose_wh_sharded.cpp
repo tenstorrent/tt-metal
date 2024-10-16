@@ -8,7 +8,6 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     uint32_t num_tiles = get_compile_time_arg_val(0);
 
     transpose_wh_init(tt::CB::c_intermed0);
@@ -31,8 +30,6 @@ void MAIN {
 
         cb_push_back(cb_out1, 1);
         cb_pop_front(cb_im0, 1);
-
-
     }
 }
-}
+}  // namespace NAMESPACE

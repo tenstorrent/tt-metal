@@ -15,16 +15,16 @@
 
 namespace py = pybind11;
 
-
 namespace ttnn {
 namespace operations {
 namespace binary {
 
 namespace detail {
 
-
 template <typename binary_operation_t>
-void bind_primitive_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_primitive_binary_operation(py::module& module,
+                                     const binary_operation_t& operation,
+                                     const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -66,7 +66,14 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
                const std::optional<ttnn::Tensor>& output_tensor,
                const std::optional<unary::FusedActivations>& activations,
                const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) -> ttnn::Tensor {
-                return self(input_tensor_a, input_tensor_b, binary_op_type, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
+                return self(input_tensor_a,
+                            input_tensor_b,
+                            binary_op_type,
+                            dtype,
+                            memory_config,
+                            output_tensor,
+                            activations,
+                            input_tensor_a_activation);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -79,9 +86,13 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
             py::arg("input_tensor_a_activation") = std::nullopt});
 }
 
-
 template <typename binary_operation_t>
-void bind_binary_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& info=". ", const std::string& note=" ") {
+void bind_binary_operation(py::module& module,
+                           const binary_operation_t& operation,
+                           const std::string& description,
+                           const std::string& math,
+                           const std::string& info = ". ",
+                           const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -126,54 +137,70 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
         operation,
         doc,
         // tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::FusedActivations>& activations,
-               const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, scalar, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0},
+        ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                   const ttnn::Tensor& input_tensor_a,
+                                   const float scalar,
+                                   const std::optional<const DataType>& dtype,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& output_tensor,
+                                   const std::optional<unary::FusedActivations>& activations,
+                                   const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
+                                   const uint8_t& queue_id) -> ttnn::Tensor {
+                                    return self(queue_id,
+                                                input_tensor_a,
+                                                scalar,
+                                                dtype,
+                                                memory_config,
+                                                output_tensor,
+                                                activations,
+                                                input_tensor_a_activation);
+                                },
+                                py::arg("input_tensor_a"),
+                                py::arg("input_tensor_b"),
+                                py::kw_only(),
+                                py::arg("dtype") = std::nullopt,
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("output_tensor") = std::nullopt,
+                                py::arg("activations") = std::nullopt,
+                                py::arg("input_tensor_a_activation") = std::nullopt,
+                                py::arg("queue_id") = 0},
 
         // tensor and tensor
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::FusedActivations>& activations,
-               const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, activations, input_tensor_a_activation);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt,
-            py::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                   const ttnn::Tensor& input_tensor_a,
+                                   const ttnn::Tensor& input_tensor_b,
+                                   const std::optional<const DataType>& dtype,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& output_tensor,
+                                   const std::optional<unary::FusedActivations>& activations,
+                                   const std::optional<unary::UnaryWithParam>& input_tensor_a_activation,
+                                   uint8_t queue_id) -> ttnn::Tensor {
+                                    return self(queue_id,
+                                                input_tensor_a,
+                                                input_tensor_b,
+                                                dtype,
+                                                memory_config,
+                                                output_tensor,
+                                                activations,
+                                                input_tensor_a_activation);
+                                },
+                                py::arg("input_tensor_a"),
+                                py::arg("input_tensor_b"),
+                                py::kw_only(),
+                                py::arg("dtype") = std::nullopt,
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("output_tensor") = std::nullopt,
+                                py::arg("activations") = std::nullopt,
+                                py::arg("input_tensor_a_activation") = std::nullopt,
+                                py::arg("queue_id") = 0});
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note="") {
+void bind_binary_composite(py::module& module,
+                           const binary_operation_t& operation,
+                           const std::string& description,
+                           const std::string& math,
+                           const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -207,25 +234,26 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
         math,
         note);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         const Tensor& input_tensor_b,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor_a, input_tensor_b, memory_config);
+                                                      },
+                                                      py::arg("input_tensor_a"),
+                                                      py::arg("input_tensor_b"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_with_alpha(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_binary_composite_with_alpha(py::module& module,
+                                      const binary_operation_t& operation,
+                                      const std::string& description,
+                                      const std::string& math) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -255,27 +283,29 @@ void bind_binary_composite_with_alpha(py::module& module, const binary_operation
         description,
         math);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               float alpha,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, alpha, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::arg("alpha") = 1.0f,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         const Tensor& input_tensor_b,
+                                                         float alpha,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(
+                                                              input_tensor_a, input_tensor_b, alpha, memory_config);
+                                                      },
+                                                      py::arg("input_tensor_a"),
+                                                      py::arg("input_tensor_b"),
+                                                      py::arg("alpha") = 1.0f,
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
-void bind_binary_composite_with_rtol_atol(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_binary_composite_with_rtol_atol(py::module& module,
+                                          const binary_operation_t& operation,
+                                          const std::string& description,
+                                          const std::string& math) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -312,23 +342,22 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               float rtol,
-               float atol,
-               const bool equal_nan,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("rtol") = 1e-05f,
-            py::arg("atol") = 1e-08f,
-            py::arg("equal_nan") = false,
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                   const Tensor& input_tensor_a,
+                                   const Tensor& input_tensor_b,
+                                   float rtol,
+                                   float atol,
+                                   const bool equal_nan,
+                                   const std::optional<MemoryConfig>& memory_config) {
+                                    return self(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+                                },
+                                py::arg("input_tensor_a"),
+                                py::arg("input_tensor_b"),
+                                py::kw_only(),
+                                py::arg("rtol") = 1e-05f,
+                                py::arg("atol") = 1e-08f,
+                                py::arg("equal_nan") = false,
+                                py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
@@ -360,37 +389,37 @@ void bind_div_like_ops(py::module& module, const binary_operation_t& operation, 
         operation.python_fully_qualified_name(),
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         const Tensor& input_tensor_b,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor_a, input_tensor_b, memory_config);
+                                                      },
+                                                      py::arg("input_tensor_a"),
+                                                      py::arg("input_tensor_b"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt},
 
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, value, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("value"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         float value,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor_a, value, memory_config);
+                                                      },
+                                                      py::arg("input_tensor_a"),
+                                                      py::arg("value"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
-void bind_div(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_div(py::module& module,
+              const binary_operation_t& operation,
+              const std::string& description,
+              const std::string& math) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -438,8 +467,9 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config, output_tensor);
-                },
+                return self(
+                    queue_id, input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config, output_tensor);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::kw_only(),
@@ -458,8 +488,8 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
                uint8_t queue_id) -> ttnn::Tensor {
-                    return self(queue_id, input_tensor_a, value, accurate_mode, round_mode, memory_config, output_tensor);
-                },
+                return self(queue_id, input_tensor_a, value, accurate_mode, round_mode, memory_config, output_tensor);
+            },
             py::arg("input_tensor_a"),
             py::arg("value"),
             py::kw_only(),
@@ -471,7 +501,11 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
 }
 
 template <typename binary_operation_t>
-void bind_polyval(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math, const std::string& note=" ") {
+void bind_polyval(py::module& module,
+                  const binary_operation_t& operation,
+                  const std::string& description,
+                  const std::string& math,
+                  const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -505,25 +539,25 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
         math,
         note);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const std::vector<float>& coeffs,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, coeffs, memory_config);
-                },
-            py::arg("input_tensor_a"),
-            py::arg("coeffs"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         const std::vector<float>& coeffs,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor_a, coeffs, memory_config);
+                                                      },
+                                                      py::arg("input_tensor_a"),
+                                                      py::arg("coeffs"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
-void bind_binary_overload_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_overload_operation(py::module& module,
+                                    const binary_operation_t& operation,
+                                    const std::string& description) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -546,38 +580,40 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
         operation.python_fully_qualified_name(),
         description);
 
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
+    bind_registered_operation(module,
+                              operation,
+                              doc,
 
-        //tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor,
-            float scalar,
-            const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, scalar, memory_config); },
-            py::arg("input_tensor"),
-            py::arg("scalar"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt},
+                              // tensor and scalar
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor,
+                                                         float scalar,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor, scalar, memory_config);
+                                                      },
+                                                      py::arg("input_tensor"),
+                                                      py::arg("scalar"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt},
 
-        //tensor and tensor
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config); },
-            py::arg("input_a"),
-            py::arg("input_b"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+                              // tensor and tensor
+                              ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                                         const Tensor& input_tensor_a,
+                                                         const Tensor& input_tensor_b,
+                                                         const std::optional<MemoryConfig>& memory_config) {
+                                                          return self(input_tensor_a, input_tensor_b, memory_config);
+                                                      },
+                                                      py::arg("input_a"),
+                                                      py::arg("input_b"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt});
 }
 
 template <typename binary_operation_t>
-void bind_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+void bind_inplace_operation(py::module& module,
+                            const binary_operation_t& operation,
+                            const std::string& description,
+                            const std::string& math) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -606,27 +642,27 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
         operation,
         doc,
 
-        //tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor,
-            const float scalar) {
-                return self(input_tensor, scalar); },
-            py::arg("input_a"),
-            py::arg("input_b")},
+        // tensor and scalar
+        ttnn::pybind_overload_t{[](const binary_operation_t& self, const Tensor& input_tensor, const float scalar) {
+                                    return self(input_tensor, scalar);
+                                },
+                                py::arg("input_a"),
+                                py::arg("input_b")},
 
-        //tensor and tensor
+        // tensor and tensor
         ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b) {
-                return self(input_tensor_a, input_tensor_b); },
+            [](const binary_operation_t& self, const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+                return self(input_tensor_a, input_tensor_b);
+            },
             py::arg("input_a"),
             py::arg("input_b")});
 }
 
 template <typename binary_operation_t>
-void bind_logical_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description, const std::string& note=" ") {
+void bind_logical_inplace_operation(py::module& module,
+                                    const binary_operation_t& operation,
+                                    const std::string& description,
+                                    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -660,16 +696,17 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
         doc,
 
         ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b) {
-                return self(input_tensor_a, input_tensor_b); },
+            [](const binary_operation_t& self, const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+                return self(input_tensor_a, input_tensor_b);
+            },
             py::arg("input_a"),
             py::arg("input_b")});
 }
 
 template <typename binary_operation_t>
-void bind_binary_inplace_operation(py::module& module, const binary_operation_t& operation, const std::string& description) {
+void bind_binary_inplace_operation(py::module& module,
+                                   const binary_operation_t& operation,
+                                   const std::string& description) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -692,33 +729,33 @@ void bind_binary_inplace_operation(py::module& module, const binary_operation_t&
         operation,
         doc,
 
-        //tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor,
-            const float scalar,
-            const std::optional<unary::FusedActivations>& activations,
-            const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
-                return self(input_tensor, scalar, activations, input_tensor_a_activation); },
-            py::arg("input_a"),
-            py::arg("input_b"),
-            py::kw_only(),
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt},
+        // tensor and scalar
+        ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                   const Tensor& input_tensor,
+                                   const float scalar,
+                                   const std::optional<unary::FusedActivations>& activations,
+                                   const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+                                    return self(input_tensor, scalar, activations, input_tensor_a_activation);
+                                },
+                                py::arg("input_a"),
+                                py::arg("input_b"),
+                                py::kw_only(),
+                                py::arg("activations") = std::nullopt,
+                                py::arg("input_tensor_a_activation") = std::nullopt},
 
-        //tensor and tensor
-        ttnn::pybind_overload_t{
-            [](const binary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            const std::optional<unary::FusedActivations>& activations,
-            const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
-                return self(input_tensor_a, input_tensor_b, activations, input_tensor_a_activation); },
-            py::arg("input_a"),
-            py::arg("input_b"),
-            py::kw_only(),
-            py::arg("activations") = std::nullopt,
-            py::arg("input_tensor_a_activation") = std::nullopt});
+        // tensor and tensor
+        ttnn::pybind_overload_t{[](const binary_operation_t& self,
+                                   const Tensor& input_tensor_a,
+                                   const Tensor& input_tensor_b,
+                                   const std::optional<unary::FusedActivations>& activations,
+                                   const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+                                    return self(input_tensor_a, input_tensor_b, activations, input_tensor_a_activation);
+                                },
+                                py::arg("input_a"),
+                                py::arg("input_b"),
+                                py::kw_only(),
+                                py::arg("activations") = std::nullopt,
+                                py::arg("input_tensor_a_activation") = std::nullopt});
 }
 }  // namespace detail
 
@@ -804,7 +841,8 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_and,
         R"doc(Compute logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",". ",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i))doc",
+        ". ",
 
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -819,7 +857,8 @@ void py_module(py::module& module) {
         module,
         ttnn::logical_or,
         R"doc(Compute logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",". ",
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i))doc",
+        ". ",
 
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -852,7 +891,8 @@ void py_module(py::module& module) {
         module,
         ttnn::squared_difference,
         R"doc(Compute squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc", ". ",
+        R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        ". ",
 
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -1012,15 +1052,13 @@ void py_module(py::module& module) {
         module,
         ttnn::addalpha,
         R"doc(Compute addalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}}).)doc"
-        );
+        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}}).)doc");
 
     detail::bind_binary_composite_with_alpha(
         module,
         ttnn::subalpha,
         R"doc(Compute subalpha :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}}).)doc"
-        );
+        R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}}).)doc");
 
     detail::bind_binary_composite_with_rtol_atol(
         module,
@@ -1121,7 +1159,6 @@ void py_module(py::module& module) {
         ttnn::ne_,
         R"doc(Perform Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{output\_tensor}} = (\mathrm{{input\_tensor\_a}} != \mathrm{{input\_tensor\_b}}))doc");
-
 }
 
 }  // namespace binary

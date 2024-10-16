@@ -15,8 +15,7 @@ namespace operations::complex_unary {
 
 template <ComplexUnaryOpType complex_unary_op_type>
 struct ExecuteComplexUnaryTensor {
-
-    //Type 1: 1 input tensor
+    // Type 1: 1 input tensor
     static Tensor invoke(const ComplexTensor &input_tensor_arg, const MemoryConfig &memory_config) {
         return OpHandler<complex_unary_op_type>::handle(input_tensor_arg, memory_config);
     }
@@ -29,7 +28,7 @@ struct ExecuteComplexUnaryComplexTensor {
     }
 };
 
-}
+}  // namespace operations::complex_unary
 
 constexpr auto real = ttnn::register_operation<
     "ttnn::real",
@@ -50,7 +49,7 @@ constexpr auto is_real = ttnn::register_operation<
 constexpr auto conj = ttnn::register_operation<
     "ttnn::conj",
     operations::complex_unary::ExecuteComplexUnaryComplexTensor<operations::complex_unary::ComplexUnaryOpType::CONJ>>();
-constexpr auto polar = ttnn::register_operation<
-    "ttnn::polar",
-    operations::complex_unary::ExecuteComplexUnaryComplexTensor<operations::complex_unary::ComplexUnaryOpType::POLAR>>();
-}
+constexpr auto polar = ttnn::register_operation<"ttnn::polar",
+                                                operations::complex_unary::ExecuteComplexUnaryComplexTensor<
+                                                    operations::complex_unary::ComplexUnaryOpType::POLAR>>();
+}  // namespace ttnn

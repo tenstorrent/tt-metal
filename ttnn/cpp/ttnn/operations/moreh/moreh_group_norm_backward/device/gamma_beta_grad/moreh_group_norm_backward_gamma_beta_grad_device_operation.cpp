@@ -12,8 +12,8 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
-void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(const operation_attributes_t& operation_attributes,
+                                                                    const tensor_args_t& tensor_args) {
     const auto& output_grad = tensor_args.output_grad;
     const auto& input = tensor_args.input;
     const auto& mean = tensor_args.mean;
@@ -57,25 +57,25 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     TT_FATAL(rstd.get_shape().value.without_padding()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t
-MorehGroupNormBackwardGammaBetaGradOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t MorehGroupNormBackwardGammaBetaGradOperation::
+    select_program_factory(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return MorehGroupNormBackwardGammaBetaGradFactory();
 }
 
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
 
 void MorehGroupNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::shape_return_value_t
-MorehGroupNormBackwardGammaBetaGradOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardGammaBetaGradOperation::shape_return_value_t MorehGroupNormBackwardGammaBetaGradOperation::
+    compute_output_shapes(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& output_grad = tensor_args.output_grad;
     // output_grad (N, C, H, W)
@@ -96,9 +96,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_shapes(
     return {dgamma_dbeta_shape, dgamma_dbeta_shape};
 }
 
-MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t
-MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+MorehGroupNormBackwardGammaBetaGradOperation::tensor_return_value_t MorehGroupNormBackwardGammaBetaGradOperation::
+    create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.output_grad.get_dtype();
     Layout layout{Layout::TILE};
@@ -131,9 +130,8 @@ MorehGroupNormBackwardGammaBetaGradOperation::create_output_tensors(
     return result;
 }
 
-std::tuple<
-    MorehGroupNormBackwardGammaBetaGradOperation::operation_attributes_t,
-    MorehGroupNormBackwardGammaBetaGradOperation::tensor_args_t>
+std::tuple<MorehGroupNormBackwardGammaBetaGradOperation::operation_attributes_t,
+           MorehGroupNormBackwardGammaBetaGradOperation::tensor_args_t>
 MorehGroupNormBackwardGammaBetaGradOperation::invoke(
     const Tensor& output_grad,
     const Tensor& input,

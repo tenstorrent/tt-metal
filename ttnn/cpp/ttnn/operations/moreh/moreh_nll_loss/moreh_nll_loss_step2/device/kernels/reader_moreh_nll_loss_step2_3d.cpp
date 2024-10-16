@@ -52,8 +52,8 @@ void kernel_main() {
         .page_size = input_tile_bytes,
     };
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const InterleavedAddrGen<target_is_dram> addrg_target = {.bank_base_address = target_addr,
+                                                             .page_size = target_tile_bytes};
 
     const InterleavedAddrGen<weight_is_dram> addrg_weight = {
         .bank_base_address = weight_addr,
@@ -86,7 +86,11 @@ void kernel_main() {
         uint32_t traget_noc_id = nt * Wt + wt;
         uint32_t target_offset;
         get_noc_offset(n, w, target_element_size, target_offset);
-        read_tile(cb_target, addrg_target, traget_noc_id, NOC_MINIMUM_READ_SIZE / element_size * target_element_size, target_offset);
+        read_tile(cb_target,
+                  addrg_target,
+                  traget_noc_id,
+                  NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
+                  target_offset);
 
 #if defined(WEIGHT)
         cb_reserve_back(cb_tmp_weight, onetile);

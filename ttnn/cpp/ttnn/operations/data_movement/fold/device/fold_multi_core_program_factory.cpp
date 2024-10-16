@@ -12,8 +12,10 @@
 
 namespace ttnn::operations::data_movement {
 
-Fold::MultiCore::cached_program_t fold_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t stride_h, uint32_t stride_w) {
+Fold::MultiCore::cached_program_t fold_multi_core(const Tensor& input,
+                                                  const Tensor& output,
+                                                  uint32_t stride_h,
+                                                  uint32_t stride_w) {
     Program program = CreateProgram();
     Device* device = output.device();
 
@@ -60,92 +62,90 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         WriterDataMovementConfig({cb_src0_index, cb_dst0_index}));
 
     // Writer run-time args
-    SetRuntimeArgs(
-        program,
-        writer_kernel_id,
-        all_cores,
-        {
-            pixel_size,
-            aligned_pixel_size,
-            aligned_dst_pixel_size,
-            num_pixels,
-            num_dst_pixels,
-            stride_w * aligned_pixel_size,
-            width * aligned_pixel_size,
-            stride_h,
-            stride_w,
-            num_dst_rows,
-            width / stride_w,
-            pixels_per_dst_row * aligned_pixel_size,
-        });
+    SetRuntimeArgs(program,
+                   writer_kernel_id,
+                   all_cores,
+                   {
+                       pixel_size,
+                       aligned_pixel_size,
+                       aligned_dst_pixel_size,
+                       num_pixels,
+                       num_dst_pixels,
+                       stride_w * aligned_pixel_size,
+                       width * aligned_pixel_size,
+                       stride_h,
+                       stride_w,
+                       num_dst_rows,
+                       width / stride_w,
+                       pixels_per_dst_row * aligned_pixel_size,
+                   });
 
-    return { std::move(program), {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0} };
+    return {std::move(program), {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
 }
 
 Fold::MultiCore::cached_program_t Fold::MultiCore::create(const operation_attributes_t& operation_attributes,
-                                         const tensor_args_t& tensor_args,
-                                         tensor_return_value_t& output_tensor) {
-    return fold_multi_core(tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
+                                                          const tensor_args_t& tensor_args,
+                                                          tensor_return_value_t& output_tensor) {
+    return fold_multi_core(
+        tensor_args.input_tensor, output_tensor, operation_attributes.stride_h, operation_attributes.stride_w);
 }
 
 void Fold::MultiCore::override_runtime_arguments(cached_program_t& cached_program,
-                                                const operation_attributes_t& operation_attributes,
-                                                const tensor_args_t& tensor_args,
-                                                tensor_return_value_t& output_tensor) {
+                                                 const operation_attributes_t& operation_attributes,
+                                                 const tensor_args_t& tensor_args,
+                                                 tensor_return_value_t& output_tensor) {
+    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
+    auto& stride_h = cached_program.shared_variables.stride_h;
+    auto& stride_w = cached_program.shared_variables.stride_w;
+    auto& cb_src0 = cached_program.shared_variables.cb_src0;
+    auto& cb_dst0 = cached_program.shared_variables.cb_dst0;
 
-        auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-        auto& stride_h = cached_program.shared_variables.stride_h;
-        auto& stride_w = cached_program.shared_variables.stride_w;
-        auto& cb_src0 = cached_program.shared_variables.cb_src0;
-        auto& cb_dst0 = cached_program.shared_variables.cb_dst0;
+    auto& program = cached_program.program;
+    auto& input_tensor = tensor_args.input_tensor;
 
-        auto& program = cached_program.program;
-        auto& input_tensor = tensor_args.input_tensor;
+    auto shard_shape = input_tensor.shard_spec()->shape;
+    auto all_cores = input_tensor.shard_spec()->grid;
 
-        auto shard_shape = input_tensor.shard_spec()->shape;
-        auto all_cores = input_tensor.shard_spec()->grid;
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-        tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t pixel_size = shard_shape[1] * input_tensor.element_size();
+    uint32_t num_pixels = shard_shape[0];
+    uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
-        uint32_t pixel_size = shard_shape[1] * input_tensor.element_size();
-        uint32_t num_pixels = shard_shape[0];
-        uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
+    uint32_t width = input_tensor.get_legacy_shape()[2];
+    uint32_t chunk_size = stride_w * pixel_size;
+    uint32_t row_size = width * pixel_size;
+    uint32_t dst_pixel_size = stride_h * chunk_size;
+    uint32_t dst_row_size = stride_h * row_size;
+    uint32_t num_dst_rows = num_pixels / (width * stride_h);
+    uint32_t cb_pages_per_dst_row = stride_h * width;
 
-        uint32_t width = input_tensor.get_legacy_shape()[2];
-        uint32_t chunk_size = stride_w * pixel_size;
-        uint32_t row_size = width * pixel_size;
-        uint32_t dst_pixel_size = stride_h * chunk_size;
-        uint32_t dst_row_size = stride_h * row_size;
-        uint32_t num_dst_rows = num_pixels / (width * stride_h);
-        uint32_t cb_pages_per_dst_row = stride_h * width;
+    uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
+    uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
 
-        uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
-        uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
+    auto src_buffer = input_tensor.buffer();
+    auto dst_buffer = output_tensor.buffer();
 
-        auto src_buffer = input_tensor.buffer();
-        auto dst_buffer = output_tensor.buffer();
+    UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);
 
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);
-
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            all_cores,
-            {
-                pixel_size,
-                aligned_pixel_size,
-                aligned_dst_pixel_size,
-                num_pixels,
-                num_dst_pixels,
-                stride_w * aligned_pixel_size,
-                width * aligned_pixel_size,
-                stride_h,
-                stride_w,
-                num_dst_rows,
-                width / stride_w,
-                cb_pages_per_dst_row,
-            });
+    SetRuntimeArgs(program,
+                   writer_kernel_id,
+                   all_cores,
+                   {
+                       pixel_size,
+                       aligned_pixel_size,
+                       aligned_dst_pixel_size,
+                       num_pixels,
+                       num_dst_pixels,
+                       stride_w * aligned_pixel_size,
+                       width * aligned_pixel_size,
+                       stride_h,
+                       stride_w,
+                       num_dst_rows,
+                       width / stride_w,
+                       cb_pages_per_dst_row,
+                   });
 }
 
 }  // namespace ttnn::operations::data_movement

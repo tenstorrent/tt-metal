@@ -21,23 +21,23 @@ std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
     const std::optional<MemoryConfig>& mean_memory_config,
     const std::optional<MemoryConfig>& rstd_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::moreh_group_norm(
-        input,
-        num_groups,
-        eps,
-        gamma,
-        beta,
-        are_required_outputs,
-        output,
-        mean,
-        rstd,
-        memory_config,
-        mean_memory_config,
-        rstd_memory_config,
-        compute_kernel_config);
+    return ttnn::prim::moreh_group_norm(input,
+                                        num_groups,
+                                        eps,
+                                        gamma,
+                                        beta,
+                                        are_required_outputs,
+                                        output,
+                                        mean,
+                                        rstd,
+                                        memory_config,
+                                        mean_memory_config,
+                                        rstd_memory_config,
+                                        compute_kernel_config);
 }
 std::vector<Tensor> MorehGroupNorm::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     return {
         Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),
         Tensor(operation::get_workers_for_op_output(input_tensors, optional_inputs)),

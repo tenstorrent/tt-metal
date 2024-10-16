@@ -10,17 +10,14 @@
 
 namespace ttnn::operations::binary::utils {
 
-using ttnn::operations::unary::UnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
+using ttnn::operations::unary::UnaryWithParam;
 
-
-std::map<std::string, std::string> get_defines(
-    BinaryOpType op_type,
-    const std::optional<tt::tt_metal::DataType> input_dtype,
-    const std::optional<tt::tt_metal::DataType> output_dtype,
-    const std::optional<std::vector<UnaryWithParam>> fused_activations,
-    const std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-
+std::map<std::string, std::string> get_defines(BinaryOpType op_type,
+                                               const std::optional<tt::tt_metal::DataType> input_dtype,
+                                               const std::optional<tt::tt_metal::DataType> output_dtype,
+                                               const std::optional<std::vector<UnaryWithParam>> fused_activations,
+                                               const std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     std::map<std::string, std::string> defines;
     std::string op_name = "sub_tiles";
     std::string op_binary_type = "EltwiseBinaryType::ELWSUB";
@@ -41,24 +38,12 @@ std::map<std::string, std::string> get_defines(
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
             break;
-        case BinaryOpType::GT:
-            defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LT:
-            defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::GTE:
-            defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::LTE:
-            defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::EQ:
-            defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst));
-            break;
-        case BinaryOpType::NE:
-            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
-            break;
+        case BinaryOpType::GT: defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::LT: defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::GTE: defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::LTE: defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::EQ: defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst)); break;
+        case BinaryOpType::NE: defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst)); break;
         case BinaryOpType::SQUARED_DIFFERENCE:
             defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst));
             break;
@@ -110,28 +95,28 @@ std::map<std::string, std::string> get_defines(
     }
 
     using DataType = tt::tt_metal::DataType;
-    if(input_dtype.has_value() && output_dtype.has_value() &&
+    if (input_dtype.has_value() && output_dtype.has_value() &&
         ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT16) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::INT32) ||
-        (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT16) ||
-        (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
-        (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
-        (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-        (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32))){
+         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT16) ||
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::INT32) ||
+         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT16) ||
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::INT32) ||
+         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
+         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT16) ||
+         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT32) ||
+         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
+         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
+         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
+         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32))) {
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
@@ -153,11 +138,12 @@ std::map<std::string, std::string> get_defines(
         }
     }
 
-    if (input_tensor_a_activation.has_value() ) {
-        defines.merge(ttnn::operations::unary::utils::get_defines(input_tensor_a_activation.value().op_type, std::nullopt, "PRE_IN0_0", idst));
+    if (input_tensor_a_activation.has_value()) {
+        defines.merge(ttnn::operations::unary::utils::get_defines(
+            input_tensor_a_activation.value().op_type, std::nullopt, "PRE_IN0_0", idst));
     }
 
     return defines;
 }
 
-}
+}  // namespace ttnn::operations::binary::utils

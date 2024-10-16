@@ -6,22 +6,23 @@
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
-template<uint32_t tile_bytes, uint32_t num_readers>
+template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;
 }
 
 template <uint32_t tile_bytes>
 void copy_tile(uint64_t noc_read_addr_base, uint32_t q_write_ptr_base, uint32_t src_tile_id, uint32_t dst_tile_id) {
-    noc_async_read(noc_read_addr_base + src_tile_id*tile_bytes, q_write_ptr_base + dst_tile_id*tile_bytes, tile_bytes);
+    noc_async_read(
+        noc_read_addr_base + src_tile_id * tile_bytes, q_write_ptr_base + dst_tile_id * tile_bytes, tile_bytes);
 }
 
 template <uint32_t tile_bytes>
 void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
-    if (val == 0){
+    if (val == 0) {
         constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
         uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-        uint32_t write_addr = get_write_ptr(cb_id) + tile_id*tile_bytes;
+        uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
         volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
 
         // Fill tile with zeros
@@ -30,10 +31,10 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
             write_addr += MEM_ZEROS_SIZE;
         }
         noc_async_read_barrier();
-    }
-    else {
+    } else {
         // Fill 2 uint16 datums in each writes to optimize for performance
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
+        volatile tt_l1_ptr uint32_t* ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
         constexpr int num_uint32_datums_tile = (32 * 32) / 2;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
@@ -50,19 +51,21 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
     fill_tile<tile_bytes>(cb_id, tile_id, 0);
 
     // DPRINT << "Fill partial tile" << ENDL();
-    const uint16_t datum_val = partial_val>>16;
-    volatile tt_l1_ptr uint16_t* uint16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
-    volatile tt_l1_ptr uint32_t* uint32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id*tile_bytes);
+    const uint16_t datum_val = partial_val >> 16;
+    volatile tt_l1_ptr uint16_t* uint16_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    volatile tt_l1_ptr uint32_t* uint32_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
     constexpr uint32_t uint16_datums_per_face_row = 16;
     constexpr uint32_t uint32_datums_per_face_row = 8;
     constexpr uint32_t uint32_datums_per_face = (16 * 16) / 2;
     // Fill diagonal faces with diagonal -inf
-    for (uint32_t k = 0; k < 4; k+=3) {
+    for (uint32_t k = 0; k < 4; k += 3) {
         uint32_t uint16_face_idx = k << 8;
         uint32_t uint32_face_idx = k << 7;
         for (uint32_t r = 0; r < uint16_datums_per_face_row; ++r) {
-            const uint32_t col_start = r+1;
+            const uint32_t col_start = r + 1;
             const uint32_t col_start_uint32 = (col_start + 1) >> 1;
             if ((col_start) % 2 == 1) {
                 uint16_ptr[uint16_face_idx + r * uint16_datums_per_face_row + col_start] = datum_val;
@@ -83,7 +86,7 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
 template <uint32_t cb_mask_in>
 void generate_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_chunk, uint32_t k_chunk) {
     uint32_t mask_size_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t NEG_INF = 0xFF80FF80; // TODO: Make sure this is -inf
+    constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
     cb_reserve_back(cb_mask_in, mask_size_tiles);
 
     uint32_t write_ptr_base = get_write_ptr(cb_mask_in);
@@ -108,16 +111,14 @@ void generate_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_chunk, u
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
                 }
-            }
-            else if (global_k_tile == global_q_tile) {
+            } else if (global_k_tile == global_q_tile) {
                 if (diag_tile_idx == -1) {
                     fill_diagonal_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
                     diag_tile_idx = in_mask_tile_id;
                 } else {
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, diag_tile_idx, in_mask_tile_id);
                 }
-            }
-            else {
+            } else {
                 if (inf_tile_idx == -1) {
                     fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
                     inf_tile_idx = in_mask_tile_id;
@@ -145,8 +146,8 @@ void kernel_main() {
     constexpr uint32_t scale_val = get_compile_time_arg_val(10);
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
 
-    const uint32_t out_addr  = get_arg_val<uint32_t>(0);
-    const uint32_t core_id    = get_arg_val<uint32_t>(1);
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t core_id = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(2);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(3);
     const uint32_t local_nh_start = get_arg_val<uint32_t>(4);
@@ -167,10 +168,7 @@ void kernel_main() {
     constexpr DataFormat data_format = get_dataformat(cb_out);
 
     const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -188,23 +186,24 @@ void kernel_main() {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 uint32_t q_chunk;
-                #if defined BALANCED_Q_PARALLEL
+#if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
-                if (q_iter < q_chunk_div_2) { // bottom half
+                if (q_iter < q_chunk_div_2) {  // bottom half
                     q_chunk = local_q_start + q_iter;
                 } else {
-                    uint32_t back_q_iter = q_iter - q_chunk_div_2; // Back half should start at 0
+                    uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
                     q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
                 }
-                #else
+#else
                 q_chunk = local_q_start + q_iter;
-                #endif
+#endif
 
                 uint32_t q_head_offset = nq * St * DHt;
                 uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
                 out_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
 
-                const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
+                const uint32_t q_low_idx =
+                    q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                 const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {

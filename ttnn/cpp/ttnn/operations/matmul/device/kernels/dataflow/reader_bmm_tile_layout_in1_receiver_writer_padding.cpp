@@ -82,10 +82,9 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
     // WRITER
-    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {.bank_base_address = out_tensor_addr,
+                                                                   .page_size = output_single_tile_size_bytes,
+                                                                   .data_format = output_data_format};
 
     const uint64_t in1_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
@@ -179,8 +178,7 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_wait_front(
-        cb_id_out0,
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    cb_wait_front(cb_id_out0,
+                  batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
 }

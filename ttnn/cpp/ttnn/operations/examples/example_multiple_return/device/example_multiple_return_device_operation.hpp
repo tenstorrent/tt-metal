@@ -72,16 +72,14 @@ struct ExampleMultipleReturnDeviceOperation {
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static cached_program_t create(const operation_attributes_t& operation_attributes,
+                                       const tensor_args_t& tensor_args,
+                                       tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+        static void override_runtime_arguments(cached_program_t& cached_program,
+                                               const operation_attributes_t& operation_attributes,
+                                               const tensor_args_t& tensor_args,
+                                               tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<SingleCore>;
@@ -105,10 +103,13 @@ struct ExampleMultipleReturnDeviceOperation {
 
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output = ttnn::prim::example(input_tensor)` after the op is registered
-    // Keep in mind that the the overload with `queue_id` argument will be added automatically for primitive operations
-    // So, the user can also call this operation using `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor, bool return_output1, bool return_output2);
+    // The user will be able to call the operation using `tensor_return_value_t output =
+    // ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`
+    // argument will be added automatically for primitive operations So, the user can also call this operation using
+    // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(const Tensor& input_tensor,
+                                                                    bool return_output1,
+                                                                    bool return_output2);
 
     // Optional methods
 
@@ -130,7 +131,7 @@ struct ExampleMultipleReturnDeviceOperation {
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 namespace ttnn::prim {
-constexpr auto example_multiple_return = ttnn::register_operation<
-    "ttnn::prim::example_multiple_return",
-    ttnn::operations::examples::ExampleMultipleReturnDeviceOperation>();
+constexpr auto example_multiple_return =
+    ttnn::register_operation<"ttnn::prim::example_multiple_return",
+                             ttnn::operations::examples::ExampleMultipleReturnDeviceOperation>();
 }  // namespace ttnn::prim

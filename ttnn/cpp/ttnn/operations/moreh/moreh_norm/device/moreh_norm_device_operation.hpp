@@ -5,24 +5,22 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-#define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
-    struct FactoryName {                                                                    \
-        struct shared_variables_t {                                                         \
-            KernelHandle reader_kernels_id;                                                 \
-            KernelHandle writer_kernels_id;                                                 \
-            std::size_t num_cores_to_be_used;                                               \
-            std::size_t num_cores_y;                                                        \
-        };                                                                                  \
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>; \
-        static cached_program_t create(                                                     \
-            const operation_attributes_t& operation_attributes,                             \
-            const tensor_args_t& tensor_args,                                               \
-            tensor_return_value_t& output);                                                 \
-        static void override_runtime_arguments(                                             \
-            cached_program_t& cached_program,                                               \
-            const operation_attributes_t& operation_attributes,                             \
-            const tensor_args_t& tensor_args,                                               \
-            tensor_return_value_t& output);                                                 \
+#define DEFINE_PROGRAM_FACTORY(FactoryName)                                                        \
+    struct FactoryName {                                                                           \
+        struct shared_variables_t {                                                                \
+            KernelHandle reader_kernels_id;                                                        \
+            KernelHandle writer_kernels_id;                                                        \
+            std::size_t num_cores_to_be_used;                                                      \
+            std::size_t num_cores_y;                                                               \
+        };                                                                                         \
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;        \
+        static cached_program_t create(const operation_attributes_t& operation_attributes,         \
+                                       const tensor_args_t& tensor_args,                           \
+                                       tensor_return_value_t& output);                             \
+        static void override_runtime_arguments(cached_program_t& cached_program,                   \
+                                               const operation_attributes_t& operation_attributes, \
+                                               const tensor_args_t& tensor_args,                   \
+                                               tensor_return_value_t& output);                     \
     };
 
 namespace ttnn::operations::moreh::moreh_norm {

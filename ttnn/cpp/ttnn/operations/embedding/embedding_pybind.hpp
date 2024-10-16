@@ -60,33 +60,39 @@ void py_module(py::module& module) {
                 [1.35917e-38, 0, 4.49994e-39, 0]]], dtype=bfloat16))doc";
 
     using OperationType = decltype(ttnn::embedding);
-    bind_registered_operation(
-        module,
-        ttnn::embedding,
-        doc,
-        ttnn::pybind_overload_t{
-        [] (const OperationType& self,
-            const ttnn::Tensor& input_tensor,
-            const ttnn::Tensor& weight,
-            const std::optional<int>& padding_idx,
-            const ttnn::Layout& layout,
-            EmbeddingsType embeddings_type,
-            const std::optional<const DataType> dtype,
-            std::optional<ttnn::Tensor> &optional_output_tensor,
-            const std::optional<ttnn::MemoryConfig>& memory_config,
-            uint8_t queue_id) {
-                return self(queue_id, input_tensor, weight, padding_idx, layout, embeddings_type, dtype, memory_config, optional_output_tensor);
-            },
-            py::arg("input_tensor").noconvert(),
-            py::arg("weight").noconvert(),
-            py::kw_only(),
-            py::arg("padding_idx") = std::nullopt,
-            py::arg("layout") = ttnn::ROW_MAJOR_LAYOUT,
-            py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
-            py::arg("dtype").noconvert() = std::nullopt,
-            py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+    bind_registered_operation(module,
+                              ttnn::embedding,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         const ttnn::Tensor& weight,
+                                                         const std::optional<int>& padding_idx,
+                                                         const ttnn::Layout& layout,
+                                                         EmbeddingsType embeddings_type,
+                                                         const std::optional<const DataType> dtype,
+                                                         std::optional<ttnn::Tensor>& optional_output_tensor,
+                                                         const std::optional<ttnn::MemoryConfig>& memory_config,
+                                                         uint8_t queue_id) {
+                                                          return self(queue_id,
+                                                                      input_tensor,
+                                                                      weight,
+                                                                      padding_idx,
+                                                                      layout,
+                                                                      embeddings_type,
+                                                                      dtype,
+                                                                      memory_config,
+                                                                      optional_output_tensor);
+                                                      },
+                                                      py::arg("input_tensor").noconvert(),
+                                                      py::arg("weight").noconvert(),
+                                                      py::kw_only(),
+                                                      py::arg("padding_idx") = std::nullopt,
+                                                      py::arg("layout") = ttnn::ROW_MAJOR_LAYOUT,
+                                                      py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
+                                                      py::arg("dtype").noconvert() = std::nullopt,
+                                                      py::arg("output_tensor").noconvert() = std::nullopt,
+                                                      py::arg("memory_config") = std::nullopt,
+                                                      py::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::embedding

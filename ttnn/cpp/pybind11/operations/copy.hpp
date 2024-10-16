@@ -47,21 +47,20 @@ Example::
         module,
         ttnn::typecast,
         doc,
-        ttnn::pybind_overload_t{
-            [](const TypecastType& self,
-               const ttnn::Tensor& input_tensor,
-               const DataType dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, dtype, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::arg("dtype"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+        ttnn::pybind_overload_t{[](const TypecastType& self,
+                                   const ttnn::Tensor& input_tensor,
+                                   const DataType dtype,
+                                   const std::optional<ttnn::MemoryConfig>& memory_config,
+                                   const std::optional<ttnn::Tensor>& output_tensor,
+                                   const uint8_t& queue_id) -> ttnn::Tensor {
+                                    return self(queue_id, input_tensor, dtype, memory_config, output_tensor);
+                                },
+                                py::arg("input_tensor"),
+                                py::arg("dtype"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("output_tensor") = std::nullopt,
+                                py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
             [](const TypecastType& self,
@@ -81,14 +80,14 @@ Example::
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0}
 
-            );
+    );
 }
 
 }  // namespace detail
 
 void py_module(py::module& module) {
     detail::bind_global_typecast(module);
-    }
+}
 
 }  // namespace copy
 }  // namespace operations

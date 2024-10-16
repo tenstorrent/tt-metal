@@ -40,14 +40,14 @@ concept DeviceOperationConcept = requires {
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
         using shape_return_value_t = typename device_operation_t::shape_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::compute_output_shapes(operation_attributes, tensor_args)),
-                      shape_return_value_t>);
+        static_assert(
+            std::same_as<decltype(device_operation_t::compute_output_shapes(operation_attributes, tensor_args)),
+                         shape_return_value_t>);
 
         using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
-                      tensor_return_value_t>);
+        static_assert(
+            std::same_as<decltype(device_operation_t::create_output_tensors(operation_attributes, tensor_args)),
+                         tensor_return_value_t>);
 
         const auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
         std::visit(
@@ -62,15 +62,17 @@ concept DeviceOperationConcept = requires {
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
     DeviceOperationConcept<device_operation_t> &&
-    requires(
-        const typename device_operation_t::operation_attributes_t& operation_attributes,
-        const typename device_operation_t::tensor_args_t& tensor_args) {
-        { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
+    requires(const typename device_operation_t::operation_attributes_t& operation_attributes,
+             const typename device_operation_t::tensor_args_t& tensor_args) {
+        {
+            device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+        } -> std::convertible_to<tt::stl::hash::hash_t>;
     };
 
 namespace detail {
 template <typename... Ts>
-[[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
+[[nodiscard]]
+std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
     assert(i < sizeof...(Ts));
     static constexpr std::variant<Ts...> table[] = {Ts{}...};
     return table[i];
@@ -79,9 +81,8 @@ template <typename... Ts>
 inline const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
 template <typename device_operation_t>
-inline auto compute_program_hash(
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+inline auto compute_program_hash(const typename device_operation_t::operation_attributes_t& operation_attributes,
+                                 const typename device_operation_t::tensor_args_t& tensor_args) {
     if constexpr (DeviceOperationWithCustomProgramCacheConcept<device_operation_t>) {
         ZoneScopedN("Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
@@ -174,20 +175,17 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
     }
 }
 
-
 #ifdef DEBUG
 
 template <typename device_operation_t>
-inline void log_operation(
-    std::size_t device_operation_id,
-    std::size_t device_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
-    bool program_cache_hit) {
+inline void log_operation(std::size_t device_operation_id,
+                          std::size_t device_id,
+                          const typename device_operation_t::operation_attributes_t& operation_attributes,
+                          const typename device_operation_t::tensor_args_t& tensor_args,
+                          tt::stl::hash::hash_t program_hash,
+                          bool program_cache_hit) {
     tt::log_debug(
-        tt::LogOp, "Launching Device Operation: \"{}\"",
-        get_operation_name<device_operation_t>(operation_attributes));
+        tt::LogOp, "Launching Device Operation: \"{}\"", get_operation_name<device_operation_t>(operation_attributes));
 
     tt::log_debug(tt::LogOp, "Program Hash: {}", program_hash);
     tt::log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
@@ -209,24 +207,25 @@ inline void log_operation(
     tt::log_debug(tt::LogOp, "");
 }
 
-
 #else
 
 template <typename device_operation_t>
-inline void log_operation(
-    std::size_t device_operation_id,
-    std::size_t device_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
-    bool program_cache_hit) {}
+inline void log_operation(std::size_t device_operation_id,
+                          std::size_t device_id,
+                          const typename device_operation_t::operation_attributes_t& operation_attributes,
+                          const typename device_operation_t::tensor_args_t& tensor_args,
+                          tt::stl::hash::hash_t program_hash,
+                          bool program_cache_hit) {}
 
 #endif
 
-
-
 template <DeviceOperationConcept device_operation_t>
-void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
+void launch_on_worker_thread(auto cq_id,
+                             auto device_operation_id,
+                             const auto& operation_attributes,
+                             const auto& tensor_args,
+                             auto& tensor_return_value,
+                             auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
     auto& program_cache = device->program_cache;
@@ -241,13 +240,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     }
 
     log_operation<device_operation_t>(
-            device_operation_id,
-            device->id(),
-            operation_attributes,
-            tensor_args,
-            program_hash,
-            program_cache_hit
-        );
+        device_operation_id, device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
@@ -277,20 +270,19 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         program.set_runtime_id(device_operation_id);
 
         GraphTracker::instance().track_program(&program);
-        if(GraphTracker::instance().hook_program(&program)) {
+        if (GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
         enqueue_or_launch_program(program);
 
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
-            program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
+        TracyOpTTNNDevice(device_operation_t{},
+                          device_operation_id,
+                          device->id(),
+                          program,
+                          operation_attributes,
+                          tensor_args,
+                          tensor_return_value);
 
     } else {
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -306,20 +298,19 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         program->set_runtime_id(device_operation_id);
 
         GraphTracker::instance().track_program(program.get());
-        if(GraphTracker::instance().hook_program(program.get())) {
+        if (GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
         enqueue_or_launch_program(*program);
 
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
-            *program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
+        TracyOpTTNNDevice(device_operation_t{},
+                          device_operation_id,
+                          device->id(),
+                          *program,
+                          operation_attributes,
+                          tensor_args,
+                          tensor_return_value);
     }
 }
 
@@ -334,19 +325,22 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
-    launch_on_worker_thread<device_operation_t>(cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
+    launch_on_worker_thread<device_operation_t>(
+        cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
     return tensor_return_value;
 }
 
 template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
+typename device_operation_t::tensor_args_t get_shard_tensor_args(
+    std::size_t index,
+    auto device,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{
-            DeviceStorage{storage.get_buffer_for_device(device)},
-            storage.get_tensor_shape_for_device(device),
-            tensor.get_dtype(),
-            tensor.get_layout()};
+        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)},
+                      storage.get_tensor_shape_for_device(device),
+                      tensor.get_dtype(),
+                      tensor.get_layout()};
     };
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
@@ -355,7 +349,8 @@ static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vecto
     return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
 }
 
-static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
+static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,
+                                                                std::vector<std::vector<Tensor>>& output_shards) {
     auto& first_shard = output_shards[0];
 
     std::vector<Tensor> output;
@@ -371,7 +366,9 @@ static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storag
     return output;
 }
 
-static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(auto& old_storage, std::vector<std::vector<std::optional<Tensor>>>& output_shards) {
+static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(
+    auto& old_storage,
+    std::vector<std::vector<std::optional<Tensor>>>& output_shards) {
     auto& first_shard = output_shards[0];
 
     std::vector<std::optional<Tensor>> output;
@@ -391,7 +388,7 @@ static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(a
     return output;
 }
 
-template<typename T>
+template <typename T>
 static T make_tensor_return_value_from_shards(auto& old_storage, std::vector<T>& output_shards) {
     // TODO: add logic to handle all types we want to support generically
     TT_THROW("make_tensor_return_value_from_shards is not implemented for this type. Please add an overload");
@@ -423,14 +420,13 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
 
         // Launch each shard
         for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            shard_futures.emplace_back(
-                std::async(
-                    std::launch::async,
-                    [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
-                        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-                        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-                        return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
-                    }));
+            shard_futures.emplace_back(std::async(
+                std::launch::async, [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
+                    auto device = storage.get_buffer_for_device_id(shard_index)->device();
+                    auto shard_tensor_args =
+                        get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
+                    return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
+                }));
         }
 
         // Combine shards into a multi-device storage
@@ -441,7 +437,8 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
         for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
             auto device = storage.get_buffer_for_device_id(shard_index)->device();
             auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-            outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
+            outputs.push_back(
+                launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
         }
     }
 
@@ -456,8 +453,8 @@ typename device_operation_t::tensor_return_value_t invoke(
     ZoneScopedN("Run Device Operation");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
-    GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
-
+    GraphTracker::instance().track_function_start(
+        get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
     static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
@@ -473,8 +470,7 @@ typename device_operation_t::tensor_return_value_t invoke(
                 return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
             } else if constexpr (std::is_same_v<storage_t, tt::tt_metal::MultiDeviceStorage>) {
                 return detail::launch_on_multi_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            }
-            else {
+            } else {
                 TT_THROW("Unsupported storage type");
             }
         },
@@ -483,7 +479,8 @@ typename device_operation_t::tensor_return_value_t invoke(
     // Should every output tensor be tracked?
     /*
     if (GraphTracker::instance().is_enabled()) {
-        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, tensor_return_value);
+        tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id,
+    tensor_return_value);
     }
     */
 

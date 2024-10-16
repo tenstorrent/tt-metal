@@ -11,20 +11,18 @@
 namespace ttnn::operations::experimental::ssm {
 
 struct ExecuteRepeatAndInterleaveEltwiseMul {
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& a,
-        const Tensor& b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+    static ttnn::Tensor invoke(uint8_t queue_id,
+                               const Tensor& a,
+                               const Tensor& b,
+                               const std::optional<MemoryConfig>& memory_config = std::nullopt,
+                               const std::optional<DataType> dtype = std::nullopt,
+                               const std::optional<MathFidelity> math_fidelity = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        const Tensor& a,
-        const Tensor& b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
+    static ttnn::Tensor invoke(const Tensor& a,
+                               const Tensor& b,
+                               const std::optional<MemoryConfig>& memory_config = std::nullopt,
+                               const std::optional<DataType> dtype = std::nullopt,
+                               const std::optional<MathFidelity> math_fidelity = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ssm

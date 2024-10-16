@@ -26,8 +26,10 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape 
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
+tt::tt_metal::LegacyShape get_output_grad_shape(const Tensor &output_grad,
+                                                const Tensor &input_grad,
+                                                const std::vector<int64_t> &dims,
+                                                const bool &keepdim) {
     if (keepdim) {
         return output_grad.get_shape().value;
     }
@@ -51,11 +53,10 @@ tt::tt_metal::LegacyShape get_output_grad_shape(
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
 
-MorehMeanBackwardOperation::MorehMeanBackwardFactory::cached_program_t
-MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output) {
+MorehMeanBackwardOperation::MorehMeanBackwardFactory::cached_program_t MorehMeanBackwardOperation::
+    MorehMeanBackwardFactory::create(const operation_attributes_t &operation_attributes,
+                                     const tensor_args_t &tensor_args,
+                                     tensor_return_value_t &output) {
     const auto &output_grad = tensor_args.output_grad;
     const auto &input_grad = output;
     auto keepdim = operation_attributes.keepdim;
@@ -108,28 +109,26 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
-    const auto
-        [num_cores_to_be_used,
-         all_cores,
-         core_group_1,
-         core_group_2,
-         num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
+    const auto [num_cores_to_be_used,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_input_grad_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CB::c_in0, 2},  // input
-            {tt::CB::c_in1, 1},  // zero
-            {tt::CB::c_in2, 1},  // scalar
-            {tt::CB::c_intermed0, 1},
-            {tt::CB::c_out0, 2},  // output
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  cb_data_format,
+                                                  {
+                                                      {tt::CB::c_in0, 2},  // input
+                                                      {tt::CB::c_in1, 1},  // zero
+                                                      {tt::CB::c_in2, 1},  // scalar
+                                                      {tt::CB::c_intermed0, 1},
+                                                      {tt::CB::c_out0, 2},  // output
+                                                  });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -167,12 +166,11 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
             {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
         },
-        tt::operations::primary::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .math_approx_mode = math_approx_mode,
-            .defines = compute_defines});
+        tt::operations::primary::ComputeKernelConfig{.math_fidelity = math_fidelity,
+                                                     .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                     .unpack_to_dest_mode = unpack_to_dest_mode,
+                                                     .math_approx_mode = math_approx_mode,
+                                                     .defines = compute_defines});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp

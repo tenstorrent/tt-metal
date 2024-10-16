@@ -30,17 +30,16 @@ void py_module(py::module& module) {
     )doc");
 
     matmul_multi_core_reuse_program_config
-        .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
-            py::kw_only(),
-            py::arg("compute_with_storage_grid_size"),
-            py::arg("in0_block_w").noconvert(),
-            py::arg("out_subblock_h").noconvert(),
-            py::arg("out_subblock_w").noconvert(),
-            py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert())
-        .def_readwrite(
-            "compute_with_storage_grid_size", &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
+        .def(py::init<CoreCoord, std::size_t, std::size_t, std::size_t, std::size_t, std::size_t>(),
+             py::kw_only(),
+             py::arg("compute_with_storage_grid_size"),
+             py::arg("in0_block_w").noconvert(),
+             py::arg("out_subblock_h").noconvert(),
+             py::arg("out_subblock_w").noconvert(),
+             py::arg("per_core_M").noconvert(),
+             py::arg("per_core_N").noconvert())
+        .def_readwrite("compute_with_storage_grid_size",
+                       &MatmulMultiCoreReuseProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w)
@@ -54,30 +53,27 @@ void py_module(py::module& module) {
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config
-        .def(
-            py::init<
-                CoreCoord,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                bool,
-                std::optional<UnaryWithParam>,
-                bool>(),
-            py::kw_only(),
-            py::arg("compute_with_storage_grid_size"),
-            py::arg("in0_block_w").noconvert(),
-            py::arg("out_subblock_h").noconvert(),
-            py::arg("out_subblock_w").noconvert(),
-            py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert(),
-            py::arg("transpose_mcast").noconvert(),
-            py::arg("fused_activation"),
-            py::arg("fuse_batch").noconvert() = true)
-        .def_readwrite(
-            "compute_with_storage_grid_size",
-            &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
+        .def(py::init<CoreCoord,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      bool,
+                      std::optional<UnaryWithParam>,
+                      bool>(),
+             py::kw_only(),
+             py::arg("compute_with_storage_grid_size"),
+             py::arg("in0_block_w").noconvert(),
+             py::arg("out_subblock_h").noconvert(),
+             py::arg("out_subblock_w").noconvert(),
+             py::arg("per_core_M").noconvert(),
+             py::arg("per_core_N").noconvert(),
+             py::arg("transpose_mcast").noconvert(),
+             py::arg("fused_activation"),
+             py::arg("fuse_batch").noconvert() = true)
+        .def_readwrite("compute_with_storage_grid_size",
+                       &MatmulMultiCoreReuseMultiCastProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w)
@@ -94,30 +90,27 @@ void py_module(py::module& module) {
     )doc");
 
     matmul_multi_core_reuse_multicast_1d_program_config
-        .def(
-            py::init<
-                CoreCoord,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                std::size_t,
-                bool,
-                std::optional<UnaryWithParam>,
-                bool>(),
-            py::kw_only(),
-            py::arg("compute_with_storage_grid_size"),
-            py::arg("in0_block_w").noconvert(),
-            py::arg("out_subblock_h").noconvert(),
-            py::arg("out_subblock_w").noconvert(),
-            py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert(),
-            py::arg("fuse_batch").noconvert(),
-            py::arg("fused_activation"),
-            py::arg("mcast_in0").noconvert())
-        .def_readwrite(
-            "compute_with_storage_grid_size",
-            &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
+        .def(py::init<CoreCoord,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      std::size_t,
+                      bool,
+                      std::optional<UnaryWithParam>,
+                      bool>(),
+             py::kw_only(),
+             py::arg("compute_with_storage_grid_size"),
+             py::arg("in0_block_w").noconvert(),
+             py::arg("out_subblock_h").noconvert(),
+             py::arg("out_subblock_w").noconvert(),
+             py::arg("per_core_M").noconvert(),
+             py::arg("per_core_N").noconvert(),
+             py::arg("fuse_batch").noconvert(),
+             py::arg("fused_activation"),
+             py::arg("mcast_in0").noconvert())
+        .def_readwrite("compute_with_storage_grid_size",
+                       &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w)
         .def_readwrite("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h)
         .def_readwrite("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w)
@@ -134,22 +127,20 @@ void py_module(py::module& module) {
     )doc");
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
-        .def(
-            py::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
-            py::kw_only(),
-            py::arg("in0_block_w").noconvert(),
-            py::arg("per_core_M").noconvert(),
-            py::arg("per_core_N").noconvert(),
-            py::arg("fused_activation"))
+        .def(py::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>>(),
+             py::kw_only(),
+             py::arg("in0_block_w").noconvert(),
+             py::arg("per_core_M").noconvert(),
+             py::arg("per_core_N").noconvert(),
+             py::arg("fused_activation"))
         .def_readwrite("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w)
         .def_readwrite("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M)
         .def_readwrite("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::fused_activation);
 
-    bind_registered_operation(
-        module,
-        ::ttnn::matmul,
-        R"doc(
+    bind_registered_operation(module,
+                              ::ttnn::matmul,
+                              R"doc(
         Returns the matrix product of two tensors.
 
         The input tensors need to be tiled. Therefore, the input tensors have to be
@@ -268,50 +259,48 @@ void py_module(py::module& module) {
             >>> print(output.shape)
             [1, 10, 64, 128]
         )doc",
-        ttnn::pybind_overload_t{
-            [](decltype(::ttnn::matmul)& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const bool transpose_a,
-               const bool transpose_b,
-               const std::optional<const ttnn::MemoryConfig> memory_config,
-               const std::optional<const DataType> dtype,
-               const std::optional<const MatmulProgramConfig> program_config,
-               const std::optional<const std::string>& activation,
-               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    transpose_a,
-                    transpose_b,
-                    memory_config,
-                    dtype,
-                    program_config,
-                    activation,
-                    compute_kernel_config,
-                    core_grid,
-                    output_tile);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("transpose_a") = false,
-            py::arg("transpose_b") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("program_config") = std::nullopt,
-            py::arg("activation") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("core_grid") = std::nullopt,
-            py::arg("output_tile") = std::nullopt,
-        });
+                              ttnn::pybind_overload_t{
+                                  [](decltype(::ttnn::matmul)& self,
+                                     const ttnn::Tensor& input_tensor_a,
+                                     const ttnn::Tensor& input_tensor_b,
+                                     const bool transpose_a,
+                                     const bool transpose_b,
+                                     const std::optional<const ttnn::MemoryConfig> memory_config,
+                                     const std::optional<const DataType> dtype,
+                                     const std::optional<const MatmulProgramConfig> program_config,
+                                     const std::optional<const std::string>& activation,
+                                     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+                                     const std::optional<const ttnn::CoreGrid> core_grid,
+                                     const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+                                      return self(input_tensor_a,
+                                                  input_tensor_b,
+                                                  transpose_a,
+                                                  transpose_b,
+                                                  memory_config,
+                                                  dtype,
+                                                  program_config,
+                                                  activation,
+                                                  compute_kernel_config,
+                                                  core_grid,
+                                                  output_tile);
+                                  },
+                                  py::arg("input_tensor_a"),
+                                  py::arg("input_tensor_b"),
+                                  py::kw_only(),
+                                  py::arg("transpose_a") = false,
+                                  py::arg("transpose_b") = false,
+                                  py::arg("memory_config") = std::nullopt,
+                                  py::arg("dtype") = std::nullopt,
+                                  py::arg("program_config") = std::nullopt,
+                                  py::arg("activation") = std::nullopt,
+                                  py::arg("compute_kernel_config") = std::nullopt,
+                                  py::arg("core_grid") = std::nullopt,
+                                  py::arg("output_tile") = std::nullopt,
+                              });
 
-    bind_registered_operation(
-        module,
-        ::ttnn::linear,
-        R"doc(
+    bind_registered_operation(module,
+                              ::ttnn::linear,
+                              R"doc(
         Returns the linear transformation of the inputs.
 
         The limitations and behaviours are the same as for matmul.
@@ -344,48 +333,47 @@ void py_module(py::module& module) {
             >>> print(output.shape)
             [10, 64, 128]
         )doc",
-        ttnn::pybind_overload_t{
-            [](decltype(::ttnn::linear)& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const ttnn::Tensor>& bias,
-               const bool transpose_a,
-               const bool transpose_b,
-               const std::optional<const ttnn::MemoryConfig> memory_config,
-               const std::optional<const DataType> dtype,
-               const std::optional<const MatmulProgramConfig> program_config,
-               const std::optional<const std::string>& activation,
-               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    bias,
-                    transpose_a,
-                    transpose_b,
-                    memory_config,
-                    dtype,
-                    program_config,
-                    activation,
-                    compute_kernel_config,
-                    core_grid,
-                    output_tile);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("bias") = std::nullopt,
-            py::arg("transpose_a") = false,
-            py::arg("transpose_b") = false,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("program_config") = std::nullopt,
-            py::arg("activation") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("core_grid") = std::nullopt,
-            py::arg("output_tile") = std::nullopt,
-        });
+                              ttnn::pybind_overload_t{
+                                  [](decltype(::ttnn::linear)& self,
+                                     const ttnn::Tensor& input_tensor_a,
+                                     const ttnn::Tensor& input_tensor_b,
+                                     const std::optional<const ttnn::Tensor>& bias,
+                                     const bool transpose_a,
+                                     const bool transpose_b,
+                                     const std::optional<const ttnn::MemoryConfig> memory_config,
+                                     const std::optional<const DataType> dtype,
+                                     const std::optional<const MatmulProgramConfig> program_config,
+                                     const std::optional<const std::string>& activation,
+                                     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+                                     const std::optional<const ttnn::CoreGrid> core_grid,
+                                     const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+                                      return self(input_tensor_a,
+                                                  input_tensor_b,
+                                                  bias,
+                                                  transpose_a,
+                                                  transpose_b,
+                                                  memory_config,
+                                                  dtype,
+                                                  program_config,
+                                                  activation,
+                                                  compute_kernel_config,
+                                                  core_grid,
+                                                  output_tile);
+                                  },
+                                  py::arg("input_tensor_a"),
+                                  py::arg("input_tensor_b"),
+                                  py::kw_only(),
+                                  py::arg("bias") = std::nullopt,
+                                  py::arg("transpose_a") = false,
+                                  py::arg("transpose_b") = false,
+                                  py::arg("memory_config") = std::nullopt,
+                                  py::arg("dtype") = std::nullopt,
+                                  py::arg("program_config") = std::nullopt,
+                                  py::arg("activation") = std::nullopt,
+                                  py::arg("compute_kernel_config") = std::nullopt,
+                                  py::arg("core_grid") = std::nullopt,
+                                  py::arg("output_tile") = std::nullopt,
+                              });
 }
 
 }  // namespace matmul

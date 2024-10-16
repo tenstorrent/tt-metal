@@ -17,35 +17,31 @@ namespace detail {
 
 template <typename data_movement_operation_t>
 void bind_reshape(pybind11::module& module, const data_movement_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               int W,
-               int Z,
-               int Y,
-               int X,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, W, Z, Y, X, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg("W"),
-            py::arg("Z"),
-            py::arg("Y"),
-            py::arg("X"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0
-            }
-        );
+    bind_registered_operation(module,
+                              operation,
+                              doc,
+                              ttnn::pybind_overload_t{[](const data_movement_operation_t& self,
+                                                         const ttnn::Tensor& input_tensor,
+                                                         int W,
+                                                         int Z,
+                                                         int Y,
+                                                         int X,
+                                                         const std::optional<ttnn::MemoryConfig>& memory_config,
+                                                         uint8_t queue_id) -> ttnn::Tensor {
+                                                          return self(
+                                                              queue_id, input_tensor, W, Z, Y, X, memory_config);
+                                                      },
+                                                      py::arg("input_tensor"),
+                                                      py::arg("W"),
+                                                      py::arg("Z"),
+                                                      py::arg("Y"),
+                                                      py::arg("X"),
+                                                      py::kw_only(),
+                                                      py::arg("memory_config") = std::nullopt,
+                                                      py::arg("queue_id") = 0});
 }
 
 }  // namespace detail
-
 
 void py_bind_reshape(pybind11::module& module) {
     detail::bind_reshape(

@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t cache_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
     const uint32_t index_tensor_addr = get_arg_val<uint32_t>(2);
     const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(18);
 
     const uint32_t St = get_compile_time_arg_val(19);
-    uint32_t semaphore_addr   = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
+    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for receiver
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -52,19 +52,13 @@ void kernel_main() {
     uint32_t cache_id = cache_start_id;
 
     const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr,
-        .page_size = cache_tile_bytes,
-        .data_format = cache_data_format
-    };
+        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
 
     bool skip_update = false;
 
     if constexpr (use_index_tensor) {
-
-        const InterleavedAddrGen<index_is_dram> addrg = {
-            .bank_base_address = index_tensor_addr,
-            .page_size = index_stick_size_B
-        };
+        const InterleavedAddrGen<index_is_dram> addrg = {.bank_base_address = index_tensor_addr,
+                                                         .page_size = index_stick_size_B};
 
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
@@ -82,16 +76,15 @@ void kernel_main() {
         } else {
             if constexpr (is_paged_cache) {
                 const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
-                    .bank_base_address = page_table_tensor_addr,
-                    .page_size = page_table_stick_size
-                };
+                    .bank_base_address = page_table_tensor_addr, .page_size = page_table_stick_size};
                 cb_reserve_back(page_table_cb_id, 1);
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
                 uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
                 noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
                 noc_async_read_barrier();
                 cb_push_back(page_table_cb_id, 1);
-                volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+                volatile tt_l1_ptr uint32_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 
                 const uint32_t virtual_block_id = update_idx / block_size;
                 const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
@@ -110,7 +103,8 @@ void kernel_main() {
 
     if (wait_to_start_signal) {
         // wait for signal to start pushing tensor
-        volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
+        volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
         noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, 1);
         noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
     }
@@ -126,9 +120,8 @@ void kernel_main() {
 
             noc_async_read_barrier();
         }
-        cb_push_back(cache_cb_id, Wt );
+        cb_push_back(cache_cb_id, Wt);
 
         cache_id += head_offset_t;
     }
-
 }

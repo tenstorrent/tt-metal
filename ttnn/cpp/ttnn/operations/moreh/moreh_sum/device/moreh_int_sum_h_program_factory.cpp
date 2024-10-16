@@ -41,13 +41,12 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
-    log_debug(
-        tt::LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
+    log_debug(tt::LogOp,
+              "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+              math_fidelity,
+              math_approx_mode,
+              fp32_dest_acc_en,
+              packer_l1_acc);
 
     if (!fp32_dest_acc_en) {
         log_warning(tt::LogOp, "fp32_dest_acc_en should be set for integer sum");
@@ -65,31 +64,32 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     const uint32_t in1_t{1};        // mask
     const uint32_t intermed0_t{1};  // accumalated sum
     const uint32_t out0_t{2};       // output
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_cols);
+    const auto [num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_cols_per_core_group_1,
+                num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_cols);
 
-    log_debug(
-        tt::LogOp,
-        "num_tiles {}, num_cols {}, num_cols_per_core_group_1 {}, num_cols_per_core_group_2 {}",
-        num_tiles,
-        num_cols,
-        num_cols_per_core_group_1,
-        num_cols_per_core_group_2);
+    log_debug(tt::LogOp,
+              "num_tiles {}, num_cols {}, num_cols_per_core_group_1 {}, num_cols_per_core_group_2 {}",
+              num_tiles,
+              num_cols,
+              num_cols_per_core_group_1,
+              num_cols_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CB::c_in0, in0_t},              // input
-            {tt::CB::c_in1, in1_t},              // mask
-            {tt::CB::c_intermed0, intermed0_t},  // accumalated sum
-            {tt::CB::c_out0, out0_t},            // output
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  cb_data_format,
+                                                  {
+                                                      {tt::CB::c_in0, in0_t},              // input
+                                                      {tt::CB::c_in1, in1_t},              // mask
+                                                      {tt::CB::c_intermed0, intermed0_t},  // accumalated sum
+                                                      {tt::CB::c_out0, out0_t},            // output
+                                                  });
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
@@ -112,10 +112,9 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{
-        num_cols_per_core_group_1,  // num_cols
-        Ht,                         // Ht
-        origin_H};
+    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1,  // num_cols
+                                                     Ht,                         // Ht
+                                                     origin_H};
 
     std::map<string, string> compute_defines;
     if (fp32_dest_acc_en) {
@@ -123,21 +122,20 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
     }
     const auto compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_int_sum_h.cpp"};
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernel_1_id =
+        tt::operations::primary::CreateComputeKernel(program,
+                                                     compute_kernel_file,
+                                                     {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
+                                                     compute_defines,
+                                                     math_fidelity,
+                                                     fp32_dest_acc_en,
+                                                     math_approx_mode);
 
     std::optional<KernelHandle> compute_kernel_2_id{std::nullopt};
     if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{
-            num_cols_per_core_group_2,  // num_cols
-            Ht,                         // Ht
-            origin_H};
+        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2,  // num_cols
+                                                         Ht,                         // Ht
+                                                         origin_H};
         compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
             program,
             compute_kernel_file,
@@ -160,25 +158,23 @@ MorehSumOperation::MorehSumHIntFactory::cached_program_t MorehSumOperation::More
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_cols_read / Wt * HtWt + num_cols_read % Wt,
-             num_cols_read % Wt,
-             num_cols_per_core,
-             mask_h});
+        SetRuntimeArgs(program,
+                       reader_kernel_id,
+                       core,
+                       {input.buffer()->address(),
+                        num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                        num_cols_read % Wt,
+                        num_cols_per_core,
+                        mask_h});
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {
-                output.buffer()->address(),
-                num_cols_per_core,  // number of tiles to write
-                num_cols_read       // output tile start index
-            });
+        SetRuntimeArgs(program,
+                       writer_kernel_id,
+                       core,
+                       {
+                           output.buffer()->address(),
+                           num_cols_per_core,  // number of tiles to write
+                           num_cols_read       // output tile start index
+                       });
 
         num_cols_read += num_cols_per_core;
     }

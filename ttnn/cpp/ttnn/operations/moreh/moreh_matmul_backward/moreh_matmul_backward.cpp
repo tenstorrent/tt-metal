@@ -82,7 +82,8 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
 }
 
 std::vector<Tensor> MorehMatmulBackward::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& output_grad = input_tensors.at(0);
     const auto& input = input_tensors.at(1);
     const auto& other = input_tensors.at(2);

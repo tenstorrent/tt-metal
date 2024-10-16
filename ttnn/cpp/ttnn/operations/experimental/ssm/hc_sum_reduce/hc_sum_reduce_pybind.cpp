@@ -26,19 +26,20 @@ void bind_hc_sum_reduce(py::module& module) {
         module,
         ttnn::experimental::hc_sum_reduce,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               const std::optional<MathFidelity> math_fidelity,
-               uint8_t queue_id) { return self(queue_id, input, memory_config, dtype, math_fidelity); },
-            py::arg("input"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("math_fidelity") = std::nullopt,
-            py::arg("queue_id") = 0});
+        ttnn::pybind_overload_t{[](const OperationType& self,
+                                   const ttnn::Tensor& input,
+                                   const std::optional<MemoryConfig>& memory_config,
+                                   const std::optional<DataType> dtype,
+                                   const std::optional<MathFidelity> math_fidelity,
+                                   uint8_t queue_id) {
+                                    return self(queue_id, input, memory_config, dtype, math_fidelity);
+                                },
+                                py::arg("input"),
+                                py::kw_only(),
+                                py::arg("memory_config") = std::nullopt,
+                                py::arg("dtype") = std::nullopt,
+                                py::arg("math_fidelity") = std::nullopt,
+                                py::arg("queue_id") = 0});
 }
 
 }  // namespace ttnn::operations::experimental::ssm::detail

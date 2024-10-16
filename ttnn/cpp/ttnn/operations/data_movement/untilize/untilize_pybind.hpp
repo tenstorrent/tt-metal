@@ -48,7 +48,9 @@ void bind_untilize(py::module &module) {
                const std::optional<MemoryConfig> &memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize); },
+               uint8_t queue_id) {
+                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize);
+            },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,

@@ -20,27 +20,25 @@ std::vector<std::optional<Tensor>> MorehBMMBackward::invoke(
     std::vector<std::optional<Tensor>> outputs(2);
     if (are_required_outputs.at(0)) {
         TT_FATAL(input_grad.has_value(), "input_grad needs to have a value when input_requires_grad is True.");
-        outputs[0] = ttnn::moreh_matmul(
-            output_grad,
-            mat2,
-            false,
-            true,
-            input_grad.value(),
-            std::nullopt,
-            input_grad_memory_config,
-            compute_kernel_config);
+        outputs[0] = ttnn::moreh_matmul(output_grad,
+                                        mat2,
+                                        false,
+                                        true,
+                                        input_grad.value(),
+                                        std::nullopt,
+                                        input_grad_memory_config,
+                                        compute_kernel_config);
     }
     if (are_required_outputs.at(1)) {
         TT_FATAL(mat2_grad.has_value(), "mat2_grad needs to have a value when mat2_requires_grad is True.");
-        outputs[1] = ttnn::moreh_matmul(
-            input,
-            output_grad,
-            true,
-            false,
-            mat2_grad.value(),
-            std::nullopt,
-            mat2_grad_memory_config,
-            compute_kernel_config);
+        outputs[1] = ttnn::moreh_matmul(input,
+                                        output_grad,
+                                        true,
+                                        false,
+                                        mat2_grad.value(),
+                                        std::nullopt,
+                                        mat2_grad_memory_config,
+                                        compute_kernel_config);
     }
     return outputs;
 }

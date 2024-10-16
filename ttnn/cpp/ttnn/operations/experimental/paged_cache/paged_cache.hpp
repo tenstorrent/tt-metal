@@ -11,13 +11,22 @@ namespace ttnn {
 namespace operations::experimental::paged_cache {
 
 struct PagedUpdateCacheOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& cache_tensor, const Tensor& input_tensor, const std::vector<uint32_t> update_idxs, const std::optional<const Tensor> update_idxs_tensor, const std::optional<bool> share_cache, const std::optional<const Tensor> page_table, const uint32_t batch_offset, std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    static ttnn::Tensor invoke(const Tensor& cache_tensor,
+                               const Tensor& input_tensor,
+                               const std::vector<uint32_t> update_idxs,
+                               const std::optional<const Tensor> update_idxs_tensor,
+                               const std::optional<bool> share_cache,
+                               const std::optional<const Tensor> page_table,
+                               const uint32_t batch_offset,
+                               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 struct PagedFillCacheOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& cache_tensor, const Tensor& input_tensor, const Tensor& page_table, const uint32_t batch_idx, std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+    static ttnn::Tensor invoke(const Tensor& cache_tensor,
+                               const Tensor& input_tensor,
+                               const Tensor& page_table,
+                               const uint32_t batch_idx,
+                               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 
 }  // namespace operations::experimental::paged_cache

@@ -94,15 +94,19 @@ struct UnaryWithParam {
     UnaryWithParam(UnaryOpType op_type, float param) : op_type{op_type}, params{param} {}
     UnaryWithParam(UnaryOpType op_type) : op_type{op_type} {}
 
-    bool has_parameter() const { return params.size() > 0; }
+    bool has_parameter() const {
+        return params.size() > 0;
+    }
 
     static constexpr auto attribute_names = std::forward_as_tuple("op_type", "param");
-    const auto attribute_values() const { return std::forward_as_tuple(this->op_type, this->params); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->op_type, this->params);
+    }
 };
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
-}
+}  // namespace ttnn::operations::unary
 
 namespace tt::stl::json {
 

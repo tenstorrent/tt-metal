@@ -20,7 +20,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     auto output = output_tensor;
 
     auto memory_config = operation_attributes.memory_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
@@ -41,13 +41,12 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
-    log_debug(
-        tt::LogOp,
-        "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
-        math_fidelity,
-        math_approx_mode,
-        fp32_dest_acc_en,
-        packer_l1_acc);
+    log_debug(tt::LogOp,
+              "math_fidelity {} math_approx_mode {} fp32_dest_acc_en {} packer_l1_acc {}",
+              math_fidelity,
+              math_approx_mode,
+              fp32_dest_acc_en,
+              packer_l1_acc);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -71,8 +70,8 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto num_cols = other_dims_product * Wt;
 
-    const CoreRange all_core_range(
-        {0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
+    const CoreRange all_core_range({0, 0},
+                                   {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
         tt::operations::primary::split_work_to_cores(all_core_range, num_cols);
@@ -86,8 +85,8 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size,
+                                           {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
     cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -116,8 +115,8 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     CBHandle cb_output;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size,
+                                           {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
     cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     tt::tt_metal::Buffer* src0_buffer = input.buffer();
@@ -154,46 +153,42 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         reduce_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                         // Ht
-        num_cols_per_core_group_1,  // Wt
-        1,                          // NC
-        origin_H};
+    vector<uint32_t> compute_kernel_args_group_1 = {Ht,                         // Ht
+                                                    num_cols_per_core_group_1,  // Wt
+                                                    1,                          // NC
+                                                    origin_H};
 
     vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
-    auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
-        program,
-        compute_kernel_name,
-        core_group_1,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
-            .defines = reduce_defines});
+    auto reduce_compute_kernel_group_1_id =
+        tt::tt_metal::CreateKernel(program,
+                                   compute_kernel_name,
+                                   core_group_1,
+                                   tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                                               .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                               .unpack_to_dest_mode = unpack_to_dest_mode,
+                                                               .math_approx_mode = math_approx_mode,
+                                                               .compile_args = compute_kernel_args_group_1,
+                                                               .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
-            Ht,                         // Ht
-            num_cols_per_core_group_2,  // Wt
-            1,                          // NC
-            origin_H};
+        vector<uint32_t> compute_kernel_args_group_2 = {Ht,                         // Ht
+                                                        num_cols_per_core_group_2,  // Wt
+                                                        1,                          // NC
+                                                        origin_H};
 
-        auto reduce_compute_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            compute_kernel_name,
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = reduce_defines});
+        auto reduce_compute_kernel_group_2_id =
+            tt::tt_metal::CreateKernel(program,
+                                       compute_kernel_name,
+                                       core_group_2,
+                                       tt::tt_metal::ComputeConfig{.math_fidelity = math_fidelity,
+                                                                   .fp32_dest_acc_en = fp32_dest_acc_en,
+                                                                   .unpack_to_dest_mode = unpack_to_dest_mode,
+                                                                   .math_approx_mode = math_approx_mode,
+                                                                   .compile_args = compute_kernel_args_group_2,
+                                                                   .defines = reduce_defines});
     }
 
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
@@ -206,36 +201,33 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {input.buffer()->address(),
-             num_cols_read / Wt * HtWt + num_cols_read % Wt,
-             num_cols_read % Wt,
-             num_cols_per_core,
-             mask_h});
+        tt::tt_metal::SetRuntimeArgs(program,
+                                     reader_kernel_id,
+                                     core,
+                                     {input.buffer()->address(),
+                                      num_cols_read / Wt * HtWt + num_cols_read % Wt,
+                                      num_cols_read % Wt,
+                                      num_cols_per_core,
+                                      mask_h});
 
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {
-                output.buffer()->address(),
-                num_cols_per_core,  // number of tiles to write
-                num_cols_read       // output tile start index
-            });
+        tt::tt_metal::SetRuntimeArgs(program,
+                                     writer_kernel_id,
+                                     core,
+                                     {
+                                         output.buffer()->address(),
+                                         num_cols_per_core,  // number of tiles to write
+                                         num_cols_read       // output tile start index
+                                     });
         num_cols_read += num_cols_per_core;
     }
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }
 
-void MorehSumOperation::MorehSumHFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+void MorehSumOperation::MorehSumHFactory::override_runtime_arguments(cached_program_t& cached_program,
+                                                                     const operation_attributes_t& operation_attributes,
+                                                                     const tensor_args_t& tensor_args,
+                                                                     tensor_return_value_t& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;

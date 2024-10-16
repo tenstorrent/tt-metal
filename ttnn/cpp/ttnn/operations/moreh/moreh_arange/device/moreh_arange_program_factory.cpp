@@ -26,13 +26,12 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     Program program = Program();
 
     // Create circular buffer
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        all_cores,
-        tt::tt_metal::datatype_to_dataformat_converter(dtype),
-        {
-            {tt::CB::c_out0, 1},
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  all_cores,
+                                                  tt::tt_metal::datatype_to_dataformat_converter(dtype),
+                                                  {
+                                                      {tt::CB::c_out0, 1},
+                                                  });
 
     // Create write kernel
     std::map<string, string> writer_defines;
@@ -64,13 +63,12 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
             num_tiles_per_core = num_tiles_per_core_group_2;
         else
             TT_FATAL(false, "Core not in specified core ranges");
-        std::vector<uint32_t> writer_args = {
-            output.buffer()->address(),
-            tile_offset,
-            num_tiles_per_core,
-            *reinterpret_cast<uint32_t*>(&start),
-            *reinterpret_cast<uint32_t*>(&step),
-            output.element_size()};
+        std::vector<uint32_t> writer_args = {output.buffer()->address(),
+                                             tile_offset,
+                                             num_tiles_per_core,
+                                             *reinterpret_cast<uint32_t*>(&start),
+                                             *reinterpret_cast<uint32_t*>(&step),
+                                             output.element_size()};
         SetRuntimeArgs(program, kernel_id, core, writer_args);
         tile_offset += num_tiles_per_core;
     }

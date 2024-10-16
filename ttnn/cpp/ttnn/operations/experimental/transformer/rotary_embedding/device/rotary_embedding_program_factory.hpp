@@ -16,8 +16,12 @@
 namespace tt {
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_multi_core(
-    const Tensor &input, const Tensor &cos, const Tensor &sin, Tensor &output, std::optional<uint32_t> token_idx, ttnn::DeviceComputeKernelConfig compute_kernel_config);
+operation::ProgramWithCallbacks rotary_embedding_multi_core(const Tensor &input,
+                                                            const Tensor &cos,
+                                                            const Tensor &sin,
+                                                            Tensor &output,
+                                                            std::optional<uint32_t> token_idx,
+                                                            ttnn::DeviceComputeKernelConfig compute_kernel_config);
 
 }  // namespace tt_metal
 }  // namespace tt

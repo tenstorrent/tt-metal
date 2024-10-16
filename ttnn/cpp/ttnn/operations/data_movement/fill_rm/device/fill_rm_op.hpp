@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-namespace ttnn::operations::data_movement{
+namespace ttnn::operations::data_movement {
 
 // Generates an NCHW row-major tensor and fill it with ones up to hOnes, wOnes in each HW tile
 // with the rest padded with zeros. So for H=2, W=3, hFill=1, wFill=2 the following tensor will be generated:
@@ -20,7 +20,7 @@ namespace ttnn::operations::data_movement{
 // H, W are expected to be multiples of 32
 // The 'any' Tensor arg is only used to pass the device and resulting tensor dtype
 // val_hi/lo are expected to be uint16 encodings of bfloat16 numbers, so 0x3f80 for 1.0 etc.
-struct FillRM  {
+struct FillRM {
     uint32_t N, C, H, W, hFill, wFill;
     float val_hi, val_lo;
     const MemoryConfig output_mem_config;
@@ -28,7 +28,8 @@ struct FillRM  {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    operation::ProgramWithCallbacks create_program(const std::vector<Tensor> &input_tensors,
+                                                   std::vector<Tensor> &output_tensors) const;
 };
 
 }  // namespace ttnn::operations::data_movement

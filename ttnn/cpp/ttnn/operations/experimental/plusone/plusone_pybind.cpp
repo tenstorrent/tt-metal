@@ -29,17 +29,13 @@ void bind_experimental_plusone_operation(py::module& module) {
         )doc";
 
     using OperationType = decltype(ttnn::plus_one);
-    bind_registered_operation(
-        module,
-        ttnn::plus_one,
-        doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor
-                ) {
-                    return self(input_tensor);
-                },
-                py::arg("input_tensor").noconvert()});
+    bind_registered_operation(module,
+                              ttnn::plus_one,
+                              doc,
+                              ttnn::pybind_overload_t{[](const OperationType& self, const ttnn::Tensor& input_tensor) {
+                                                          return self(input_tensor);
+                                                      },
+                                                      py::arg("input_tensor").noconvert()});
 }
 
 }  // namespace ttnn::operations::experimental::plusone::detail

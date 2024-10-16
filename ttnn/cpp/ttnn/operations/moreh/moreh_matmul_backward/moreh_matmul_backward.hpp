@@ -18,7 +18,8 @@ struct MorehMatmulBackward {
         const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
     static std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs);
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_inputs);
 
     static std::vector<bool> create_async_return_flag(
         const Tensor& output_grad,
@@ -33,7 +34,7 @@ struct MorehMatmulBackward {
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward
 
 namespace ttnn {
-constexpr auto moreh_matmul_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_matmul_backward",
-    ttnn::operations::moreh::moreh_matmul_backward::MorehMatmulBackward>();
-} // namespace ttnn
+constexpr auto moreh_matmul_backward =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_matmul_backward",
+                                                 ttnn::operations::moreh::moreh_matmul_backward::MorehMatmulBackward>();
+}  // namespace ttnn

@@ -8,7 +8,9 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-
-operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
+operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(const Tensor &a,
+                                                                  const Tensor &output,
+                                                                  uint32_t num_slices = 1,
+                                                                  uint32_t slice_index = 0);
 
 }

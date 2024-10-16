@@ -16,19 +16,20 @@ using namespace tt::constants;
 
 namespace ttnn::operations::data_movement {
 
-std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRangeSet &all_cores, const CoreCoord &logical_controller) {
+std::vector<CoreRange> get_multicast_regions(const Device* device,
+                                             const CoreRangeSet& all_cores,
+                                             const CoreCoord& logical_controller) {
     TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 
     std::vector<CoreRange> logical_core_ranges;
-    auto split_core_range_containing_controller = [&](const CoreRange &controller_core_range) {
+    auto split_core_range_containing_controller = [&](const CoreRange& controller_core_range) {
         TT_ASSERT(controller_core_range.start_coord == logical_controller);
-        CoreRange right_block(CoreCoord(logical_controller.x + 1, logical_controller.y), controller_core_range.end_coord);
-        CoreRange remaining_stick = CoreRange(
-            CoreCoord(logical_controller.x, logical_controller.y + 1),
-            CoreCoord(logical_controller.x, controller_core_range.end_coord.y)
-        );
+        CoreRange right_block(CoreCoord(logical_controller.x + 1, logical_controller.y),
+                              controller_core_range.end_coord);
+        CoreRange remaining_stick = CoreRange(CoreCoord(logical_controller.x, logical_controller.y + 1),
+                                              CoreCoord(logical_controller.x, controller_core_range.end_coord.y));
 
         logical_core_ranges.push_back(right_block);
         logical_core_ranges.push_back(remaining_stick);
@@ -54,9 +55,10 @@ std::vector<CoreRange> get_multicast_regions(const Device *device, const CoreRan
     return logical_core_ranges;
 }
 
-// This variant of move is invoked when the input buffer and output buffer overlap, which is possible because input buffer is deallocated before the op runs.
-// In this case, data in each core needs to be moved to a temporary local location before being copied into the output buffer
-operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input, Tensor &output) {
+// This variant of move is invoked when the input buffer and output buffer overlap, which is possible because input
+// buffer is deallocated before the op runs. In this case, data in each core needs to be moved to a temporary local
+// location before being copied into the output buffer
+operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
@@ -66,21 +68,24 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
     uint32_t page_size = input.buffer()->page_size();
 
     uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
-    tt::tt_metal::Device *device = output.device();
+    tt::tt_metal::Device* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
     const auto num_dram_banks = device->num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;
     uint32_t aligned_page_size = round_up_to_mul32(page_size);
-    tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
-		.set_page_size(cb_index, aligned_page_size);
+    tt::tt_metal::CircularBufferConfig cb_config =
+        tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
+            .set_page_size(cb_index, aligned_page_size);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
@@ -100,18 +105,21 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
 
     KernelHandle kernel_id = CreateKernel(
         program,
-        tilized ? "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp" : "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
+        tilized
+            ? "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/"
+              "move_stick_layout_interleaved_with_overlap.cpp",
         all_cores,
-        DataMovementConfig{.compile_args = compile_time_args}
-    );
+        DataMovementConfig{.compile_args = compile_time_args});
 
     const CoreCoord logical_controller = CoreCoord{0, 0};
     CoreCoord noc_controller = device->worker_core_from_logical_core(logical_controller);
     std::vector<CoreRange> logical_multicast_regions = get_multicast_regions(device, all_cores, logical_controller);
 
     std::vector<CoreRange> noc_multicast_regions;
-    for (const auto &logical_cr : logical_multicast_regions) {
-        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start_coord), device->worker_core_from_logical_core(logical_cr.end_coord));
+    for (const auto& logical_cr : logical_multicast_regions) {
+        CoreRange noc_cr(device->worker_core_from_logical_core(logical_cr.start_coord),
+                         device->worker_core_from_logical_core(logical_cr.end_coord));
         noc_multicast_regions.push_back(std::move(noc_cr));
     }
 
@@ -133,33 +141,31 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         }
 
         bool is_controller = (i == 0);
-        std::vector<uint32_t> runtime_args = {
-            src_buffer->address(),
-            dst_buffer->address(),
-            pages_handled_per_core,
-            num_pages_per_core,
-            semaphore_id,
-            (uint32_t)noc_controller.x,
-            (uint32_t)noc_controller.y,
-            /*control_value=*/(num_cores - 1),
-            (uint32_t)is_controller,
-            (uint32_t)range_0_noc.start_coord.x,
-            (uint32_t)range_0_noc.start_coord.y,
-            (uint32_t)range_0_noc.end_coord.x,
-            (uint32_t)range_0_noc.end_coord.y,
-            (uint32_t)logical_multicast_regions[0].size(),
-            (uint32_t)range_1_noc.start_coord.x,
-            (uint32_t)range_1_noc.start_coord.y,
-            (uint32_t)range_1_noc.end_coord.x,
-            (uint32_t)range_1_noc.end_coord.y,
-            (uint32_t)logical_multicast_regions[1].size(),
-            (uint32_t)noc_multicast_regions.back().start_coord.x,
-            (uint32_t)noc_multicast_regions.back().start_coord.y,
-            (uint32_t)noc_multicast_regions.back().end_coord.x,
-            (uint32_t)noc_multicast_regions.back().end_coord.y,
-            (uint32_t)logical_multicast_regions.back().size(),
-            (uint32_t)do_third_multicast
-        };
+        std::vector<uint32_t> runtime_args = {src_buffer->address(),
+                                              dst_buffer->address(),
+                                              pages_handled_per_core,
+                                              num_pages_per_core,
+                                              semaphore_id,
+                                              (uint32_t)noc_controller.x,
+                                              (uint32_t)noc_controller.y,
+                                              /*control_value=*/(num_cores - 1),
+                                              (uint32_t)is_controller,
+                                              (uint32_t)range_0_noc.start_coord.x,
+                                              (uint32_t)range_0_noc.start_coord.y,
+                                              (uint32_t)range_0_noc.end_coord.x,
+                                              (uint32_t)range_0_noc.end_coord.y,
+                                              (uint32_t)logical_multicast_regions[0].size(),
+                                              (uint32_t)range_1_noc.start_coord.x,
+                                              (uint32_t)range_1_noc.start_coord.y,
+                                              (uint32_t)range_1_noc.end_coord.x,
+                                              (uint32_t)range_1_noc.end_coord.y,
+                                              (uint32_t)logical_multicast_regions[1].size(),
+                                              (uint32_t)noc_multicast_regions.back().start_coord.x,
+                                              (uint32_t)noc_multicast_regions.back().start_coord.y,
+                                              (uint32_t)noc_multicast_regions.back().end_coord.x,
+                                              (uint32_t)noc_multicast_regions.back().end_coord.y,
+                                              (uint32_t)logical_multicast_regions.back().size(),
+                                              (uint32_t)do_third_multicast};
         if (!tilized) {
             runtime_args.push_back(page_size);
             runtime_args.push_back(aligned_page_size);
@@ -169,14 +175,17 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor &input
         pages_handled_per_core += num_pages_per_core;
     }
 
-    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](const Program &program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>& output_buffers) {
+    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto src_buffer = input_buffers.at(0);
         auto dst_buffer = output_buffers.at(0);
 
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto &runtime_args = GetRuntimeArgs(program, kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
             }
@@ -197,9 +206,9 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto input_shape = input.get_legacy_shape();
     auto input_dtype = input.get_dtype();
     auto input_layout = input.get_layout();
-    TT_FATAL(
-        input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-        shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(), "Error");
+    TT_FATAL(input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
+                 shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(),
+             "Error");
     const uint32_t src_cb_sharded = tt::CB::c_in0;
     const uint32_t dst_cb_sharded = tt::CB::c_in1;
     uint32_t tile_size_bytes = tile_size(cb_data_format);
@@ -229,17 +238,16 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
 
     auto input_buffer_address = input.buffer()->address();
     auto output_buffer_address = output.buffer()->address();
-    TT_FATAL(
-        output_buffer_address > input_buffer_address,
-        "Expected output buffer to be allocated at a higher address than input buffer");
+    TT_FATAL(output_buffer_address > input_buffer_address,
+             "Expected output buffer to be allocated at a higher address than input buffer");
     uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(input.buffer()->alignment() == output.buffer()->alignment(),
-        "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        input.buffer()->alignment(), output.buffer()->alignment());
-    TT_FATAL(
-        move_chunk_size_bytes % input.buffer()->alignment() == 0,
-        "Expected chunk size bytes to move to be {} byte aligned.",
-        input.buffer()->alignment());
+             "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
+             input.buffer()->alignment(),
+             output.buffer()->alignment());
+    TT_FATAL(move_chunk_size_bytes % input.buffer()->alignment() == 0,
+             "Expected chunk size bytes to move to be {} byte aligned.",
+             input.buffer()->alignment());
     uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
@@ -287,9 +295,9 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks move_multi_core(const Tensor &input, Tensor &output) {
+operation::ProgramWithCallbacks move_multi_core(const Tensor& input, Tensor& output) {
     bool src_and_dst_in_l1 = input.memory_config().is_l1() && output.memory_config().is_l1();
     return copy_multi_core(input, output, src_and_dst_in_l1);
 }
 
-}
+}  // namespace ttnn::operations::data_movement

@@ -185,12 +185,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2_impl_3d(
@@ -366,12 +365,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2_impl_4d(
@@ -555,12 +553,11 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = core_h}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id,
+             .unary_writer_kernel_id = writer_kernel_id,
+             .num_cores = num_cores,
+             .num_cores_y = core_h}};
 }
 
 MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2DeviceOperation::Factory::create(

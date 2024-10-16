@@ -24,11 +24,10 @@ void py_graph_module(py::module& m) {
         R"doc(begin_graph_capture()
     )doc";
 
-    m.def(
-        "begin_graph_capture",
-        &GraphProcessor::begin_graph_capture,
-        doc_begin,
-        py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
+    m.def("begin_graph_capture",
+          &GraphProcessor::begin_graph_capture,
+          doc_begin,
+          py::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
     auto doc_end =
         R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]

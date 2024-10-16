@@ -48,24 +48,22 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const uint32_t out0_t = 2;
     const uint32_t out1_t = 2;
 
-    tt::operations::primary::CreateCircularBuffer(
-        program,
-        std::set<CoreRange>{CoreRange(core, core)},
-        cb_data_format,
-        {
-            {CB::c_in0, in0_t},
-            {CB::c_in1, in1_t},
-            {CB::c_in2, in2_t},
-            {CB::c_out0, out0_t},
-            {CB::c_out1, out1_t},
-        });
+    tt::operations::primary::CreateCircularBuffer(program,
+                                                  std::set<CoreRange>{CoreRange(core, core)},
+                                                  cb_data_format,
+                                                  {
+                                                      {CB::c_in0, in0_t},
+                                                      {CB::c_in1, in1_t},
+                                                      {CB::c_in2, in2_t},
+                                                      {CB::c_out0, out0_t},
+                                                      {CB::c_out1, out1_t},
+                                                  });
     bool has_input_grad = input_grad.has_value();
     bool has_other_grad = other_grad.has_value();
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)tt::operations::primary::is_dram(src0_buffer),
-        (std::uint32_t)tt::operations::primary::is_dram(src1_buffer),
-        (std::uint32_t)tt::operations::primary::is_dram(src2_buffer)};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::operations::primary::is_dram(src0_buffer),
+                                                      (std::uint32_t)tt::operations::primary::is_dram(src1_buffer),
+                                                      (std::uint32_t)tt::operations::primary::is_dram(src2_buffer)};
 
     bool dst0_is_dram = false;
     bool dst1_is_dram = false;
@@ -113,17 +111,16 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
         program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core,
-        {(std::uint32_t)has_input_grad,
-         (std::uint32_t)has_other_grad,
-         src0_buffer->address(),
-         src1_buffer->address(),
-         src2_buffer->address(),
-         num_tiles,
-         0});
+    SetRuntimeArgs(program,
+                   reader_kernel_id,
+                   core,
+                   {(std::uint32_t)has_input_grad,
+                    (std::uint32_t)has_other_grad,
+                    src0_buffer->address(),
+                    src1_buffer->address(),
+                    src2_buffer->address(),
+                    num_tiles,
+                    0});
 
     SetRuntimeArgs(
         program, compute_kernel_id, core, {(std::uint32_t)has_input_grad, (std::uint32_t)has_other_grad, num_tiles});
@@ -134,8 +131,8 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         core,
         {(std::uint32_t)has_input_grad, (std::uint32_t)has_other_grad, dst0_address, dst1_address, num_tiles, 0});
 
-    return {
-        std::move(program), {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
+    return {std::move(program),
+            {.unary_reader_kernel_id = reader_kernel_id, .unary_writer_kernel_id = writer_kernel_id}};
 }
 
 void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(

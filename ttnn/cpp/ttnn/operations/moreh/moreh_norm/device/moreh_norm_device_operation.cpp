@@ -20,10 +20,9 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
     const auto input_rank = input.get_legacy_shape().rank();
-    TT_FATAL(
-        (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
-        "dim must be between 0 and {}.",
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL((dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
+             "dim must be between 0 and {}.",
+             tt::tt_metal::MAX_NUM_DIMENSIONS);
     TT_FATAL((dim < input_rank), "dim must be smaller than input tensor rank {}.", input_rank);
 }
 
@@ -58,10 +57,9 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
 
         for (int i = 0; i < input_rank; ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
-            TT_FATAL(
-                input_dim_wo_padding[i] == output_dim_wo_padding[i],
-                "Input and output dimensions without padding do not match at index {}.",
-                i);
+            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i],
+                     "Input and output dimensions without padding do not match at index {}.",
+                     i);
         }
     } else {
         TT_FATAL(!is_tile_dim, "Dimension {} should not be a tile dimension when keepdim is false.", dim);
@@ -80,20 +78,18 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         for (int i = 0; i < input_rank; ++i) {
             if (i == dim)
                 continue;
-            TT_FATAL(
-                input_shape[i] == expected_output_shape[i],
-                "Input and expected output shapes do not match at index {}.",
-                i);
-            TT_FATAL(
-                input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
-                "Input and expected output shapes without padding do not match at index {}.",
-                i);
+            TT_FATAL(input_shape[i] == expected_output_shape[i],
+                     "Input and expected output shapes do not match at index {}.",
+                     i);
+            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
+                     "Input and expected output shapes without padding do not match at index {}.",
+                     i);
         }
     }
 }
 
-void MorehNormOperation::validate_inputs(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehNormOperation::validate_inputs(const operation_attributes_t& operation_attributes,
+                                         const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
     const auto dim = operation_attributes.dim;
@@ -105,7 +101,8 @@ void MorehNormOperation::validate_inputs(
 }
 
 MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.get_legacy_shape().rank();
     if (dim == input_rank - 1)
@@ -116,18 +113,19 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
         return ProgramFactoryOther{};
 }
 
-void MorehNormOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehNormOperation::validate_on_program_cache_miss(const operation_attributes_t& operation_attributes,
+                                                        const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
-void MorehNormOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+void MorehNormOperation::validate_on_program_cache_hit(const operation_attributes_t& operation_attributes,
+                                                       const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
 
 MorehNormOperation::shape_return_value_t MorehNormOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input.get_legacy_shape();
     const auto input_rank = input_shape.rank();
     const auto dim = operation_attributes.dim;
@@ -159,17 +157,17 @@ MorehNormOperation::shape_return_value_t MorehNormOperation::compute_output_shap
 };
 
 MorehNormOperation::tensor_return_value_t MorehNormOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args) {
     const auto& output = tensor_args.output;
     if (output.has_value())
         return output.value();
     const auto& input = tensor_args.input;
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        input.get_dtype(),
-        Layout::TILE,
-        input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_shapes(operation_attributes, tensor_args),
+                                input.get_dtype(),
+                                Layout::TILE,
+                                input.device(),
+                                operation_attributes.memory_config);
 }
 
 std::tuple<MorehNormOperation::operation_attributes_t, MorehNormOperation::tensor_args_t> MorehNormOperation::invoke(

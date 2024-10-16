@@ -22,16 +22,20 @@ struct ScaledDotProductAttentionGQADecode {
     const DeviceComputeKernelConfig compute_kernel_config;
     const uint32_t k_chunk_size;
 
-    void validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors,
+                  const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
 
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
 
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, std::vector<Tensor>& output_tensors) const;
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 
-    operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors,
+                                         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
 }  // namespace ttnn::operations::transformer

@@ -9,26 +9,25 @@
 #include <optional>
 
 namespace ttnn {
-namespace operations::experimental::copy  {
+namespace operations::experimental::copy {
 
 struct TypecastOperation {
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const DataType& dtype,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    static ttnn::Tensor invoke(uint8_t queue_id,
+                               const Tensor& input_tensor,
+                               const DataType& dtype,
+                               const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+                               const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const DataType& dtype,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
+    static ttnn::Tensor invoke(const Tensor& input_tensor,
+                               const DataType& dtype,
+                               const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+                               const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 }  // namespace operations::experimental::copy
 
 namespace experimental {
-    constexpr auto typecast = ttnn::register_operation_with_auto_launch_op<"ttnn::experimental::typecast", ttnn::operations::experimental::copy::TypecastOperation>();
-} // namespace experimental
+constexpr auto typecast =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::experimental::typecast",
+                                                 ttnn::operations::experimental::copy::TypecastOperation>();
+}  // namespace experimental
 }  // namespace ttnn

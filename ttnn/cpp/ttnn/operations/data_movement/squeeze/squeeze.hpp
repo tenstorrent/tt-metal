@@ -6,18 +6,12 @@
 
 #include "ttnn/decorators.hpp"
 
-
 namespace ttnn {
 namespace operations::data_movement {
 
 struct SqueezeOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const int dim
-        );
-
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const int dim);
 };
-
 
 }  // namespace operations::data_movement
 

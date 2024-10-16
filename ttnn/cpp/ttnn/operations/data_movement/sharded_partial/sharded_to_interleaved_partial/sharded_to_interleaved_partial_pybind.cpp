@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -15,7 +14,9 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 template <typename data_movement_sharded_operation_t>
-void bind_sharded_to_interleaved_partial(pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
+void bind_sharded_to_interleaved_partial(pybind11::module& module,
+                                         const data_movement_sharded_operation_t& operation,
+                                         const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -27,7 +28,7 @@ void bind_sharded_to_interleaved_partial(pybind11::module& module, const data_mo
                int64_t& num_slices,
                int64_t& slice_index,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::DataType> & output_dtype,
+               const std::optional<ttnn::DataType>& output_dtype,
                uint8_t queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, cache_tensor, num_slices, slice_index, memory_config, output_dtype);
             },
@@ -40,12 +41,12 @@ void bind_sharded_to_interleaved_partial(pybind11::module& module, const data_mo
             py::arg("output_dtype") = std::nullopt,
             py::arg("queue_id") = 0,
 
-            });
+        });
 }
 
 }  // namespace detail
 
-//TODO: Add more descriptions to the arguments
+// TODO: Add more descriptions to the arguments
 void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
     detail::bind_sharded_to_interleaved_partial(
         module,
@@ -72,4 +73,4 @@ void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
         )doc");
 }
 
-}  // namespace ttnn::operations::data_movement::sharded
+}  // namespace ttnn::operations::data_movement

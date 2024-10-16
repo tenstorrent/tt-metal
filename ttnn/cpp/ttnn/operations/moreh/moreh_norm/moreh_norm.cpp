@@ -7,14 +7,13 @@
 #include "device/moreh_norm_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
-Tensor MorehNorm::invoke(
-    const Tensor& input,
-    float p,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
-    bool keepdim,
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+Tensor MorehNorm::invoke(const Tensor& input,
+                         float p,
+                         std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+                         bool keepdim,
+                         const std::optional<Tensor>& output,
+                         const std::optional<MemoryConfig>& memory_config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (!dim.has_value()) {
         std::vector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);

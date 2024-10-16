@@ -9,13 +9,12 @@
 namespace ttnn::operations::moreh::moreh_dot {
 
 struct MorehDot {
-    static Tensor invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const std::optional<Tensor>& output,
-        const std::optional<DataType>& dtype,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+    static Tensor invoke(const Tensor& input_a,
+                         const Tensor& input_b,
+                         const std::optional<Tensor>& output,
+                         const std::optional<DataType>& dtype,
+                         const std::optional<MemoryConfig>& memory_config,
+                         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_dot
 

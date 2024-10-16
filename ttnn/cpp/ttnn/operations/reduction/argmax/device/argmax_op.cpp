@@ -7,30 +7,27 @@
 
 namespace ttnn::operations::reduction {
 
-void ArgMax::validate_with_output_tensors(
-    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+void ArgMax::validate_with_output_tensors(const std::vector<Tensor> &input_tensors,
+                                          const std::vector<std::optional<Tensor>> &output_tensors) const {
     const auto &input_tensor_a = input_tensors.at(0);
 
-    TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Only INTERLEAVED memory layout is supported for inputs!");
+    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+             "Only INTERLEAVED memory layout is supported for inputs!");
 
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Only BFLOAT16 is supported for inputs!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
-    TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Only INTERLEAVED memory layout is supported for outputs!");
+    TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+             "Only INTERLEAVED memory layout is supported for outputs!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto &optional_output_tensor = output_tensors.at(0);
     if (optional_output_tensor.has_value()) {
-        TT_FATAL(
-            optional_output_tensor.value().get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
-        TT_FATAL(
-            optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-            "Only INTERLEAVED memory layout is supported for outputs!");
+        TT_FATAL(optional_output_tensor.value().get_dtype() == DataType::UINT32,
+                 "Only UINT32 is supported for outputs!");
+        TT_FATAL(optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                 "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
     if (this->dim.has_value()) {
@@ -42,9 +39,8 @@ void ArgMax::validate_with_output_tensors(
     }
 
     auto input_shape = input_tensor_a.get_legacy_shape();
-    TT_FATAL(input_shape[0]==1, "dim 0 must be 1");
-    TT_FATAL(input_shape[1]==1, "dim 1 must be 1");
-
+    TT_FATAL(input_shape[0] == 1, "dim 0 must be 1");
+    TT_FATAL(input_shape[1] == 1, "dim 1 must be 1");
 }
 
 std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
@@ -52,15 +48,14 @@ std::vector<tt::tt_metal::LegacyShape> ArgMax::compute_output_shapes(const std::
     if (this->dim.has_value()) {
         tt::tt_metal::LegacyShape output_shape({input_shape[0], input_shape[1], 1, input_shape[2]});
         return {output_shape};
-    }
-    else {
+    } else {
         tt::tt_metal::LegacyShape output_shape({1, 1, 1, 1});
         return {output_shape};
     }
 }
 
-std::vector<Tensor> ArgMax::create_output_tensors(
-    const std::vector<Tensor> &input_tensors, const std::vector<std::optional<Tensor>> &output_tensors) const {
+std::vector<Tensor> ArgMax::create_output_tensors(const std::vector<Tensor> &input_tensors,
+                                                  const std::vector<std::optional<Tensor>> &output_tensors) const {
     if (output_tensors.at(0).has_value()) {
         return {output_tensors.at(0).value()};
     }
@@ -70,13 +65,11 @@ std::vector<Tensor> ArgMax::create_output_tensors(
         *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
 }
 
-operation::ProgramWithCallbacks ArgMax::create_program(
-    const std::vector<Tensor> &input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks ArgMax::create_program(const std::vector<Tensor> &input_tensors,
+                                                       std::vector<Tensor> &output_tensors) const {
     const auto &input_tensor = input_tensors.at(0);
     const auto &output_tensor = output_tensors.at(0);
-    const auto normalized_dim = dim.has_value()
-    ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0)
-    : dim;
+    const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0) : dim;
     if (use_multicore) {
         return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);
     }

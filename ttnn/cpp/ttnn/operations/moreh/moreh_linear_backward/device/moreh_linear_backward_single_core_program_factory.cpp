@@ -11,11 +11,10 @@
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::cached_program_t
-MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& bias_grad) {
+MorehBiasAddBackwardOperation::SingleCoreProgramFactory::cached_program_t MorehBiasAddBackwardOperation::
+    SingleCoreProgramFactory::create(const operation_attributes_t& operation_attributes,
+                                     const tensor_args_t& tensor_args,
+                                     tensor_return_value_t& bias_grad) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -110,23 +109,21 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
-    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core, core_num, compute_kernel_args},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
+    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(program,
+                                                                                compute_kernel_file,
+                                                                                {core, core_num, compute_kernel_args},
+                                                                                compute_defines,
+                                                                                math_fidelity,
+                                                                                fp32_dest_acc_en,
+                                                                                math_approx_mode);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        core,
-        {output_grad.buffer()->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
+    SetRuntimeArgs(program,
+                   reader_kernel_id,
+                   core,
+                   {output_grad.buffer()->address(), num_tiles, 0, mask_h, mask_w, do_mask_h, do_mask_w});
     SetRuntimeArgs(program, writer_kernel_id, core, {bias_grad.buffer()->address(), 1, 0});
     SetRuntimeArgs(program, compute_kernel_id, core, {batch_num, Ht, Wt, do_mask_h, do_mask_w});
 

@@ -27,8 +27,10 @@ enum class Direction {
     UNASSIGNED
 };
 
-static_assert(Direction::CLOCKWISE == Direction::RIGHT, "Direction::CLOCKWISE == Direction::RIGHT not equal but expected to be for current design");
-static_assert(Direction::COUNTER_CLOCKWISE == Direction::LEFT, "Direction::COUNTER_CLOCKWISE == Direction::LEFT not equal but expected to be for current design");
+static_assert(Direction::CLOCKWISE == Direction::RIGHT,
+              "Direction::CLOCKWISE == Direction::RIGHT not equal but expected to be for current design");
+static_assert(Direction::COUNTER_CLOCKWISE == Direction::LEFT,
+              "Direction::COUNTER_CLOCKWISE == Direction::LEFT not equal but expected to be for current design");
 
 /*
  * Contains various attributes about a given worker
@@ -51,8 +53,9 @@ struct WorkerAttributes {
 };
 
 struct WorkerTransferInfo {
-    WorkerTransferInfo(
-        std::vector<uint32_t> const& pages_per_full_chunk_per_worker, uint32_t num_links, uint32_t num_workers);
+    WorkerTransferInfo(std::vector<uint32_t> const& pages_per_full_chunk_per_worker,
+                       uint32_t num_links,
+                       uint32_t num_workers);
 
     uint32_t get_num_pages_per_full_chunk(WorkerAttributes const& worker_attrs) const;
 
@@ -63,7 +66,11 @@ struct WorkerTransferInfo {
 
 std::size_t get_global_worker_id(std::size_t link, std::size_t channel_id, std::size_t num_channels_per_link);
 std::size_t get_global_worker_id(WorkerAttributes const& attrs, std::size_t num_channels_per_link);
-std::size_t get_worker_index_in_slice(ttnn::ccl::RingTopology const& tc, std::size_t global_worker_index, std::size_t worker_channel_id, std::size_t num_edm_channels_per_link, std::size_t link);
+std::size_t get_worker_index_in_slice(ttnn::ccl::RingTopology const& tc,
+                                      std::size_t global_worker_index,
+                                      std::size_t worker_channel_id,
+                                      std::size_t num_edm_channels_per_link,
+                                      std::size_t link);
 
 std::vector<WorkerAttributes> build_worker_attributes(
     ttnn::ccl::RingTopology const& topology_config,
@@ -79,6 +86,6 @@ std::vector<WorkerAttributes> build_worker_attributes(
     std::size_t num_channels_per_link,
     std::function<bool(std::size_t)> is_buffer_in_clockwise_direction_fn);
 
-} // namespace reduce_scatter_detail
-} // namespace ccl
-} // namespace ttnn
+}  // namespace reduce_scatter_detail
+}  // namespace ccl
+}  // namespace ttnn

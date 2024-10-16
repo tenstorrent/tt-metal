@@ -11,32 +11,31 @@ namespace ttnn {
 using DeviceBuffer = std::shared_ptr<Buffer>;
 using queue_id = uint8_t;
 
-DeviceBuffer allocate_interleaved_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
+DeviceBuffer allocate_interleaved_buffer_on_device(size_t buffer_size_bytes,
+                                                   Device* device,
+                                                   const ttnn::SimpleShape& shape,
+                                                   DataType data_type,
+                                                   Layout layout,
+                                                   const MemoryConfig& memory_config,
+                                                   const std::optional<Tile>& tile) {
     uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
     return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
-DeviceBuffer allocate_contiguous_buffer_on_device(
-    size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
+DeviceBuffer allocate_contiguous_buffer_on_device(size_t buffer_size_bytes,
+                                                  Device* device,
+                                                  const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
-DeviceBuffer allocate_sharded_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
+DeviceBuffer allocate_sharded_buffer_on_device(size_t buffer_size_bytes,
+                                               Device* device,
+                                               const ttnn::SimpleShape& shape,
+                                               DataType data_type,
+                                               Layout layout,
+                                               const ShardSpecBuffer& shard_params,
+                                               const MemoryConfig& memory_config,
+                                               const std::optional<Tile>& tile) {
     tt::tt_metal::tensor_impl::validate_sharded_buffer_allocation(
         shape, layout, data_type, shard_params, memory_config, tile);
     const auto& page_shape = shard_params.page_shape;
@@ -50,15 +49,14 @@ DeviceBuffer allocate_sharded_buffer_on_device(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
 }
 
-DeviceBuffer allocate_buffer_on_device(
-    size_t buffer_size_bytes,
-    types::Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile) {
+DeviceBuffer allocate_buffer_on_device(size_t buffer_size_bytes,
+                                       types::Device* device,
+                                       const ttnn::SimpleShape& shape,
+                                       DataType data_type,
+                                       Layout layout,
+                                       const MemoryConfig& memory_config,
+                                       const std::optional<ShardSpecBuffer>& shard_spec,
+                                       const std::optional<Tile>& tile) {
     if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         return allocate_interleaved_buffer_on_device(
             buffer_size_bytes, device, shape, data_type, layout, memory_config, tile);
@@ -70,11 +68,10 @@ DeviceBuffer allocate_buffer_on_device(
     }
 }
 
-void write_buffer(
-    queue_id cq_id,
-    Tensor& dst,
-    std::vector<std::shared_ptr<void>> src,
-    const std::optional<std::size_t> transfer_size) {
+void write_buffer(queue_id cq_id,
+                  Tensor& dst,
+                  std::vector<std::shared_ptr<void>> src,
+                  const std::optional<std::size_t> transfer_size) {
     uint32_t dst_ref_count = dst.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : dst.get_workers()) {
         auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(worker->id());
@@ -86,13 +83,12 @@ void write_buffer(
     dst.tensor_attributes->update_main_thread_ref_count(dst.workers.at(0), dst_ref_count);
 }
 
-void read_buffer(
-    queue_id cq_id,
-    Tensor& src,
-    std::vector<std::shared_ptr<void>> dst,
-    const std::optional<std::size_t> transfer_size,
-    size_t src_offset,
-    bool blocking) {
+void read_buffer(queue_id cq_id,
+                 Tensor& src,
+                 std::vector<std::shared_ptr<void>> dst,
+                 const std::optional<std::size_t> transfer_size,
+                 size_t src_offset,
+                 bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
     uint32_t src_ref_count = src.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : src.get_workers()) {
@@ -118,20 +114,28 @@ void queue_synchronize(CommandQueue& cq) {
     Finish(cq);
 }
 
-void event_synchronize(std::shared_ptr<Event> event) { EventSynchronize(event); }
+void event_synchronize(std::shared_ptr<Event> event) {
+    EventSynchronize(event);
+}
 
-bool event_query(std::shared_ptr<Event> event) { return EventQuery(event); }
+bool event_query(std::shared_ptr<Event> event) {
+    return EventQuery(event);
+}
 
 void wait_for_event(CommandQueue& cq, std::shared_ptr<Event> event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
-    cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event); });
+    cq_worker->push_work([cq_worker, cq_id, event]() {
+        EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event);
+    });
 }
 
 void record_event(CommandQueue& cq, std::shared_ptr<Event> event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
-    cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueRecordEvent(cq_worker->command_queue(cq_id), event); });
+    cq_worker->push_work([cq_worker, cq_id, event]() {
+        EnqueueRecordEvent(cq_worker->command_queue(cq_id), event);
+    });
 }
 
 }  // namespace ttnn

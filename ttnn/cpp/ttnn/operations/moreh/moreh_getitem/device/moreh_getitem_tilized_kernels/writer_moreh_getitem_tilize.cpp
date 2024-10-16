@@ -43,12 +43,11 @@ void kernel_main() {
 
         uint32_t stick_idx = i;
 
-        Idx5d stick_index_5d = get_stick_indices(
-            stick_idx,
-            output_size_c_without_padding,
-            output_size_d_without_padding,
-            output_size_h_without_padding,
-            output_num_stick_width);
+        Idx5d stick_index_5d = get_stick_indices(stick_idx,
+                                                 output_size_c_without_padding,
+                                                 output_size_d_without_padding,
+                                                 output_size_h_without_padding,
+                                                 output_num_stick_width);
         Idx5d tile_index_5d = get_tile_indices(stick_index_5d);
 
         uint32_t noc_id = tile_index_5d.n * output_noc_id_stride_n + tile_index_5d.c * output_noc_id_stride_c +

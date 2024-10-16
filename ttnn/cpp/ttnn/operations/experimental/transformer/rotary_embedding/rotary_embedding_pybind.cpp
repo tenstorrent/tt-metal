@@ -15,10 +15,9 @@ namespace ttnn::operations::experimental::transformer {
 
 void py_bind_rotary_embedding(pybind11::module& module) {
     namespace py = pybind11;
-    ttnn::bind_registered_operation(
-        module,
-        ttnn::experimental::rotary_embedding,
-        R"doc(
+    ttnn::bind_registered_operation(module,
+                                    ttnn::experimental::rotary_embedding,
+                                    R"doc(
         Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
 
         When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.
@@ -40,14 +39,13 @@ void py_bind_rotary_embedding(pybind11::module& module) {
             ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::pybind_arguments_t {
-            py::arg("input_tensor"),
-            py::arg("cos_cache"),
-            py::arg("sin_cache"),
-            py::arg("token_index") = std::nullopt,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+                                    ttnn::pybind_arguments_t{py::arg("input_tensor"),
+                                                             py::arg("cos_cache"),
+                                                             py::arg("sin_cache"),
+                                                             py::arg("token_index") = std::nullopt,
+                                                             py::kw_only(),
+                                                             py::arg("memory_config") = std::nullopt,
+                                                             py::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

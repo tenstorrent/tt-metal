@@ -7,8 +7,9 @@
 
 namespace ttnn::operations::data_movement::clone {
 struct Clone {
-    static Tensor invoke(
-        const Tensor& input, const std::optional<DataType>& dtype, const std::optional<MemoryConfig>& memory_config);
+    static Tensor invoke(const Tensor& input,
+                         const std::optional<DataType>& dtype,
+                         const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::data_movement::clone
 
