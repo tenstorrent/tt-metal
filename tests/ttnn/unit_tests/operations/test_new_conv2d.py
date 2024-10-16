@@ -187,10 +187,6 @@ def run_conv(
     else:
         pcc = 0.998
 
-    # Reduce pcc threshold for long dot products
-    if input_channels * filter_height * filter_width > 5000:
-        pcc = 0.985
-
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
