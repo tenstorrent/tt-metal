@@ -182,7 +182,7 @@ if [ "$c_compiler_path" != "" ]; then
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+    cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
 fi
 
 if [ "$enable_time_trace" = "ON" ]; then
