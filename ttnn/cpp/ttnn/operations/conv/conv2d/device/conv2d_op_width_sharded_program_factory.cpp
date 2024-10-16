@@ -617,14 +617,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     CircularBufferConfig cb_for_l1_array_config =
         CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
             .set_page_size(cb_for_l1_array, 32 * 2);
-    auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
 
     CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
                 .set_page_size(sharded_act_cb, shard_shape[1] * datum_size(act_df));
         cb_sharded_act_config.set_globally_allocated_address(*a.buffer());
 
-    auto cb_sharded_act = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_act_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_act_config);
 
     CircularBufferConfig cb_act_config =
         CircularBufferConfig(act_block_num_tiles_split * tilized_act_tile_size, {{act_cb, tilized_act_df}})
