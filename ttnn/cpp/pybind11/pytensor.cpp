@@ -1603,16 +1603,6 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const std::vector<int32_t> &dims) -> Tensor { return self.reshape(infer_dims_for_reshape(self, dims)); },
-            R"doc(
-                Reshapes TT tensor
-
-                .. code-block:: python
-
-                    reshaped_tensor = tt_tensor.reshape((4, -1, 32))
-            )doc")
-        .def(
-            "reshape",
             [](Tensor &self, const ttnn::Shape &shape) -> Tensor { return self.reshape(shape); },
             R"doc(
                 Reshapes TT tensor
@@ -1620,6 +1610,16 @@ void pytensor_module(py::module &m_tensor) {
                 .. code-block:: python
 
                     reshaped_tensor = tt_tensor.reshape((4, 3, 32))
+            )doc")
+        .def(
+            "reshape",
+            [](Tensor &self, const std::vector<int32_t> &shape) -> Tensor { return self.reshape(infer_dims_for_reshape(self, shape)); },
+            R"doc(
+                Reshapes TT tensor
+
+                .. code-block:: python
+
+                    reshaped_tensor = tt_tensor.reshape((4, -1, 32))
             )doc")
         .def_property(
             "tensor_id",
