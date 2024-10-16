@@ -173,6 +173,7 @@ target_link_libraries(metal_common_libs INTERFACE
 )
 
 # Note on flags:
+#   DFMT_HEADER_ONLY must be for every target or else they won't interact with the header only fmt as intended
 #   ttnn and tt_lib will break if built with LTO, so leaving -fno-lto in compile options
 add_library(linker_flags INTERFACE)
 
@@ -184,7 +185,7 @@ ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
 target_link_libraries(compiler_flags INTERFACE linker_flags compiler_warnings stdlib)
-target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -fvisibility-inlines-hidden -fno-lto)
+target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
 
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
