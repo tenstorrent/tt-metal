@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
-                std::vector<uint32_t> mm_reader_args = {
+                const std::array mm_reader_args = {
                     (std::uint32_t) dram_buffer_src0_addr,
                     (std::uint32_t) dram_src0_noc_xy.x,
                     (std::uint32_t) dram_src0_noc_xy.y,
@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
                     (std::uint32_t) per_core_M * in0_block_w * single_tile_size, // input 0 block bytes
                     (std::uint32_t) per_core_N * in0_block_w * single_tile_size};
 
-                std::vector<uint32_t> writer_args = {
+                const std::array writer_args = {
                     (std::uint32_t) dram_buffer_dst_addr,
                     (std::uint32_t) dram_dst_noc_xy.x,
                     (std::uint32_t) dram_dst_noc_xy.y,

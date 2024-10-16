@@ -162,7 +162,7 @@ bool test_program_specified_with_core_range_set(tt_metal::Device *device, tt_met
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Reader kernel on all cores reads from same location in DRAM
-    std::vector<uint32_t> reader_rt_args = {
+    const std::array reader_rt_args = {
         src_dram_buffer->address(),
         (std::uint32_t)dram_src_noc_xy.x,
         (std::uint32_t)dram_src_noc_xy.y,

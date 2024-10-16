@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
         CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
         auto core_start_physical = device->worker_core_from_logical_core(core_start);
         auto core_end_physical = device->worker_core_from_logical_core(core_end);
-        std::vector<uint32_t> mcast_reader_args = {
+        const std::array mcast_reader_args = {
             (std::uint32_t)dram_buffer_addr,
             (std::uint32_t)dram_noc_xy.x,
             (std::uint32_t)dram_noc_xy.y,
