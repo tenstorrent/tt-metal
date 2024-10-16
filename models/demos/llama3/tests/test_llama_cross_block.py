@@ -158,13 +158,14 @@ def test_llama_cross_attention_transformer_block_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-        tt_xattn_mask = ttnn.reshape(
-            tt_xattn_mask,
-            shape=ttnn.Shape(
-                [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
-                [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
-            ),
-        )
+        if mode == "decode":
+            tt_xattn_mask = ttnn.reshape(
+                tt_xattn_mask,
+                shape=ttnn.Shape(
+                    [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
+                    [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
+                ),
+            )
 
         full_text_mask = torch.bernoulli(
             torch.full(
