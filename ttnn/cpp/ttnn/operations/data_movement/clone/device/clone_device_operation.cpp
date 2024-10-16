@@ -44,7 +44,7 @@ CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     return create_device_tensor(
-        tensor_args.input.get_legacy_shape(),
+        compute_output_shapes(operation_attributes, tensor_args),
         operation_attributes.dtype,
         input.get_layout(),
         input.device(),
