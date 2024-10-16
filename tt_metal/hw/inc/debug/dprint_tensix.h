@@ -37,8 +37,8 @@ constexpr uint16_t NUM_ROWS_PER_TILE = NUM_FACES_PER_TILE * NUM_ROWS_PER_FACE;
 
 // Helper function to print array
 inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, uint32_t count) {
-    DPRINT << " "
-        << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count);
+    DPRINT << TYPED_U32_ARRAY(TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type, data_format, data, count)
+           << ENDL();
 }
 
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
@@ -160,7 +160,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #endif
         // Print the contents
         DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
-        DPRINT << "Tile ID = " << tile_id;
+        DPRINT << "Tile ID = " << tile_id << ENDL();
 
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
             for (int row_id = 0; row_id < NUM_ROWS_PER_FACE; ++row_id) {
@@ -175,7 +175,6 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                 DPRINT << ENDL();
             }
         }
-        DPRINT << ENDL();
     })
     dbg_unhalt();
 }
