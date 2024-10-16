@@ -34,14 +34,18 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
+        Note:
+            ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE_LAYOUT requires width (shape[-1]) and height (shape[-2]) dimension to be multiple of 32.
+
         Returns:
             ttnn.Tensor: A filled tensor of specified shape and value.
 
         Example:
-            >>> filled_tensor = ttnn.full(shape=[2, 3], fill_value=7.0, dtype=ttnn.bfloat16)
+            >>> filled_tensor = ttnn.full(shape=[2, 2], fill_value=7.0, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
-            ttnn.Tensor([[[[7.0,  7.0,  7.0],
-                            [7.0,  7.0,  7.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+            ttnn.Tensor([[[[7.0,  7.0],
+                            [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name());
 
@@ -104,16 +108,20 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
             device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
+        Note:
+            ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to be multiple of 32.
+
         Returns:
             ttnn.Tensor: A tensor filled with {1}.
 
         Example:
-            >>> tensor = ttnn.{0}(shape=[1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            >>> tensor = ttnn.{0}(shape=[1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             >>> print(tensor)
             ttnn.Tensor([[[[{1}, {1}],
                             [{1}, {1}]],
                             [[{1}, {1}],
-                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)
+                            [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name(),
         value_string);
@@ -159,7 +167,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 
         Example:
             >>> tensor = ttnn.zeros(shape=(2, 3), dtype=ttnn.bfloat16)
-            >>> filled_tensor = ttnn.fill_like(tensor, fill_value=5.0, dtype=ttnn.bfloat16)
+            >>> filled_tensor = ttnn.full_like(tensor, fill_value=5.0, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
             ttnn.Tensor([[[[5.0,  5.0,  5.0],
                             [5.0,  5.0,  5.0]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
