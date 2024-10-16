@@ -20,7 +20,7 @@ void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
             "All reduce input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
 
-        TT_FATAL(this->topology != ccl::Topology::Linear || !t.is_sharded(), "Sharded tensors are not supported for all reduce on a linear topology");
+        TT_FATAL(!t.is_sharded(), "Sharded tensors are not supported for all reduce currently");
     }
 }
 
