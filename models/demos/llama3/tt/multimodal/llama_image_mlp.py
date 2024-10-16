@@ -110,8 +110,6 @@ class TtLlamaImageFeedForward(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        compute_kernel_config_hifi2 = self.model_config["MLP_KERNEL_CONFIG_HIFI2"]
-        compute_kernel_config_hifi4 = self.model_config["MLP_KERNEL_CONFIG_HIFI4"]
 
         # Depends on whether we are padding or not
         MAX_MM_SEQ_LEN = 1056
@@ -128,7 +126,7 @@ class TtLlamaImageFeedForward(LightweightModule):
             x_in,
             self.c_fc_weight,
             bias=self.c_fc_bias,
-            compute_kernel_config=compute_kernel_config_hifi4,
+            compute_kernel_config=self.args.compute_kernel_config_hifi4,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_1,
@@ -139,7 +137,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         c_proj_out = ttnn.linear(
             c_fc_out,
             self.c_proj_weight,
-            compute_kernel_config=compute_kernel_config_hifi4,
+            compute_kernel_config=self.args.compute_kernel_config_hifi4,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_2,
