@@ -75,10 +75,8 @@ def ResnetLinear(
     """
 
     matmul_config = hardcoded_matmul_config_linear[batch_size]
-    weight_shape = weight.shape.with_tile_padding()
-    weight = weight.reshape(1, 1, weight_shape[-2], weight_shape[-1])
-    bias_shape = bias.shape.with_tile_padding()
-    bias = bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
+    weight = weight.reshape(1, 1, weight.shape[-2], weight.shape[-1])
+    bias = bias.reshape(1, 1, bias.shape[-2], bias.shape[-1])
 
     def linear_(act):
         output = ttnn.linear(
@@ -713,9 +711,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] / self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -802,9 +800,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -930,9 +928,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
-                x.shape.with_tile_padding()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
@@ -1020,7 +1018,7 @@ class resnet50:
             (
                 self.batch_size,
                 x.shape.with_tile_padding()[1],
-                (int)(x.shape.with_tile_padding()[2] / self.batch_size),
+                x.shape.with_tile_padding()[2] // self.batch_size,
                 x.shape.with_tile_padding()[3],
             ),
         )
