@@ -188,22 +188,20 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             continue;
         }
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
         auto ntiles_per_core = ntiles_per_block * nblocks_per_core;
-        reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),               // src_addr
             ntiles_per_core,  // ntiles
             tile_start_id                         // start_id
         };
 
-        std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),           // dst_addr
             nsticks_per_core,  // nsticks
             stick_size,               // block_size_nbytes
             ntiles_per_core,                // ntiles_per_core
             TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
+            std::uint32_t{0}, //start stick id = 0, since parallelizing on height
             offset_within_stick
         };
 
@@ -218,22 +216,20 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         // reader runtime args
-        std::vector<uint32_t> reader_rt_args;
         auto ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
-        reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),               // src_addr
             ntiles_per_core_cliff,  // ntiles
             tile_start_id                         // start_id
         };
 
-        std::vector<uint32_t> writer_rt_args;
-        writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),           // dst_addr
             nsticks_per_core,  // nsticks
             stick_size,               // block_size_nbytes
             ntiles_per_core_cliff,                // ntiles_per_core
             TILE_WIDTH * output.element_size(),               // tile_width_size
-            0, //start stick id = 0, since parallelizing on height
+            std::uint32_t{0}, //start stick id = 0, since parallelizing on height
             offset_within_stick
         };
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
@@ -754,7 +750,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Writer compile-time args
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         num_sticks,
         stick_size,
@@ -763,7 +759,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         num_full_blocks_in_row,
         num_leftover_tiles,
         leftover_width_in_row,
-        0};
+        std::uint32_t{0}};
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};

@@ -812,7 +812,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
         }
 
         if constexpr (initialize_args) {
-            vector<uint32_t> writer_kernel_args = {output_buffer->address(), num_tiles_per_core, num_tiles_written};
+            const std::array writer_kernel_args = {output_buffer->address(), num_tiles_per_core, num_tiles_written};
             tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
         } else {
             auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];

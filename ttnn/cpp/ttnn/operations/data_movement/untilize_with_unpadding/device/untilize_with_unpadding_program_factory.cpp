@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
                                 .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         output_w,
         padded_W_diff_blocks,
@@ -336,7 +336,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
+        const std::array reader_rt_args = {src0_buffer->address(), num_tiles_per_core, tile_start_id};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
@@ -522,7 +522,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
     // reader runtime args
-    vector<uint32_t> reader_rt_args = {
+    const std::array reader_rt_args = {
         ntiles_per_block * nblocks_per_core  // ntiles
     };
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
@@ -550,7 +550,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             CoreCoord& core = cores[i];
 
             // writer runtime args
-            vector<uint32_t> writer_rt_args;
             uint32_t block_start_row_offset;
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
@@ -605,13 +604,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                 }
             }
 
-            writer_rt_args = {
+            const std::array writer_rt_args = {
                 dst_buffer->address(),  // dst_addr
                 num_rows_block,
                 block_row_size,
-                1,
-                1,
-                1,
+                std::uint32_t{1},
+                std::uint32_t{1},
+                std::uint32_t{1},
                 output_row_size,
                 row_size_unpadded,
                 num_rows_unpadded,

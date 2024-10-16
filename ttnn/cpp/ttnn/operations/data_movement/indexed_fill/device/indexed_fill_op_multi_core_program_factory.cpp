@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
         uint32_t local_b = (i<B) ? b : 0;
         uint32_t local_batch_size_in_sticks = (i<B) ? batch_size_in_sticks : 0;
 
-        std::vector<uint32_t> reader_runtime_args = {
+        const std::array reader_runtime_args = {
                                                     batch_ids.buffer()->address(),
                                                     local_b,
                                                     input_a.buffer()->address(),
@@ -108,7 +108,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
                                                     i
         };
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-        std::vector<uint32_t> writer_runtime_args = {
+        const std::array writer_runtime_args = {
                                                     output.buffer()->address(),
                                                     page_size,
                                                     local_batch_size_in_sticks,
@@ -135,7 +135,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
         for (const auto &core : cores) {
             uint32_t local_b = (core_id<B) ? b : 0;
             uint32_t local_batch_size_in_sticks = (core_id<B) ? batch_size_in_sticks : 0;
-            std::vector<uint32_t> reader_runtime_args = {
+            const std::array reader_runtime_args = {
                                                     batch_ids.buffer()->address(),
                                                     local_b,
                                                     input_a.buffer()->address(),
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(const Tensor &batch_ids,
             };
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-            std::vector<uint32_t> writer_runtime_args = {
+            const std::array writer_runtime_args = {
                                                     output.buffer()->address(),
                                                     page_size,
                                                     local_batch_size_in_sticks,

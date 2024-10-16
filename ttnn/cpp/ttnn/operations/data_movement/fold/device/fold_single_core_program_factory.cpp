@@ -96,7 +96,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), pixel_size, num_pixels, 0});
 
     // Writer run-time args
-    std::vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         dst_pixel_size,
         scratch_buffer->address(),
