@@ -326,6 +326,8 @@ def get_devices(request):
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = request.getfixturevalue("mesh_device").get_devices()
+    elif "n300_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("n300_mesh_device").get_devices()
     elif "t3k_mesh_device" in request.fixturenames:
         devices = request.getfixturevalue("t3k_mesh_device").get_devices()
     elif "pcie_mesh_device" in request.fixturenames:
