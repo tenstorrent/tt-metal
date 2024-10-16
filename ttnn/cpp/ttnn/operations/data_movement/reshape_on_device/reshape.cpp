@@ -59,7 +59,7 @@ ttnn::Tensor ReshapeOperation::invoke(
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
     // No-op (Will do a tensor copy)
-    ttnn::SimpleShape output_shape = tt::tt_metal::infer_dims_for_reshape({N, C, H, W}, input_tensor.volume());
+    ttnn::SimpleShape output_shape = tt::tt_metal::infer_dims_for_reshape({N, C, H, W}, input_tensor.get_logical_volume());
     if (
         ((input_tensor.get_layout() == Layout::TILE or input_tensor.get_layout() == Layout::ROW_MAJOR) && output_shape[3] == input_tensor.get_legacy_shape()[3])
     ) {

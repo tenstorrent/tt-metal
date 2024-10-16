@@ -21,7 +21,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only tile and row major reshape supported!");
 
-    auto output_shape = infer_dims_for_reshape({this->N, this->C, this->H, this->W}, input_tensor_a.volume());
+    auto output_shape = infer_dims_for_reshape({this->N, this->C, this->H, this->W}, input_tensor_a.get_logical_volume());
     TT_FATAL(input_tensor_a.volume() == output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3], "New shape volume must match old shape volume");
 
     TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Reshape does not currently support sharding");
@@ -43,7 +43,7 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor> &input_tensors) 
 
 std::vector<ttnn::SimpleShape> ReshapeDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    return {tt::tt_metal::infer_dims_for_reshape({this->N, this->C, this->H, this->W}, input_tensor_a.volume())};
+    return {tt::tt_metal::infer_dims_for_reshape({this->N, this->C, this->H, this->W}, input_tensor_a.get_logical_volume())};
 }
 
 
