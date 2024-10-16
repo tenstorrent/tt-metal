@@ -1449,6 +1449,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
     detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = floor(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = ceil(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
+    detail::bind_unary_operation(module, ttnn::round, R"doc(\mathrm{{output\_tensor}}_i = round(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -1945,11 +1946,6 @@ void py_module(py::module& module) {
         ttnn::triu,
         "diagonal", "diagonal value", 0,
         R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc");
-    detail::bind_unary_composite_int_with_default(
-        module,
-        ttnn::round,
-        "decimals", "decimals value", 0,
-        R"doc(Performs round function on :attr:`input_tensor`, not supported for grayskull, :attr:`decimals`.)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,
