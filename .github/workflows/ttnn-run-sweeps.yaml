@@ -147,6 +147,7 @@ on:
           - eltwise.unary.gez.gez
           - eltwise.unary.lez.lez
           - eltwise.unary.nez.nez
+          - eltwise.unary.prelu.prelu
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
