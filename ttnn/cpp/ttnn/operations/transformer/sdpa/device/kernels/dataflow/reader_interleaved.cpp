@@ -21,6 +21,9 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
     constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
     constexpr uint32_t num_cores = get_compile_time_arg_val(9);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(10) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(11) == 1;
+
 
     const uint32_t q_addr  = get_arg_val<uint32_t>(0);
     const uint32_t k_addr  = get_arg_val<uint32_t>(1);
@@ -45,6 +48,7 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CB::c_in0;
     constexpr uint32_t cb_k_in = tt::CB::c_in1;
     constexpr uint32_t cb_v_in = tt::CB::c_in2;
+    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
 
 
     constexpr uint32_t onetile = 1;
@@ -54,6 +58,10 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
+    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
+
+    constexpr uint32_t q_heads_per_kv = NQH / NKH;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
@@ -77,6 +85,12 @@ void kernel_main() {
         .data_format = v_data_format
     };
 
+    const InterleavedAddrGenFast<is_dram> mask_reader = {
+        .bank_base_address = mask_addr,
+        .page_size = mask_tile_bytes,
+        .data_format = mask_data_format
+    };
+
     uint32_t q_tile_id = 0;
     uint32_t k_tile_id = 0;
     uint32_t v_tile_id = 0;
@@ -85,8 +99,7 @@ void kernel_main() {
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         const uint32_t q_batch_offset = nb * NQH * St * DHt;
-        const uint32_t k_batch_offset = nb * NKH * St * DHt;
-        const uint32_t v_batch_offset = nb * NKH * St * DHt;
+        const uint32_t kv_batch_offset = nb * NKH * St * DHt;
         const uint32_t mask_batch_offset = nb * St * St;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
@@ -127,13 +140,21 @@ void kernel_main() {
                 cb_push_back(cb_q_in, q_chunk_tiles);
 
                 const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
-                const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                uint32_t q_high_idx;
+                if constexpr (is_causal) {
+                    q_high_idx = q_low_idx + Sq_chunk_t;
+                } else {
+                    q_high_idx = St;
+                }
+
+                const uint32_t kv_head = nq / q_heads_per_kv;
+                const uint32_t kv_head_offset = kv_head * St * DHt;
 
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                    const uint32_t k_start_tile_id = k_batch_offset + k_chunk * Sk_chunk_t * DHt;
+                    const uint32_t k_start_tile_id = kv_batch_offset + kv_head_offset + k_chunk * Sk_chunk_t * DHt;
 
                     // Read K chunk transposed
                     cb_reserve_back(cb_k_in, k_chunk_tiles);
@@ -155,7 +176,37 @@ void kernel_main() {
                     noc_async_read_barrier();
                     cb_push_back(cb_k_in, k_chunk_tiles);
 
-                    v_tile_id = v_batch_offset + k_chunk * Sk_chunk_t * DHt;
+                    if constexpr (use_provided_mask) {
+                        // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
+                        // Q-range = [q_low, q_high)
+                        // K-range = [k_low, k_high)
+                        // does_overlap = not (q_low >= k_high or k_low >= q_high)
+                        // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
+                        // Read mask chunk
+                        cb_reserve_back(cb_mask_in, mask_chunk_tiles);
+                        uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+                        barrier_count = 0;
+                        mask_tile_id = mask_batch_offset + q_chunk * Sq_chunk_t * St /*row_offset*/ + k_chunk * Sk_chunk_t /*col_offset*/;
+                        for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                            for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                                noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+                                mask_tile_id += 1;
+                                mask_write_ptr += mask_tile_bytes;
+                                if (++barrier_count == barrier_threshold) {
+                                    noc_async_read_barrier();
+                                    barrier_count = 0;
+                                }
+                            }
+                            // Strid along columns to get to next row
+                            mask_tile_id -= Sk_chunk_t;
+                            mask_tile_id += St;
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_mask_in, mask_chunk_tiles);
+                    }
+
+
+                    v_tile_id = k_start_tile_id;
                     // Read V chunk
                     cb_reserve_back(cb_v_in, k_chunk_tiles);
                     uint32_t v_write_ptr = get_write_ptr(cb_v_in);
