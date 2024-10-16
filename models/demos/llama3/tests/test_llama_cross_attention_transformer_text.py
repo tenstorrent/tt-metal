@@ -52,8 +52,8 @@ def test_llama_cross_attention_transformer_text_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
-    no_grad,
 ):
+    # TODO: Wrap with no_grad
     dtype = ttnn.bfloat8_b
     pcc = 0.98
 
