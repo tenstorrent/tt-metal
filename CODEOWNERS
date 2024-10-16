@@ -28,12 +28,12 @@ setup_hugepages.py @tt-rkim @TT-billteng
 scripts/docker @TT-billteng
 scripts/build_scripts/ @tt-rkim @vtangTT @TT-billteng
 scripts/build_scripts/build_with_profiler_opt.sh @mo-tenstorrent @tt-rkim
-cmake/ @tt-rkim @vtangTT @TT-billteng
+cmake/ @tt-rkim @vtangTT @TT-billteng @afuller-TT
 build_metal.sh @tt-rkim @vtangTT @TT-billteng
 
 Makefile @tt-rkim
-/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt
-tests/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt
+/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt @afuller-TT
+tests/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt @afuller-TT
 
 # Testing scripts and infra
 
@@ -106,6 +106,7 @@ ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejo
 ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @yan-zaretskiy @jaykru-tt
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
+ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 ttnn/cpp/ttnn/operations/reduction/ @SeanNijjar @ntarafdar @sjameelTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho

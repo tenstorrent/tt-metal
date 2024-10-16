@@ -13,6 +13,7 @@ on:
           - add
           - ccl.line_all_gather
           - ccl.all_gather_n300
+          - ccl.all_gather_n300_focused
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
@@ -20,6 +21,7 @@ on:
           - eltwise.unary.gelu.gelu_pytorch2
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
+          - eltwise.unary.abs.abs
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
           - eltwise.unary.sin.sin
@@ -93,6 +95,18 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.acos_bw
+          - eltwise.unary_backward.acosh_bw
+          - eltwise.unary_backward.atan_bw
+          - eltwise.unary_backward.cos_bw
+          - eltwise.unary_backward.frac_bw
+          - eltwise.unary_backward.i0_bw
+          - eltwise.unary_backward.rad2deg_bw
+          - eltwise.unary_backward.relu_bw
+          - eltwise.unary_backward.rsqrt_bw
+          - eltwise.unary_backward.sigmoid_bw
+          - eltwise.unary_backward.tan_bw
+          - eltwise.unary_backward.trunc_bw
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
@@ -101,6 +115,23 @@ on:
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.log10_bw.log10_bw
+          - eltwise.unary_backward.abs_bw.abs_bw
+          - eltwise.unary_backward.sinh_bw.sinh_bw
+          - eltwise.unary_backward.sin_bw.sin_bw
+          - eltwise.unary_backward.square_bw.square_bw
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw
+          - eltwise.unary_backward.bias_gelu_bw.bias_gelu_bw
+          - eltwise.unary_backward.pow_bw.pow_bw
+          - eltwise.unary_backward.exp_bw.exp_bw
+          - eltwise.unary_backward.tanh_bw.tanh_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.assign_bw.assign_bw
+          - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
@@ -111,6 +142,11 @@ on:
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.unary.gtz.gtz
+          - eltwise.unary.ltz.ltz
+          - eltwise.unary.gez.gez
+          - eltwise.unary.lez.lez
+          - eltwise.unary.nez.nez
           - eltwise.binary.subtract.subtract
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
@@ -140,6 +176,11 @@ on:
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.embedding_bw.embedding_bw
+          - eltwise.binary_backward.addalpha_bw.addalpha_bw
+          - eltwise.binary_backward.subalpha_bw.subalpha_bw
+          - eltwise.binary_backward.xlogy_bw.xlogy_bw
+          - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -183,6 +224,7 @@ on:
           - data_movement.fill.fill_pytorch2
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
+          - data_movement.repeat.repeat
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
