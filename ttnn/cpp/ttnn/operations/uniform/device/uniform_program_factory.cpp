@@ -27,7 +27,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     auto grid = device->compute_with_storage_grid_size();
     int core_h = grid.y;
 
-    uint32_t units_to_divide = output.volume() / constants::TILE_HEIGHT / constants::TILE_WIDTH;
+    uint32_t units_to_divide = output.volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
@@ -58,7 +58,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
-    const uint32_t output_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
     const std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};

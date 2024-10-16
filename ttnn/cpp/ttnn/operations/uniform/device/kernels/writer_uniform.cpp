@@ -6,7 +6,6 @@
 
 #include "common/constants.hpp"
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 using namespace tt;
 
