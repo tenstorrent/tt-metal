@@ -10,8 +10,7 @@
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 inline vInt float_to_int31(vFloat v) {
     vInt q = float_to_int16(v * 0x1p-15f, 0);
@@ -35,5 +34,4 @@ void calculate_round() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
