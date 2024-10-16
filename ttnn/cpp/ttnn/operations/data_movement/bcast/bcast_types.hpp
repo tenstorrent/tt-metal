@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <map>
+#include <string>
+
 namespace ttnn {
 
 enum class BcastOpMath { ADD, SUB, MUL };

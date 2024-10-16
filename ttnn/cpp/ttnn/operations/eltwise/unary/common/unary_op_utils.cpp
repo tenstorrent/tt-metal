@@ -4,6 +4,9 @@
 
 #include "unary_op_utils.hpp"
 
+#include "tt_metal/common/assert.hpp"
+#include "ttnn/cpp/ttnn/tensor/types.hpp"
+
 namespace ttnn::operations::unary::utils {
 
 namespace {
@@ -117,10 +120,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::BITWISE_XOR:
             op_init_and_name = {
                 "bitwise_xor_tile_init();", fmt::format("bitwise_xor_tile({}, {}u);", idst, std::to_string((uint)param0))};
-            break;
-        case UnaryOpType::BITWISE_NOT:
-            op_init_and_name = {
-                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
         case UnaryOpType::BITWISE_AND:
             op_init_and_name = {
@@ -251,6 +250,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
 std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std::string idst) {
     std::pair<std::string, std::string> op_init_and_name;
     switch (op_type) {
+        case UnaryOpType::BITWISE_NOT:
+            op_init_and_name = {
+                "bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
+            break;
         case UnaryOpType::RECIP: op_init_and_name = {"recip_tile_init();", fmt::format("recip_tile({});", idst)}; break;
         case UnaryOpType::RELU: op_init_and_name = {"relu_tile_init();", fmt::format("relu_tile({});", idst)}; break;
         case UnaryOpType::SQRT: op_init_and_name = {"sqrt_tile_init();", fmt::format("sqrt_tile({});", idst)}; break;

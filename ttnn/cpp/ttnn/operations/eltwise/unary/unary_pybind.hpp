@@ -24,6 +24,56 @@ namespace unary {
 namespace detail {
 
 template <typename unary_operation_t>
+void bind_unary_composite_optional_floats_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, std::optional<float> parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, std::optional<float> parameter_b_value, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc(
+        {8}
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            {2} (float): {3}. Defaults to `{4}`.
+            {5} (float): {6}. Defaults to `{7}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> output = {1}(tensor, {2} = {4}, {5} = {7})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name_a,
+        parameter_a_doc,
+        parameter_a_value,
+        parameter_name_b,
+        parameter_b_doc,
+        parameter_b_value,
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<float> parameter_a,
+               std::optional<float> parameter_b,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::arg("memory_config") = std::nullopt});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
@@ -76,15 +126,13 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
 
 
 template <typename unary_operation_t>
-void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
-        {2}
-
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            {2}
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -97,12 +145,16 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {3}
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        math,
         info_doc);
 
     bind_registered_operation(
@@ -1325,7 +1377,16 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
 }  // namespace detail
 
 void py_module(py::module& module) {
-    detail::bind_unary_operation_overload_complex(module, ttnn::abs);
+    detail::bind_unary_operation_overload_complex(module, ttnn::abs, R"doc(\mathrm{{output\_tensor}}_i = abs(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation(module, ttnn::acos, R"doc(\mathrm{{output\_tensor}}_i = acos(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::asin, R"doc(\mathrm{{output\_tensor}}_i = asin(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc");
@@ -1360,25 +1421,80 @@ void py_module(py::module& module) {
            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
         )doc");
+
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
     detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = floor(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
     detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = ceil(\mathrm{{input\_tensor}}_i))doc", "Available for Wormhole_B0 only");
-    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc");
-    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+    detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation(module, ttnn::i0, R"doc(\mathrm{{output\_tensor}}_i = i0(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isfinite, R"doc(\mathrm{{output\_tensor}}_i = isfinite(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isinf, R"doc(\mathrm{{output\_tensor}}_i = isinf(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isnan, R"doc(\mathrm{{output\_tensor}}_i = isnan(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isneginf, R"doc(\mathrm{{output\_tensor}}_i = isneginf(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isposinf, R"doc(\mathrm{{output\_tensor}}_i = isposinf(\mathrm{{input\_tensor}}_i))doc");
-    detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = log(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = log10(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc", R"doc(Supports bfloat16 dtype and both TILE and ROW_MAJOR layout)doc");
-    detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc");
-    detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc");
-    detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc");
+    detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+    detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
+    detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = relu(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = relu6(\mathrm{{input\_tensor}}_i))doc");
@@ -1392,6 +1508,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::tan, R"doc(\mathrm{{output\_tensor}}_i = tan(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::tanh, R"doc(\mathrm{{output\_tensor}}_i = tanh(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::log_sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc");
+    detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
@@ -1448,7 +1565,16 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "");
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "",
+        R"doc(Supported dtypes, layouts, and ranks:
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
+
     detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function", "This will carry out ReLU operation at min value instead of the standard 0");
@@ -1459,7 +1585,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_not, "value", "scalar value", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
 
     // Unary ops with dim parameter
@@ -1527,12 +1652,12 @@ void py_module(py::module& module) {
         "low", "Low value",
         "high", "High value",
         R"doc(Performs clip function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
-    detail::bind_unary_composite_floats(
+    detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clamp,
-        "low", "Low value",
-        "high", "High value",
-        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`low`, :attr:`high`.)doc");
+        "min", "Minimum value", std::nullopt,
+        "max", "Maximum value", std::nullopt,
+        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,

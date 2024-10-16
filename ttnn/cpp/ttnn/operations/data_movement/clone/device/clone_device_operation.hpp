@@ -16,7 +16,7 @@ struct CloneOperation {
         const Tensor& input;
     };
 
-    using shape_return_value_t = Shape;
+    using shape_return_value_t = ttnn::SimpleShape;
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {

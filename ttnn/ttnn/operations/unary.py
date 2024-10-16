@@ -286,7 +286,7 @@ def _golden_function_polygamma(input_tensor_a, k, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.polygamma, golden_function=_golden_function_polygamma)
 
 
-def _golden_function_clamp(input_tensor_a, min, max, *args, **kwargs):
+def _golden_function_clamp(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
     return torch.clamp(input=input_tensor_a, min=min, max=max)
@@ -412,10 +412,10 @@ def _golden_function_bitwise_xor(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.bitwise_xor, golden_function=_golden_function_bitwise_xor)
 
 
-def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
+def _golden_function_bitwise_not(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.bitwise_not(input_tensor_a, value)
+    return torch.bitwise_not(input_tensor_a)
 
 
 ttnn.attach_golden_function(ttnn.bitwise_not, golden_function=_golden_function_bitwise_not)
