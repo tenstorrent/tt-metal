@@ -118,9 +118,13 @@ operation::ProgramWithCallbacks bcast_multi_core_w(const Tensor &a, const Tensor
 		} else if (core_group_2.core_coord_in_core_ranges(core)) {
 			Wt_per_core = Wt_per_core_group_2;
 		} else {
-			tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, std::vector<uint32_t>(16, 0));
-			tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, std::vector<uint32_t>(3, 0));
-			tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, std::vector<uint32_t>(9, 0));
+			constexpr std::array<uint32_t, 16> binary_reader_kernel_args{0};
+			constexpr std::array<uint32_t, 3> bcast_kernel_args{0};
+			constexpr std::array<uint32_t, 9> unary_writer_kernel_args{0};
+
+			tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, binary_reader_kernel_args);
+			tt_metal::SetRuntimeArgs(program, bcast_kernel_id, core, bcast_kernel_args);
+			tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, unary_writer_kernel_args);
 			continue;
 		}
         uint32_t num_tensor_tiles_per_core = NC*Ht*Wt_per_core;
