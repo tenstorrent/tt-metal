@@ -1029,9 +1029,16 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                 } else {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
                     kg.kernel_bin_sizes[0] = binary_packed_size;
-                    kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
-                    offset += binary_packed_size;
-                    offset = align(offset, l1_alignment);
+
+                    // No kernel config buffer on active eth yet
+                    if (hal.get_programmable_core_type(kg.programmable_core_type_index) ==
+                        HalProgrammableCoreType::IDLE_ETH) {
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                        offset += binary_packed_size;
+                        offset = align(offset, l1_alignment);
+                    } else {
+                        kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
+                    }
                 }
             }
         }

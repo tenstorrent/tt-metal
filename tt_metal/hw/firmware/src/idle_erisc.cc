@@ -136,9 +136,9 @@ int main() {
             // Run the ERISC kernel
             WAYPOINT("R");
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-            void (*kernel_address)() = (void (*)())
+            void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                 mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
-            (*kernel_address)();
+            (*kernel_address)((uint32_t)kernel_address);
             RECORD_STACK_USAGE();
             WAYPOINT("D");
             mailboxes->go_message.signal = RUN_MSG_DONE;

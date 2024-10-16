@@ -437,7 +437,13 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, ui
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
-    llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[0]);
+
+    if (this->config_.eth_mode == Eth::IDLE) {
+        llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[0]);
+    } else {
+        int riscv_id = 5;
+        tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
+    }
 
     return true;
 }
