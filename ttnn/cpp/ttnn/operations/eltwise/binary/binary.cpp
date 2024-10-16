@@ -110,14 +110,15 @@ auto preprocess_inputs(
     auto repeat_smaller = [](const auto &first, auto &second) {
         const auto first_shape = first.get_shape();
         const auto second_shape = second.get_shape();
-
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
+            TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
             Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[1] > second_shape[1]) {
+            TT_FATAL(second_shape[1] == 1, "Dimension trying to broadcast is not equal to 1");
             Shape repeats(std::array<uint32_t, 4>{1, first_shape[1], 1, 1});
             second = ttnn::repeat(second, repeats);
         }
