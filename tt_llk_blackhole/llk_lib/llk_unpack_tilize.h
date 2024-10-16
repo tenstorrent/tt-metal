@@ -20,13 +20,11 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile=false) {
         static constexpr uint unpack_srcb_set_dvalid = TT_OP_NOP;
     #else
         static constexpr uint unpack_srca = TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-        // static constexpr uint unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
         static constexpr uint unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     #endif
 
-    const uint32_t outerloop = narrow_tile ? 1 : 2;
+    const uint32_t outerloop = 1;
     constexpr uint32_t innerloop = 1;
-    // ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
     ckernel_template tmp(outerloop, innerloop, unpack_srcb_set_dvalid);
     tmp.set_start_op(unpack_srca);
     tmp.program(instrn_buffer);
@@ -125,7 +123,7 @@ inline void _llk_unpack_tilize_(const std::uint32_t base_address, const std::uin
     }
 
     // Run MOP
-    mop_run(0, 1);
+    ckernel::ckernel_template::run(instrn_buffer);
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
