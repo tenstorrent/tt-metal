@@ -448,6 +448,7 @@ def test_conv_ws(
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div,
+        act_block_h_override=32,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -1057,6 +1058,7 @@ def test_resnet50_conv_wh_fp32(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("enable_auto_formatting", [True, False])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_sd_conv(
     device,
     use_program_cache,
@@ -1077,6 +1079,7 @@ def test_sd_conv(
     use_1d_systolic_array,
     config_override,
     enable_auto_formatting,
+    auto_shard,
 ):
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
         if enable_auto_formatting:
@@ -1100,6 +1103,7 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             split_factor=3 if input_channels == 1920 else 2,
+            auto_shard=auto_shard,
         )
     else:
         run_conv(
@@ -1123,6 +1127,7 @@ def test_sd_conv(
             use_shallow_conv_variant=(input_channels == 16),
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
+            auto_shard=auto_shard,
         )
 
 
