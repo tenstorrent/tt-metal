@@ -11,9 +11,6 @@ from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 
 
 def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
-    if scatter_dim != 3:
-        return True, "Only support for scatter_dim=3 is tested so far"
-
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
     tensor_size_bytes = elem_size
     for i in input_shape:
@@ -21,9 +18,6 @@ def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devic
     num_l1_banks = 64
     if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
-
-    # if input_dtype == ttnn.bfloat8_b and tuple(input_shape) == (1, 1, 2048, 1024) and scatter_dim == 3:
-    #     return True, "Known failure with bfp8_b data format"
 
     return False, ""
 
@@ -57,7 +51,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.all_reduce(
+        output_tensor_mesh = ttnn.experimental.all_reduce(
             input_tensor_mesh,
             scatter_dim=scatter_dim,
             math_op=math_op,
@@ -136,7 +130,7 @@ def run_all_reduce_test(
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # Run the op
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.all_reduce(
+        output_tensor_mesh = ttnn.experimental.all_reduce(
             input_tensor_mesh,
             scatter_dim=scatter_dim,
             math_op=math_op,
@@ -155,16 +149,13 @@ def run_all_reduce_test(
     for i, t in enumerate(input_tensors):
         golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t).bfloat16()
 
-    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, scatter_dim)
-
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
     # Compare
-    assert len(golden_output_tensors) == len(tt_out_tensors)
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
+        eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
@@ -173,9 +164,9 @@ def run_all_reduce_test(
                     for z in range(tt_output_tensor.shape[1]):
                         for y in range(tt_output_tensor.shape[2]):
                             for x in range(tt_output_tensor.shape[3]):
-                                if tt_output_tensor[w, z, y, x] != golden_output_tensors[i][w, z, y, x]:
+                                if tt_output_tensor[w, z, y, x] != golden_canonical_out_tensor[w, z, y, x]:
                                     logger.error(
-                                        f"mismatch at {w}, {z}, {y}, {x}: {tt_output_tensor[w, z, y, x]} != {golden_output_tensors[i][w, z, y, x]}"
+                                        f"mismatch at {w}, {z}, {y}, {x}: {tt_output_tensor[w, z, y, x]} != {golden_canonical_out_tensor[w, z, y, x]}"
                                     )
 
         else:
@@ -188,19 +179,20 @@ def run_all_reduce_test(
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
-        # (4, 1),
         (8, 1),
     ],
 )
 @pytest.mark.parametrize(
     "per_chip_output_shape, scatter_dim, layout",
     [
-        ([1, 2, 256, 32 * 8], 3, ttnn.TILE_LAYOUT),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
-        ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
-        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # # # Has worker slice size warning - defaults to 1x1
-        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 4096], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 8192], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 1024], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 2048], 2, ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 8192, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 32], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
