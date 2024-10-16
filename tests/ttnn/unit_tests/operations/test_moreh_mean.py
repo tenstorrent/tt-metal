@@ -202,17 +202,16 @@ def test_moreh_mean_compute_kernel_options(input_shape_dim, compute_kernel_optio
     ],
 )
 def test_moreh_mean_callback(input_shape_dim, device, use_program_cache):
-    torch.manual_seed(2023)
-
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
@@ -275,17 +274,16 @@ def test_moreh_mean_backward_compute_kernel_options(input_shape_dim, compute_ker
     ],
 )
 def test_moreh_mean_backward_callback(input_shape_dim, device, use_program_cache):
-    torch.manual_seed(2023)
-
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean_backward(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
         tt_dummy = to_ttnn(torch_dummy, device=device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
