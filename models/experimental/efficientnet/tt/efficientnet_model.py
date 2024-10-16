@@ -104,9 +104,11 @@ class TtEfficientNet(torch.nn.Module):
                 stage.append(
                     block_cnf.block(
                         state_dict=state_dict,
-                        base_address=f"blocks.{len(layers)-1}.{len(stage)}"
-                        if is_lite
-                        else f"features.{len(layers)}.{len(stage)}",
+                        base_address=(
+                            f"blocks.{len(layers)-1}.{len(stage)}"
+                            if is_lite
+                            else f"features.{len(layers)}.{len(stage)}"
+                        ),
                         device=device,
                         cnf=block_cnf,
                         stochastic_depth_prob=sd_prob,

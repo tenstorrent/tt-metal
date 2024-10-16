@@ -79,6 +79,7 @@ class SwinConfig(BackboneConfigMixin, nn.Module):
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
+
     model_type = "swin"
 
     attribute_map = {
@@ -132,9 +133,7 @@ class SwinConfig(BackboneConfigMixin, nn.Module):
         # we set the hidden_size attribute in order to make Swin work with VisionEncoderDecoderModel
         # this indicates the channel dimension after the last stage of the model
         self.hidden_size = int(embed_dim * 2 ** (len(depths) - 1))
-        self.stage_names = ["stem"] + [
-            f"stage{idx}" for idx in range(1, len(depths) + 1)
-        ]
+        self.stage_names = ["stem"] + [f"stage{idx}" for idx in range(1, len(depths) + 1)]
         (
             self._out_features,
             self._out_indices,

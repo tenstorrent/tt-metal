@@ -20,9 +20,7 @@ from models.experimental.hrnet.tt.hrnet_model import hrnet_w18_small
     "model_name, pcc",
     (("hrnet_w18_small", 0.99),),
 )
-def test_hrnet_model_inference(
-    device, model_name, pcc, imagenet_sample_input, reset_seeds
-):
+def test_hrnet_model_inference(device, model_name, pcc, imagenet_sample_input, reset_seeds):
     torch_model = timm.create_model(model_name, pretrained=True)
 
     tt_model = hrnet_w18_small(device, multi_scale_output=True)

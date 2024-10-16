@@ -26,9 +26,7 @@ class TtT5Model(nn.Module):
         super().__init__()
 
         self.config_use_cache = config["use_cache"] if "use_cache" in config else False
-        self.config_use_return_dict = (
-            config["use_return_dict"] if "use_return_dict" in config else False
-        )
+        self.config_use_return_dict = config["use_return_dict"] if "use_return_dict" in config else False
 
         # Re-use embedding layer from reference_module
         self.shared = nn.Embedding(config["vocab_size"], config["d_model"])
@@ -38,9 +36,7 @@ class TtT5Model(nn.Module):
         encoder_config["is_decoder"] = False
         encoder_config["use_cache"] = False
         encoder_config["is_encoder_decoder"] = False
-        self.encoder = TtT5Stack(
-            encoder_config, state_dict, "encoder", device, self.shared
-        )
+        self.encoder = TtT5Stack(encoder_config, state_dict, "encoder", device, self.shared)
 
         if "num_decoder_layers" not in config:
             config["num_decoder_layers"] = config["num_layers"]
@@ -49,9 +45,7 @@ class TtT5Model(nn.Module):
         decoder_config["is_decoder"] = True
         decoder_config["is_encoder_decoder"] = False
         decoder_config["num_layers"] = config["num_decoder_layers"]
-        self.decoder = TtT5Stack(
-            decoder_config, state_dict, "decoder", device, self.shared
-        )
+        self.decoder = TtT5Stack(decoder_config, state_dict, "decoder", device, self.shared)
 
         self.config = config
         self.device = device
@@ -120,9 +114,7 @@ class TtT5Model(nn.Module):
         ```"""
 
         use_cache = use_cache if use_cache is not None else self.config_use_cache
-        return_dict = (
-            return_dict if return_dict is not None else self.config_use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config_use_return_dict
 
         # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
         if head_mask is not None and decoder_head_mask is None:

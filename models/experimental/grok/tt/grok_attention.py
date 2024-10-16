@@ -204,7 +204,7 @@ class TtGrokAttention(LightweightModule):
             rot_mat,
             program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
             memory_config=self.q_mem_config,
-            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"]
+            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
             # [seqlen, bsz, padd_heads, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, bsz, padd_heads, head_dim]
         )
         k_heads_1B1D = ttnn.matmul(

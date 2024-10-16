@@ -122,17 +122,11 @@ class Foldcut(nn.Module):
 
 class Conv(nn.Module):
     # Standard convolution
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Conv, self).__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = nn.BatchNorm2d(c2)
-        self.act = (
-            nn.SiLU()
-            if act is True
-            else (act if isinstance(act, nn.Module) else nn.Identity())
-        )
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
@@ -149,11 +143,7 @@ class RobustConv(nn.Module):
         super(RobustConv, self).__init__()
         self.conv_dw = Conv(c1, c1, k=k, s=s, p=p, g=c1, act=act)
         self.conv1x1 = nn.Conv2d(c1, c2, 1, 1, 0, groups=1, bias=True)
-        self.gamma = (
-            nn.Parameter(layer_scale_init_value * torch.ones(c2))
-            if layer_scale_init_value > 0
-            else None
-        )
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(c2)) if layer_scale_init_value > 0 else None
 
     def forward(self, x):
         x = x.to(memory_format=torch.channels_last)
@@ -180,11 +170,7 @@ class RobustConv2(nn.Module):
             dilation=1,
             groups=1,
         )
-        self.gamma = (
-            nn.Parameter(layer_scale_init_value * torch.ones(c2))
-            if layer_scale_init_value > 0
-            else None
-        )
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones(c2)) if layer_scale_init_value > 0 else None
 
     def forward(self, x):
         x = self.conv_deconv(self.conv_strided(x))
@@ -200,9 +186,7 @@ def DWConv(c1, c2, k=1, s=1, act=True):
 
 class GhostConv(nn.Module):
     # Ghost Convolution https://github.com/huawei-noah/ghostnet
-    def __init__(
-        self, c1, c2, k=1, s=1, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, groups
+    def __init__(self, c1, c2, k=1, s=1, g=1, act=True):  # ch_in, ch_out, kernel, stride, groups
         super(GhostConv, self).__init__()
         c_ = c2 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, k, s, None, g, act)
@@ -215,9 +199,7 @@ class GhostConv(nn.Module):
 
 class Stem(nn.Module):
     # Stem
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Stem, self).__init__()
         c_ = int(c2 / 2)  # hidden channels
         self.cv1 = Conv(c1, c_, 3, 2)
@@ -252,9 +234,7 @@ class SPP(nn.Module):
         c_ = c1 // 2  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_ * (len(k) + 1), c2, 1, 1)
-        self.m = nn.ModuleList(
-            [nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k]
-        )
+        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
 
     def forward(self, x):
         x = self.cv1(x)
@@ -263,9 +243,7 @@ class SPP(nn.Module):
 
 class Bottleneck(nn.Module):
     # Darknet bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super(Bottleneck, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -278,9 +256,7 @@ class Bottleneck(nn.Module):
 
 class Res(nn.Module):
     # ResNet bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super(Res, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -289,18 +265,12 @@ class Res(nn.Module):
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        return (
-            x + self.cv3(self.cv2(self.cv1(x)))
-            if self.add
-            else self.cv3(self.cv2(self.cv1(x)))
-        )
+        return x + self.cv3(self.cv2(self.cv1(x))) if self.add else self.cv3(self.cv2(self.cv1(x)))
 
 
 class ResX(Res):
     # ResNet bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__(c1, c2, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
 
@@ -316,11 +286,7 @@ class Ghost(nn.Module):
             GhostConv(c_, c2, 1, 1, act=False),
         )  # pw-linear
         self.shortcut = (
-            nn.Sequential(
-                DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)
-            )
-            if s == 2
-            else nn.Identity()
+            nn.Sequential(DWConv(c1, c1, k, s, act=False), Conv(c1, c2, 1, 1, act=False)) if s == 2 else nn.Identity()
         )
 
     def forward(self, x):
@@ -342,9 +308,7 @@ class SPPCSPC(nn.Module):
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(c_, c_, 3, 1)
         self.cv4 = Conv(c_, c_, 1, 1)
-        self.m = nn.ModuleList(
-            [nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k]
-        )
+        self.m = nn.ModuleList([nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k])
         self.cv5 = Conv(4 * c_, c_, 1, 1)
         self.cv6 = Conv(c_, c_, 3, 1)
         self.cv7 = Conv(2 * c_, c2, 1, 1)
@@ -372,9 +336,7 @@ class GhostSPPCSPC(SPPCSPC):
 
 class GhostStem(Stem):
     # Stem
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__(c1, c2, k, s, p, g, act)
         c_ = int(c2 / 2)  # hidden channels
         self.cv1 = GhostConv(c1, c_, 3, 2)
@@ -385,17 +347,13 @@ class GhostStem(Stem):
 
 class BottleneckCSPA(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPA, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(
-            *[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
     def forward(self, x):
         y1 = self.m(self.cv1(x))
@@ -405,17 +363,13 @@ class BottleneckCSPA(nn.Module):
 
 class BottleneckCSPB(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPB, self).__init__()
         c_ = int(c2)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_, c_, 1, 1)
         self.cv3 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(
-            *[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
     def forward(self, x):
         x1 = self.cv1(x)
@@ -426,18 +380,14 @@ class BottleneckCSPB(nn.Module):
 
 class BottleneckCSPC(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(BottleneckCSPC, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c1, c_, 1, 1)
         self.cv3 = Conv(c_, c_, 1, 1)
         self.cv4 = Conv(2 * c_, c2, 1, 1)
-        self.m = nn.Sequential(
-            *[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
     def forward(self, x):
         y1 = self.cv3(self.m(self.cv1(x)))
@@ -447,9 +397,7 @@ class BottleneckCSPC(nn.Module):
 
 class ResCSPA(BottleneckCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -457,9 +405,7 @@ class ResCSPA(BottleneckCSPA):
 
 class ResCSPB(BottleneckCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -467,9 +413,7 @@ class ResCSPB(BottleneckCSPB):
 
 class ResCSPC(BottleneckCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -477,9 +421,7 @@ class ResCSPC(BottleneckCSPC):
 
 class ResXCSPA(ResCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
@@ -487,9 +429,7 @@ class ResXCSPA(ResCSPA):
 
 class ResXCSPB(ResCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
@@ -497,9 +437,7 @@ class ResXCSPB(ResCSPB):
 
 class ResXCSPC(ResCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Res(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
@@ -507,9 +445,7 @@ class ResXCSPC(ResCSPC):
 
 class GhostCSPA(BottleneckCSPA):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
@@ -517,9 +453,7 @@ class GhostCSPA(BottleneckCSPA):
 
 class GhostCSPB(BottleneckCSPB):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
         self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
@@ -527,9 +461,7 @@ class GhostCSPB(BottleneckCSPB):
 
 class GhostCSPC(BottleneckCSPC):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[Ghost(c_, c_) for _ in range(n)])
@@ -590,21 +522,13 @@ class RepConv(nn.Module):
 
         padding_11 = autopad(k, p) - k // 2
 
-        self.act = (
-            nn.SiLU()
-            if act is True
-            else (act if isinstance(act, nn.Module) else nn.Identity())
-        )
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
         if deploy:
-            self.rbr_reparam = nn.Conv2d(
-                c1, c2, k, s, autopad(k, p), groups=g, bias=True
-            )
+            self.rbr_reparam = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=True)
 
         else:
-            self.rbr_identity = (
-                nn.BatchNorm2d(num_features=c1) if c2 == c1 and s == 1 else None
-            )
+            self.rbr_identity = nn.BatchNorm2d(num_features=c1) if c2 == c1 and s == 1 else None
 
             self.rbr_dense = nn.Sequential(
                 nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False),
@@ -656,9 +580,7 @@ class RepConv(nn.Module):
             assert isinstance(branch, nn.BatchNorm2d)
             if not hasattr(self, "id_tensor"):
                 input_dim = self.in_channels // self.groups
-                kernel_value = np.zeros(
-                    (self.in_channels, input_dim, 3, 3), dtype=np.float32
-                )
+                kernel_value = np.zeros((self.in_channels, input_dim, 3, 3), dtype=np.float32)
                 for i in range(self.in_channels):
                     kernel_value[i, i % input_dim, 1, 1] = 1
                 self.id_tensor = torch.from_numpy(kernel_value).to(branch.weight.device)
@@ -728,31 +650,21 @@ class RepConv(nn.Module):
                 groups=self.groups,
                 bias=False,
             )
-            identity_conv_1x1.weight.data = identity_conv_1x1.weight.data.to(
-                self.rbr_1x1.weight.data.device
-            )
-            identity_conv_1x1.weight.data = (
-                identity_conv_1x1.weight.data.squeeze().squeeze()
-            )
+            identity_conv_1x1.weight.data = identity_conv_1x1.weight.data.to(self.rbr_1x1.weight.data.device)
+            identity_conv_1x1.weight.data = identity_conv_1x1.weight.data.squeeze().squeeze()
             # logger.info(f" identity_conv_1x1.weight = {identity_conv_1x1.weight.shape}")
             identity_conv_1x1.weight.data.fill_(0.0)
             identity_conv_1x1.weight.data.fill_diagonal_(1.0)
-            identity_conv_1x1.weight.data = identity_conv_1x1.weight.data.unsqueeze(
-                2
-            ).unsqueeze(3)
+            identity_conv_1x1.weight.data = identity_conv_1x1.weight.data.unsqueeze(2).unsqueeze(3)
             # logger.info(f" identity_conv_1x1.weight = {identity_conv_1x1.weight.shape}")
 
             identity_conv_1x1 = self.fuse_conv_bn(identity_conv_1x1, self.rbr_identity)
             bias_identity_expanded = identity_conv_1x1.bias
-            weight_identity_expanded = torch.nn.functional.pad(
-                identity_conv_1x1.weight, [1, 1, 1, 1]
-            )
+            weight_identity_expanded = torch.nn.functional.pad(identity_conv_1x1.weight, [1, 1, 1, 1])
         else:
             # logger.info(f"fuse: rbr_identity != BatchNorm2d, rbr_identity = {self.rbr_identity}")
             bias_identity_expanded = torch.nn.Parameter(torch.zeros_like(rbr_1x1_bias))
-            weight_identity_expanded = torch.nn.Parameter(
-                torch.zeros_like(weight_1x1_expanded)
-            )
+            weight_identity_expanded = torch.nn.Parameter(torch.zeros_like(weight_1x1_expanded))
 
         # logger.info(f"self.rbr_1x1.weight = {self.rbr_1x1.weight.shape}, ")
         # logger.info(f"weight_1x1_expanded = {weight_1x1_expanded.shape}, ")
@@ -761,9 +673,7 @@ class RepConv(nn.Module):
         self.rbr_dense.weight = torch.nn.Parameter(
             self.rbr_dense.weight + weight_1x1_expanded + weight_identity_expanded
         )
-        self.rbr_dense.bias = torch.nn.Parameter(
-            self.rbr_dense.bias + rbr_1x1_bias + bias_identity_expanded
-        )
+        self.rbr_dense.bias = torch.nn.Parameter(self.rbr_dense.bias + rbr_1x1_bias + bias_identity_expanded)
 
         self.rbr_reparam = self.rbr_dense
         self.deploy = True
@@ -783,9 +693,7 @@ class RepConv(nn.Module):
 
 class RepBottleneck(Bottleneck):
     # Standard bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__(c1, c2, shortcut=True, g=1, e=0.5)
         c_ = int(c2 * e)  # hidden channels
         self.cv2 = RepConv(c_, c2, 3, 1, g=g)
@@ -793,45 +701,31 @@ class RepBottleneck(Bottleneck):
 
 class RepBottleneckCSPA(BottleneckCSPA):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(
-            *[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
 
 class RepBottleneckCSPB(BottleneckCSPB):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
-        self.m = nn.Sequential(
-            *[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
 
 class RepBottleneckCSPC(BottleneckCSPC):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(
-            *[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)]
-        )
+        self.m = nn.Sequential(*[RepBottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)])
 
 
 class RepRes(Res):
     # Standard bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__(c1, c2, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.cv2 = RepConv(c_, c_, 3, 1, g=g)
@@ -839,9 +733,7 @@ class RepRes(Res):
 
 class RepResCSPA(ResCSPA):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[RepRes(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -849,9 +741,7 @@ class RepResCSPA(ResCSPA):
 
 class RepResCSPB(ResCSPB):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
         self.m = nn.Sequential(*[RepRes(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -859,9 +749,7 @@ class RepResCSPB(ResCSPB):
 
 class RepResCSPC(ResCSPC):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[RepRes(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -869,9 +757,7 @@ class RepResCSPC(ResCSPC):
 
 class RepResX(ResX):
     # Standard bottleneck
-    def __init__(
-        self, c1, c2, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(self, c1, c2, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__(c1, c2, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.cv2 = RepConv(c_, c_, 3, 1, g=g)
@@ -879,9 +765,7 @@ class RepResX(ResX):
 
 class RepResXCSPA(ResXCSPA):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[RepResX(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -889,9 +773,7 @@ class RepResXCSPA(ResXCSPA):
 
 class RepResXCSPB(ResXCSPB):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2)  # hidden channels
         self.m = nn.Sequential(*[RepResX(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -899,9 +781,7 @@ class RepResXCSPB(ResXCSPB):
 
 class RepResXCSPC(ResXCSPC):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=32, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=32, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)  # hidden channels
         self.m = nn.Sequential(*[RepResX(c_, c_, shortcut, g, e=0.5) for _ in range(n)])
@@ -938,9 +818,7 @@ class TransformerBlock(nn.Module):
         if c1 != c2:
             self.conv = Conv(c1, c2)
         self.linear = nn.Linear(c2, c2)  # learnable position embedding
-        self.tr = nn.Sequential(
-            *[TransformerLayer(c2, num_heads) for _ in range(num_layers)]
-        )
+        self.tr = nn.Sequential(*[TransformerLayer(c2, num_heads) for _ in range(num_layers)])
         self.c2 = c2
 
     def forward(self, x):
@@ -969,9 +847,7 @@ class TransformerBlock(nn.Module):
 
 class Focus(nn.Module):
     # Focus wh information into c-space
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1, act=True
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Focus, self).__init__()
         self.conv = Conv(c1 * 4, c2, k, s, p, g, act)
         # self.contract = Contract(gain=2)
@@ -1050,9 +926,7 @@ class NMS(nn.Module):
         super(NMS, self).__init__()
 
     def forward(self, x):
-        return non_max_suppression(
-            x[0], conf_thres=self.conf, iou_thres=self.iou, classes=self.classes
-        )
+        return non_max_suppression(x[0], conf_thres=self.conf, iou_thres=self.iou, classes=self.classes)
 
 
 class autoShape(nn.Module):
@@ -1066,9 +940,7 @@ class autoShape(nn.Module):
         self.model = model.eval()
 
     def autoshape(self):
-        logger.info(
-            "autoShape already enabled, skipping... "
-        )  # model already converted to model.autoshape()
+        logger.info("autoShape already enabled, skipping... ")  # model already converted to model.autoshape()
         return self
 
     @torch.no_grad()
@@ -1086,26 +958,16 @@ class autoShape(nn.Module):
         p = next(self.model.parameters())  # for device and type
         if isinstance(imgs, torch.Tensor):  # torch
             with amp.autocast(enabled=p.device.type != "cpu"):
-                return self.model(
-                    imgs.to(p.device).type_as(p), augment, profile
-                )  # inference
+                return self.model(imgs.to(p.device).type_as(p), augment, profile)  # inference
 
         # Pre-process
-        n, imgs = (
-            (len(imgs), imgs) if isinstance(imgs, list) else (1, [imgs])
-        )  # number of images, list of images
+        n, imgs = (len(imgs), imgs) if isinstance(imgs, list) else (1, [imgs])  # number of images, list of images
         shape0, shape1, files = [], [], []  # image and inference shapes, filenames
         for i, im in enumerate(imgs):
             f = f"image{i}"  # filename
             if isinstance(im, str):  # filename or uri
                 im, f = (
-                    np.asarray(
-                        Image.open(
-                            requests.get(im, stream=True).raw
-                            if im.startswith("http")
-                            else im
-                        )
-                    ),
+                    np.asarray(Image.open(requests.get(im, stream=True).raw if im.startswith("http") else im)),
                     im,
                 )
             elif isinstance(im, Image.Image):  # PIL Image
@@ -1113,18 +975,13 @@ class autoShape(nn.Module):
             files.append(Path(f).with_suffix(".jpg").name)
             if im.shape[0] < 5:  # image in CHW
                 im = im.transpose((1, 2, 0))  # reverse dataloader .transpose(2, 0, 1)
-            im = (
-                im[:, :, :3] if im.ndim == 3 else np.tile(im[:, :, None], 3)
-            )  # enforce 3ch input
+            im = im[:, :, :3] if im.ndim == 3 else np.tile(im[:, :, None], 3)  # enforce 3ch input
             s = im.shape[:2]  # HWC
             shape0.append(s)  # image shape
             g = size / max(s)  # gain
             shape1.append([y * g for y in s])
             imgs[i] = im  # update
-        shape1 = [
-            make_divisible(x, int(self.stride.max()))
-            for x in np.stack(shape1, 0).max(0)
-        ]  # inference shape
+        shape1 = [make_divisible(x, int(self.stride.max())) for x in np.stack(shape1, 0).max(0)]  # inference shape
         x = [letterbox(im, new_shape=shape1, auto=False)[0] for im in imgs]  # pad
         x = np.stack(x, 0) if n > 1 else x[0][None]  # stack
         x = np.ascontiguousarray(x.transpose((0, 3, 1, 2)))  # BHWC to BCHW
@@ -1137,9 +994,7 @@ class autoShape(nn.Module):
             t.append(time_synchronized())
 
             # Post-process
-            y = non_max_suppression(
-                y, conf_thres=self.conf, iou_thres=self.iou, classes=self.classes
-            )  # NMS
+            y = non_max_suppression(y, conf_thres=self.conf, iou_thres=self.iou, classes=self.classes)  # NMS
             for i in range(n):
                 scale_coords(shape1, y[i][:, :4], shape0[i])
 
@@ -1152,10 +1007,7 @@ class Detections:
     def __init__(self, imgs, pred, files, times=None, names=None, shape=None):
         super(Detections, self).__init__()
         d = pred[0].device  # device
-        gn = [
-            torch.tensor([*[im.shape[i] for i in [1, 0, 1, 0]], 1.0, 1.0], device=d)
-            for im in imgs
-        ]  # normalizations
+        gn = [torch.tensor([*[im.shape[i] for i in [1, 0, 1, 0]], 1.0, 1.0], device=d) for im in imgs]  # normalizations
         self.imgs = imgs  # list of images as numpy arrays
         self.pred = pred  # list of tensors pred[0] = (xyxy, conf, cls)
         self.names = names  # class names
@@ -1165,9 +1017,7 @@ class Detections:
         self.xyxyn = [x / g for x, g in zip(self.xyxy, gn)]  # xyxy normalized
         self.xywhn = [x / g for x, g in zip(self.xywh, gn)]  # xywh normalized
         self.n = len(self.pred)  # number of images (batch size)
-        self.t = tuple(
-            (times[i + 1] - times[i]) * 1000 / self.n for i in range(3)
-        )  # timestamps (ms)
+        self.t = tuple((times[i + 1] - times[i]) * 1000 / self.n for i in range(3))  # timestamps (ms)
         self.s = shape  # inference BCHW shape
 
     def display(self, pprint=False, show=False, save=False, render=False, save_dir=""):
@@ -1182,11 +1032,7 @@ class Detections:
                     for *box, conf, cls in pred:  # xyxy, confidence, class
                         label = f"{self.names[int(cls)]} {conf:.2f}"
                         plot_one_box(box, img, label=label, color=colors[int(cls) % 10])
-            img = (
-                Image.fromarray(img.astype(np.uint8))
-                if isinstance(img, np.ndarray)
-                else img
-            )  # from np
+            img = Image.fromarray(img.astype(np.uint8)) if isinstance(img, np.ndarray) else img  # from np
             if pprint:
                 logger.info(str.rstrip(", "))
             if show:
@@ -1204,17 +1050,14 @@ class Detections:
     def print(self):
         self.display(pprint=True)  # logger.info results
         logger.info(
-            f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {tuple(self.s)}"
-            % self.t
+            f"Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {tuple(self.s)}" % self.t
         )
 
     def show(self):
         self.display(show=True)  # show results
 
     def save(self, save_dir="runs/hub/exp"):
-        save_dir = increment_path(
-            save_dir, exist_ok=save_dir != "runs/hub/exp"
-        )  # increment save_dir
+        save_dir = increment_path(save_dir, exist_ok=save_dir != "runs/hub/exp")  # increment save_dir
         Path(save_dir).mkdir(parents=True, exist_ok=True)
         self.display(save=True, save_dir=save_dir)  # save results
 
@@ -1244,19 +1087,13 @@ class Detections:
             "name",
         )  # xywh columns
         for k, c in zip(["xyxy", "xyxyn", "xywh", "xywhn"], [ca, ca, cb, cb]):
-            a = [
-                [x[:5] + [int(x[5]), self.names[int(x[5])]] for x in x.tolist()]
-                for x in getattr(self, k)
-            ]  # update
+            a = [[x[:5] + [int(x[5]), self.names[int(x[5])]] for x in x.tolist()] for x in getattr(self, k)]  # update
             setattr(new, k, [pd.DataFrame(x, columns=c) for x in a])
         return new
 
     def tolist(self):
         # return a list of Detections objects, i.e. 'for result in results.tolist():'
-        x = [
-            Detections([self.imgs[i]], [self.pred[i]], self.names, self.s)
-            for i in range(self.n)
-        ]
+        x = [Detections([self.imgs[i]], [self.pred[i]], self.names, self.s) for i in range(self.n)]
         for d in x:
             for k in ["imgs", "pred", "xyxy", "xyxyn", "xywh", "xywhn"]:
                 setattr(d, k, getattr(d, k)[0])  # pop out of list
@@ -1268,18 +1105,14 @@ class Detections:
 
 class Classify(nn.Module):
     # Classification head, i.e. x(b,c1,20,20) to x(b,c2)
-    def __init__(
-        self, c1, c2, k=1, s=1, p=None, g=1
-    ):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1):  # ch_in, ch_out, kernel, stride, padding, groups
         super(Classify, self).__init__()
         self.aap = nn.AdaptiveAvgPool2d(1)  # to x(b,c1,1,1)
         self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p), groups=g)  # to x(b,c2,1,1)
         self.flat = nn.Flatten()
 
     def forward(self, x):
-        z = torch.cat(
-            [self.aap(y) for y in (x if isinstance(x, list) else [x])], 1
-        )  # cat if list
+        z = torch.cat([self.aap(y) for y in (x if isinstance(x, list) else [x])], 1)  # cat if list
         return self.flat(self.conv(z))  # flatten to x(b,c2)
 
 
@@ -1403,29 +1236,21 @@ class OREPA_3x3_RepConv(nn.Module):
         self.branch_counter = 0
 
         self.weight_rbr_origin = nn.Parameter(
-            torch.Tensor(
-                out_channels, int(in_channels / self.groups), kernel_size, kernel_size
-            )
+            torch.Tensor(out_channels, int(in_channels / self.groups), kernel_size, kernel_size)
         )
         nn.init.kaiming_uniform_(self.weight_rbr_origin, a=math.sqrt(1.0))
         self.branch_counter += 1
 
         if groups < out_channels:
-            self.weight_rbr_avg_conv = nn.Parameter(
-                torch.Tensor(out_channels, int(in_channels / self.groups), 1, 1)
-            )
-            self.weight_rbr_pfir_conv = nn.Parameter(
-                torch.Tensor(out_channels, int(in_channels / self.groups), 1, 1)
-            )
+            self.weight_rbr_avg_conv = nn.Parameter(torch.Tensor(out_channels, int(in_channels / self.groups), 1, 1))
+            self.weight_rbr_pfir_conv = nn.Parameter(torch.Tensor(out_channels, int(in_channels / self.groups), 1, 1))
             nn.init.kaiming_uniform_(self.weight_rbr_avg_conv, a=1.0)
             nn.init.kaiming_uniform_(self.weight_rbr_pfir_conv, a=1.0)
             self.weight_rbr_avg_conv.data
             self.weight_rbr_pfir_conv.data
             self.register_buffer(
                 "weight_rbr_avg_avg",
-                torch.ones(kernel_size, kernel_size).mul(
-                    1.0 / kernel_size / kernel_size
-                ),
+                torch.ones(kernel_size, kernel_size).mul(1.0 / kernel_size / kernel_size),
             )
             self.branch_counter += 1
 
@@ -1445,16 +1270,12 @@ class OREPA_3x3_RepConv(nn.Module):
             id_value = np.zeros((in_channels, int(in_channels / self.groups), 1, 1))
             for i in range(in_channels):
                 id_value[i, i % int(in_channels / self.groups), 0, 0] = 1
-            id_tensor = torch.from_numpy(id_value).type_as(
-                self.weight_rbr_1x1_kxk_idconv1
-            )
+            id_tensor = torch.from_numpy(id_value).type_as(self.weight_rbr_1x1_kxk_idconv1)
             self.register_buffer("id_tensor", id_tensor)
 
         else:
             self.weight_rbr_1x1_kxk_conv1 = nn.Parameter(
-                torch.Tensor(
-                    internal_channels_1x1_3x3, int(in_channels / self.groups), 1, 1
-                )
+                torch.Tensor(internal_channels_1x1_3x3, int(in_channels / self.groups), 1, 1)
             )
             nn.init.kaiming_uniform_(self.weight_rbr_1x1_kxk_conv1, a=math.sqrt(1.0))
         self.weight_rbr_1x1_kxk_conv2 = nn.Parameter(
@@ -1469,12 +1290,8 @@ class OREPA_3x3_RepConv(nn.Module):
         self.branch_counter += 1
 
         expand_ratio = 8
-        self.weight_rbr_gconv_dw = nn.Parameter(
-            torch.Tensor(in_channels * expand_ratio, 1, kernel_size, kernel_size)
-        )
-        self.weight_rbr_gconv_pw = nn.Parameter(
-            torch.Tensor(out_channels, in_channels * expand_ratio, 1, 1)
-        )
+        self.weight_rbr_gconv_dw = nn.Parameter(torch.Tensor(in_channels * expand_ratio, 1, kernel_size, kernel_size))
+        self.weight_rbr_gconv_pw = nn.Parameter(torch.Tensor(out_channels, in_channels * expand_ratio, 1, 1))
         nn.init.kaiming_uniform_(self.weight_rbr_gconv_dw, a=math.sqrt(1.0))
         nn.init.kaiming_uniform_(self.weight_rbr_gconv_pw, a=math.sqrt(1.0))
         self.branch_counter += 1
@@ -1494,50 +1311,36 @@ class OREPA_3x3_RepConv(nn.Module):
         nn.init.constant_(self.vector[4, :], 0.5)  # dws_conv
 
     def fre_init(self):
-        prior_tensor = torch.Tensor(
-            self.out_channels, self.kernel_size, self.kernel_size
-        )
+        prior_tensor = torch.Tensor(self.out_channels, self.kernel_size, self.kernel_size)
         half_fg = self.out_channels / 2
         for i in range(self.out_channels):
             for h in range(3):
                 for w in range(3):
                     if i < half_fg:
-                        prior_tensor[i, h, w] = math.cos(
-                            math.pi * (h + 0.5) * (i + 1) / 3
-                        )
+                        prior_tensor[i, h, w] = math.cos(math.pi * (h + 0.5) * (i + 1) / 3)
                     else:
-                        prior_tensor[i, h, w] = math.cos(
-                            math.pi * (w + 0.5) * (i + 1 - half_fg) / 3
-                        )
+                        prior_tensor[i, h, w] = math.cos(math.pi * (w + 0.5) * (i + 1 - half_fg) / 3)
 
         self.register_buffer("weight_rbr_prior", prior_tensor)
 
     def weight_gen(self):
-        weight_rbr_origin = torch.einsum(
-            "oihw,o->oihw", self.weight_rbr_origin, self.vector[0, :]
-        )
+        weight_rbr_origin = torch.einsum("oihw,o->oihw", self.weight_rbr_origin, self.vector[0, :])
 
         weight_rbr_avg = torch.einsum(
             "oihw,o->oihw",
-            torch.einsum(
-                "oihw,hw->oihw", self.weight_rbr_avg_conv, self.weight_rbr_avg_avg
-            ),
+            torch.einsum("oihw,hw->oihw", self.weight_rbr_avg_conv, self.weight_rbr_avg_avg),
             self.vector[1, :],
         )
 
         weight_rbr_pfir = torch.einsum(
             "oihw,o->oihw",
-            torch.einsum(
-                "oihw,ohw->oihw", self.weight_rbr_pfir_conv, self.weight_rbr_prior
-            ),
+            torch.einsum("oihw,ohw->oihw", self.weight_rbr_pfir_conv, self.weight_rbr_prior),
             self.vector[2, :],
         )
 
         weight_rbr_1x1_kxk_conv1 = None
         if hasattr(self, "weight_rbr_1x1_kxk_idconv1"):
-            weight_rbr_1x1_kxk_conv1 = (
-                self.weight_rbr_1x1_kxk_idconv1 + self.id_tensor
-            ).squeeze()
+            weight_rbr_1x1_kxk_conv1 = (self.weight_rbr_1x1_kxk_idconv1 + self.id_tensor).squeeze()
         elif hasattr(self, "weight_rbr_1x1_kxk_conv1"):
             weight_rbr_1x1_kxk_conv1 = self.weight_rbr_1x1_kxk_conv1.squeeze()
         else:
@@ -1549,35 +1352,19 @@ class OREPA_3x3_RepConv(nn.Module):
             t, ig = weight_rbr_1x1_kxk_conv1.size()
             o, tg, h, w = weight_rbr_1x1_kxk_conv2.size()
             weight_rbr_1x1_kxk_conv1 = weight_rbr_1x1_kxk_conv1.view(g, int(t / g), ig)
-            weight_rbr_1x1_kxk_conv2 = weight_rbr_1x1_kxk_conv2.view(
-                g, int(o / g), tg, h, w
-            )
+            weight_rbr_1x1_kxk_conv2 = weight_rbr_1x1_kxk_conv2.view(g, int(o / g), tg, h, w)
             weight_rbr_1x1_kxk = torch.einsum(
                 "gti,gothw->goihw", weight_rbr_1x1_kxk_conv1, weight_rbr_1x1_kxk_conv2
             ).view(o, ig, h, w)
         else:
-            weight_rbr_1x1_kxk = torch.einsum(
-                "ti,othw->oihw", weight_rbr_1x1_kxk_conv1, weight_rbr_1x1_kxk_conv2
-            )
+            weight_rbr_1x1_kxk = torch.einsum("ti,othw->oihw", weight_rbr_1x1_kxk_conv1, weight_rbr_1x1_kxk_conv2)
 
-        weight_rbr_1x1_kxk = torch.einsum(
-            "oihw,o->oihw", weight_rbr_1x1_kxk, self.vector[3, :]
-        )
+        weight_rbr_1x1_kxk = torch.einsum("oihw,o->oihw", weight_rbr_1x1_kxk, self.vector[3, :])
 
-        weight_rbr_gconv = self.dwsc2full(
-            self.weight_rbr_gconv_dw, self.weight_rbr_gconv_pw, self.in_channels
-        )
-        weight_rbr_gconv = torch.einsum(
-            "oihw,o->oihw", weight_rbr_gconv, self.vector[4, :]
-        )
+        weight_rbr_gconv = self.dwsc2full(self.weight_rbr_gconv_dw, self.weight_rbr_gconv_pw, self.in_channels)
+        weight_rbr_gconv = torch.einsum("oihw,o->oihw", weight_rbr_gconv, self.vector[4, :])
 
-        weight = (
-            weight_rbr_origin
-            + weight_rbr_avg
-            + weight_rbr_1x1_kxk
-            + weight_rbr_pfir
-            + weight_rbr_gconv
-        )
+        weight = weight_rbr_origin + weight_rbr_avg + weight_rbr_1x1_kxk + weight_rbr_pfir + weight_rbr_gconv
 
         return weight
 
@@ -1643,9 +1430,7 @@ class RepConv_OREPA(nn.Module):
             self.nonlinearity = nonlinear
 
         if use_se:
-            self.se = SEBlock(
-                self.out_channels, internal_neurons=self.out_channels // 16
-            )
+            self.se = SEBlock(self.out_channels, internal_neurons=self.out_channels // 16)
         else:
             self.se = nn.Identity()
 
@@ -1718,18 +1503,12 @@ class RepConv_OREPA(nn.Module):
         K3 = self.rbr_dense.weight_gen()
         K1 = self.rbr_1x1.conv.weight
         t3 = (
-            (
-                self.rbr_dense.bn.weight
-                / ((self.rbr_dense.bn.running_var + self.rbr_dense.bn.eps).sqrt())
-            )
+            (self.rbr_dense.bn.weight / ((self.rbr_dense.bn.running_var + self.rbr_dense.bn.eps).sqrt()))
             .reshape(-1, 1, 1, 1)
             .detach()
         )
         t1 = (
-            (
-                self.rbr_1x1.bn.weight
-                / ((self.rbr_1x1.bn.running_var + self.rbr_1x1.bn.eps).sqrt())
-            )
+            (self.rbr_1x1.bn.weight / ((self.rbr_1x1.bn.running_var + self.rbr_1x1.bn.eps).sqrt()))
             .reshape(-1, 1, 1, 1)
             .detach()
         )
@@ -1737,9 +1516,7 @@ class RepConv_OREPA(nn.Module):
         l2_loss_circle = (K3**2).sum() - (
             K3[:, :, 1:2, 1:2] ** 2
         ).sum()  # The L2 loss of the "circle" of weights in 3x3 kernel. Use regular L2 on them.
-        eq_kernel = (
-            K3[:, :, 1:2, 1:2] * t3 + K1 * t1
-        )  # The equivalent resultant central point of 3x3 kernel.
+        eq_kernel = K3[:, :, 1:2, 1:2] * t3 + K1 * t1  # The equivalent resultant central point of 3x3 kernel.
         l2_loss_eq_kernel = (
             eq_kernel**2 / (t3**2 + t1**2)
         ).sum()  # Normalize for an L2 coefficient comparable to regular L2.
@@ -1778,9 +1555,7 @@ class RepConv_OREPA(nn.Module):
         else:
             if not hasattr(self, "id_tensor"):
                 input_dim = self.in_channels // self.groups
-                kernel_value = np.zeros(
-                    (self.in_channels, input_dim, 3, 3), dtype=np.float32
-                )
+                kernel_value = np.zeros((self.in_channels, input_dim, 3, 3), dtype=np.float32)
                 for i in range(self.in_channels):
                     kernel_value[i, i % input_dim, 1, 1] = 1
                 self.id_tensor = torch.from_numpy(kernel_value).to(branch.weight.device)
@@ -1853,12 +1628,8 @@ class WindowAttention(nn.Module):
         coords_w = torch.arange(self.window_size[1])
         coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
         coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = (
-            coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        )  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(
-            1, 2, 0
-        ).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
         relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
         relative_coords[:, :, 1] += self.window_size[1] - 1
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
@@ -1875,11 +1646,7 @@ class WindowAttention(nn.Module):
 
     def forward(self, x, mask=None):
         B_, N, C = x.shape
-        qkv = (
-            self.qkv(x)
-            .reshape(B_, N, 3, self.num_heads, C // self.num_heads)
-            .permute(2, 0, 3, 1, 4)
-        )
+        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = (
             qkv[0],
             qkv[1],
@@ -1889,23 +1656,17 @@ class WindowAttention(nn.Module):
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)
 
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ].view(
+        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
             -1,
         )  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
             attn = self.softmax(attn)
         else:
@@ -1954,17 +1715,13 @@ def window_partition(x, window_size):
     B, H, W, C = x.shape
     assert H % window_size == 0, "feature map h and w can not divide by window size"
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = (
-        x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    )
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows
 
 
 def window_reverse(windows, window_size, H, W):
     B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(
-        B, H // window_size, W // window_size, window_size, window_size, -1
-    )
+    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
@@ -1995,9 +1752,7 @@ class SwinTransformerLayer(nn.Module):
         #     # if window size is larger than input resolution, we don't partition windows
         #     self.shift_size = 0
         #     self.window_size = min(self.input_resolution)
-        assert (
-            0 <= self.shift_size < self.window_size
-        ), "shift_size must in 0-window_size"
+        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
         self.attn = WindowAttention(
@@ -2039,14 +1794,10 @@ class SwinTransformerLayer(nn.Module):
                 img_mask[:, h, w, :] = cnt
                 cnt += 1
 
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
+        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
         mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
 
         return attn_mask
 
@@ -2055,11 +1806,7 @@ class SwinTransformerLayer(nn.Module):
         _, _, H_, W_ = x.shape
 
         Padding = False
-        if (
-            min(H_, W_) < self.window_size
-            or H_ % self.window_size != 0
-            or W_ % self.window_size != 0
-        ):
+        if min(H_, W_) < self.window_size or H_ % self.window_size != 0 or W_ % self.window_size != 0:
             Padding = True
             # logger.info(f'img_size {min(H_, W_)} is less than (or not divided by) window_size {self.window_size}, Padding.')
             pad_r = (self.window_size - W_ % self.window_size) % self.window_size
@@ -2083,24 +1830,16 @@ class SwinTransformerLayer(nn.Module):
 
         # cyclic shift
         if self.shift_size > 0:
-            shifted_x = torch.roll(
-                x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
+            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         else:
             shifted_x = x
 
         # partition windows
-        x_windows = window_partition(
-            shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
+        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
 
         # W-MSA/SW-MSA
-        attn_windows = self.attn(
-            x_windows, mask=attn_mask
-        )  # nW*B, window_size*window_size, C
+        attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -2108,9 +1847,7 @@ class SwinTransformerLayer(nn.Module):
 
         # reverse cyclic shift
         if self.shift_size > 0:
-            x = torch.roll(
-                shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
+            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             x = shifted_x
         x = x.view(B, H * W, C)
@@ -2156,9 +1893,7 @@ class SwinTransformerBlock(nn.Module):
 
 class STCSPA(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(STCSPA, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -2176,9 +1911,7 @@ class STCSPA(nn.Module):
 
 class STCSPB(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(STCSPB, self).__init__()
         c_ = int(c2)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -2197,9 +1930,7 @@ class STCSPB(nn.Module):
 
 class STCSPC(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(STCSPC, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -2239,9 +1970,7 @@ class WindowAttention_v2(nn.Module):
         self.pretrained_window_size = pretrained_window_size
         self.num_heads = num_heads
 
-        self.logit_scale = nn.Parameter(
-            torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True
-        )
+        self.logit_scale = nn.Parameter(torch.log(10 * torch.ones((num_heads, 1, 1))), requires_grad=True)
 
         # mlp to generate continuous relative position bias
         self.cpb_mlp = nn.Sequential(
@@ -2251,12 +1980,8 @@ class WindowAttention_v2(nn.Module):
         )
 
         # get relative_coords_table
-        relative_coords_h = torch.arange(
-            -(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32
-        )
-        relative_coords_w = torch.arange(
-            -(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32
-        )
+        relative_coords_h = torch.arange(-(self.window_size[0] - 1), self.window_size[0], dtype=torch.float32)
+        relative_coords_w = torch.arange(-(self.window_size[1] - 1), self.window_size[1], dtype=torch.float32)
         relative_coords_table = (
             torch.stack(torch.meshgrid([relative_coords_h, relative_coords_w]))
             .permute(1, 2, 0)
@@ -2271,9 +1996,7 @@ class WindowAttention_v2(nn.Module):
             relative_coords_table[:, :, :, 1] /= self.window_size[1] - 1
         relative_coords_table *= 8  # normalize to -8, 8
         relative_coords_table = (
-            torch.sign(relative_coords_table)
-            * torch.log2(torch.abs(relative_coords_table) + 1.0)
-            / np.log2(8)
+            torch.sign(relative_coords_table) * torch.log2(torch.abs(relative_coords_table) + 1.0) / np.log2(8)
         )
 
         self.register_buffer("relative_coords_table", relative_coords_table)
@@ -2283,12 +2006,8 @@ class WindowAttention_v2(nn.Module):
         coords_w = torch.arange(self.window_size[1])
         coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
         coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        relative_coords = (
-            coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        )  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(
-            1, 2, 0
-        ).contiguous()  # Wh*Ww, Wh*Ww, 2
+        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
         relative_coords[:, :, 0] += self.window_size[0] - 1  # shift to start from 0
         relative_coords[:, :, 1] += self.window_size[1] - 1
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
@@ -2328,32 +2047,22 @@ class WindowAttention_v2(nn.Module):
 
         # cosine attention
         attn = F.normalize(q, dim=-1) @ F.normalize(k, dim=-1).transpose(-2, -1)
-        logit_scale = torch.clamp(
-            self.logit_scale, max=torch.log(torch.tensor(1.0 / 0.01))
-        ).exp()
+        logit_scale = torch.clamp(self.logit_scale, max=torch.log(torch.tensor(1.0 / 0.01))).exp()
         attn = attn * logit_scale
 
-        relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(
-            -1, self.num_heads
-        )
-        relative_position_bias = relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ].view(
+        relative_position_bias_table = self.cpb_mlp(self.relative_coords_table).view(-1, self.num_heads)
+        relative_position_bias = relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1],
             self.window_size[0] * self.window_size[1],
             -1,
         )  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         relative_position_bias = 16 * torch.sigmoid(relative_position_bias)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.num_heads, N, N)
             attn = self.softmax(attn)
         else:
@@ -2419,17 +2128,13 @@ class Mlp_v2(nn.Module):
 def window_partition_v2(x, window_size):
     B, H, W, C = x.shape
     x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = (
-        x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    )
+    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows
 
 
 def window_reverse_v2(windows, window_size, H, W):
     B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(
-        B, H // window_size, W // window_size, window_size, window_size, -1
-    )
+    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
     x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
@@ -2461,9 +2166,7 @@ class SwinTransformerLayer_v2(nn.Module):
         #    # if window size is larger than input resolution, we don't partition windows
         #    self.shift_size = 0
         #    self.window_size = min(self.input_resolution)
-        assert (
-            0 <= self.shift_size < self.window_size
-        ), "shift_size must in 0-window_size"
+        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
         self.attn = WindowAttention_v2(
@@ -2505,14 +2208,10 @@ class SwinTransformerLayer_v2(nn.Module):
                 img_mask[:, h, w, :] = cnt
                 cnt += 1
 
-        mask_windows = window_partition(
-            img_mask, self.window_size
-        )  # nW, window_size, window_size, 1
+        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
         mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(
-            attn_mask == 0, float(0.0)
-        )
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
 
         return attn_mask
 
@@ -2521,11 +2220,7 @@ class SwinTransformerLayer_v2(nn.Module):
         _, _, H_, W_ = x.shape
 
         Padding = False
-        if (
-            min(H_, W_) < self.window_size
-            or H_ % self.window_size != 0
-            or W_ % self.window_size != 0
-        ):
+        if min(H_, W_) < self.window_size or H_ % self.window_size != 0 or W_ % self.window_size != 0:
             Padding = True
             # logger.info(f'img_size {min(H_, W_)} is less than (or not divided by) window_size {self.window_size}, Padding.')
             pad_r = (self.window_size - W_ % self.window_size) % self.window_size
@@ -2548,24 +2243,16 @@ class SwinTransformerLayer_v2(nn.Module):
 
         # cyclic shift
         if self.shift_size > 0:
-            shifted_x = torch.roll(
-                x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2)
-            )
+            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         else:
             shifted_x = x
 
         # partition windows
-        x_windows = window_partition_v2(
-            shifted_x, self.window_size
-        )  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(
-            -1, self.window_size * self.window_size, C
-        )  # nW*B, window_size*window_size, C
+        x_windows = window_partition_v2(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
 
         # W-MSA/SW-MSA
-        attn_windows = self.attn(
-            x_windows, mask=attn_mask
-        )  # nW*B, window_size*window_size, C
+        attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
@@ -2573,9 +2260,7 @@ class SwinTransformerLayer_v2(nn.Module):
 
         # reverse cyclic shift
         if self.shift_size > 0:
-            x = torch.roll(
-                shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2)
-            )
+            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         else:
             x = shifted_x
         x = x.view(B, H * W, C)
@@ -2640,9 +2325,7 @@ class SwinTransformer2Block(nn.Module):
 
 class ST2CSPA(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(ST2CSPA, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -2660,9 +2343,7 @@ class ST2CSPA(nn.Module):
 
 class ST2CSPB(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(ST2CSPB, self).__init__()
         c_ = int(c2)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -2681,9 +2362,7 @@ class ST2CSPB(nn.Module):
 
 class ST2CSPC(nn.Module):
     # CSP Bottleneck https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, c1, c2, n=1, shortcut=True, g=1, e=0.5
-    ):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
         super(ST2CSPC, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)

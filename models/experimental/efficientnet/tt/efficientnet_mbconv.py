@@ -135,9 +135,9 @@ class TtEfficientnetMbConv(torch.nn.Module):
             layers.append(
                 TtEfficientnetConv2dNormActivation(
                     state_dict=state_dict,
-                    conv_base_address=f"{base_address}._expand_conv"
-                    if is_lite
-                    else f"{base_address}.block.{len(layers)}.0",
+                    conv_base_address=(
+                        f"{base_address}._expand_conv" if is_lite else f"{base_address}.block.{len(layers)}.0"
+                    ),
                     bn_base_address=f"{base_address}._bn0" if is_lite else f"{base_address}.block.{len(layers)}.1",
                     device=device,
                     in_channels=cnf.input_channels,
@@ -153,9 +153,9 @@ class TtEfficientnetMbConv(torch.nn.Module):
         layers.append(
             TtEfficientnetConv2dNormActivation(
                 state_dict=state_dict,
-                conv_base_address=f"{base_address}._depthwise_conv"
-                if is_lite
-                else f"{base_address}.block.{len(layers)}.0",
+                conv_base_address=(
+                    f"{base_address}._depthwise_conv" if is_lite else f"{base_address}.block.{len(layers)}.0"
+                ),
                 bn_base_address=f"{base_address}._bn1" if is_lite else f"{base_address}.block.{len(layers)}.1",
                 device=device,
                 in_channels=expanded_channels,
@@ -188,9 +188,9 @@ class TtEfficientnetMbConv(torch.nn.Module):
         layers.append(
             TtEfficientnetConv2dNormActivation(
                 state_dict=state_dict,
-                conv_base_address=f"{base_address}._project_conv"
-                if is_lite
-                else f"{base_address}.block.{len(layers)}.0",
+                conv_base_address=(
+                    f"{base_address}._project_conv" if is_lite else f"{base_address}.block.{len(layers)}.0"
+                ),
                 bn_base_address=f"{base_address}._bn2" if is_lite else f"{base_address}.block.{len(layers)}.1",
                 device=device,
                 in_channels=expanded_channels,

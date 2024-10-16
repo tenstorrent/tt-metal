@@ -23,12 +23,8 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input, device):
     batch_size = _batch_size
 
     with torch.no_grad():
-        image_processor = transformers.AutoImageProcessor.from_pretrained(
-            "google/mobilenet_v2_1.0_224"
-        )
-        torch_model = transformers.MobileNetV2Model.from_pretrained(
-            "google/mobilenet_v2_1.0_224"
-        )
+        image_processor = transformers.AutoImageProcessor.from_pretrained("google/mobilenet_v2_1.0_224")
+        torch_model = transformers.MobileNetV2Model.from_pretrained("google/mobilenet_v2_1.0_224")
 
         torch_model.eval()
         state_dict = torch_model.state_dict()
@@ -42,9 +38,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input, device):
                 disable_conv_on_tt_device=True,
             )
         else:
-            tt_model = TtMobileNetv2Model(
-                config=torch_model.config, state_dict=state_dict
-            )
+            tt_model = TtMobileNetv2Model(config=torch_model.config, state_dict=state_dict)
 
         tt_model.eval()
 
@@ -55,9 +49,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input, device):
                     "conv_stem.first_conv.normalization",
                 ]
             ]
-            modules_to_fuse.extend(
-                [["conv_stem.conv_3x3.convolution", "conv_stem.conv_3x3.normalization"]]
-            )
+            modules_to_fuse.extend([["conv_stem.conv_3x3.convolution", "conv_stem.conv_3x3.normalization"]])
             modules_to_fuse.extend(
                 [
                     [
@@ -93,9 +85,7 @@ def test_mobilenetv2_inference(fuse_ops, imagenet_sample_input, device):
                     ]
                 )
 
-            modules_to_fuse.extend(
-                [[f"conv_1x1.convolution", f"conv_1x1.normalization"]]
-            )
+            modules_to_fuse.extend([[f"conv_1x1.convolution", f"conv_1x1.normalization"]])
 
             tt_model = torch.ao.quantization.fuse_modules(tt_model, modules_to_fuse)
 

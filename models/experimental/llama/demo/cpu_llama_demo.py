@@ -25,9 +25,7 @@ def test_cpu_demo(prompt, num_words):
 
     # load llama pytorch model =======================================================
     tokenizer = AutoTokenizer.from_pretrained(_tokenizer_name)
-    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(
-        _llama_model_name
-    )
+    hugging_face_reference_model = AutoModelForCausalLM.from_pretrained(_llama_model_name)
 
     hugging_face_reference_model.eval()
 
@@ -44,18 +42,14 @@ def test_cpu_demo(prompt, num_words):
     logger.info(f"Initial prompt tokens: {tokens}")
 
     # generate Pytorch output of num_words with generate function ====================
-    logits_processor = get_logits_processor(
-        input_ids, hugging_face_reference_model.config
-    )
+    logits_processor = get_logits_processor(input_ids, hugging_face_reference_model.config)
 
     generate_ids = hugging_face_reference_model.generate(
         input_ids, logits_processor=logits_processor, max_length=seq_length + num_words
     )
 
     # decode output ids
-    output = tokenizer.batch_decode(
-        generate_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-    )[0]
+    output = tokenizer.batch_decode(generate_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)[0]
 
     tokens = tokenizer.tokenize(output)
 

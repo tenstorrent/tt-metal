@@ -17,7 +17,7 @@ def test_cpu_demo():
     sample = next(iter(ds))
 
     inputs = feature_extractor(
-    sample["audio"]["array"], sampling_rate=sample["audio"]["sampling_rate"], return_tensors="pt"
+        sample["audio"]["array"], sampling_rate=sample["audio"]["sampling_rate"], return_tensors="pt"
     )
     input_features = inputs.input_features
 
@@ -27,8 +27,8 @@ def test_cpu_demo():
     predicted_class_ids = torch.argmax(logits).item()
     predicted_label = model.config.id2label[predicted_class_ids]
 
-    with open('sample_audio.npy', 'wb') as f:
-        np.save(f, sample['audio']['array'])
+    with open("sample_audio.npy", "wb") as f:
+        np.save(f, sample["audio"]["array"])
     # actually save the input
     logger.info(f"Input audio is saved as sample_audio.npy.")
     logger.info(f"CPU's predicted Output: {predicted_label}.")

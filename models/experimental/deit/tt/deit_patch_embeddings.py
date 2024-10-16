@@ -11,8 +11,6 @@ from torch import nn
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
-
-
 class DeiTPatchEmbeddings(nn.Module):
     """
     implemented for cpu only.
@@ -23,33 +21,17 @@ class DeiTPatchEmbeddings(nn.Module):
         image_size, patch_size = config.image_size, config.patch_size
         num_channels, hidden_size = config.num_channels, config.hidden_size
 
-        image_size = (
-            image_size
-            if isinstance(image_size, collections.abc.Iterable)
-            else (image_size, image_size)
-        )
-        patch_size = (
-            patch_size
-            if isinstance(patch_size, collections.abc.Iterable)
-            else (patch_size, patch_size)
-        )
-        num_patches = (image_size[1] // patch_size[1]) * (
-            image_size[0] // patch_size[0]
-        )
+        image_size = image_size if isinstance(image_size, collections.abc.Iterable) else (image_size, image_size)
+        patch_size = patch_size if isinstance(patch_size, collections.abc.Iterable) else (patch_size, patch_size)
+        num_patches = (image_size[1] // patch_size[1]) * (image_size[0] // patch_size[0])
         self.image_size = image_size
         self.patch_size = patch_size
         self.num_channels = num_channels
         self.num_patches = num_patches
 
-        self.projection = nn.Conv2d(
-            num_channels, hidden_size, kernel_size=patch_size, stride=patch_size
-        )
-        self.projection.weight = nn.Parameter(
-            state_dict[f"{base_address}.projection.weight"]
-        )
-        self.projection.bias = nn.Parameter(
-            state_dict[f"{base_address}.projection.bias"]
-        )
+        self.projection = nn.Conv2d(num_channels, hidden_size, kernel_size=patch_size, stride=patch_size)
+        self.projection.weight = nn.Parameter(state_dict[f"{base_address}.projection.weight"])
+        self.projection.bias = nn.Parameter(state_dict[f"{base_address}.projection.bias"])
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
         batch_size, num_channels, height, width = pixel_values.shape

@@ -29,9 +29,7 @@ def test_hrnet_basic_block_inference(device, model_name, pcc, reset_seeds):
     model = timm.create_model(model_name, pretrained=True)
 
     # Torch BasicBlock
-    torch_model = model.stage2[BASIC_BLOCK_LAYER_INDEX].branches[
-        BASIC_BLOCK_LAYER_INDEX
-    ][BASIC_BLOCK_LAYER_INDEX]
+    torch_model = model.stage2[BASIC_BLOCK_LAYER_INDEX].branches[BASIC_BLOCK_LAYER_INDEX][BASIC_BLOCK_LAYER_INDEX]
 
     # Tt BasicBlock
     tt_model = TtBasicBlock(

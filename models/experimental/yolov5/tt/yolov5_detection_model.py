@@ -36,18 +36,14 @@ from models.experimental.yolov5.reference.utils.torch_utils import (
 )
 
 
-def parse_model(
-    state_dict, base_address, yaml_dict, ch, device
-):  # model_dict, input_channels(3)
+def parse_model(state_dict, base_address, yaml_dict, ch, device):  # model_dict, input_channels(3)
     # with open(yaml_file_name, encoding="ascii", errors="ignore") as f:
     #     d = yaml.safe_load(f)  # model dict
 
     d = yaml_dict
 
     # Parse a YOLOv5 model.yaml dictionary
-    logger.info(
-        f"{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}"
-    )
+    logger.info(f"{'':>3}{'from':>18}{'n':>3}{'params':>10}  {'module':<40}{'arguments':<30}")
     anchors, nc, gd, gw, act = (
         d["anchors"],
         d["nc"],
@@ -57,21 +53,15 @@ def parse_model(
     )
 
     if act:
-        Conv.default_act = eval(
-            act
-        )  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
+        Conv.default_act = eval(act)  # redefine default activation, i.e. Conv.default_act = nn.SiLU()
         logger.info(f"{colorstr('activation:')} {act}")  # print
 
-    na = (
-        (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors
-    )  # number of anchors
+    na = (len(anchors[0]) // 2) if isinstance(anchors, list) else anchors  # number of anchors
     no = na * (nc + 5)  # number of outputs = anchors * (classes + 5)
 
     layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
 
-    for i, (f, n, m, args) in enumerate(
-        d["backbone"] + d["head"]
-    ):  # from, number, module, args
+    for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         for j, a in enumerate(args):
             with contextlib.suppress(NameError):
                 args[j] = eval(a) if isinstance(a, str) else a  # eval strings
@@ -126,9 +116,7 @@ def parse_model(
         args.insert(0, f"{base_address}.{i}")
         args.insert(0, state_dict)
 
-        m_ = (
-            nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)
-        )  # module
+        m_ = nn.Sequential(*(m(*args) for _ in range(n))) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace("__main__.", "")  # module type
         np = sum(x.numel() for x in m_.parameters())  # number params
         m_.i, m_.f, m_.type, m_.np = (
@@ -138,9 +126,7 @@ def parse_model(
             np,
         )  # attach index, 'from' index, type, number params
 
-        save.extend(
-            x % i for x in ([f] if isinstance(f, int) else f) if x != -1
-        )  # append to savelist
+        save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
 
         if i == 0:
@@ -154,9 +140,7 @@ def parse_model(
 class BaseModel(nn.Module):
     # YOLOv5 base model
     def forward(self, x, profile=False, visualize=False):
-        return self._forward_once(
-            x, profile, visualize
-        )  # single-scale inference, train
+        return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_once(self, x, profile=False, visualize=False):
         y, dt = [], []  # outputs
@@ -164,11 +148,7 @@ class BaseModel(nn.Module):
             logger.debug(f"Running layer {i}")
 
             if m.f != -1:  # if not from previous layer
-                x = (
-                    y[m.f]
-                    if isinstance(m.f, int)
-                    else [x if j == -1 else y[j] for j in m.f]
-                )  # from earlier layers
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
 
@@ -181,11 +161,7 @@ class BaseModel(nn.Module):
 
     def _profile_one_layer(self, m, x, dt):
         c = m == self.model[-1]  # is final layer, copy input as inplace fix
-        o = (
-            thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1e9 * 2
-            if thop
-            else 0
-        )  # FLOPs
+        o = thop.profile(m, inputs=(x.copy() if c else x,), verbose=False)[0] / 1e9 * 2 if thop else 0  # FLOPs
         t = time_sync()
         for _ in range(10):
             m(x.copy() if c else x)
@@ -267,18 +243,12 @@ class TtYolov5DetectionModel(BaseModel):
             s = 256  # 2x min stride
             m.inplace = self.inplace
 
-            forward = (
-                lambda x: self.forward(x)
-                if isinstance(m, TtYolov5Detect)
-                else self.forward(x)[0]
-            )
+            forward = lambda x: self.forward(x) if isinstance(m, TtYolov5Detect) else self.forward(x)[0]
 
             zeros_tensor = torch2tt_tensor(torch.zeros(1, ch, s, s), device)
             forwaded_zeros = forward(zeros_tensor)
 
-            m.stride = torch.tensor(
-                [s / x.shape[-2] for x in forwaded_zeros]
-            )  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in forwaded_zeros])  # forward
 
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
@@ -290,9 +260,7 @@ class TtYolov5DetectionModel(BaseModel):
         if augment:
             return self._forward_augment(x)  # augmented inference, None
 
-        return self._forward_once(
-            x, profile, visualize
-        )  # single-scale inference, train
+        return self._forward_once(x, profile, visualize)  # single-scale inference, train
 
     def _forward_augment(self, x):
         img_size = x.shape[-2:]  # height, width
@@ -339,29 +307,21 @@ class TtYolov5DetectionModel(BaseModel):
         y[-1] = y[-1][:, i:]  # small
         return y
 
-    def _initialize_biases(
-        self, cf=None
-    ):  # initialize biases into Detect(), cf is class frequency
+    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
         # https://arxiv.org/abs/1708.02002 section 3.3
         # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
         m = self.model[-1]  # Detect() module
 
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-            b.data[:, 4] += math.log(
-                8 / (640 / s) ** 2
-            )  # obj (8 objects per 640 image)
+            b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
             b.data[:, 5 : 5 + m.nc] += (
-                math.log(0.6 / (m.nc - 0.99999))
-                if cf is None
-                else torch.log(cf / cf.sum())
+                math.log(0.6 / (m.nc - 0.99999)) if cf is None else torch.log(cf / cf.sum())
             )  # cls
             mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
 
-def _yolov5_detection_model(
-    cfg_path, state_dict, base_address, device
-) -> TtYolov5DetectionModel:
+def _yolov5_detection_model(cfg_path, state_dict, base_address, device) -> TtYolov5DetectionModel:
     tt_model = TtYolov5DetectionModel(
         cfg=cfg_path,
         state_dict=state_dict,
@@ -378,9 +338,7 @@ def yolov5s_detection_model(device) -> TtYolov5DetectionModel:
     data = None
     half = False
 
-    refence_model = DetectMultiBackend(
-        weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half
-    )
+    refence_model = DetectMultiBackend(weights, device=torch.device("cpu"), dnn=dnn, data=data, fp16=half)
 
     tt_model = TtYolov5DetectionModel(
         cfg=cfg_path,

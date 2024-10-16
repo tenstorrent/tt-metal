@@ -42,9 +42,7 @@ def roberta_for_qa():
     answer_start_index = outputs.start_logits.argmax()
     answer_end_index = outputs.end_logits.argmax()
 
-    predict_answer_tokens = inputs.input_ids[
-        0, answer_start_index : answer_end_index + 1
-    ]
+    predict_answer_tokens = inputs.input_ids[0, answer_start_index : answer_end_index + 1]
     tokenizer.decode(predict_answer_tokens, skip_special_tokens=True)
 
 
@@ -57,12 +55,8 @@ def roberta_for_multiple_choice():
     choice1 = "It is eaten while held in the hand."
     # labels = torch.tensor(0).unsqueeze(0)  # choice0 is correct (according to Wikipedia ;)), batch size 1
 
-    encoding = tokenizer(
-        [prompt, prompt], [choice0, choice1], return_tensors="pt", padding=True
-    )
-    outputs = model(
-        **{k: v.unsqueeze(0) for k, v in encoding.items()}
-    )  # batch size is 1
+    encoding = tokenizer([prompt, prompt], [choice0, choice1], return_tensors="pt", padding=True)
+    outputs = model(**{k: v.unsqueeze(0) for k, v in encoding.items()})  # batch size is 1
     predicted_class = outputs.logits.argmax().item()
 
 

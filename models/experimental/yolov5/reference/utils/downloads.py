@@ -22,9 +22,7 @@ def is_url(url, check=True):
         url = str(url)
         result = urllib.parse.urlparse(url)
         assert all([result.scheme, result.netloc])  # check if is url
-        return (
-            (urllib.request.urlopen(url).getcode() == 200) if check else True
-        )  # check if exists online
+        return (urllib.request.urlopen(url).getcode() == 200) if check else True  # check if exists online
     except (AssertionError, urllib.request.HTTPError):
         return False
 
@@ -56,14 +54,10 @@ def safe_download(file, url, url2=None, min_bytes=1e0, error_msg=""):
     from utils.general import logger
 
     file = Path(file)
-    assert_msg = (
-        f"Downloaded file '{file}' does not exist or size is < min_bytes={min_bytes}"
-    )
+    assert_msg = f"Downloaded file '{file}' does not exist or size is < min_bytes={min_bytes}"
     try:  # url1
         logger.info(f"Downloading {url} to {file}...")
-        torch.hub.download_url_to_file(
-            url, str(file), progress=logger.level <= logging.INFO
-        )
+        torch.hub.download_url_to_file(url, str(file), progress=logger.level <= logging.INFO)
         assert file.exists() and file.stat().st_size > min_bytes, assert_msg  # check
     except Exception as e:  # url2
         if file.exists():
@@ -87,12 +81,8 @@ def attempt_download(file, repo="ultralytics/yolov5", release="v7.0"):
         # Return GitHub repo tag (i.e. 'v7.0') and assets (i.e. ['yolov5s.pt', 'yolov5m.pt', ...])
         if version != "latest":
             version = f"tags/{version}"  # i.e. tags/v7.0
-        response = requests.get(
-            f"https://api.github.com/repos/{repository}/releases/{version}"
-        ).json()  # github api
-        return response["tag_name"], [
-            x["name"] for x in response["assets"]
-        ]  # tag, assets
+        response = requests.get(f"https://api.github.com/repos/{repository}/releases/{version}").json()  # github api
+        return response["tag_name"], [x["name"] for x in response["assets"]]  # tag, assets
 
     file = Path(str(file).strip().replace("'", ""))
     if not file.exists():
@@ -100,9 +90,7 @@ def attempt_download(file, repo="ultralytics/yolov5", release="v7.0"):
         name = Path(urllib.parse.unquote(str(file))).name  # decode '%2F' to '/' etc.
         if str(file).startswith(("http:/", "https:/")):  # download
             url = str(file).replace(":/", "://")  # Pathlib turns :// -> :/
-            file = name.split("?")[
-                0
-            ]  # parse authentication https://url.com/file.txt?auth...
+            file = name.split("?")[0]  # parse authentication https://url.com/file.txt?auth...
             if Path(file).is_file():
                 logger.info(f"Found {url} locally at {file}")  # file already exists
             else:
@@ -110,11 +98,7 @@ def attempt_download(file, repo="ultralytics/yolov5", release="v7.0"):
             return file
 
         # GitHub assets
-        assets = [
-            f"yolov5{size}{suffix}.pt"
-            for size in "nsmlx"
-            for suffix in ("", "6", "-cls", "-seg")
-        ]  # default
+        assets = [f"yolov5{size}{suffix}.pt" for size in "nsmlx" for suffix in ("", "6", "-cls", "-seg")]  # default
         try:
             tag, assets = github_assets(repo, release)
         except Exception:
@@ -122,20 +106,12 @@ def attempt_download(file, repo="ultralytics/yolov5", release="v7.0"):
                 tag, assets = github_assets(repo)  # latest release
             except Exception:
                 try:
-                    tag = (
-                        subprocess.check_output(
-                            "git tag", shell=True, stderr=subprocess.STDOUT
-                        )
-                        .decode()
-                        .split()[-1]
-                    )
+                    tag = subprocess.check_output("git tag", shell=True, stderr=subprocess.STDOUT).decode().split()[-1]
                 except Exception:
                     tag = release
 
         if name in assets:
-            file.parent.mkdir(
-                parents=True, exist_ok=True
-            )  # make parent dir (if required)
+            file.parent.mkdir(parents=True, exist_ok=True)  # make parent dir (if required)
             safe_download(
                 file,
                 url=f"https://github.com/{repo}/releases/download/{tag}/{name}",

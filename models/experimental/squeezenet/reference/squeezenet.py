@@ -32,9 +32,7 @@ class Fire(nn.Module):
         squeeze_weight = state_dict[f"{base_address}.squeeze.weight"]
         squeeze_bias = state_dict[f"{base_address}.squeeze.bias"].tolist()
         self.squeeze_params = [squeeze_planes, inplanes, 1, 1, 1, 1, 0, 0, 1, 1]
-        if not disable_conv_on_tt_device and is_conv_supported_on_device(
-            self.squeeze_params
-        ):
+        if not disable_conv_on_tt_device and is_conv_supported_on_device(self.squeeze_params):
             self.squeeze = run_conv_on_device_wrapper(
                 squeeze_weight.reshape(-1).tolist(),
                 self.squeeze_params,
@@ -43,9 +41,7 @@ class Fire(nn.Module):
             )
         else:
             self.squeeze = nn.Conv2d(inplanes, squeeze_planes, kernel_size=1)
-            self.squeeze.weight = nn.Parameter(
-                state_dict[f"{base_address}.squeeze.weight"]
-            )
+            self.squeeze.weight = nn.Parameter(state_dict[f"{base_address}.squeeze.weight"])
             self.squeeze.bias = nn.Parameter(state_dict[f"{base_address}.squeeze.bias"])
 
         self.squeeze_activation = nn.ReLU(inplace=True)
@@ -64,9 +60,7 @@ class Fire(nn.Module):
             1,
             1,
         ]
-        if not disable_conv_on_tt_device and is_conv_supported_on_device(
-            self.expand1x1_params
-        ):
+        if not disable_conv_on_tt_device and is_conv_supported_on_device(self.expand1x1_params):
             self.expand1x1 = run_conv_on_device_wrapper(
                 expand1x1_weight.reshape(-1).tolist(),
                 self.expand1x1_params,
@@ -75,12 +69,8 @@ class Fire(nn.Module):
             )
         else:
             self.expand1x1 = nn.Conv2d(squeeze_planes, expand1x1_planes, kernel_size=1)
-            self.expand1x1.weight = nn.Parameter(
-                state_dict[f"{base_address}.expand1x1.weight"]
-            )
-            self.expand1x1.bias = nn.Parameter(
-                state_dict[f"{base_address}.expand1x1.bias"]
-            )
+            self.expand1x1.weight = nn.Parameter(state_dict[f"{base_address}.expand1x1.weight"])
+            self.expand1x1.bias = nn.Parameter(state_dict[f"{base_address}.expand1x1.bias"])
 
         self.expand1x1_activation = nn.ReLU(inplace=True)
 
@@ -98,9 +88,7 @@ class Fire(nn.Module):
             1,
             1,
         ]
-        if not disable_conv_on_tt_device and is_conv_supported_on_device(
-            self.expand3x3_params
-        ):
+        if not disable_conv_on_tt_device and is_conv_supported_on_device(self.expand3x3_params):
             self.expand3x3 = run_conv_on_device_wrapper(
                 expand3x3_weight.reshape(-1).tolist(),
                 self.expand3x3_params,
@@ -108,15 +96,9 @@ class Fire(nn.Module):
                 expand3x3_bias,
             )
         else:
-            self.expand3x3 = nn.Conv2d(
-                squeeze_planes, expand3x3_planes, kernel_size=3, padding=1
-            )
-            self.expand3x3.weight = nn.Parameter(
-                state_dict[f"{base_address}.expand3x3.weight"]
-            )
-            self.expand3x3.bias = nn.Parameter(
-                state_dict[f"{base_address}.expand3x3.bias"]
-            )
+            self.expand3x3 = nn.Conv2d(squeeze_planes, expand3x3_planes, kernel_size=3, padding=1)
+            self.expand3x3.weight = nn.Parameter(state_dict[f"{base_address}.expand3x3.weight"])
+            self.expand3x3.bias = nn.Parameter(state_dict[f"{base_address}.expand3x3.bias"])
 
         self.expand3x3_activation = nn.ReLU(inplace=True)
 
@@ -322,9 +304,7 @@ class SqueezeNet(nn.Module):
                 ),
             )
         else:
-            raise ValueError(
-                f"Unsupported SqueezeNet version {version}: 1_0 or 1_1 expected"
-            )
+            raise ValueError(f"Unsupported SqueezeNet version {version}: 1_0 or 1_1 expected")
 
         self.features[0].weight = nn.Parameter(state_dict["features.0.weight"])
         self.features[0].bias = nn.Parameter(state_dict["features.0.bias"])
@@ -345,9 +325,7 @@ class SqueezeNet(nn.Module):
         return torch.flatten(x, 1)
 
 
-def _squeezenet(
-    version: str, state_dict, device=None, disable_conv_on_tt_device=True
-) -> SqueezeNet:
+def _squeezenet(version: str, state_dict, device=None, disable_conv_on_tt_device=True) -> SqueezeNet:
     model = SqueezeNet(
         version,
         state_dict=state_dict,
@@ -359,9 +337,7 @@ def _squeezenet(
 
 
 # weights: SqueezeNet1_0_Weights.IMAGENET1K_V1
-def squeezenet1_0(
-    state_dict, device=None, disable_conv_on_tt_device=True
-) -> SqueezeNet:
+def squeezenet1_0(state_dict, device=None, disable_conv_on_tt_device=True) -> SqueezeNet:
     return _squeezenet(
         "1_0",
         state_dict=state_dict,
@@ -371,9 +347,7 @@ def squeezenet1_0(
 
 
 # weights:  SqueezeNet1_1_Weights.IMAGENET1K_V1
-def squeezenet1_1(
-    state_dict, device=None, disable_conv_on_tt_device=True
-) -> SqueezeNet:
+def squeezenet1_1(state_dict, device=None, disable_conv_on_tt_device=True) -> SqueezeNet:
     return _squeezenet(
         "1_1",
         state_dict=state_dict,
