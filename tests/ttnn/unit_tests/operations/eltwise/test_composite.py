@@ -93,16 +93,33 @@ def test_unary_composite_cbrt_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_clamp_ttnn(input_shapes, device):
+@pytest.mark.parametrize(
+    "min, max",
+    [
+        (-10, 10),
+        (1, -1),
+        (0, 0),
+        (-1.0, None),
+        (None, 1.0),
+        (None, None),
+        (-0.5, None),
+        (None, -0.5),
+        (1.0, 0.0),
+        (0.0, 1.0),
+    ],
+)
+def test_unary_composite_clamp_ttnn(input_shapes, min, max, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    min = -10
-    max = 10
-    output_tensor = ttnn.clamp(input_tensor1, min, max)
-    golden_function = ttnn.get_golden_function(ttnn.clamp)
-    golden_tensor = golden_function(in_data1, min, max)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    if min is None and max is None:
+        with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
+            ttnn.clamp(input_tensor1, min=min, max=max)
+        assert True
+    else:
+        output_tensor = ttnn.clamp(input_tensor1, min=min, max=max)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
+        golden_tensor = golden_function(in_data1, min=min, max=max)
+        comp_pass = compare_pcc([output_tensor], [golden_tensor])
+        assert comp_pass
 
 
 @pytest.mark.parametrize(
