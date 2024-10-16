@@ -177,6 +177,7 @@ struct Tensor {
     // ======================================================================================
     Tensor reshape(int N, int C, int H, int W) const;
     Tensor reshape(const ttnn::SimpleShape &new_shape) const;
+    Tensor reshape(const ttnn::Shape &new_shape) const;
 
     // ======================================================================================
     //                                      Getters

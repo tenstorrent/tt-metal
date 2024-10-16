@@ -21,7 +21,7 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     if (!ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE)) {
         return tensor.reshape(shape);
     }
@@ -50,9 +50,11 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::SimpleShape& s
     return device_tensor;
 }
 
-ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     const auto layout = tensor.get_layout();
+    auto shape_with_padding = shape.with_tile_padding();
     auto tensor_shape = tensor.get_shape();
+    auto tensor_shape_with_padding = tensor_shape.with_tile_padding();
 
     //Constraint in device kernel
     uint32_t ROW_MAJOR_WIDTH = 8;
@@ -61,21 +63,23 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::SimpleSha
         auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
-            if (tensor_shape[-1] == shape[-1]) {
+            if (tensor_shape_with_padding[-1] == shape_with_padding[-1]) {
                 return rm_tensor.reshape(shape);
             }
             //Different page width, going to use device kernel that does transpose
             else {
                 auto original_rank = shape.rank();
                 auto tensor_4d = unsqueeze_to_4D(rm_tensor);
-                const auto shape_4d = shape.to_rank(4);
+                const auto shape_4d = shape.to_rank<4>();
                 auto reshaped_tensor = ttnn::reshape_on_device(tensor_4d, shape_4d[0], shape_4d[1], shape_4d[2], shape_4d[3], tensor.memory_config());
                 reshaped_rm_tensor = squeeze_from_4D(reshaped_tensor, original_rank);
             }
         } else if (tensor_shape.rank() >= 2 and shape.rank() >= 2) {
             // Handle the case when the tensor is not contiguous but the last two dimensions are the same and so reshape
             // is possible
-            if (tensor_shape[-1] == shape[-1] and tensor_shape[-2] == shape[-2]) {
+            if (tensor_shape[-1] == shape[-1] and tensor_shape[-2] == shape[-2] and
+                tensor_shape_with_padding[-1] == shape_with_padding[-1] and
+                tensor_shape_with_padding[-2] == shape_with_padding[-2]) {
                 reshaped_rm_tensor = rm_tensor.reshape(shape);
             }
         } else {
@@ -94,20 +98,14 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::SimpleSha
     else {
         return reshaped_rm_tensor;
     }
-
 }
 
 }
 
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape
-    ) {
-
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto layout = tensor.get_layout();
-    auto tensor_shape = tensor.get_logical_shape();
-
+    auto tensor_shape = tensor.get_shape();
 
     // First Case, No reshape Required
     if (tensor_shape == shape) {
@@ -115,8 +113,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
 
     bool tile_tensor_view_reshape_possible = (layout == ttnn::Layout::TILE and
-        ((shape[-2] % ttnn::TILE_SIZE == 0) and (shape[-1] % ttnn::TILE_SIZE == 0)) and
-        (tensor_shape[-1] == shape[-1])
+        ((shape.with_tile_padding()[-2] % ttnn::TILE_SIZE == 0) and (shape.with_tile_padding()[-1] % ttnn::TILE_SIZE == 0)) and
+        (tensor_shape.with_tile_padding()[-1] == shape.with_tile_padding()[-1])
         );
 
     // For Tensors already on host we can do the tensor.reshape (changing of view)
@@ -127,7 +125,10 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     // Catch-all
     // Do the reshape in row-major
     return detail::row_major_reshape(tensor, shape);
+}
 
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+    return invoke(tensor, ttnn::Shape(shape.as_vector()));
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(

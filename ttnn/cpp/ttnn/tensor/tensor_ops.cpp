@@ -358,7 +358,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W) {
     return output;
 }
 
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
     TT_ASSERT(
@@ -384,7 +384,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_s
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, ttnn::SimpleShape> new_shapes;
+                std::unordered_map<int, ttnn::Shape> new_shapes;
 
                 for (auto device_id : updated_storage.ordered_device_ids) {
                     new_shapes.insert({device_id, new_shape});
@@ -434,6 +434,10 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_s
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
+}
+
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
+    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.as_vector()));
 }
 
 }

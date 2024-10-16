@@ -13,11 +13,11 @@ using namespace tt::tt_metal;
 
 Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTensor& strategy) {
     std::vector<OwnedBuffer> owned_buffers;
-    std::vector<ttnn::SimpleShape> shapes;
+    std::vector<ttnn::Shape> shapes;
 
     for (int i = 0; i < strategy.replication_factor; i++) {
         owned_buffers.push_back(std::get<OwnedStorage>(tensor.get_storage()).buffer);
-        shapes.push_back(tensor.get_logical_shape());
+        shapes.push_back(tensor.get_shape());
     }
 
     return Tensor{

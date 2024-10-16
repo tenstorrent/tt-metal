@@ -65,8 +65,7 @@ void dump_multi_device_host_storage(std::ofstream& output_stream, const MultiDev
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
             }, storage.get_buffer(0)
         );
-        tt::tt_metal::LegacyShape legacy_shape(storage.shapes.at(0).as_vector());
-        output_stream.write(reinterpret_cast<const char*>(&legacy_shape), sizeof(tt::tt_metal::LegacyShape));
+        output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(ttnn::Shape));
     } else {
         for (int i = 0; i < num_buffers; i++) {
             std::visit(
@@ -79,8 +78,7 @@ void dump_multi_device_host_storage(std::ofstream& output_stream, const MultiDev
             );
         }
         for (const auto& shape : storage.shapes) {
-            tt::tt_metal::LegacyShape legacy_shape(shape.as_vector());
-            output_stream.write(reinterpret_cast<const char*>(&legacy_shape), sizeof(tt::tt_metal::LegacyShape));
+            output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
         }
     }
 }
@@ -103,20 +101,20 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
     input_stream.read(reinterpret_cast<char*>(&strategy), sizeof(DistributedTensorConfig));
 
     std::vector<OwnedBuffer> buffers;
-    std::vector<ttnn::SimpleShape> shapes;
+    std::vector<ttnn::Shape> shapes;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::size_t size = 0;
         input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
         auto buffer = owned_buffer::create<T>(size);
-        auto shape = tt::tt_metal::LegacyShape{};
+        auto shape = ttnn::Shape{};
         input_stream.read(reinterpret_cast<char*>(buffer.begin()), sizeof(T) * size);
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
         buffers.push_back(buffer);
-        shapes.push_back(shape.logical_shape());
+        shapes.push_back(shape);
 
         for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
-            shapes.push_back(shape.logical_shape());
+            shapes.push_back(shape);
         }
 
     } else {
@@ -130,9 +128,9 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
-            auto shape = tt::tt_metal::LegacyShape{};
-            input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
-            shapes.push_back(shape.logical_shape());
+            auto shape = ttnn::Shape{};
+            input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+            shapes.push_back(shape);
         }
     }
 
@@ -204,14 +202,14 @@ void dump_tensor(const std::string& file_name, const Tensor& tensor, const std::
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
-    auto shape = tensor.get_legacy_shape();
+    auto shape = tensor.get_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto storage_type = tensor.storage_type();
 
     output_stream.write(reinterpret_cast<const char*>(&detail::SENTINEL_VALUE), sizeof(std::size_t));
     output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
-    output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
+    output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
     output_stream.write(reinterpret_cast<const char*>(&data_type), sizeof(DataType));
     output_stream.write(reinterpret_cast<const char*>(&layout), sizeof(Layout));
     output_stream.write(reinterpret_cast<const char*>(&storage_type), sizeof(StorageType));
@@ -274,11 +272,11 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
         if (version_id > VERSION_ID) {
             throw std::runtime_error(fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
         }
-        auto shape = tt::tt_metal::LegacyShape{};
+        auto shape = ttnn::Shape{};
         DataType data_type;
         Layout layout;
         StorageType storage_type;
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
         input_stream.read(reinterpret_cast<char*>(&data_type), sizeof(DataType));
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
         input_stream.read(reinterpret_cast<char*>(&storage_type), sizeof(StorageType));
@@ -307,10 +305,10 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     } else {
         input_stream.seekg(0, std::ios::beg); // No sentinel found, assume it's an older format and rewind
 
-        auto shape = tt::tt_metal::LegacyShape{};
+        auto shape = ttnn::Shape{};
         DataType data_type;
         Layout layout;
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(tt::tt_metal::LegacyShape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
         input_stream.read(reinterpret_cast<char*>(&data_type), sizeof(DataType));
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 

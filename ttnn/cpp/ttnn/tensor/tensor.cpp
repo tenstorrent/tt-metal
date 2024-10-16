@@ -179,7 +179,7 @@ Tensor::Tensor(
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                 std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                std::vector<ttnn::SimpleShape>(num_buffers, this->tensor_attributes->shape.logical_shape());
+                std::vector<ttnn::Shape>(num_buffers, this->tensor_attributes->shape);
         }
         this->tensor_attributes->num_shards_to_be_populated = num_buffers;
     }
@@ -583,6 +583,10 @@ Tensor Tensor::reshape(int N, int C, int H, int W) const {
 }
 
 Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_shape);
+}
+
+Tensor Tensor::reshape(const ttnn::Shape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
