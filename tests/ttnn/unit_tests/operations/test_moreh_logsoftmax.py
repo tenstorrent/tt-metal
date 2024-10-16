@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_npu,
+    to_ttnn,
 )
 
 
@@ -432,7 +432,7 @@ def test_logsoftmax_callback(shape_dim_strategy, device, use_program_cache):
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
 
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(shape)
     assert list(tt_dev.shape.with_tile_padding()) == list(tt_cpu.shape)
@@ -457,8 +457,7 @@ def logsoftmax_backward_step(dev_y, dev_dy, dim, strategy, device, num_program_c
         assert num_program_cache_entries > 0
 
     torch_dummy = torch.randn([32, 32])
-    tt_dummy = to_npu(torch_dummy, device)
-
+    tt_dummy = to_ttnn(torch_dummy, device=device)
     return tt_npu, num_program_cache_entries
 
 
