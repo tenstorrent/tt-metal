@@ -989,12 +989,6 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             pcie_alignment);
     }
 
-    // Wait Cmd, if DISPATH_S is enabled, the wait is coalesced into the DISPATCH_NOTIFY_SLAVE_GO
-    // so no need for reserving space.
-    if (program.program_transfer_info.num_active_cores > 0 && !this->device->dispatch_s_enabled()) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
     std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
     std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
@@ -1070,9 +1064,12 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             this->packed_write_max_unicast_sub_cmds,
             unicast_go_signals_payload);
     }
-    // If dispatch_s is enabled, have dispatch_d send a semaphore update to dispatch_s
-    // Either dispatch_d or dispatch_s will send the go signal
-    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE + this->device->dispatch_s_enabled() * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier on dispatch_d if program is active)
+    // if not,  check if the program is active on workers. If active, have dispatch_d issue a write barrier
+    cmd_sequence_sizeB += (this->device->dispatch_s_enabled() || program.program_transfer_info.num_active_cores > 0) * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
+    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
