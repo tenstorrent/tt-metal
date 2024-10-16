@@ -153,20 +153,14 @@ void LayerNorm::validate(const std::vector<Tensor> &input_tensors, const std::ve
 
 
 }
-std::vector<tt::tt_metal::LegacyShape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
+std::vector<ttnn::SimpleShape> LayerNorm::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    auto output_shape = input_tensors.at(0).get_logical_shape();
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER)
     {
-        auto output_shape = input_tensor.get_legacy_shape();
-        auto padding = output_shape.padding();
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
-        return {tt::tt_metal::LegacyShape(output_shape, padding)};
     }
-    else
-    {
-        return {input_tensor.get_legacy_shape()};
-    }
+    return {output_shape};
 }
 std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
