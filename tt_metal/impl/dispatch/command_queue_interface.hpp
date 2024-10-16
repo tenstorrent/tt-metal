@@ -325,6 +325,14 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
     uint8_t *dst8 = (uint8_t *)dst;
 
     if (size_t num_lines = n / inner_blk_size) {
+        if ((uintptr_t)dst % sizeof(__m256i) != 0) {
+            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+            _mm_stream_si128((__m128i *)dst8, blk);
+            src8 += sizeof(__m128i);
+            dst8 += sizeof(__m128i);
+            n -= sizeof(__m128i);
+            num_lines = n / inner_blk_size;
+        }
         for (size_t i = 0; i < num_lines; ++i) {
             for (size_t j = 0; j < inner_loop; ++j) {
                 __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
@@ -338,6 +346,14 @@ static inline void memcpy_to_device(void *__restrict dst, const void *__restrict
 
     if (n > 0) {
         if (size_t num_lines = n / sizeof(__m256i)) {
+            if ((uintptr_t)dst % sizeof(__m256i) != 0) {
+                __m128i blk = _mm_loadu_si128((const __m128i *)src8);
+                _mm_stream_si128((__m128i *)dst8, blk);
+                src8 += sizeof(__m128i);
+                dst8 += sizeof(__m128i);
+                n -= sizeof(__m128i);
+                num_lines = n / sizeof(__m256i);
+            }
             for (size_t i = 0; i < num_lines; ++i) {
                 __m256i blk = _mm256_loadu_si256((const __m256i *)src8);
                 _mm256_stream_si256((__m256i *)dst8, blk);

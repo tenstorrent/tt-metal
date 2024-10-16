@@ -542,8 +542,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     stringstream ss;
     bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
     bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
@@ -565,8 +564,8 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define ALLOCATOR_ALIGNMENT " << allocator_alignment << endl;
-    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(allocator_alignment) - 1 << endl;
+    ss << "#define LOG_BASE_2_OF_DRAM_ALIGNMENT " << std::bit_width(DRAM_ALIGNMENT) - 1 << endl;
+    ss << "#define LOG_BASE_2_OF_L1_ALIGNMENT " << std::bit_width(L1_ALIGNMENT) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -654,15 +653,13 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     std::vector<CoreCoord>& dram_bank_map,
     std::vector<int32_t>& dram_bank_offset_map,
     std::vector<CoreCoord>& l1_bank_map,
-    std::vector<int32_t>& l1_bank_offset_map,
-    uint32_t allocator_alignment) {
+    std::vector<int32_t>& l1_bank_offset_map) {
     string output_string = generate_bank_to_noc_coord_descriptor_string(
         grid_size,
         dram_bank_map,
         dram_bank_offset_map,
         l1_bank_map,
-        l1_bank_offset_map,
-        allocator_alignment);
+        l1_bank_offset_map);
 
     fs::create_directories(path + "/brisc");
     ofstream file_stream_br(path + "/brisc/generated_bank_to_noc_coord_mapping.h");

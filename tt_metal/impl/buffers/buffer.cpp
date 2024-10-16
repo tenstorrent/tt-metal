@@ -313,7 +313,7 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     return translate_page_address(offset, bank_id);
 }
 
-uint32_t Buffer::alignment() const { return this->device_->get_allocator_alignment(); }
+uint32_t Buffer::alignment() const { return this->device_->get_allocator_alignment(this->buffer_type_); }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_ASSERT(is_sharded(this->buffer_layout()));

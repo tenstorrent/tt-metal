@@ -270,12 +270,14 @@ void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& co
 }
 
 void EnqueueWriteBufferCommand::process() {
+    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
 
     uint32_t cmd_sequence_sizeB =
-        CQ_PREFETCH_CMD_BARE_MIN_SIZE +  // CQ_PREFETCH_CMD_RELAY_INLINE + (CQ_DISPATCH_CMD_WRITE_PAGED or
-                                         // CQ_DISPATCH_CMD_WRITE_LINEAR)
-        data_size_bytes;
+        align(
+            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + // CQ_PREFETCH_CMD_RELAY_INLINE + (CQ_DISPATCH_CMD_WRITE_PAGED or
+                                                            // CQ_DISPATCH_CMD_WRITE_LINEAR)
+            data_size_bytes, pcie_alignment);
     if (this->issue_wait) {
         cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
     }

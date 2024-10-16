@@ -219,6 +219,7 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .dram_bank_offsets = {},
          .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
                                  hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid_size = this->logical_grid_size(),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
@@ -230,13 +231,13 @@ void Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size
          .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
          .l1_bank_remap = l1_bank_remap,
          .compute_grid_size = this->compute_with_storage_grid_size(),
-         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1))});
+         .l1_alignment = hal.get_alignment(HalMemType::L1)});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.alignment == 0,
-        "Reserved size must be aligned to allocator alignment {}",
-        config.alignment);
+        config.l1_small_size % config.l1_alignment == 0,
+        "Reserved size must be aligned to L1 allocator alignment {}",
+        config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -715,7 +716,7 @@ void Device::configure_kernel_variant(
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
-        defines.at("WATCHER_NOINLINE") = std::to_string(force_watcher_no_inline);
+        defines["WATCHER_NOINLINE"] = std::to_string(force_watcher_no_inline);
     }
     if (llrt::OptionsG.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
@@ -3124,9 +3125,9 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
     return allocator::get_statistics(*this->allocator_, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment() const {
+uint32_t Device::get_allocator_alignment(const BufferType &buffer_type) const {
     this->check_allocator_is_initialized();
-    return this->allocator_->config.alignment;
+    return (buffer_type == BufferType::DRAM) ? this->allocator_->config.dram_alignment : this->allocator_->config.l1_alignment;
 }
 
 size_t Device::get_l1_small_size() const {
@@ -3365,8 +3366,7 @@ void Device::generate_device_headers(const std::string &path) const
         dram_noc_coord_per_bank,
         dram_offsets_per_bank,
         l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->allocator_->config.alignment
+        l1_offset_per_bank
     );
 }
 
