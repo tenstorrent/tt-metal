@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "debug/assert.h"
 #include "ethernet/dataflow_api.h"
+#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include <array>
 
 
@@ -41,6 +42,7 @@ FORCE_INLINE void roundtrip_ping(
     ) {
 
     if (is_ring_start) {
+        //This is the first element in the ring
         if constexpr (measure) {
             {
                 DeviceZoneScopedN("ROUNDTRIP-PING");
@@ -155,6 +157,7 @@ void kernel_main() {
     std::array<uint32_t, NUM_CHANNELS> channels_sem_addrs;
     std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> channels_syncs_addrs;
     uint32_t arg_idx = 0;
+    //Get the runtime arguments
     const bool is_ring_start = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_samples = get_arg_val<uint32_t>(arg_idx++);
@@ -162,13 +165,11 @@ void kernel_main() {
     const uint32_t transfer_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    volatile uint32_t* start_semaphore = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    const uint32_t init_handshake_noc_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t init_handshake_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t init_handshake_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     ASSERT(max_concurrent_samples <= 8);
     volatile eth_channel_sync_t *last_channel_sync_addr = 0;
+
+    //Get the per-channel semaphores
     for (uint32_t i = 0; i < max_concurrent_samples; i++) {
         channels_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
         ASSERT(last_channel_sync_addr + sizeof(eth_channel_sync_t) <= channels_addrs[i]);
@@ -176,6 +177,7 @@ void kernel_main() {
         channels_syncs_addrs[i]->bytes_sent = 0;
         channels_syncs_addrs[i]->receiver_ack = 0;
         last_channel_sync_addr = channels_syncs_addrs[i];
+        //Semaphore is mapped to sender core
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
@@ -193,13 +195,13 @@ void kernel_main() {
     uint32_t eth_channel_sync_ack_addr = handshake_addr;
     // Delete me when migrating to FD2 - for now we require a worker core to act as intermediary between local chip eriscs
     // because CreateSemaphore doesn't reliably worker on ethernet cores prior to FD2
-    *start_semaphore = 0;
+    //*start_semaphore = 0;
     // Delete me when migrating to FD2
-    uint64_t init_handshake_noc_addr = get_noc_addr(init_handshake_noc_x, init_handshake_noc_y, init_handshake_addr);
+    //uint64_t Worker_Semaphore_noc_addr = get_noc_addr(init_handshake_noc_x, init_handshake_noc_y, Worker_Semaphore_0);
     // Delete me when migrating to FD2
-    noc_semaphore_inc(init_handshake_noc_addr, 1);
+    //noc_semaphore_inc(Worker_Semaphore_noc_addr, 1);
 
-    eth_noc_semaphore_wait(start_semaphore, 1);
+    //eth_noc_semaphore_wait(start_semaphore, 1);
 
     // Clear the ring
     roundtrip_ping<false>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, 16, eth_noc_x, eth_noc_y, eth_channel_sync_ack_addr, is_ring_start);
