@@ -17,7 +17,7 @@ The macro ``DeviceZoneScopedN( zone_name )`` is used similar to tracy's ``ZoneSc
 How to Run
 ~~~~~~~~~~
 
-Device-side profiling is only allowed in profiler builds. ``scripts/build_scripts/build_with_profiler_opt.sh`` is the script for building profiler builds.
+Device-side profiling is only allowed in profiler builds. ``build_metal.sh --enable-profiler`` is the script for building profiler builds.
 
 Because downloading profiler results can add high runtime overhead, ``TT_METAL_DEVICE_PROFILER=1`` environment variable has to be set to perform the download.
 
@@ -26,7 +26,7 @@ The commands to build and run the ``full_buffer`` example after following :ref:`
 ..  code-block:: sh
 
     cd $TT_METAL_HOME
-    scripts/build_scripts/build_with_profiler_opt.sh
+    build_metal.sh --enable-profiler
     TT_METAL_DEVICE_PROFILER=1 ./build/programming_examples/profiler/test_full_buffer
 
 The generated csv is ``profile_log_device.csv`` and is saved under ``{$TT_METAL_HOME}/generated/profiler/.logs`` by default.
