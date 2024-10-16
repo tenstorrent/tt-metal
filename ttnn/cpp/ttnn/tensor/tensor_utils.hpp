@@ -34,7 +34,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, u
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const ttnn::SimpleShape infer_dims_for_reshape(const std::vector<int32_t>& shape, uint32_t old_volume);
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::vector<int32_t>& shape);
 
 // TODO: Remove this once we switch to SimpleShape .volume()
 static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {

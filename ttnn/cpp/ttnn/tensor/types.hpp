@@ -518,6 +518,8 @@ struct Shape {
     explicit Shape(const Shape &shape, const Padding &padding) :
         value{tt::tt_metal::LegacyShape{shape.value, padding}} {}
 
+    Shape(const SimpleShape& shape): value{shape.as_vector()} {}
+
     const auto rank() const { return this->value.rank(); }
 
     const size_t size() const { return this->rank(); }

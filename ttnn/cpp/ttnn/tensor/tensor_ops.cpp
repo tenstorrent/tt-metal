@@ -348,16 +348,6 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
     return output;
 }
 
-Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, N, C, H, W);
-    auto new_shape = infer_dims_for_reshape({N, C, H, W}, input_tensor.volume());
-    auto output = input_tensor.reshape(new_shape);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
@@ -365,7 +355,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
         input_tensor.volume() == new_shape.padded_shape().volume(),
         "{} != {}",
         input_tensor.volume(),
-        new_shape.padded_shape()().volume());
+        new_shape.padded_shape().volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
             new_shape[-2] % constants::TILE_HEIGHT == 0 && new_shape[-1] % constants::TILE_WIDTH == 0 &&

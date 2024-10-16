@@ -6,7 +6,7 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W);
-operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output, int N, int C, int H, int W);
+operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output);
+operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output);
 
 }

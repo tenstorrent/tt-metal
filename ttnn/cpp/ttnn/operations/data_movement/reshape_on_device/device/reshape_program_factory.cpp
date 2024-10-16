@@ -11,7 +11,7 @@
 namespace ttnn::operations::data_movement::detail {
 
 
-operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output, int N, int C, int H, int W) {
+operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor &a, Tensor &output) {
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -208,7 +208,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t> > > get_runti
     return ret_val;
 }
 
-operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output, int N, int C, int H, int W) {
+operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& output) {
     TT_FATAL(a.get_dtype() == output.get_dtype(), "Error");
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();

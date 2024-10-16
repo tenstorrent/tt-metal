@@ -71,7 +71,7 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& sh
                 auto original_rank = shape.rank();
                 auto tensor_4d = unsqueeze_to_4D(rm_tensor);
                 const auto shape_4d = shape.to_rank(4);
-                auto reshaped_tensor = ttnn::reshape_on_device(tensor_4d, shape_4d[0], shape_4d[1], shape_4d[2], shape_4d[3], tensor.memory_config());
+                auto reshaped_tensor = ttnn::reshape_on_device(tensor_4d, ttnn::SimpleShape{shape_4d[0], shape_4d[1], shape_4d[2], shape_4d[3]}, tensor.memory_config());
                 reshaped_rm_tensor = squeeze_from_4D(reshaped_tensor, original_rank);
             }
         } else if (tensor_shape.rank() >= 2 and shape.rank() >= 2) {
@@ -135,7 +135,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const std::vector<int32_t> & shape_vector
     ) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(shape_vector, tensor.get_logical_volume()));
+    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector));
 }
 
 } // ttnn::operations::data_movement namespace

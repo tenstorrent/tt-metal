@@ -456,7 +456,8 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
 }
 
-const ttnn::SimpleShape infer_dims_for_reshape(const std::vector<int32_t>& shape, uint32_t old_volume) {
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::vector<int32_t>& shape) {
+    int64_t old_volume = tensor.get_logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
     for (auto index = 0; index < shape.size(); ++index) {

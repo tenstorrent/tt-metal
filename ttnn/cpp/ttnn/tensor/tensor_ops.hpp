@@ -42,7 +42,6 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
 Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape);
 
-Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W);
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape);
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
 

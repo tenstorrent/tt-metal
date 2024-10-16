@@ -578,9 +578,9 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(int N, int C, int H, int W) const {
-    return tensor_ops::tensor_reshape(*this, N, C, H, W);
-}
+/*Tensor Tensor::reshape(int N, int C, int H, int W) const {
+    return tensor_ops::tensor_reshape(*this, infer_dims_for_reshape(*this, {N, C, H, W}));
+}*/
 
 Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);

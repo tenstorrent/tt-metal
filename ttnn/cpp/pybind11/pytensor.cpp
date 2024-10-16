@@ -1593,7 +1593,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "reshape",
-            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
+            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(infer_dims_for_reshape(self, {N, C, H, W})); },
             R"doc(
                 Reshapes TT tensor
 

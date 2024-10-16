@@ -11,7 +11,7 @@
 namespace ttnn::operations::data_movement {
 
 struct ReshapeDeviceOperation {
-    int N, C, H, W;
+    const ttnn::Shape output_shape;
     const MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
