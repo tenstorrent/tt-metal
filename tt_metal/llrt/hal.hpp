@@ -41,7 +41,8 @@ enum class HalL1MemAddrType : uint8_t {
     CORE_INFO = 7,
     GO_MSG = 8,
     LAUNCH_MSG_BUFFER_RD_PTR = 9,
-    COUNT = 10
+    MEMORY_MAP_END = 10,
+    COUNT = 11
 };
 
 enum class HalDramMemAddrType : uint8_t {
