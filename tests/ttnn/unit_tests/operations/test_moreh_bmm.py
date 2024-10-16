@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_npu,
+    to_ttnn,
 )
 
 
@@ -162,7 +162,7 @@ def test_moreh_bmm_callback(shape, optional_output, compute_kernel_options, devi
     for i in range(2):
         run_moreh_bmm(shape, optional_output, compute_kernel_options, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
@@ -217,7 +217,7 @@ def test_moreh_bmm_backward_callback(shape, requires_grad, compute_kernel_option
     for i in range(2):
         run_moreh_bmm_backward(shape, requires_grad, compute_kernel_options, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0

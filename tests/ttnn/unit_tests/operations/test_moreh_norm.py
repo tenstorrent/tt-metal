@@ -13,8 +13,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_cpu,
-    to_npu,
+    to_torch,
+    to_ttnn,
     compute_output_shape,
     TILE_HEIGHT,
     TILE_WIDTH,
@@ -97,21 +97,23 @@ def tt_norm(
             - `npu_dx`: The gradient of the input tensor (if `do_backward=True`), otherwise None.
     """
     _, tt_output_shape = compute_output_shape(cpu_x.shape, dim, keepdim=keepdim)
-    npu_x = to_npu(cpu_x.bfloat16(), device)
+    npu_x = to_ttnn(cpu_x.bfloat16(), device=device)
     if do_backward:
-        npu_dy = to_npu(cpu_dy.reshape(tt_output_shape).bfloat16(), device)
+        npu_dy = to_ttnn(cpu_dy.reshape(tt_output_shape).bfloat16(), device=device)
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     if do_backward:
-        npu_y = to_npu(torch.norm(cpu_x, p=p, dim=dim, keepdim=keepdim).bfloat16().reshape(tt_output_shape), device)
+        npu_y = to_ttnn(
+            torch.norm(cpu_x, p=p, dim=dim, keepdim=keepdim).bfloat16().reshape(tt_output_shape), device=device
+        )
     else:
-        npu_y = to_npu(torch.empty(tt_output_shape), device)
+        npu_y = to_ttnn(torch.empty(tt_output_shape), device=device)
         ttnn.operations.moreh.norm(
             npu_x, p=p, dim=dim, keepdim=keepdim, output=npu_y, compute_kernel_config=compute_kernel_config
         )
 
     npu_dx = None
     if do_backward:
-        npu_dx = to_npu(torch.empty_like(cpu_x), device)
+        npu_dx = to_ttnn(torch.empty_like(cpu_x), device=device)
 
         ttnn.operations.moreh.norm_backward(
             npu_x,
@@ -123,9 +125,9 @@ def tt_norm(
             input_grad=npu_dx,
             compute_kernel_config=compute_kernel_config,
         )
-        npu_dx = to_cpu(npu_dx, list(cpu_x.shape))
+        npu_dx = to_torch(npu_dx, shape=cpu_x.shape)
 
-    npu_y = to_cpu(npu_y, tt_output_shape)
+    npu_y = to_torch(npu_y, shape=tt_output_shape)
     return npu_y, npu_dx
 
 
@@ -348,7 +350,7 @@ def test_moreh_norm_callback(input_shape, p, dim_rtol_atol, keepdim, device, use
     for i in range(2):
         run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
@@ -495,7 +497,7 @@ def test_moreh_norm_backward_callback(input_shape, p, dim_rtol_atol, keepdim, de
     for i in range(2):
         run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
