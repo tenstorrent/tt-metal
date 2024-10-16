@@ -11,9 +11,9 @@ from models.utility_functions import skip_for_grayskull
 # [N150 / N300 only]
 @skip_for_grayskull("Requires wormhole_b0 to run")
 def test_llama_ci_dispatch():
-    dir_1b = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
-    dir_3b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/"
-    dir_8b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/"
+    dir_1b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/"
+    dir_3b = "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/"
+    dir_8b = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
 
     # for dir_path in [dir_1b, dir_3b, dir_8b]:
     for dir_path in [dir_1b, dir_3b]:
