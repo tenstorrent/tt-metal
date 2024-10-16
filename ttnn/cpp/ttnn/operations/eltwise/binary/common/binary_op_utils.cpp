@@ -4,7 +4,9 @@
 
 #include "binary_op_utils.hpp"
 
+#include "tt_metal/common/assert.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/cpp/ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::binary::utils {
 

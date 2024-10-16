@@ -18,6 +18,8 @@
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 
 
@@ -195,11 +197,11 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worke
     return output;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* mesh_device) {
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, mesh_device);
     if (mesh_device) {
-        auto workers = distribute_tensor_to_mesh(input_tensor, *mesh_device);
+        auto workers = ttnn::distributed::distribute_tensor_to_mesh(input_tensor, *mesh_device);
         TT_FATAL(
             validate_worker_modes(workers),
             "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
@@ -253,7 +255,7 @@ void tensor_print(const Tensor& input_tensor) {
     GraphTracker::instance().track_function_end();
 }
 
-Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value) {
+Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad", input_tensor, output_tensor_shape, input_tensor_start, pad_value);
     TT_ASSERT(
@@ -277,7 +279,7 @@ Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& o
     return output;
 }
 
-Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end) {
+Tensor tensor_unpad(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
@@ -312,13 +314,13 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    auto output = input_tensor.pad(tt::tt_metal::LegacyShape(shape, padded_shape), tt::tt_metal::LegacyShape{input_tensor_start}, pad_value);
+    auto output = input_tensor.pad(tt::tt_metal::LegacyShape(shape, padded_shape), ttnn::SimpleShape{std::move(input_tensor_start)}, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape) {
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
@@ -340,7 +342,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Le
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
     }
-    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
+    auto output = input_tensor.unpad(ttnn::SimpleShape(std::move(output_tensor_start)), ttnn::SimpleShape(std::move(output_tensor_end)));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

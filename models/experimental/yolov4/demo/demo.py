@@ -9,6 +9,7 @@ import time
 import numpy as np
 import math
 import pytest
+import os
 
 from models.experimental.yolov4.reference.yolov4 import Yolov4
 from models.experimental.yolov4.ttnn.yolov4 import TtYOLOv4
@@ -428,20 +429,16 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             output = model(device, img)
 
             output_tensor1 = ttnn.to_torch(output[0])
-            output_tensor1 = output_tensor1.reshape(1, 40, 40, 256)
+            output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)
             output_tensor1 = torch.permute(output_tensor1, (0, 3, 1, 2))
 
             output_tensor2 = ttnn.to_torch(output[1])
-            output_tensor2 = output_tensor2.reshape(1, 20, 20, 256)
+            output_tensor2 = output_tensor2.reshape(1, 20, 20, 255)
             output_tensor2 = torch.permute(output_tensor2, (0, 3, 1, 2))
 
             output_tensor3 = ttnn.to_torch(output[2])
-            output_tensor3 = output_tensor3.reshape(1, 10, 10, 256)
+            output_tensor3 = output_tensor3.reshape(1, 10, 10, 255)
             output_tensor3 = torch.permute(output_tensor3, (0, 3, 1, 2))
-
-            output_tensor1 = output_tensor1[:, :255, :, :]
-            output_tensor2 = output_tensor2[:, :255, :, :]
-            output_tensor3 = output_tensor3[:, :255, :, :]
 
             yolo1 = YoloLayer(
                 anchor_mask=[0, 1, 2],
@@ -540,9 +537,12 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
 def test_yolov4_model(device, model_location_generator, reset_seeds, input_path):
     model_path = model_location_generator("models", model_subdir="Yolo")
     if model_path == "models":
-        pytest.skip(
-            "Requires weights file to be downloaded from https://drive.google.com/file/d/1wv_LiFeCRYwtpkqREPeI13-gPELBDwuJ/view"
-        )
+        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
+            os.system(
+                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
+            )  # execute the yolov4_weights_download.sh file
+
+        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
 

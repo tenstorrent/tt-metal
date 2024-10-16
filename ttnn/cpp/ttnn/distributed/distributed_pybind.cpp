@@ -4,12 +4,12 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 
-#include "ttnn/distributed/mesh_device.hpp"
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-
+#include "pybind11/stl.h"
 
 namespace ttnn::distributed {
 
@@ -148,7 +148,7 @@ void py_module(py::module& module) {
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(
         "get_device_tensor",
-        py::overload_cast<const Tensor&, int>(&tt::tt_metal::get_device_tensor),
+        py::overload_cast<const Tensor&, int>(&ttnn::distributed::get_device_tensor),
         py::arg("tensor"),
         py::arg("device_id"),
         py::kw_only(),
@@ -164,7 +164,7 @@ void py_module(py::module& module) {
     )doc");
     module.def(
         "get_device_tensor",
-        py::overload_cast<const Tensor&, const Device*>(&tt::tt_metal::get_device_tensor),
+        py::overload_cast<const Tensor&, const Device*>(&ttnn::distributed::get_device_tensor),
         py::arg("tensor"),
         py::arg("device"),
         py::kw_only(),
@@ -180,7 +180,7 @@ void py_module(py::module& module) {
     )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def("aggregate_as_tensor", &aggregate_as_tensor, py::arg("tensors"), py::kw_only());
-    module.def("get_t3k_physical_device_ids_ring", &tt::tt_metal::get_t3k_physical_device_ids_ring);
+    module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
 }  // namespace ttnn::distributed

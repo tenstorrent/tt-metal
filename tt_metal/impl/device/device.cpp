@@ -337,8 +337,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
                 ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                uint32_t fw_size = binary_mem.get_text_size();
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
             }
             llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
@@ -349,8 +349,8 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
                 ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, eriscv_id);
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", kernel_size16 * 16);
+                uint32_t fw_size = binary_mem.get_text_size();
+                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
             }
             llrt::program_risc_startup_addr(this->id(), phys_core);
@@ -362,11 +362,12 @@ void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, 
         for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
             ll_api::memory binary_mem =
                 llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
-            uint32_t kernel_size16 = llrt::get_binary_code_size16(binary_mem, riscv_id);
+            uint32_t fw_size = binary_mem.get_text_size();
             if (riscv_id == 1) {
-                launch_msg->kernel_config.ncrisc_kernel_size16 = kernel_size16;
+                // In this context, ncrisc_kernel_size16 is the size of the fw
+                launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
             }
-            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, kernel_size16 * 16);
+            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
             if (not llrt::OptionsG.get_skip_loading_fw()) {
                 llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
             }
@@ -2770,6 +2771,7 @@ void Device::init_command_queue_device() {
     }
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
+    command_queue_program.finalize(this);
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -2789,6 +2791,7 @@ void Device::init_command_queue_device() {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            mmio_command_queue_program.finalize(mmio_device);
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -2861,7 +2864,7 @@ bool Device::close() {
     tt_metal::detail::DumpDeviceProfileResults(this, true);
 
     this->trace_buffer_pool_.clear();
-    this->EnableAllocs();
+    this->MarkAllocationsSafe();
 
     this->deallocate_buffers();
 
@@ -3273,7 +3276,7 @@ bool Device::using_slow_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     TT_FATAL(this->trace_buffer_pool_.count(tid) == 0, "Trace already exists for tid {} on device", tid);
     TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
-    this->EnableAllocs();
+    this->MarkAllocationsSafe();
     // Create an empty trace buffer here. This will get initialized in end_trace
     this->trace_buffer_pool_.insert({tid, Trace::create_empty_trace_buffer()});
     this->hw_command_queues_[cq_id]->record_begin(tid, this->trace_buffer_pool_[tid]->desc);
@@ -3292,7 +3295,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
     Trace::initialize_buffer(this->command_queue(cq_id), this->trace_buffer_pool_[tid]);
-    this->DisableAllocs();
+    this->MarkAllocationsUnsafe();
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
@@ -3312,7 +3315,7 @@ void Device::release_trace(const uint32_t tid) {
     uint32_t erased = this->trace_buffer_pool_.erase(tid);
     // Only enable allocations once all captured traces are released
     if (this->trace_buffer_pool_.empty()) {
-        this->EnableAllocs();
+        this->MarkAllocationsSafe();
     }
 }
 
@@ -3324,12 +3327,12 @@ std::shared_ptr<TraceBuffer> Device::get_trace(const uint32_t tid) {
     }
 }
 
-void Device::DisableAllocs() {
-    tt::tt_metal::allocator::disable_allocs(*(this->allocator_));
+void Device::MarkAllocationsUnsafe() {
+    tt::tt_metal::allocator::mark_allocations_unsafe(*(this->allocator_));
 }
 
-void Device::EnableAllocs() {
-    tt::tt_metal::allocator::enable_allocs(*(this->allocator_));
+void Device::MarkAllocationsSafe() {
+    tt::tt_metal::allocator::mark_allocations_safe(*(this->allocator_));
 }
 
 void Device::generate_device_headers(const std::string &path) const

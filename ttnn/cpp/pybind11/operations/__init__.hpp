@@ -53,9 +53,6 @@ void py_module(py::module& module) {
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
-    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_reduce_scatter(m_ccl);
 
     //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
@@ -84,6 +81,10 @@ void py_module(py::module& module) {
 
     auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
     complex_unary_backward::py_module(m_complex_unary_backward);
+
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_bind_all_gather(m_ccl);
+    ccl::py_bind_reduce_scatter(m_ccl);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);

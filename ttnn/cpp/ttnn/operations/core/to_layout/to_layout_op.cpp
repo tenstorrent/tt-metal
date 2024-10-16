@@ -4,6 +4,7 @@
 
 #include "to_layout_op.hpp"
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -188,7 +189,7 @@ Tensor to_layout_impl(
             return device ? tensor.to(layout, device) : tensor.to(layout);
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            tensor = tensor.unpad_from_tile(tensor.get_shape().value.without_padding());
+            tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
@@ -201,7 +202,7 @@ Tensor to_layout_impl(
                 }
                 padded_input_start.push_back(0);
             }
-            tensor = tensor.pad(padded_output_shape, padded_input_start, 0);
+            tensor = tensor.pad(padded_output_shape, ttnn::SimpleShape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
 
