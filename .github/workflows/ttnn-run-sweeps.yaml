@@ -231,6 +231,18 @@ on:
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - max_pool2d.short.max_pool2d_short_sweep
+          - eltwise.unary.sqrt.sqrt
+          - eltwise.unary.square.square
+          - eltwise.unary.softshrink.softshrink
+          - eltwise.unary.softsign.softsign
+          - eltwise.unary.swish.swish
+          - eltwise.unary.tan.tan
+          - eltwise.unary.signbit.signbit
+          - eltwise.unary.polygamma.polygamma
+          - eltwise.unary.round.round
+          - eltwise.unary.swiglu.swiglu
+          - eltwise.unary.tanhshrink.tanhsrink
+          - eltwise.unary.threshold.threshold
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
