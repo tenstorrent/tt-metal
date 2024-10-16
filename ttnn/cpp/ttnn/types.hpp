@@ -7,6 +7,7 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -14,10 +15,6 @@ namespace ttnn {
 namespace types {
 
 using Device = tt::tt_metal::Device;
-using MeshShape = tt::tt_metal::MeshShape;
-using DeviceIds = tt::tt_metal::DeviceIds;
-using MeshDevice = tt::tt_metal::MeshDevice;
-using MeshDeviceView = tt::tt_metal::MeshDeviceView;
 
 constexpr auto TILE_SIZE = 32;
 

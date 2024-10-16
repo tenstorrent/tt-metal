@@ -101,7 +101,7 @@ def compute_gather_cos_sin(dhead, end, position_ids):
 
 
 def run_test_rotary_embedding_llama(
-    devices,
+    device,
     batch,
     seq_len,
     pcc,
@@ -111,8 +111,6 @@ def run_test_rotary_embedding_llama(
     max_seq_len,
     datatype=ttnn.bfloat16,
 ):
-    device = devices[0]
-
     # Prepare input
     torch.manual_seed(0)
     inp = [
@@ -188,6 +186,7 @@ def run_test_rotary_embedding_llama(
         (1, 256),
         (1, 512),
         (1, 2048),
+        (1, 3 * 1024),  # To test non-power of 2
         (1, 4096),
         (1, 8192),
         (1, 16384),
@@ -199,6 +198,7 @@ def run_test_rotary_embedding_llama(
         "prefill_256",
         "prefill_512",
         "prefill_2k",
+        "prefill_3k",
         "prefill_4k",
         "prefill_8k",
         "prefill_16k",
@@ -226,10 +226,9 @@ def test_rotary_embedding_llama(
     head_dim,
     datatype,
     pcc,
-    all_devices,
+    device,
 ):
-    devices = all_devices
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
 
@@ -238,7 +237,7 @@ def test_rotary_embedding_llama(
 
     max_seq_len = max(4096, seq_len)
 
-    run_test_rotary_embedding_llama(devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
+    run_test_rotary_embedding_llama(device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
 
     # shift input/output tensor by creating very small tensor between loop
     inp = torch.rand(1, 1, 32, 32)
@@ -250,7 +249,7 @@ def test_rotary_embedding_llama(
             ttnn.ROW_MAJOR_LAYOUT,
         )
         .to(ttnn.TILE_LAYOUT)
-        .to(devices[0])
+        .to(device)
     )
 
 
@@ -283,11 +282,10 @@ def test_rotary_embedding_llama_with_program_cache(
     head_dim,
     datatype,
     pcc,
-    all_devices,
+    device,
     use_program_cache,
 ):
-    devices = all_devices
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
 
@@ -296,7 +294,7 @@ def test_rotary_embedding_llama_with_program_cache(
     cache_tensors = []
     for _ in range(3):
         run_test_rotary_embedding_llama(
-            devices, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
+            device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype
         )
 
         # shift input/output tensor by creating very small tensor between loop
@@ -309,9 +307,9 @@ def test_rotary_embedding_llama_with_program_cache(
                 ttnn.ROW_MAJOR_LAYOUT,
             )
             .to(ttnn.TILE_LAYOUT)
-            .to(devices[0])
+            .to(device)
         )
 
         cache_tensors.append(test_tensor)
 
-    assert devices[0].num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() == 2

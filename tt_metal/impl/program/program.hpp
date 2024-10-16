@@ -50,6 +50,7 @@ struct KernelGroup {
     kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
+    uint32_t kernel_bin_sizes[MaxProcessorsPerCoreType];
     launch_msg_t launch_msg;
     go_msg_t go_msg;
 
@@ -76,6 +77,8 @@ struct ProgramConfig {
     uint32_t sem_size;
     uint32_t cb_offset;
     uint32_t cb_size;
+    uint32_t kernel_text_offset; // offset of first kernel bin
+    uint32_t kernel_text_size;   // max size of all kernel bins across all kernel groups
 };
 
 inline namespace v0 {
@@ -141,14 +144,12 @@ class Program {
 
     void compile(Device * device, bool fd_bootloader_mode = false);
 
-    void invalidate_compile();
-
     void invalidate_circular_buffer_allocation();
 
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const { return this->finalized_; }
-    void finalize();
+    void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
@@ -213,7 +214,7 @@ class Program {
     std::vector<Semaphore> semaphores_;
 
     CoreRangeSet worker_crs_;
-    std::unordered_map<chip_id_t, bool> compile_needed_;
+    std::unordered_set<chip_id_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
@@ -260,6 +261,7 @@ class Program {
     uint32_t finalize_rt_args(uint32_t programmable_core_type_index, uint32_t base_offset);
     uint32_t finalize_sems(uint32_t programmable_core_type_index, uint32_t base_offset);
     uint32_t finalize_cbs(uint32_t programmable_core_type_index, uint32_t base_offset);
+    uint32_t finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset);
     void set_launch_msg_sem_offsets();
 
     bool runs_on_noc_unicast_only_cores();

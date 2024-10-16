@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/math.hpp"
 
 #include "tt_metal/host_api.hpp"
 
@@ -166,7 +166,7 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
+    auto shape = input_tensors[0].get_padded_shape(); // TODO: Replace with get_logical_shape()
     shape[this->dim] *= this->ring_size;
     return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }

@@ -66,8 +66,6 @@ def register_ttnn_cpp_unary_function(unary_function):
             "gelu": torch.nn.functional.gelu,
             "rsqrt": torch.rsqrt,
             # Unaries with float parameter
-            "elu": torch.nn.functional.elu,
-            "leaky_relu": torch.nn.functional.leaky_relu,
             # "prelu": torch_prelu, # Alias for leaky_relu. TODO(#8544): implement PReLU properly
             # Other unaries (composite operations)
             "softplus": torch.nn.functional.softplus,
@@ -151,8 +149,6 @@ TTNN_ELTWISE_UNARY_CPP_FUNCTIONS = [
     ttnn.gelu,
     ttnn.rsqrt,
     # Unaries with float parameter
-    ttnn.elu,
-    ttnn.leaky_relu,
     # ttnn.prelu,  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
     # Unaries using op_chain
     ttnn.log_sigmoid,
@@ -236,6 +232,24 @@ def _golden_function_pow(input_tensor_a, exponent, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.pow, golden_function=_golden_function_pow)
 
 
+def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
+    import torch
+
+    return torch.nn.functional.elu(input_tensor_a, alpha=alpha)
+
+
+ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
+
+
+def _golden_function_leaky_relu(input_tensor_a, *args, negative_slope=0.01, **kwargs):
+    import torch
+
+    return torch.nn.functional.leaky_relu(input_tensor_a, negative_slope=negative_slope)
+
+
+ttnn.attach_golden_function(ttnn.leaky_relu, golden_function=_golden_function_leaky_relu)
+
+
 def _golden_function_relu_min(input_tensor_a, *args, lower_limit, **kwargs):
     import torch
 
@@ -272,7 +286,7 @@ def _golden_function_polygamma(input_tensor_a, k, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.polygamma, golden_function=_golden_function_polygamma)
 
 
-def _golden_function_clamp(input_tensor_a, min, max, *args, **kwargs):
+def _golden_function_clamp(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
     return torch.clamp(input=input_tensor_a, min=min, max=max)
@@ -398,10 +412,10 @@ def _golden_function_bitwise_xor(input_tensor_a, value, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.bitwise_xor, golden_function=_golden_function_bitwise_xor)
 
 
-def _golden_function_bitwise_not(input_tensor_a, value, *args, **kwargs):
+def _golden_function_bitwise_not(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.bitwise_not(input_tensor_a, value)
+    return torch.bitwise_not(input_tensor_a)
 
 
 ttnn.attach_golden_function(ttnn.bitwise_not, golden_function=_golden_function_bitwise_not)

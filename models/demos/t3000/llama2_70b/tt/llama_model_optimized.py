@@ -168,7 +168,7 @@ class TtLlamaModel_optimized:
             seq_len <= self.model_config["MAX_CONTEXT_LEN"]
         ), f"Sequence length {seq_len} exceeds MAX_CONTEXT_LEN {self.model_config['MAX_CONTEXT_LEN']}"
 
-    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, mode="decode"):
+    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, mode="decode", page_table=None):
         """
         Prepare inputs for decode mode. Assume that current token is at
         start_pos, and KV cache has valid data up to start_pos.
@@ -240,6 +240,17 @@ class TtLlamaModel_optimized:
 
             cache_idxs_tt = None  # unused in prefill mode
 
+            if isinstance(page_table, torch.Tensor):
+                # Support vLLM tensor page_table input
+                page_table = ttnn.as_tensor(
+                    page_table,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                )
+
         elif mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             xs = x
@@ -258,7 +269,7 @@ class TtLlamaModel_optimized:
             rot_mats = ttnn.as_tensor(
                 rot_mat,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
@@ -269,7 +280,51 @@ class TtLlamaModel_optimized:
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
-        return (xs, start_pos, rot_mats, cache_idxs_tt)
+            if isinstance(page_table, torch.Tensor):
+                # Support vLLM tensor page_table input
+                page_table = ttnn.as_tensor(
+                    page_table,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                )
+
+        return (xs, start_pos, rot_mats, cache_idxs_tt, page_table)
+
+    def prepare_device_inputs(
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        valid_seq_len=None,
+        mode="decode",
+        page_table=None,
+        return_tokens=False,  # if true, return tokens for decode mode
+        return_rot_mat_rm=False,  # if true, also return rot_mat in row-major layout for decode
+    ):
+        tt_inp, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.prepare_inputs(
+            tokens, start_pos, valid_seq_len=valid_seq_len, mode=mode, page_table=page_table
+        )
+
+        if mode == "decode":
+            tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_inp_emb = self.tt_embd(tt_inp)
+            tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+            rot_mat_rm = ttnn.to_device(rot_mat, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rot_mat = ttnn.to_layout(rot_mat_rm, ttnn.TILE_LAYOUT)
+            rot_mat = ttnn.interleaved_to_sharded(rot_mat, self.model_config["ROT_MAT_MM_IN1_MEMCFG"])
+            cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if tt_page_table is not None:
+                tt_page_table = ttnn.to_device(tt_page_table, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            tt_inp_emb = tt_inp
+
+        return_out = [tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table]
+        if mode == "decode":
+            if return_tokens:
+                return_out.append(tt_inp)
+            if return_rot_mat_rm:
+                return_out.append(rot_mat_rm)
+        return tuple(return_out)
 
     def __call__(
         self,

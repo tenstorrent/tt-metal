@@ -66,8 +66,6 @@ def run(
 
     torch_input_tensor_a = torch.full(size=input_shape, fill_value=-2147483647).to(torch.int32)
 
-    scalar = torch.randint(-100, 101, (1,)).item()
-
     torch_output_tensor = torch.bitwise_not(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
@@ -79,7 +77,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.bitwise_not(input_tensor_a, value=scalar, memory_config=output_memory_config)
+    result = ttnn.bitwise_not(input_tensor_a, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

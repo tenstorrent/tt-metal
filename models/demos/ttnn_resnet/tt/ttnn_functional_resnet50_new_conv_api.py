@@ -446,7 +446,6 @@ class resnet50:
         stride,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=None,
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
@@ -459,7 +458,6 @@ class resnet50:
         self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
-        self.mesh_mapper = mesh_mapper
         if is_grayskull():
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -746,7 +744,6 @@ class resnet50:
             stride=[2, 2],
             padding=[1, 1],
             dilation=[1, 1],
-            device=device,
         )
 
         x_height = 56

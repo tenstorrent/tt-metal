@@ -17,6 +17,7 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_all_harts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_before_finish.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_hanging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tensix_dest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_raise_wait.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/test_dram_to_l1_multicast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/test_dram.cpp
@@ -34,7 +35,6 @@ target_include_directories(unit_tests_common_o PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
     ${PROJECT_SOURCE_DIR}/tt_metal/common
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/common

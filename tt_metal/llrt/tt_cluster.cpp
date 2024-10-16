@@ -37,6 +37,8 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
+    tt_metal::hal.initialize(arch_);
+
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
@@ -142,7 +144,7 @@ void Cluster::generate_cluster_descriptor() {
                                    : "";
 
     // create-eth-map not available for Blackhole bring up
-    if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE) {
+    if (this->arch_ == tt::ARCH::GRAYSKULL or this->arch_ == tt::ARCH::BLACKHOLE or this->target_type_ == TargetDevice::Simulator) {
         // Cannot use tt_SiliconDevice::detect_available_device_ids because that returns physical device IDs
         std::vector<chip_id_t> physical_mmio_device_ids;
         std::set<chip_id_t> logical_mmio_device_ids;
@@ -191,7 +193,7 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size()/4,
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
-    } else {
+    } else if (this->target_type_ != TargetDevice::Simulator){
     // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
@@ -284,7 +286,8 @@ void Cluster::open_driver(
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
     }
-    device_driver->set_device_dram_address_params(dram_address_params);
+    std::uint32_t dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+    device_driver->set_device_dram_address_params(tt_device_dram_address_params{dram_barrier_base});
     device_driver->set_device_l1_address_params(l1_address_params);
 
     this->get_metal_desc_from_tt_desc(
