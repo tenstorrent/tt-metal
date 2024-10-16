@@ -17,25 +17,23 @@ struct ExecuteScaledDotProductAttention {
         const ttnn::Tensor &input_tensor_q,
         const ttnn::Tensor &input_tensor_k,
         const ttnn::Tensor &input_tensor_v,
-        std::optional<ttnn::Tensor> causal_mask = std::nullopt,
+        std::optional<ttnn::Tensor> attn_mask = std::nullopt,
         bool is_causal = true,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<uint32_t> valid_seq_len = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor_q,
         const ttnn::Tensor &input_tensor_k,
         const ttnn::Tensor &input_tensor_v,
-        std::optional<ttnn::Tensor> causal_mask = std::nullopt,
+        std::optional<ttnn::Tensor> attn_mask = std::nullopt,
         bool is_causal = true,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<uint32_t> valid_seq_len = std::nullopt);
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 }  // namespace operations::transformer
