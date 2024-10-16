@@ -116,7 +116,7 @@ class TtLlamaSDPA(torch.nn.Module):
 
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # output_mem_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )  # seqlen, 1, batch, hidden_size
 

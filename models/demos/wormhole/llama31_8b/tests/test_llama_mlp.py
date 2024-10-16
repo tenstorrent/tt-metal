@@ -61,9 +61,9 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
         torch_input,
         device=device,
         dtype=ttnn.bfloat16,
-        memory_config=model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"]
-        if seq_len <= 32
-        else ttnn.L1_MEMORY_CONFIG,
+        memory_config=(
+            model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] if seq_len <= 32 else ttnn.L1_MEMORY_CONFIG
+        ),
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info("Compilation pass for Llama_MLP")
@@ -74,9 +74,9 @@ def test_llama_mlp_inference(device, seq_len, use_program_cache, reset_seeds):
         torch_input,
         device=device,
         dtype=ttnn.bfloat16,
-        memory_config=model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"]
-        if seq_len <= 32
-        else ttnn.L1_MEMORY_CONFIG,
+        memory_config=(
+            model_args.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"] if seq_len <= 32 else ttnn.L1_MEMORY_CONFIG
+        ),
         layout=ttnn.TILE_LAYOUT,
     )
     logger.info("Performance pass for Llama_MLP")

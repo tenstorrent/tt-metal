@@ -62,9 +62,9 @@ def get_model_config(llama_version="llama3-tg", max_batch_size=32, max_context_l
         "NUM_DEVICES": 32,
         "PADDING_LENGTH": 32,
         "MAX_MM_SEQ_LEN": lambda seq_len: min(seq_len, 1024),  # Used to support seq len greater than 2k
-        "CORE_GRID_Y": lambda seq_len: 4
-        if min(seq_len, 1024) // 32 >= 4
-        else min(seq_len, 1024) // 32,  # Core grid must be ratio of seq_len // 32
+        "CORE_GRID_Y": lambda seq_len: (
+            4 if min(seq_len, 1024) // 32 >= 4 else min(seq_len, 1024) // 32
+        ),  # Core grid must be ratio of seq_len // 32
         "COMPUTE_KERNEL_CONFIG": ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,

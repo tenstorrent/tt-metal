@@ -182,9 +182,11 @@ class resnet50Bottleneck:
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     math_fidelity=self.model_config["MATH_FIDELITY"],
-                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                    if height_sharding
-                    else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    shard_layout=(
+                        ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                        if height_sharding
+                        else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                    ),
                     deallocate_activation=True,
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
@@ -236,9 +238,9 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=height_sharding,
             ),
@@ -344,9 +346,9 @@ class resnet50Bottleneck:
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
                 act_block_h_override=act_block_h_override,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=height_sharding,
             ),
@@ -372,9 +374,9 @@ class resnet50Bottleneck:
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 math_fidelity=self.model_config["MATH_FIDELITY"],
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if height_sharding
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=height_sharding,
             ),

@@ -166,9 +166,11 @@ class TtLlamaAttention(LightweightModule):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=self.dtype,
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for k_or_v in [cache_k, cache_v]
