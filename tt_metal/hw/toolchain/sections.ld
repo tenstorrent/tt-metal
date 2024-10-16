@@ -117,7 +117,6 @@ SECTIONS
     SORT(CONSTRUCTORS)
     *(.data1)
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
-    . = ALIGN(4);
     __ldm_data_end = .;
   }
   .bss ALIGN(4):
