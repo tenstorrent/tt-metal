@@ -17,9 +17,9 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  erisc_l1_code :
+  .start :
   {
-    *(SORT(erisc_l1_code.*))
+    *(.start)
   } > REGION_APP_CODE
   code_l1 :
   {
