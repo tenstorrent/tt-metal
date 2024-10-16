@@ -16,6 +16,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    to_ttnn,
 )
 from loguru import logger
 
@@ -200,16 +201,16 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
 def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device, use_program_cache):
-    torch.manual_seed(0)
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
-        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
-        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
