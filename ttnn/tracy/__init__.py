@@ -113,7 +113,7 @@ def run_report_setup(verbose, outputFolder, port):
             )
     else:
         logger.error(
-            f"Tracy tools were not found. Please make sure you are on the correct build. Use scripts/build_scripts/build_with_profiler_opt.sh to build if you are not sure."
+            f"Tracy tools were not found. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
         )
         sys.exit(1)
 

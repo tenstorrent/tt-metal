@@ -6,7 +6,7 @@ The following set of commands will generate perf reports for ``resnet`` as an ex
 ..  code-block:: sh
 
     cd $TT_METAL_HOME
-    scripts/build_scripts/build_with_profiler_opt.sh
+    build_metal.sh --enable-profiler
     ./tt_metal/tools/profiler/profile_this.py -n resnet -c "pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"
 
 After the commands finish, the location of the generated csv will be printed on console similar to the image below:
