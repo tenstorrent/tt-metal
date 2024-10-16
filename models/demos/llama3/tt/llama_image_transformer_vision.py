@@ -37,6 +37,8 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
 
         self.dim = configuration.dim
         self.vision_dim = configuration.vision_dim
+        self.image_res = configuration.vision_chunk_size
+        self.patch_size = configuration.vision_patch_size
 
         # self.width = configuration.vision_dim
         # self.layers = configuration.vision_n_layers

@@ -131,8 +131,9 @@ class TtLlamaCrossAttention(LightweightModule):
 
     def compute_xattn_kv_cache(self, xattn_tokens):
         bsz, seqlen_y = xattn_tokens.shape[1], xattn_tokens.shape[2]
-        if seqlen_y > 1024:
-            xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // 1024, 1024, -1])
+        MAX_MM_SEQ_LEN = 1056
+        if seqlen_y > MAX_MM_SEQ_LEN:
+            xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         xk = ttnn.linear(
             xattn_tokens,
@@ -140,7 +141,7 @@ class TtLlamaCrossAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y),
+            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
 
         xv = ttnn.linear(
@@ -149,9 +150,9 @@ class TtLlamaCrossAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y),
+            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
-        if seqlen_y > 1024:
+        if seqlen_y > MAX_MM_SEQ_LEN:
             xk = ttnn.reshape(xk, [1, bsz, seqlen_y, -1])
             xv = ttnn.reshape(xv, [1, bsz, seqlen_y, -1])
 

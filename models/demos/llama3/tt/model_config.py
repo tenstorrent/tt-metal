@@ -462,13 +462,13 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=self.dim,
                 n=(self.head_dim * self.n_kv_heads) // self.num_devices,
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
             self.model_config["VISION_XATTN_SCORE_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
                 m=seq_len,
@@ -502,6 +502,17 @@ class TtModelArgs:
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=False,
+            )
+
+            self.model_config["CROSS_TRANSFORMER_TEXT_OUTPUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
+                k=self.dim,
+                n=self.vocab_size
+                // 4
+                // self.num_devices,  # TODO: Remove magic number 8 from cross attention transformer text
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= max_seq,
             )
 
     def _set_llama_params_from_dict(self, params):
