@@ -287,7 +287,7 @@ def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     run_moreh_single_test("DRAM BW test multi-core", command)
 
 
-def run_dram_read_remote_cb_sync_cmd(k, n, num_blocks, cb_num_blocks, cb_padding, df):
+def run_dram_read_remote_cb_sync_cmd(k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers):
     command = (
         "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb "
         + " --k "
@@ -304,6 +304,8 @@ def run_dram_read_remote_cb_sync_cmd(k, n, num_blocks, cb_num_blocks, cb_padding
         + str(1)
         + " --data-type "
         + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
     )
     run_moreh_single_test("DRAM read remote CB sync single-core ", command)
 
@@ -761,14 +763,14 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format",
+    "arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers",
     [
-        # ("grayskull", 1202, np.array([32768 * 2, 8 * 128]), 1, 64, 1),
-        ("wormhole_b0", 1000, np.array([32768, 128]), 1, 64, 5, 1024, 1),
-        # ("blackhole", 800, np.array([32768 * 8, 8 * 128]), 1, 256, 1),
+        ("wormhole_b0", 1000, np.array([32768, 4 * 64]), 1, 64, 5, 1024, 1, 4),
     ],
 )
-def test_dram_read_remote_cb_sync(arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format):
+def test_dram_read_remote_cb_sync(
+    arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers
+):
     data = []
     cycle_list = []
     time_list = []
@@ -780,7 +782,7 @@ def test_dram_read_remote_cb_sync(arch, freq, test_vector, num_tests, nblock, cb
             input_size = k * n * 1088 // 1024
         elif data_format == 1:
             input_size = k * n * 2048 // 1024
-        run_dram_read_remote_cb_sync_cmd(k, n, nblock, cb_nblock, cb_padding, data_format)
+        run_dram_read_remote_cb_sync_cmd(k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers)
         cycle = profile_results_kernel_duration()
         time = cycle / freq / 1000.0 / 1000.0
         throughput = input_size / cycle * freq / 1000.0
