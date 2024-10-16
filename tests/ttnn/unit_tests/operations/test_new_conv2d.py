@@ -385,7 +385,7 @@ def test_conv_ws(
     debug = False
     groups = 1
 
-    # TODO: Fix auto shard to choose Width Sharding for this case
+    # TODO: #13541: Fix auto shard to choose Width Sharding & re-enable this case.
     if input_channels == 1280 and output_channels == 1280 and input_height == 16:
         auto_shard = False
     torch.manual_seed(0)
