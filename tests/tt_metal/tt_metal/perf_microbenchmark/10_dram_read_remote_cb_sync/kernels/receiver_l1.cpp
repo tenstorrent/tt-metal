@@ -15,9 +15,15 @@ constexpr uint32_t block_num_tiles = get_compile_time_arg_val(1);
 constexpr uint32_t cb_start_addr = get_compile_time_arg_val(2);
 constexpr uint32_t cb_rd_ptr = get_compile_time_arg_val(2);
 constexpr uint32_t cb_size = get_compile_time_arg_val(3);
-uint32_t pages_acked_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
-uint32_t pages_sent_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
+constexpr uint32_t page_size = get_compile_time_arg_val(4);
+
+uint32_t rt_args_idx = 0;
+uint32_t vc;
+uint32_t noc_x;
+uint32_t noc_y;
+uint32_t pages_acked_semaphore_addr;
+uint32_t pages_sent_semaphore_addr;
+
 
 struct RemoteReceiverCBInterface {
     volatile tt_l1_ptr uint32_t* pages_acked;
@@ -40,7 +46,7 @@ struct RemoteReceiverCBInterface {
 RemoteReceiverCBInterface remote_cb_interface;
 
 template<uint32_t aligned_page_size>
-FORCE_INLINE void setup_remote_cb_interface() {
+FORCE_INLINE void setup_remote_receiver_cb_interface() {
     uint32_t num_pages = cb_size / page_size;
     uint32_t cb_size_page_aligned = num_pages * page_size;
 
@@ -56,8 +62,8 @@ FORCE_INLINE void setup_remote_cb_interface() {
 
     remote_cb_interface.fifo_start_addr = cb_start_addr;
 
-    remote_cb_interface.pages_acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pages_acked_semaphore_addr);
-    remote_cb_interface.pages_sent = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pages_sent_semaphore_addr);
+    remote_cb_interface.pages_acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_acked_semaphore_addr));
+    remote_cb_interface.pages_sent = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(pages_sent_semaphore_addr));
 
     remote_cb_interface.aligned_page_size = aligned_page_size;
 }
@@ -103,11 +109,16 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t num_pages, uint32_t remote_noc_x,
 
 void kernel_main() {
 
-    const uint32_t vc = get_arg_val<uint32_t>(0);
-    const uint32_t noc_x = get_arg_val<uint32_t>(1);
-    const uint32_t noc_y = get_arg_val<uint32_t>(2);
+    uint32_t rt_args_idx = 0;
+    vc = get_arg_val<uint32_t>(rt_args_idx++);
+    noc_x = get_arg_val<uint32_t>(rt_args_idx++);
+    noc_y = get_arg_val<uint32_t>(rt_args_idx++);
+    pages_acked_semaphore_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    pages_sent_semaphore_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
-    setup_remote_cb_interface<ALIGNED_PAGE_SIZE>();
+    constexpr uint32_t cb_id = 0;
+
+    setup_remote_receiver_cb_interface<ALIGNED_PAGE_SIZE>();
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         remote_cb_wait_front(block_num_tiles);

@@ -79,20 +79,21 @@ void get_max_page_size_and_num_pages(uint32_t num_tiles, uint32_t num_datums_per
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::Device *device,
     const CoreRangeSet &dram_reader_core,
-    const CoreRangeSet &l1_receiver_core,
+    const CoreRangeSet &l1_receiver_cores,
     const uint32_t &single_tile_size,
     const tt::DataFormat &tile_format,
     uint32_t k,
     uint32_t n,
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
+    uint32_t num_receivers,
     uint32_t cb_padding,
     std::shared_ptr<tt::tt_metal::Buffer> input_buffer,
     std::shared_ptr<tt::tt_metal::Buffer> output_buffer
     ) {
     tt_metal::Program program = tt_metal::Program();
 
-    auto all_cores = dram_reader_core.merge(l1_receiver_core);
+    auto all_cores = dram_reader_core.merge(l1_receiver_cores);
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -107,6 +108,13 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t reader_page_size, reader_num_pages;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, reader_page_size, reader_num_pages);
 
+    uint32_t receiver_block_num_tile = block_h * block_w / num_receivers;
+    uint32_t writer_page_size, writer_num_pages;
+    get_max_page_size_and_num_pages(block_w / num_receivers, single_tile_size, writer_page_size, writer_num_pages);
+
+    log_info("writer_page_size: {}", writer_page_size);
+    log_info("writer_num_pages: {}", writer_num_pages);
+
     uint32_t reader_cb_addr = device->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
@@ -115,17 +123,21 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     // L1 receiver CB
     uint32_t receiver_cb_index = 0;
-    uint32_t receiver_cb_size = block_h * block_w * single_tile_size * cb_num_blocks + cb_padding;
+    uint32_t receiver_cb_size = block_h * block_w * single_tile_size * cb_num_blocks / num_receivers + cb_padding;
     uint32_t receiver_page_size = 32;
     uint32_t receiver_cb_addr = output_buffer->address();
     tt_metal::CircularBufferConfig receiver_cb_config =
         tt_metal::CircularBufferConfig(receiver_cb_size, {{receiver_cb_index, tile_format}})
             .set_page_size(receiver_cb_index, receiver_page_size).set_globally_allocated_address(*output_buffer);
-    auto receiver_cb = tt_metal::CreateCircularBuffer(program, l1_receiver_core, receiver_cb_config);
+    auto receiver_cb = tt_metal::CreateCircularBuffer(program, l1_receiver_cores, receiver_cb_config);
 
     // semaphore
-    auto pages_acked_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
-    auto pages_sent_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    std::vector<uint32_t> pages_acked_semaphore_ids(num_receivers);
+    std::vector<uint32_t> pages_sent_semaphore_ids(num_receivers);
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        pages_acked_semaphore_ids[i] = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        pages_sent_semaphore_ids[i] = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    }
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) input_buffer->address(),
@@ -153,11 +165,12 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         (std::uint32_t) tt_metal::NOC::RISCV_0_default,
         (std::uint32_t) receiver_cb_addr,
         (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) pages_acked_semaphore_id,
-        (std::uint32_t) pages_sent_semaphore_id,
-        (std::uint32_t) reader_num_pages,
-        (std::uint32_t) reader_page_size,
-        (std::uint32_t) single_tile_size
+        (std::uint32_t) writer_num_pages,
+        (std::uint32_t) writer_page_size,
+        (std::uint32_t) single_tile_size,
+        (std::uint32_t) num_receivers,
+        (std::uint32_t) block_h,
+        (std::uint32_t) receiver_block_num_tile
     };
 
     auto writer_kernel = tt_metal::CreateKernel(
@@ -172,18 +185,16 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     std::vector<uint32_t> receiver_compile_time_args = {
         (std::uint32_t) num_blocks,
-        (std::uint32_t) block_num_tiles,
+        (std::uint32_t) receiver_block_num_tile,
         (std::uint32_t) reader_cb_addr,
         (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) pages_acked_semaphore_id,
-        (std::uint32_t) pages_sent_semaphore_id,
         (std::uint32_t) single_tile_size
     };
 
     auto receiver_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/kernels/receiver_l1.cpp",
-        l1_receiver_core,
+        l1_receiver_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_1_default,
@@ -191,6 +202,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
     // reader rt
     auto dram_reader_core_coord = dram_reader_core.ranges().begin()->start_coord;
+    log_info("dram_reader_core_coord: {}", dram_reader_core_coord);
     auto dram_reader_core_coord_physical = device->worker_core_from_logical_core(dram_reader_core_coord);
     uint32_t bank_id = 0;
     uint32_t vc = bank_id & 0x1;
@@ -201,23 +213,43 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::SetRuntimeArgs(program, reader_kernel, dram_reader_core_coord, reader_rt_args);
 
     // writer rt
-    auto l1_receiver_core_coord = l1_receiver_core.ranges().begin()->start_coord;
-    auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coord);
-    std::vector<uint32_t> writer_rt_args = {
-        (std::uint32_t) (vc + 1) & 0x3,
-        (std::uint32_t) l1_receiver_core_coord_physical.x,
-        (std::uint32_t) l1_receiver_core_coord_physical.y
-    };
+    std::vector<CoreCoord> l1_receiver_core_coords;
+    for (auto l1_receiver_core_coord : *l1_receiver_cores.ranges().begin()) {
+        l1_receiver_core_coords.push_back(l1_receiver_core_coord);
+    }
+    std::vector<uint32_t> writer_rt_args;
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
+        writer_rt_args.push_back(l1_receiver_core_coord_physical.x);
+    }
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        auto l1_receiver_core_coord_physical = device->worker_core_from_logical_core(l1_receiver_core_coords[i]);
+        writer_rt_args.push_back(l1_receiver_core_coord_physical.y);
+    }
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        writer_rt_args.push_back(pages_acked_semaphore_ids[i]);
+    }
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        writer_rt_args.push_back(pages_sent_semaphore_ids[i]);
+    }
     tt_metal::SetRuntimeArgs(program, writer_kernel, dram_reader_core_coord, writer_rt_args);
 
     // reciever rt
-    std::vector<uint32_t> receiver_rt_args = {
-        (std::uint32_t) (vc + 2) & 0x3,
-        (std::uint32_t) dram_reader_core_coord_physical.x,
-        (std::uint32_t) dram_reader_core_coord_physical.y
-    };
+    for (uint32_t i=0; i < num_receivers; ++i) {
+        std::vector<uint32_t> receiver_rt_args = {
+            (std::uint32_t) vc & 0x3,
+            (std::uint32_t) dram_reader_core_coord_physical.x,
+            (std::uint32_t) dram_reader_core_coord_physical.y
+        };
+        vc ++;
 
-    tt_metal::SetRuntimeArgs(program, receiver_kernel, l1_receiver_core_coord, receiver_rt_args);
+        receiver_rt_args.push_back(pages_acked_semaphore_ids[i]);
+        receiver_rt_args.push_back(pages_sent_semaphore_ids[i]);
+
+        log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
+
+        tt_metal::SetRuntimeArgs(program, receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
+    }
 
     return {std::move(program), reader_kernel, reader_cb_addr};
 }
@@ -268,13 +300,14 @@ bool validation_bfp8_b(
 ) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
-    std::vector<float> result_vec;
+    std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
+    std::vector<float> result_untilized;
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    result_vec = tt::test_utils::untilize(result_bfp8, kt*32 / num_blocks * cb_num_blocks, nt*32);
+    result_untilized = tt::test_utils::untilize(result_bfp8, kt*32 / num_blocks * cb_num_blocks, nt*32);
 
     const auto& values = input_tensor.get_values();
 
@@ -286,6 +319,10 @@ bool validation_bfp8_b(
         if (index == num_datums_per_cb) {
             index = 0;
         }
+    }
+
+    for (int i=0; i<result_untilized.size(); ++i) {
+        result_vec[i] = result_untilized[i];
     }
 
     pass &= pcc(golden_vec, result_vec) >= 0.9999;
@@ -307,7 +344,7 @@ bool validation_fp16(
 ) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0); // Initialize with zeros
-    std::vector<float> result_vec;
+    std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
     std::vector<uint32_t> result;
@@ -329,8 +366,27 @@ bool validation_fp16(
     }
 
     for (int i=0; i<result_untilized.size(); ++i) {
-        result_vec.push_back(to_float(static_cast<bfloat16>(result_untilized[i])));
+        result_vec[i] = to_float(static_cast<bfloat16>(result_untilized[i]));
     }
+
+    // for (uint32_t i=0; i < golden_vec.size(); ++i ) {
+    //     std::cout << golden_vec[i] << " ";
+
+    //     if ((i+1) %32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    // std::cout << std::endl;
+    // std::cout << std::endl;
+
+    // for (uint32_t i=0; i < result_vec.size(); ++i ) {
+    //     std::cout << result_vec[i] << " ";
+
+    //     if ((i+1) %32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
 
     pass &= (golden_vec == result_vec);
     if (!pass) {
@@ -347,7 +403,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     uint32_t wt,
     BufferType buffer_type,
     tt::DataFormat data_format,
-    CoreCoord core
+    CoreRangeSet cores,
+    uint32_t num_receivers
 ) {
 
     uint32_t size_bytes;
@@ -361,13 +418,14 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     }
 
     ShardSpecBuffer shard_spec = ShardSpecBuffer(
-                CoreRangeSet(std::set<CoreRange>({ CoreRange(core)})),
-                {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH},
+                cores,
+                {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
                 ShardOrientation::ROW_MAJOR,
                 false,
                 {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
                 {ht, wt});
 
+    log_info("cores: {}", cores);
     log_info("size_bytes: {}", size_bytes);
     log_info("page_size_bytes: {}", page_size_bytes);
 
@@ -376,7 +434,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
                                         .size = size_bytes,
                                         .page_size = page_size_bytes,
                                         .buffer_type = buffer_type,
-                                        .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                                        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
                                         .shard_parameters = shard_spec});
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
 
@@ -396,6 +454,7 @@ int main(int argc, char **argv) {
     uint32_t num_blocks = 8;
     uint32_t cb_num_blocks = 8;
     uint32_t cb_padding = 16;
+    uint32_t num_receivers = 1;
     uint64_t k = 8192, n = 128;
 
     try {
@@ -420,6 +479,8 @@ int main(int argc, char **argv) {
                 test_args::has_command_option_and_remaining_args(input_args, "--use-device-profiler");
             std::tie(df, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--data-type", 0);
+            std::tie(num_receivers, input_args) =
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--num-receivers", 1);
 
 
             test_args::validate_remaining_args(input_args);
@@ -446,6 +507,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Parameters Setup
         ////////////////////////////////////////////////////////////////////////////
+        uint32_t num_banks = 1;
         uint32_t input_size = 0;
         tt::DataFormat tile_format = tt::DataFormat::Bfp8_b;
         if (df == 0) {
@@ -473,20 +535,17 @@ int main(int argc, char **argv) {
         int device_id = 0;
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
 
-        uint32_t num_tiles = static_cast<uint32_t>(input_size / single_tile_size);
-        uint32_t num_cores = 1; // single core test
-        uint32_t num_tiles_per_core = num_tiles / num_cores;
-
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
-        CoreCoord l1_receiver_core_coord = CoreCoord{0, 0};
+        CoreRange dram_reader_core_coord_range = CoreRange(dram_reader_core_coord);
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
+        CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
         if (device->arch() == tt::ARCH::GRAYSKULL) {
-            l1_receiver_core_coord = CoreCoord{0, 1};
+            l1_receiver_core_coord_range = CoreRange{CoreCoord{0, 1}, CoreCoord{0, num_receivers}};
         } else {
-            l1_receiver_core_coord = CoreCoord{1, 0};
+            l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
-        CoreRangeSet l1_receiver_core{std::set<CoreRange>{CoreRange{l1_receiver_core_coord}}};
+        CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
@@ -494,31 +553,32 @@ int main(int argc, char **argv) {
         std::shared_ptr<tt::tt_metal::Buffer> input_buffer;
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
-        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         if (tile_format == tt::DataFormat::Bfp8_b) {
             auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
             std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
-            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_bank_coord);
+            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
-            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Bfp8_b, l1_receiver_core_coord);
+            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Bfp8_b, l1_receiver_core, num_receivers);
+
         } else {
             auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
             auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
             vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
-            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_bank_coord);
+            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
-            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Float16_b, l1_receiver_core_coord);
+            output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Float16_b, l1_receiver_core, num_receivers);
         }
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, kernel, output_cb_addr] = create_program(device, dram_reader_core, l1_receiver_core, single_tile_size, tile_format, k, n, num_blocks, cb_num_blocks, cb_padding, input_buffer, output_buffer);
+        auto [program, kernel, output_cb_addr] = create_program(device, dram_reader_core, l1_receiver_core, single_tile_size, tile_format, k, n, num_blocks, cb_num_blocks, num_receivers, cb_padding, input_buffer, output_buffer);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
