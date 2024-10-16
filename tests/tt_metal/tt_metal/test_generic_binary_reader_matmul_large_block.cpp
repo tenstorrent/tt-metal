@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
         auto source_addresses_in_l1 = CreateBuffer(l1_config);
         auto source_addresses_in_l1_addr = source_addresses_in_l1->address();
 
-        std::vector<uint32_t> generic_binary_reader_args {
+        const std::array generic_binary_reader_args {
             src0_dram_buffer->address(),
             (uint32_t)dram_src0_noc_xy.x,
             (uint32_t)dram_src0_noc_xy.y,
@@ -270,7 +270,7 @@ int main(int argc, char **argv) {
             core,
             tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        std::vector<uint32_t> writer_rt_args{
+        const std::array writer_rt_args{
             dst_dram_buffer->address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,

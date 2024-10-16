@@ -142,7 +142,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        std::vector<uint32_t> rt_args = {
+        const std::array rt_args = {
             (std::uint32_t) bank_id,
             (std::uint32_t) vc
         };
