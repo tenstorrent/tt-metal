@@ -80,7 +80,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
                                 .set_page_size(output_cb_index, output_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
         num_sticks,
         stick_size,
@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         num_full_blocks_in_row,
         num_leftover_tiles,
         leftover_width_in_row,
-        0  // row_start_id
+        std::uint32_t{0},  // row_start_id
     };
 
     // Reader compile-time args
@@ -236,19 +236,19 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
         const CoreCoord& core = cores[i];
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core * TILE_HEIGHT,
             block_size_nbytes,
             ntiles_per_block,
             block_size_nbytes,
-            1,  // full blocks in row
-            0,  // num leftover tiles
-            0,  // leftover width in row
+            std::uint32_t{1},  // full blocks in row
+            std::uint32_t{0},  // num leftover tiles
+            std::uint32_t{0},  // leftover width in row
             row_start_id};
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),
             ntiles_per_block * nblocks_per_core,  // ntiles per core
             tile_start_id                         // start id
@@ -265,19 +265,19 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
         const CoreCoord& core = cores.back();
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {
+        const std::array reader_rt_args = {
             src0_buffer->address(),
             nblocks_per_core_cliff * TILE_HEIGHT,
             block_size_nbytes,
             ntiles_per_block,
             block_size_nbytes,
-            1,  // full blocks in row
-            0,  // num leftover tiles
-            0,  // leftover width in row
+            std::uint32_t{1},  // full blocks in row
+            std::uint32_t{0},  // num leftover tiles
+            std::uint32_t{0},  // leftover width in row
             row_start_id};
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {
+        const std::array writer_rt_args = {
             dst_buffer->address(),
             ntiles_per_block * nblocks_per_core_cliff,  // ntiles per core
             tile_start_id                               // start id

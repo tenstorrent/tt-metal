@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
         input_w,
         padded_W_diff_blocks,
@@ -315,7 +315,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
+        const std::array writer_rt_args = {dst_buffer->address(), num_tiles_per_core, tile_start_id};
 
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
@@ -447,7 +447,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    vector<uint32_t> reader_rt_args = {
+    const std::array reader_rt_args = {
         num_input_rows,
         input_shard_width_bytes,
         (num_input_rows / num_batches) * input_shard_width_bytes,
@@ -457,7 +457,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         packed_pad_value};
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, reader_rt_args);
 
-    vector<uint32_t> writer_rt_args = {ntiles_per_core};
+    const std::array writer_rt_args = {ntiles_per_core};
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
 
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,

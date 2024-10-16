@@ -7,6 +7,11 @@ set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
+add_library(span INTERFACE)
+if(CMAKE_CXX_STANDARD LESS 20)
+  fetch_boost_library(core)
+  target_link_libraries(span INTERFACE Boost::core)
+endif()
 fetch_boost_library(smart_ptr)
 
 ############################################################################################################################
