@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         compute_defines["SPLIT_READER"] = "1";
     }
 
-    if (false) {
+    if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
@@ -671,7 +671,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    tt::DataFormat interm0_df = out_df;
+    tt::DataFormat interm0_df =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);

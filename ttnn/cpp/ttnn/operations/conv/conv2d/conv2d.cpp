@@ -250,6 +250,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_w,
     bool fp32_accum,
     bool use_shallow_conv_variant) {
+
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -841,8 +842,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         }
         conv_config.deallocate_activation = true;
     }
-    if(conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {  conv_config.act_block_h_override = 0; }
-
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         parallel_config,
@@ -850,6 +849,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
+
+    if(conv_config.shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {  conv_config.act_block_h_override = 0; }
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
