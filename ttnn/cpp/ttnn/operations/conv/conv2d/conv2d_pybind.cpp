@@ -7,6 +7,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 
 namespace py = pybind11;
@@ -195,6 +196,62 @@ void py_bind_conv2d(py::module& module) {
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("num_groups"),
         py::arg("output_dtype").noconvert() = std::nullopt);
+
+    module.def(
+        "determine_parallel_config",
+        [](const ttnn::TensorMemoryLayout& shard_layout,
+           uint32_t batch_size,
+           uint32_t input_channels,
+           uint32_t output_height,
+           uint32_t output_width,
+           uint32_t output_channels,
+           ttnn::Device* device,
+           ShardOrientation block_shard_orientation,
+           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
+            return ttnn::operations::conv::conv2d::determine_parallel_config<Device>(
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, device, block_shard_orientation, is_out_tiled);
+        },
+        py::arg("shard_layout"),
+        py::arg("batch_size"),
+        py::arg("input_channels"),
+        py::arg("output_height"),
+        py::arg("output_width"),
+        py::arg("output_channels"),
+        py::arg("device"),
+        py::arg("block_shard_orientation"),
+        py::arg("is_out_tiled") = true);
+
+    module.def(
+        "determine_parallel_config",
+        [](const ttnn::TensorMemoryLayout& shard_layout,
+           uint32_t batch_size,
+           uint32_t input_channels,
+           uint32_t output_height,
+           uint32_t output_width,
+           uint32_t output_channels,
+           ttnn::MeshDevice* device,
+           ShardOrientation block_shard_orientation,
+           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
+            return ttnn::operations::conv::conv2d::determine_parallel_config<MeshDevice>(
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, device, block_shard_orientation, is_out_tiled);
+        },
+        py::arg("shard_layout"),
+        py::arg("batch_size"),
+        py::arg("input_channels"),
+        py::arg("output_height"),
+        py::arg("output_width"),
+        py::arg("output_channels"),
+        py::arg("device"),
+        py::arg("block_shard_orientation"),
+        py::arg("is_out_tiled") = true);
+
+    module.def(
+        "create_sharded_memory_config_from_parallel_config",
+        &ttnn::operations::conv::conv2d::create_sharded_memory_config_from_parallel_config,
+        py::arg("tensor_shape"),
+        py::arg("parallel_config"),
+        py::arg("tile_size"));
+
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
