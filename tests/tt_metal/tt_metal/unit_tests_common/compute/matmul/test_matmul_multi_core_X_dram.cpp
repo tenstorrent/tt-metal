@@ -229,7 +229,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
-            std::vector<uint32_t> mm_reader_args = {
+            const std::array mm_reader_args = {
                 (std::uint32_t) dram_buffer_src0_addr,
                 (std::uint32_t) dram_src0_noc_xy.x,
                 (std::uint32_t) dram_src0_noc_xy.y,
@@ -242,7 +242,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device *device){
                 (std::uint32_t) per_core_M * in0_block_w * single_tile_size, // input 0 block bytes
                 (std::uint32_t) per_core_N * in0_block_w * single_tile_size};
 
-            std::vector<uint32_t> writer_args = {
+            const std::array writer_args = {
                 (std::uint32_t) dram_buffer_dst_addr,
                 (std::uint32_t) dram_dst_noc_xy.x,
                 (std::uint32_t) dram_dst_noc_xy.y,
@@ -321,7 +321,7 @@ bool assign_runtime_args_to_program(
         for (int core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
             CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
-            std::vector<uint32_t> mm_reader_args = {
+            const std::array mm_reader_args = {
                 (std::uint32_t)in0_dram_addr,                // in0_tensor_addr
                 (std::uint32_t)K * per_core_M * core_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)1,                            // in0_tensor_stride_w
@@ -345,7 +345,7 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)K / in0_block_w               // num_blocks
             };
 
-            std::vector<uint32_t> writer_args = {
+            const std::array writer_args = {
                 (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
