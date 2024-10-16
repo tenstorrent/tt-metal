@@ -184,7 +184,7 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
     auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-    std::vector<uint32_t> mm_reader_rt_args{
+    const std::array mm_reader_rt_args{
         src0_dram_buffer->address(),
         (std::uint32_t)dram_src0_noc_xy.x,
         (std::uint32_t)dram_src0_noc_xy.y,

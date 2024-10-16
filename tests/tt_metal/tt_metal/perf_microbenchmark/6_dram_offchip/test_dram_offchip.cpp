@@ -419,7 +419,7 @@ bool assign_runtime_args_to_program(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
-        std::vector<uint32_t> kernel_args = {
+        const std::array kernel_args = {
             (std::uint32_t)input_buffer_addr,
             (std::uint32_t)(num_tiles_used),
             (std::uint32_t)num_blocks,

@@ -238,7 +238,7 @@ int main(int argc, char **argv) {
             .set_page_size(ouput_cb_index, single_tile_size);
         auto cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
-        std::vector<uint32_t> mm_reader_rt_args{
+        const std::array mm_reader_rt_args{
             src0_dram_buffer->address(),
             (std::uint32_t)dram_src0_noc_xy.x,
             (std::uint32_t)dram_src0_noc_xy.y,
@@ -251,7 +251,7 @@ int main(int argc, char **argv) {
             M * in0_block_w * single_tile_size, // input 0 block bytes
             N * in0_block_w * single_tile_size}; // input 1 block bytes
 
-        std::vector<uint32_t> writer_rt_args{
+        const std::array writer_rt_args{
             dst_dram_buffer->address(),
             (std::uint32_t)dram_dst_noc_xy.x,
             (std::uint32_t)dram_dst_noc_xy.y,
