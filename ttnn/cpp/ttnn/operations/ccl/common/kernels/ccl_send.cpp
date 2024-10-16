@@ -20,10 +20,42 @@ using ttnn::ccl::coord_t;
 // For the future
 using address_t = uint32_t;
 
-
-
 using ttnn::ccl::Shape4D;
 using tt::tt_metal::TensorMemoryLayout;
+using shape_t = Shape4D<uint32_t>;
+
+void dprint(ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+    DPRINT << "\ttensor_slice_shape.w: " << (uint32_t)command_tensor.tensor_slice_shape.w << "\n";
+    DPRINT << "\ttensor_slice_shape.z: " << (uint32_t)command_tensor.tensor_slice_shape.z << "\n";
+    DPRINT << "\ttensor_slice_shape.y: " << (uint32_t)command_tensor.tensor_slice_shape.y << "\n";
+    DPRINT << "\ttensor_slice_shape.x: " << (uint32_t)command_tensor.tensor_slice_shape.x << "\n";
+    DPRINT << "\ttensor_slice_offset.w: " << (uint32_t)command_tensor.tensor_slice_offset.w << "\n";
+    DPRINT << "\ttensor_slice_offset.z: " << (uint32_t)command_tensor.tensor_slice_offset.z << "\n";
+    DPRINT << "\ttensor_slice_offset.y: " << (uint32_t)command_tensor.tensor_slice_offset.y << "\n";
+    DPRINT << "\ttensor_slice_offset.x: " << (uint32_t)command_tensor.tensor_slice_offset.x << "\n";
+    DPRINT << "\tworker_start_offset_in_slice.w: " << (uint32_t)command_tensor.worker_start_offset_in_slice.w << "\n";
+    DPRINT << "\tworker_start_offset_in_slice.z: " << (uint32_t)command_tensor.worker_start_offset_in_slice.z << "\n";
+    DPRINT << "\tworker_start_offset_in_slice.y: " << (uint32_t)command_tensor.worker_start_offset_in_slice.y << "\n";
+    DPRINT << "\tworker_start_offset_in_slice.x: " << (uint32_t)command_tensor.worker_start_offset_in_slice.x << "\n";
+    DPRINT << "\tworker_pages_per_slice: " << (uint32_t)command_tensor.worker_pages_per_slice << "\n";
+}
+
+void print_tensor_command(uint32_t command_index, ttnn::ccl::cmd::CclCommandTensor const& command_tensor) {
+#ifdef DEBUG_PRINT_ENABLED
+    DPRINT << "cmd[" << (uint32_t)command_index << "]:\n";
+    dprint(command_tensor);
+#endif
+}
+
+/*
+ * Convert a flattened worker offset coord value (assumed 0,0,0, worker offset in pages into tensor slice)
+ * into a 4D coordinate value
+ */
+inline shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, shape_t const& worker_slice_offset) {
+    static_assert(sizeof(coord_t) == 2 * sizeof(uint32_t), "worker_wrapped_offset_to_coord not updated to work with 4d shape");
+    auto const y = worker_slice_offset.x / slice_shape.x;
+    return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
+}
 
 std::size_t get_flat_index_from_shape(const Shape4D<uint32_t> &shape, const Shape4D<uint32_t> &index) {
     std::size_t offset = index.x;
@@ -153,7 +185,6 @@ auto build_source_address_generator(std::size_t &arg_idx, address_t tensor_addre
 */
 void kernel_main() {
     std::size_t arg_idx = 0;
-    using shape_t = Shape4D<uint32_t>;
 
     ///////////////////////////////////////////////////
     // ARGS
@@ -191,6 +222,10 @@ void kernel_main() {
 
     ttnn::ccl::cmd::CclCommandTensor command_tensor;
 
+    // Don't use CBs because there appears to be a bug if we have the same producer/consumer core to a given CB
+    // Instead, open up the CB and use it as a raw scratch space6
+    cb_reserve_back(cb_id, packet_size_in_pages);
+    const uint32_t local_l1_scratch_buffer_address = get_write_ptr(cb_id);
     for (std::size_t i = 0; i < num_commands; ++i) {
         // Generalized would be to get the command header info and then dispatch accordingly - if the command type is singular
         //
@@ -199,20 +234,7 @@ void kernel_main() {
         std::size_t new_arg_idx = arg_idx;
 
         {
-            DPRINT << "cmd[" << (uint32_t)i << "]:\n";
-            DPRINT << "\ttensor_slice_shape.w: " << (uint32_t)command_tensor.tensor_slice_shape.w << "\n";
-            DPRINT << "\ttensor_slice_shape.z: " << (uint32_t)command_tensor.tensor_slice_shape.z << "\n";
-            DPRINT << "\ttensor_slice_shape.y: " << (uint32_t)command_tensor.tensor_slice_shape.y << "\n";
-            DPRINT << "\ttensor_slice_shape.x: " << (uint32_t)command_tensor.tensor_slice_shape.x << "\n";
-            DPRINT << "\ttensor_slice_offset.w: " << (uint32_t)command_tensor.tensor_slice_offset.w << "\n";
-            DPRINT << "\ttensor_slice_offset.z: " << (uint32_t)command_tensor.tensor_slice_offset.z << "\n";
-            DPRINT << "\ttensor_slice_offset.y: " << (uint32_t)command_tensor.tensor_slice_offset.y << "\n";
-            DPRINT << "\ttensor_slice_offset.x: " << (uint32_t)command_tensor.tensor_slice_offset.x << "\n";
-            DPRINT << "\tworker_start_offset_in_slice.w: " << (uint32_t)command_tensor.worker_start_offset_in_slice.w << "\n";
-            DPRINT << "\tworker_start_offset_in_slice.z: " << (uint32_t)command_tensor.worker_start_offset_in_slice.z << "\n";
-            DPRINT << "\tworker_start_offset_in_slice.y: " << (uint32_t)command_tensor.worker_start_offset_in_slice.y << "\n";
-            DPRINT << "\tworker_start_offset_in_slice.x: " << (uint32_t)command_tensor.worker_start_offset_in_slice.x << "\n";
-            DPRINT << "\tworker_pages_per_slice: " << (uint32_t)command_tensor.worker_pages_per_slice << "\n";
+            print_tensor_command(i, command_tensor);
             ASSERT(ccl_command.worker_pages_per_slice > 0);
 
             // CURRENTLY ONLY SUPPORTS WRAPPED TENSOR ITERATION COMMANDS
@@ -221,7 +243,9 @@ void kernel_main() {
             // const shape_t tensor_slice_start_offset = ttnn::ccl::build_from_args<shape_t>(arg_idx); // Should be RT
             shape_t valid_worker_slice_shape = build_wrapped_row_tensor_slice(command_tensor.worker_pages_per_slice); // Parametrizable by ct arg
 
-            shape_t const& global_offset = command_tensor.tensor_slice_offset + command_tensor.worker_start_offset_in_slice;
+            shape_t const& worker_start_offset_global = worker_wrapped_offset_to_coord(command_tensor.tensor_slice_shape, command_tensor.worker_start_offset_in_slice);
+            shape_t const& global_offset = command_tensor.tensor_slice_offset + worker_start_offset_global;
+
             uint32_t curr_tile_id = get_flat_index_from_shape(command_tensor.tensor_shape, global_offset);
 
             uint32_t offset_into_worker_slice = 0;
@@ -237,7 +261,7 @@ void kernel_main() {
                 ASSERT(ccl_command.tensor_slice_shape.w == 1);
                 ASSERT(ccl_command.tensor_slice_shape.z == 1);
 
-                read_wrapped_chunk_from_output_tensor(
+                read_wrapped_chunk_from_output_tensor_to_address(
                     curr_tile_id,
                     offset_into_worker_slice,
                     ttnn::ccl::coord_t(command_tensor.worker_start_offset_in_slice.x, command_tensor.worker_start_offset_in_slice.y), // Offset into tensor slice
@@ -245,7 +269,7 @@ void kernel_main() {
                     // In tiles for tile layout
                     ttnn::ccl::coord_t(command_tensor.tensor_shape.x, command_tensor.tensor_shape.y),
                     ttnn::ccl::coord_t(command_tensor.tensor_slice_shape.x, command_tensor.tensor_slice_shape.y),
-                    cb_id,
+                    local_l1_scratch_buffer_address,
                     tensor_addrgen,
                     n_pages,
                     page_size,
@@ -253,11 +277,8 @@ void kernel_main() {
 
                 // Not optimal (doesn't overlap read/write) - but good for functional
                 // bringup
-                cb_wait_front(cb_id, n_pages);
-                uint32_t l1_read_addr = get_read_ptr(cb_id);
-
                 sender.wait_for_empty_write_slot();
-                sender.send_payload_blocking(cb_id, n_pages, page_size);
+                sender.send_payload_blocking_from_address(local_l1_scratch_buffer_address, n_pages, page_size);
             }
         }
     }
