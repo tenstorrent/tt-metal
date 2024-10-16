@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
 
                 CoreCoord adjacent_core_noc = device->worker_core_from_logical_core(adjacent_core_logical);
 
-                vector<uint32_t> noc_runtime_args = {
+                const std::array noc_runtime_args = {
                     (uint32_t)adjacent_core_noc.x,
                     (uint32_t)adjacent_core_noc.y,
                     cb_src1_addr,

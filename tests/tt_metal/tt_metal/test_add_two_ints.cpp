@@ -36,8 +36,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord core = {0, 0};
-        std::vector<uint32_t> first_runtime_args = {101, 202};
-        std::vector<uint32_t> second_runtime_args = {303, 606};
+        constexpr std::array<uint32_t, 2> first_runtime_args = {101, 202};
+        constexpr std::array<uint32_t, 2> second_runtime_args = {303, 606};
 
         tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
             program, "tests/tt_metal/tt_metal/test_kernels/misc/add_two_ints.cpp", core,
