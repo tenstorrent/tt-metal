@@ -9,7 +9,7 @@ There are multiple scripts used to profile host dispatch time for operations in 
 It can be called with:
 
 ```
-pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
+pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile
 ```
 
 In this case `host_overhead_profile` is the output folder.
@@ -17,7 +17,7 @@ In this case `host_overhead_profile` is the output folder.
 You can profile only one op with:
 
 ```
-pytest tests/tt_eager/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.isclose
+pytest tests/ttnn/profiling/profile_host_overhead.py --input-method cli --cli-input host_overhead_profile::tt_lib.tensor.isclose
 ```
 
 After the script is finished profiling results are in the designated output folder in file `host_overhead_profiler_output.csv`. Content of output csv might look like:
@@ -50,7 +50,7 @@ Columns:
 You can run it with:
 
 ```
-python tests/tt_eager/profiling/profile_host_overhead_with_tracy.py -o host_overhead_profile -c final.csv
+python tests/ttnn/profiling/profile_host_overhead_with_tracy.py -o host_overhead_profile -c final.csv
 ```
 
 It profiles all tt_lib ops and saves measurement results to `host_overhead_profile/final.csv`. Output might look like:
