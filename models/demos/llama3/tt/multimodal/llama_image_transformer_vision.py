@@ -39,16 +39,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         self.vision_dim = configuration.vision_dim
         self.image_res = configuration.vision_chunk_size
         self.patch_size = configuration.vision_patch_size
-
-        # self.width = configuration.vision_dim
-        # self.layers = configuration.vision_n_layers
-        # self.heads = configuration.vision_attn_n_heads
-        # self.mlp_ratio = configuration.vision_mlp_ratio
-        # self.act_layer = configuration.vision_act_layer
-        # self.in_channels = configuration.vision_in_channels
-        # self.n_global_layers = configuration.vision_n_global_layers
-        # self.global_model = True
-        # self.return_intermediate = return_intermediate
+        self.configuration = configuration
 
         self.vision_encoder = TtLlamaVisionEncoder(
             mesh_device,
@@ -102,7 +93,6 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         vision_tokens = self.vision_encoder(images, ar)
 
         seq_len = vision_tokens.shape[-2]
-        compute_kernel_config_hifi4 = self.model_config["MLP_KERNEL_CONFIG_HIFI4"]
 
         pc = self.model_config["VISION_PROJ_PROGCFG"](seq_len)
 
@@ -110,7 +100,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             vision_tokens,
             self.vision_projection_weight,
             bias=self.vision_projection_bias,
-            compute_kernel_config=compute_kernel_config_hifi4,
+            compute_kernel_config=self.configuration.compute_kernel_config_hifi4,
             core_grid=None,
             dtype=ttnn.bfloat16,
             program_config=pc,
