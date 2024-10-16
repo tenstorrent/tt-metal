@@ -4,16 +4,33 @@
 
 #pragma once
 
-#include <ranges>
+// prefer standard library implementation
+#if __has_include(<span>)
+
 #include <span>
+#define _TT_STL_SPAN_NS ::std
+
+// fallback to boost library implementation
+#elif __has_include(<boost/core/span.hpp>)
+
+#include <boost/core/span.hpp>
+#define _TT_STL_SPAN_NS ::boost
+
+#else
+
+#error "No implementation available for tt::stl::Span"
+
+#endif
 
 namespace tt::stl {
 
-using std::dynamic_extent;
+using _TT_STL_SPAN_NS::dynamic_extent;
 
 namespace detail {
 
-using std::span;
+using _TT_STL_SPAN_NS::span;
+
+#undef _TT_STL_SPAN_NS
 
 template <class T, std::size_t Extent>
 class SpanBase : public span<T, Extent> {
@@ -95,8 +112,20 @@ Span(R &&) -> Span<std::remove_reference_t<std::ranges::range_reference_t<R>>>;
 
 }  // namespace tt::stl
 
+#if __has_include(<ranges>)
+
+#include <ranges>
+
+// https://en.cppreference.com/w/cpp/ranges/borrowed_range
+// The concept std::ranges::borrowed_range defines the requirements of a range such that a function can take it by value
+// and return iterators obtained from it without danger of dangling.
 template <class T, std::size_t Extent>
 constexpr bool std::ranges::enable_borrowed_range<tt::stl::Span<T, Extent>> = true;
 
+// https://en.cppreference.com/w/cpp/ranges/view
+// The std::ranges::view concept specifies the requirements of a range type that has suitable semantic properties for
+// use in constructing range adaptor pipelines.
 template <class T, std::size_t Extent>
 constexpr bool std::ranges::enable_view<tt::stl::Span<T, Extent>> = true;
+
+#endif
