@@ -27,17 +27,11 @@ void bind_barrier(pybind11::module& module, const ccl_operation_t& operation, co
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const uint32_t num_samples,
-               const uint32_t max_concurrent_samples,
-               const uint32_t sample_page_size,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology)-> ttnn::Tensor {
-                return self(input_tensor, num_samples, max_concurrent_samples, sample_page_size, memory_config, topology);
+                return self(input_tensor, memory_config, topology);
             },
             py::arg("input_tensor"),
-            py::arg("num_samples"),
-            py::arg("max_concurrent_samples"),
-            py::arg("sample_page_size"),
             py::kw_only(),//The following are optional by key word only
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring});
@@ -61,16 +55,13 @@ void py_bind_barrier(pybind11::module& module) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options is currently only Ring`.
 
 
         Returns:
             ttnn.Tensor: the output tensor which is a copy of the input tensor
         Example:
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
-            >>> num_samples = 8
-            >>> max_concurrent_samples = 1
-            >>> sample_page_size=8
             >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
             >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
@@ -79,7 +70,7 @@ void py_bind_barrier(pybind11::module& module) {
                     tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
             >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, num_samples, max_concurrent_samples, sample_page_size, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.reduce_scatter(input_tensor_mesh, topology=ttnn.Topology.Ring)
 
 
         )doc");

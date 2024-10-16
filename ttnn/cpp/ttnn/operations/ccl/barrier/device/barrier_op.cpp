@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //There are two parts to barrier_op.cpp. First we want to add the requred functions
-//to struct Barrier. Then we will generate the function referenced in the 
+//to struct Barrier. Then we will generate the function referenced in the
 //Invoke function which uses a Barrier class variable
 
 //Required: validate, compute_output_shapes, create_output_tensors, create_program
@@ -43,9 +43,6 @@ operation::ProgramWithCallbacks Barrier::create_program(
         input_tensors.at(0),
         output_tensors.at(0),
         this->is_starting_core,
-        this->num_samples,
-        this->max_concurrent_samples,
-        this->sample_page_size,
         this->ring_size,
         this->ring_index,
         this->receiver_device_id,
@@ -58,9 +55,6 @@ namespace operations{
 namespace ccl{
 Tensor barrier(
     const Tensor& input_tensor,
-    const uint32_t num_samples,
-    const uint32_t max_concurrent_samples,
-    const uint32_t sample_page_size,
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology)
 {
@@ -71,10 +65,10 @@ Tensor barrier(
 
     //Split the job up between the tensors
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    
+
     //Define the launch_op function
     operation::launch_op(
-        [num_samples,max_concurrent_samples,sample_page_size,output_mem_config, topology, devices](
+        [output_mem_config, topology, devices](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -102,9 +96,6 @@ Tensor barrier(
             return operation::run(
                 ttnn::Barrier{
                     device_index == 0,
-                    num_samples,
-                    max_concurrent_samples,
-                    sample_page_size,
                     num_devices,
                     device_index,
                     receiver_device_id,
@@ -118,7 +109,7 @@ Tensor barrier(
     //Return the first output tensor
     return output_tensors.at(0);
 }
-    
+
 } //namespace ccl end
 
 } //namespace operations end
