@@ -144,6 +144,7 @@ void kernel_main() {
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
     constexpr uint32_t scale_val = get_compile_time_arg_val(10);
     constexpr uint32_t num_cores = get_compile_time_arg_val(11);
+    constexpr bool fp32_dest_acc_en = (get_compile_time_arg_val(12) == 1);
 
     const uint32_t out_addr  = get_arg_val<uint32_t>(0);
     const uint32_t core_id    = get_arg_val<uint32_t>(1);
@@ -178,8 +179,13 @@ void kernel_main() {
     constexpr uint32_t cb_scale_in = tt::CB::c_in4;
     constexpr uint32_t cb_identity_scale_in = tt::CB::c_in5;
 
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
-    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    if constexpr(fp32_dest_acc_en) {
+        generate_bcast_unary_scalar_fp32(cb_scale_in, scale_val);
+        generate_reduce_scaler_fp32(cb_identity_scale_in, identity_scalar_packed);
+    } else {
+        generate_bcast_unary_scalar(cb_scale_in, scale_val);
+        generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    }
 
     uint32_t out_tile_id = 0;
 

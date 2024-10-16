@@ -126,10 +126,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     TT_FATAL(batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores, "Error");
 
-    tt::log_debug("Parallelization scheme:");
-    tt::log_debug("batch_parallel_factor: {}", batch_parallel_factor);
-    tt::log_debug("nh_parallel_factor: {}", nh_parallel_factor);
-    tt::log_debug("q_parallel_factor: {}", q_parallel_factor);
+    tt::log_info("Parallelization scheme:");
+    tt::log_info("num_cores: {}", num_cores);
+    tt::log_info("batch_parallel_factor: {}", batch_parallel_factor);
+    tt::log_info("nh_parallel_factor: {}", nh_parallel_factor);
+    tt::log_info("q_parallel_factor: {}", q_parallel_factor);
 
     // Ceiling divide to allow for non-perfect divisions
     const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
@@ -138,7 +139,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 
-    tt::log_debug("q_per_core: {}", q_per_core);
+    tt::log_info("q_per_core: {}", q_per_core);
+    tt::log_info("nh_per_core: {}", q_buffer_factor);
+    tt::log_info("batch_per_core: {}", batch_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -186,19 +189,19 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
-    tt::log_debug("dst_size: {}", dst_size);
-    tt::log_debug("qk_in0_block_w: {}", qk_in0_block_w);
-    tt::log_debug("qk_out_subblock_w: {}", qk_out_subblock_w);
-    tt::log_debug("qk_out_subblock_h: {}", qk_out_subblock_h);
-    tt::log_debug("qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    tt::log_debug("qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
-    tt::log_debug("qk_num_blocks: {}", qk_num_blocks);
-    tt::log_debug("out_in0_block_w: {}", out_in0_block_w);
-    tt::log_debug("out_out_subblock_w: {}", out_out_subblock_w);
-    tt::log_debug("out_out_subblock_h: {}", out_out_subblock_h);
-    tt::log_debug("out_in0_num_subblocks: {}", out_in0_num_subblocks);
-    tt::log_debug("out_in1_num_subblocks: {}", out_in1_num_subblocks);
-    tt::log_debug("out_num_blocks: {}", out_num_blocks);
+    tt::log_info("dst_size: {}", dst_size);
+    tt::log_info("qk_in0_block_w: {}", qk_in0_block_w);
+    tt::log_info("qk_out_subblock_w: {}", qk_out_subblock_w);
+    tt::log_info("qk_out_subblock_h: {}", qk_out_subblock_h);
+    tt::log_info("qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
+    tt::log_info("qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
+    tt::log_info("qk_num_blocks: {}", qk_num_blocks);
+    tt::log_info("out_in0_block_w: {}", out_in0_block_w);
+    tt::log_info("out_out_subblock_w: {}", out_out_subblock_w);
+    tt::log_info("out_out_subblock_h: {}", out_out_subblock_h);
+    tt::log_info("out_in0_num_subblocks: {}", out_in0_num_subblocks);
+    tt::log_info("out_in1_num_subblocks: {}", out_in1_num_subblocks);
+    tt::log_info("out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
@@ -219,18 +222,28 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t log2_dht_granularity = std::log2(dht_granularity);
 
     // Log these
-    tt::log_debug("stats_granularity: {}", stats_granularity);
-    tt::log_debug("log2_stats_granularity: {}", log2_stats_granularity);
-    tt::log_debug("sub_exp_granularity: {}", sub_exp_granularity);
-    tt::log_debug("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    tt::log_debug("mul_bcast_granularity: {}", mul_bcast_granularity);
-    tt::log_debug("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
-    tt::log_debug("dht_granularity: {}", dht_granularity);
-    tt::log_debug("log2_dht_granularity: {}", log2_dht_granularity);
+    tt::log_info("stats_granularity: {}", stats_granularity);
+    tt::log_info("log2_stats_granularity: {}", log2_stats_granularity);
+    tt::log_info("sub_exp_granularity: {}", sub_exp_granularity);
+    tt::log_info("log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+    tt::log_info("mul_bcast_granularity: {}", mul_bcast_granularity);
+    tt::log_info("log2_mul_bcast_granularity: {}", log2_mul_bcast_granularity);
+    tt::log_info("dht_granularity: {}", dht_granularity);
+    tt::log_info("log2_dht_granularity: {}", log2_dht_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    class bfloat16 bfloat_identity_scalar(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
+    uint32_t packed_identity_scalar;
+    if (fp32_dest_acc_en) {
+        union {
+            float f;
+            uint32_t u;
+        } identity_scale_union;
+        identity_scale_union.f = 1.0f;
+        packed_identity_scalar = identity_scale_union.u;
+    } else {
+        class bfloat16 bfloat_identity_scalar(1.0f);
+        packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
+    }
 
     union {
         float f;
@@ -264,7 +277,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       k_num_chunks,
                                                       packed_identity_scalar,
                                                       scale_union.u,
-                                                      num_cores
+                                                      num_cores,
+                                                      fp32_dest_acc_en
 
     };
 
@@ -306,7 +320,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         defines["BALANCED_Q_PARALLEL"] = "1";
     }
 
-    tt::log_debug("BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
+    tt::log_info("BALANCED_Q_PARALLEL: {}", balanced_q_parallel);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -343,9 +357,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().get_dtype())
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b;
+    tt::DataFormat scalar_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
     uint32_t k_tile_size = tt::tt_metal::detail::TileSize(k_df);
@@ -356,14 +370,15 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t im_tile_size = tt::tt_metal::detail::TileSize(im_df);
     uint32_t stats_tile_size = tt::tt_metal::detail::TileSize(stats_df);
 
-    log_debug("q_data_format: {}", q_df);
-    log_debug("k_data_format: {}", k_df);
-    log_debug("v_data_format: {}", v_df);
-    log_debug("mask_data_format: {}", mask_df);
-    log_debug("out_data_format: {}", out_df);
-    log_debug("scalar_data_format: {}", scalar_df);
-    log_debug("intermediate_data_format: {}", im_df);
-    log_debug("statistics_data_format: {}", stats_df);
+    tt::log_info("fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    tt::log_info("q_data_format: {}", q_df);
+    tt::log_info("k_data_format: {}", k_df);
+    tt::log_info("v_data_format: {}", v_df);
+    tt::log_info("mask_data_format: {}", mask_df);
+    tt::log_info("out_data_format: {}", out_df);
+    tt::log_info("scalar_data_format: {}", scalar_df);
+    tt::log_info("intermediate_data_format: {}", im_df);
+    tt::log_info("statistics_data_format: {}", stats_df);
 
     // Q input
     auto c_in0_config =
@@ -397,8 +412,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CB::c_intermed0, im_df}})
-                                  .set_page_size(tt::CB::c_intermed0, im_tile_size);
+    auto c_intermed0_config = CircularBufferConfig(qk_tiles * stats_tile_size, {{tt::CB::c_intermed0, stats_df}})
+                                  .set_page_size(tt::CB::c_intermed0, stats_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
@@ -407,8 +422,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_intermed1_id = CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CB::c_intermed2, im_df}})
-                                  .set_page_size(tt::CB::c_intermed2, im_tile_size);
+    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * stats_tile_size, {{tt::CB::c_intermed2, stats_df}})
+                                  .set_page_size(tt::CB::c_intermed2, stats_tile_size);
     auto cb_intermed2_id = CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
@@ -435,6 +450,21 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_intermed7, stats_df}})
                                   .set_page_size(tt::CB::c_intermed7, stats_tile_size);
     auto cb_intermed7_id = CreateCircularBuffer(program, core_grid, c_intermed7_config);
+
+    // cb_debug
+    auto c_out6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CB::c_out6, im_df}})
+                            .set_page_size(tt::CB::c_out6, im_tile_size);
+    auto cb_out6_id = CreateCircularBuffer(program, core_grid, c_out6_config);
+
+    // cb_debug2
+    auto c_out7_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CB::c_out7, im_df}})
+                            .set_page_size(tt::CB::c_out7, im_tile_size);
+    auto cb_out7_id = CreateCircularBuffer(program, core_grid, c_out7_config);
+
+    // cb_debug3
+    auto c_out5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CB::c_out5, stats_df}})
+                            .set_page_size(tt::CB::c_out5, stats_tile_size);
+    auto cb_out5_id = CreateCircularBuffer(program, core_grid, c_out5_config);
 
     // Output
     auto c_out0_config =

@@ -47,3 +47,13 @@ FORCE_INLINE void generate_bcast_unary_scalar(const uint32_t cb_id, const uint32
     ptr[0] = scalar >> 16;
     cb_push_back(cb_id, 1);
 }
+
+// HW-bcast scalar
+// Tile is assumed to have 32-bit elements
+// Scalar is assumed to be a 32-bit value
+FORCE_INLINE void generate_bcast_unary_scalar_fp32(const uint32_t cb_id, const uint32_t scalar) {
+    cb_reserve_back(cb_id, 1);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    ptr[0] = scalar;
+    cb_push_back(cb_id, 1);
+}
