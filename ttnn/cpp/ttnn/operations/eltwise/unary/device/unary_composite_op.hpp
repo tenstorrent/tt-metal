@@ -46,7 +46,6 @@ enum class UnaryCompositeOpType {
     POW,
     TRIL,
     TRIU,
-    ROUND,
     POLYGAMMA,
     HARDSHRINK,
     SOFTSHRINK,
@@ -93,7 +92,6 @@ Tensor _power(uint8_t, const Tensor&, float, const std::optional<MemoryConfig>&,
 Tensor _power(uint8_t, const Tensor&, uint32_t, const std::optional<MemoryConfig>&, std::optional<Tensor>);
 Tensor _tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _round(const Tensor&, int32_t decimal =0 , const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
 Tensor _hardshrink(const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _softshrink(const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
@@ -302,13 +300,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::TRIU> {
     static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _triu(t1, param1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::ROUND> {
-    static Tensor handle(const Tensor& t1, int32_t param1, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _round(t1, param1, mem_cfg);
     }
 };
 
