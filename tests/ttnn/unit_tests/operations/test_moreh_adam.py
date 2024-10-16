@@ -12,7 +12,7 @@ from models.utility_functions import (
     comp_allclose_and_pcc,
 )
 from loguru import logger
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
