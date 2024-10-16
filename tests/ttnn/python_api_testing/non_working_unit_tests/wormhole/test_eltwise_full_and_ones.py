@@ -69,7 +69,7 @@ def run_ones_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config
 
 test_sweep_args = [
     (
-        [(4, 7, 21, 133)],
+        [(4, 7, 32, 160)],
         [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
         [ttnn.DRAM_MEMORY_CONFIG],
