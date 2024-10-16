@@ -102,7 +102,7 @@ void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const 
     // TODO: ...
     TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Error");
     if(this->use_non_tile_height){
-        TT_FATAL(this->output_channels <= 256, "use_max_core uses row major order. having more than 8 tiles in output_channel in dst registers is not supported");
+        TT_FATAL(this->output_channels <= 256, "use_non_tile_height uses row major order. having more than 8 tiles in output_channel in dst registers is not supported");
     }
     if (this->untilize_out) {
         TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");

@@ -202,7 +202,7 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 }
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
-    const ttnn::Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size, bool is_tiled) {
+    const ttnn::Shape& tensor_shape, ParallelConfig& parallel_config, uint32_t tile_size) {
 
     log_debug(tt::LogOp, "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}", tensor_shape, parallel_config, tile_size);
     // tensor_shape is [N, H, W, C]
@@ -216,9 +216,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
 
     uint32_t nhw_shape = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t nhw_padded = nhw_shape;
-    if(is_tiled) {
-        nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
-    }
+    nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
@@ -482,8 +480,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
         auto input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
             ttnn::Shape(std::array<uint32_t, 4>{
             input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
-            parallel_config,
-            tt::constants::TILE_HEIGHT, is_input_tiled);
+            parallel_config, round_up_size);
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard};
     } else {
         return {input_tensor.shape(), input_tensor.memory_config(), needs_shard_or_reshard};
@@ -754,11 +751,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     if(conv_config.use_non_tile_height){
         TT_FATAL(conv_config.act_block_h_override == 0, "conv override for non_tile height is not supported.");
     }
-    uint32_t tile_size = !conv_config.use_non_tile_height ? 32 : 1;
+    uint32_t round_up_size = !conv_config.use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
-        parallel_config,
-        tile_size);
+        parallel_config, round_up_size);
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));

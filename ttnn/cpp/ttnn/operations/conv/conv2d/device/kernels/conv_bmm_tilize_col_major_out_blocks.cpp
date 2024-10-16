@@ -81,7 +81,7 @@ inline void reblock_and_untilize(
                 output_rows_h -= out_sub_block_rows_h;
                 within_block_index += out_subblock_w;
             }
-        }else{
+        } else {
             for(uint32_t h = 0; h < out_subblock_h; h++){
                 uint32_t block_offset = 0;
                 cb_reserve_back(out_cb_id, out_block_w);
@@ -445,7 +445,7 @@ void MAIN {
                         out_cb_id);
                         output_rows_h -= curr_tile_output_rows_h;
                     }
-                }else{
+                } else {
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w, is_non_tile_height> (
                         in1_num_subblocks,
