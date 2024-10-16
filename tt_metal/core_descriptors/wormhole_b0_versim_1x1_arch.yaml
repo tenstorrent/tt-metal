@@ -8,14 +8,30 @@
 galaxy:
   1:
     compute_with_storage_grid_range:
-      start: [0, 0]
-      end: [0, 0]
+      start: [1, 1]
+      end: [1, 1]
 
     storage_cores:
       []
 
     dispatch_cores:
       []
+
+    dispatch_core_type:
+      "tensix"
+  2:
+    compute_with_storage_grid_range:
+      start: [1, 1]
+      end: [1, 1]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []
+
+    dispatch_core_type:
+      "tensix"
 
 nebula_x1:
   1:
@@ -29,6 +45,22 @@ nebula_x1:
     dispatch_cores:
       []
 
+    dispatch_core_type:
+      "tensix"
+  2:
+    compute_with_storage_grid_range:
+      start: [1, 1]
+      end: [1, 1]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []
+
+    dispatch_core_type:
+      "tensix"
+
 nebula_x2:
   1:
     compute_with_storage_grid_range:
@@ -40,3 +72,19 @@ nebula_x2:
 
     dispatch_cores:
       []
+
+    dispatch_core_type:
+      "tensix"
+  2:
+    compute_with_storage_grid_range:
+      start: [1, 1]
+      end: [1, 1]
+
+    storage_cores:
+      []
+
+    dispatch_cores:
+      []
+
+    dispatch_core_type:
+      "tensix"
