@@ -23,7 +23,7 @@ set(TT_METAL_OBJECTS
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
 
-target_link_libraries(tt_metal PUBLIC metal_header_directories umd_device metal_common_libs magic_enum fmt)
+target_link_libraries(tt_metal PUBLIC metal_header_directories umd_device metal_common_libs magic_enum fmt span)
 
 target_precompile_headers(tt_metal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/public/tracy/Tracy.hpp
