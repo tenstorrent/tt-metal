@@ -28,6 +28,12 @@ Author: Joseph Chu
   - [6.1 Data Parallel Programming Example](#61-data-parallel-programming-example)
 - [7. Programming Mesh of Devices Using Tensor Parallel](#7-programming-mesh-of-devices-using-tensor-parallel)
   - [7.1 Tensor Parallel Programming Example](#71-tensor-parallel-programming-example)
+- [8. Programming Mesh of Devices Using Hybrid Tensor and Data Parallel](#8-programming-mesh-of-devices-using-hybrid-tensor-and-data-parallel)
+  - [8.1 Llama-3.1 70B Hybrid Tensor and Data Parallel](#81-llama-31-70b-hybrid-tensor-and-data-parallel)
+  - [8.2 Llama-3.1 70B Performance Scaling](#82-llama-31-70b-performance-scaling)
+  - [8.3 Hybrid Tensor and Data Parallel Programming Example](#83-hybrid-tensor-and-data-parallel-programming-example)
+    - [8.3.1 Overview of Changes](#831-overview-of-changes)
+    - [8.3.2 Key Components](#832-key-components)
 
 ## 1. Overview
 
@@ -545,3 +551,73 @@ ttnn_output = ttnn_model(hidden_states)
 with ttnn.distribute(ttnn.ConcatMeshToTensor(mesh_device, dim=3)):
     assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output), 0.98)
 ```
+## 8. Programming Mesh of Devices Using Hybrid Tensor and Data Parallel
+
+### 8.1 Llama-3.1 70B Hybrid Tensor and Data Parallel
+
+<img src="images/llama-3.1-70b-hybrid-dp-tp.png" style="width:500px;"/>
+
+*Figure 7: Llama-3.1 70B model mapped onto T3000 and Galaxy systems.*
+
+
+### 8.2 Llama-3.1 70B Performance Scaling
+
+| System  | Batch Size | tok/s/u | tok/s  |
+|---------|------------|---------|--------|
+| T3000   | 32         | 15.1    | 483.2  |
+| Galaxy  | 128        | 14.3    | 1835.5 |
+
+*Table 1: Llama-3.1 70B model scaling from T3000 to Galaxy. Tokens per second (toks/s) throughput scales near-linear (3.8x) as we tile our model replicas across the Galaxy mesh.*
+
+
+### 8.3 Hybrid Tensor and Data Parallel Programming Example
+
+This sections explains how to employ hybrid tensor and data parallelism by tiling a submesh across a larger mesh.
+
+#### 8.3.1 Overview of Changes
+
+The main changes involve:
+
+1. Creating multiple submeshes from the main mesh
+2. Running the model on each submesh
+3. Capturing and replaying a trace across all submeshes in parallel
+
+#### 8.3.2 Key Components
+
+These three components are used to achieve linear scaling of performance as we tile our model replicas across the mesh.
+See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_hybrid_data_tensor_parallel` for full example.
+
+1. Submesh Creation
+
+```py
+    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+```
+
+2. Compile & Run the Model on Each Submesh
+
+```python
+    for submesh_device in submesh_devices:
+        model.forward(activations, device=submesh_device, ...)
+```
+
+3. Capture Model Trace: See [Advanced Performance Optimization For Models](../AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) guide for more details on how to capture and replay a trace.
+
+```python
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+    # Run the existing model on each submesh
+    for submesh_device in submesh_devices:
+        model.forward(activations, device=submesh_device, ...)
+
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+```
+
+4. Execute Model Trace:
+
+```python
+    # Execute Model Trace across all submeshes in parallel
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+```
+
+APIs will be further refined in future releases. A proposal for refined set of APIs can be found [here](https://github.com/tenstorrent/tt-metal/issues/13852).
