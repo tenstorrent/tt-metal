@@ -250,7 +250,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
         shard_grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args});
-    std::vector<uint32_t> runtime_args = {
+    const std::array runtime_args = {
         total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes};
     SetRuntimeArgs(program, kernel_id, shard_grid, runtime_args);
 
