@@ -62,7 +62,9 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                                             false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
         auto sharded_mem_config = conv::conv2d::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+        printf("shard spec shape: %d, %d\n", sharded_mem_config.shard_spec.value().shape[0], sharded_mem_config.shard_spec.value().shape[1]);
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt); // this converts interleaved to sharded
+        printf("WE DON'T GET TO HERE\n");
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         // input is already sharded, use it as is
