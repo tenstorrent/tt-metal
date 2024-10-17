@@ -7,7 +7,6 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
@@ -19,7 +18,6 @@
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 #include "ttnn/operations/data_movement/move/move_pybind.hpp"
-#include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_pybind.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat_pybind.hpp"
@@ -48,7 +46,6 @@ namespace data_movement {
 void py_module(py::module& module) {
     bind_fill_rm(module);
     bind_fold_operation(module);
-    bind_non_zero_indices(module);
     clone::bind_clone_operation(module);
     detail::bind_concat(module);
     detail::bind_indexed_fill(module);

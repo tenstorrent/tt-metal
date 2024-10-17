@@ -31,6 +31,7 @@
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
+#include "ttnn/operations/nonzero/nonzero_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
 #include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
@@ -112,6 +113,9 @@ void py_module(py::module& module) {
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
     downsample::py_bind_downsample(m_pool);
+
+    auto m_nonzero = module.def_submodule("nonzero", "nonzero operations");
+    nonzero::bind_nonzero(m_nonzero);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);

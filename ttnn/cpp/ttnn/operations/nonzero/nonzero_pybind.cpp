@@ -2,20 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "nonzero_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "non_zero_indices_pybind.hpp"
-#include "non_zero_indices.hpp"
+#include "nonzero.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
+namespace ttnn::operations::nonzero {
 
-namespace ttnn::operations::data_movement {
-namespace detail {
-namespace py = pybind11;
-
-void bind_non_zero(py::module& module) {
+void bind_nonzero(py::module& module) {
     auto doc = fmt::format(
         R"doc(
 
@@ -26,7 +23,6 @@ void bind_non_zero(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -37,29 +33,15 @@ void bind_non_zero(py::module& module) {
                 >>> output = ttnn.nonzero(tensor)
         )doc",
         ttnn::nonzero.base_name());
-
-    using OperationType = decltype(ttnn::nonzero);
-    ttnn::bind_registered_operation(
+    bind_registered_operation(
         module,
         ttnn::nonzero,
         doc,
-        ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, memory_config);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::kw_only(),
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0});
+        ttnn::pybind_arguments_t{
+            py::arg("input"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+        });
 }
 
-}  // detail
-
-void bind_non_zero_indices(py::module& module) {
-   detail::bind_non_zero(module);
-}
-
-} // namespace ttnn::operations::data_movement::detail
+}  // namespace ttnn::operations::nonzero

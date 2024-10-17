@@ -6,8 +6,8 @@
 
 #include "pybind11/pybind_fwd.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::nonzero {
 
-void bind_non_zero_indices(pybind11::module& module);
+void bind_nonzero(pybind11::module& module);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::nonzero
