@@ -989,11 +989,6 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             pcie_alignment);
     }
 
-    // Wait Cmd
-    if (program.program_transfer_info.num_active_cores > 0) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
     std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
     std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
@@ -1069,9 +1064,12 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             this->packed_write_max_unicast_sub_cmds,
             unicast_go_signals_payload);
     }
-    // If dispatch_s is enabled, have dispatch_d send a semaphore update to dispatch_s
-    // Either dispatch_d or dispatch_s will send the go signal
-    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE + this->device->dispatch_s_enabled() * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier on dispatch_d if program is active)
+    // if not,  check if the program is active on workers. If active, have dispatch_d issue a write barrier
+    cmd_sequence_sizeB += (this->device->dispatch_s_enabled() || program.program_transfer_info.num_active_cores > 0) * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
+    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
@@ -1248,15 +1246,16 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
         }
     }
 
-    // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
-    if (program.program_transfer_info.num_active_cores > 0) {
-        device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
-    }
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        // dispatch_d signals dispatch_s that its safe to send the go signal after a barrier
-        device_command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
+        device_command_sequence.add_notify_dispatch_s_go_signal_cmd(program.program_transfer_info.num_active_cores > 0);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+    } else {
+        // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
+        if (program.program_transfer_info.num_active_cores > 0) {
+            device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
+        }
     }
     go_msg_t run_program_go_signal;
     run_program_go_signal.signal = RUN_MSG_GO;
@@ -1707,7 +1706,7 @@ void EnqueueTraceCommand::process() {
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        command_sequence.add_notify_dispatch_s_go_signal_cmd(false);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
     go_msg_t reset_launch_message_read_ptr_go_signal;
