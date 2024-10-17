@@ -66,7 +66,7 @@ std::vector<uint32_t> Device::get_noc_encoding_for_active_eth_cores(NOC noc_inde
     std::vector<uint32_t> noc_encodings = {};
     noc_encodings.reserve(active_ethernet_cores.size());
     for (const auto& core : active_ethernet_cores) {
-        noc_encodings.push_back(this->get_noc_unicast_encoding(noc_index, ethernet_core_from_logical_core(core)));
+        noc_encodings.push_back(this->get_translated_noc_unicast_encoding(this->translated_coords_from_logical_coords(core, CoreType::ETH)));
     }
     return noc_encodings;
 }
@@ -680,11 +680,11 @@ void Device::configure_kernel_variant(
     string path,
     std::vector<uint32_t> compile_args,
     CoreCoord kernel_core,
-    CoreCoord kernel_physical_core,
+    CoreCoord kernel_translated_core,
     CoreType dispatch_core_type,
-    CoreCoord upstream_physical_core,
-    CoreCoord downstream_physical_core,
-    CoreCoord downstream_slave_physical_core,
+    CoreCoord upstream_translated_core,
+    CoreCoord downstream_translated_core,
+    CoreCoord downstream_slave_translated_core,
     std::map<string, string> defines_in,
     NOC my_noc_index,
     NOC upstream_noc_index,
@@ -703,15 +703,15 @@ void Device::configure_kernel_variant(
 
     std::map<string, string> defines = {
         {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(NOC_0_X(my_noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(NOC_0_Y(my_noc_index, grid_size.y, kernel_physical_core.y))},
+        {"MY_NOC_X", std::to_string(kernel_translated_core.x)},
+        {"MY_NOC_Y", std::to_string(kernel_translated_core.y)},
         {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(NOC_0_X(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(NOC_0_Y(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(NOC_0_X(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(NOC_0_Y(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
+        {"UPSTREAM_NOC_X", std::to_string(upstream_translated_core.x)},
+        {"UPSTREAM_NOC_Y", std::to_string(upstream_translated_core.y)},
+        {"DOWNSTREAM_NOC_X", std::to_string(downstream_translated_core.x)},
+        {"DOWNSTREAM_NOC_Y", std::to_string(downstream_translated_core.y)},
+        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(downstream_slave_translated_core.x)},
+        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(downstream_slave_translated_core.y)},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
@@ -1951,7 +1951,7 @@ void Device::setup_tunnel_for_remote_devices() {
                 settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
                 settings.cb_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
                 settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
-                settings.compute_core_mcast_noc_coords = this->get_noc_multicast_encoding(dispatch_d_noc_index, tensix_worker_physical_grid);
+                settings.compute_core_mcast_noc_coords = this->get_translated_noc_multicast_encoding(dispatch_d_noc_index, tensix_worker_physical_grid);
                 CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
                 settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
                 tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
@@ -1980,7 +1980,7 @@ void Device::setup_tunnel_for_remote_devices() {
                         settings.producer_semaphore_id = 0; // sync with producer (prefetcher)
                         settings.consumer_semaphore_id = 1; // sync with dispatch_d (this is the "consumer" of dispatch_s)
                     }
-                    settings.compute_core_mcast_noc_coords = this->get_noc_multicast_encoding(dispatch_s_noc_index, tensix_worker_physical_grid);
+                    settings.compute_core_mcast_noc_coords = this->get_translated_noc_multicast_encoding(dispatch_s_noc_index, tensix_worker_physical_grid);
                     tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
                     settings.worker_physical_core = tt_cxy_pair(dispatch_s_location.chip, get_physical_core_coordinate(dispatch_s_location, dispatch_core_type));
                     settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp";
@@ -2068,7 +2068,7 @@ bool Device::dispatch_s_enabled() const {
 
 bool Device::distributed_dispatcher() const {
     // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores.
-    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
+    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::ETH);
 }
 
 void Device::compile_command_queue_programs() {
@@ -2102,6 +2102,8 @@ void Device::compile_command_queue_programs() {
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
             CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
+            CoreCoord prefetch_translated_core = this->translated_coords_from_logical_coords(CoreCoord{prefetch_core.x, prefetch_core.y}, dispatch_core_type);
+            CoreCoord dispatch_translated_core = this->translated_coords_from_logical_coords(CoreCoord{dispatch_core.x, dispatch_core.y}, dispatch_core_type);
             uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
             uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
@@ -2121,6 +2123,7 @@ void Device::compile_command_queue_programs() {
 
             // dispatch_s location and flow control vars initialized as invalid. Will be set if dispatch_s is enabled for the given configuration.
             tt_cxy_pair dispatch_s_core = tt_cxy_pair(0xff, 0xff, 0xff);
+            CoreCoord dispatch_s_translated_core;
             CoreCoord dispatch_s_physical_core = {0xff, 0xff};
             uint32_t dispatch_s_buffer_base = 0xff;
             uint32_t dispatch_s_sem = 0xff; // used by dispatch_s to sync with prefetch
@@ -2129,6 +2132,7 @@ void Device::compile_command_queue_programs() {
                 // Skip allocating dispatch_s for multi-CQ configurations with ethernet dispatch
                 dispatch_s_core = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
                 dispatch_s_physical_core = get_physical_core_coordinate(dispatch_s_core, dispatch_core_type);
+                dispatch_s_translated_core = this->translated_coords_from_logical_coords(CoreCoord{dispatch_s_core.x, dispatch_s_core.y}, dispatch_core_type);
                 uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
                 if (dispatch_core_type == CoreType::WORKER) {
                     // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -2183,11 +2187,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
                 prefetch_compile_args,
                 prefetch_core,
-                prefetch_physical_core,
+                prefetch_translated_core,
                 dispatch_core_type,
                 CoreCoord{0, 0},
-                dispatch_physical_core,
-                dispatch_s_physical_core,
+                dispatch_translated_core,
+                dispatch_s_translated_core,
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2226,7 +2230,7 @@ void Device::compile_command_queue_programs() {
                 0,      // unused prefetch_downstream_buffer_pages
                 num_compute_cores, // max_write_packed_cores
                 dispatch_s_sync_sem_id, // used to notify dispatch_s that its safe to send a go signal
-                this->get_noc_multicast_encoding(my_noc_index, tensix_worker_physical_grid), // used by dispatch_d to mcast go signals when dispatch_s is not enabled
+                this->get_translated_noc_multicast_encoding(my_noc_index, tensix_worker_physical_grid), // used by dispatch_d to mcast go signals when dispatch_s is not enabled
                 tensix_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
                 eth_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
                 dispatch_core_type == CoreType::ETH,
@@ -2242,11 +2246,11 @@ void Device::compile_command_queue_programs() {
                 "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
                 dispatch_compile_args,
                 dispatch_core,
-                dispatch_physical_core,
+                dispatch_translated_core,
                 dispatch_core_type,
-                prefetch_physical_core,
+                prefetch_translated_core,
                 CoreCoord{0, 0},
-                dispatch_s_physical_core,
+                dispatch_s_translated_core,
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2260,7 +2264,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_s_sem,
                     prefetch_dispatch_s_sync_sem,
                     dispatch_s_sync_sem_id,
-                    this->get_noc_multicast_encoding(NOC::NOC_1, tensix_worker_physical_grid),
+                    this->get_translated_noc_multicast_encoding(NOC::NOC_1, tensix_worker_physical_grid),
                     tensix_num_worker_cores,
                     tensix_worker_go_signal_addr,
                     eth_worker_go_signal_addr,
@@ -2272,10 +2276,10 @@ void Device::compile_command_queue_programs() {
                     "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",
                     dispatch_s_compile_args,
                     dispatch_s_core,
-                    dispatch_s_physical_core,
+                    dispatch_s_translated_core,
                     dispatch_core_type,
-                    prefetch_physical_core,
-                    dispatch_physical_core,
+                    prefetch_translated_core,
+                    dispatch_translated_core,
                     CoreCoord{0, 0},
                     std::map<string, string> {},
                     dispatch_s_noc_index,
@@ -2334,15 +2338,18 @@ void Device::compile_command_queue_programs() {
                     //Value of each vector entry is the initialization value for the semaphore.
                     tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_core, sem, prefetch_settings.dispatch_core_type);
                 }
+                CoreCoord prefetch_translated_core = this->translated_coords_from_logical_coords(CoreCoord{prefetch_core.x, prefetch_core.y}, prefetch_settings.dispatch_core_type);
+                CoreCoord upstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{prefetch_settings.upstream_cores[0].x, prefetch_settings.upstream_cores[0].y}, prefetch_settings.dispatch_core_type);
+                CoreCoord downstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{prefetch_settings.downstream_cores[0].x, prefetch_settings.downstream_cores[0].y}, prefetch_settings.dispatch_core_type);
                 configure_kernel_variant(
                     *mmio_command_queue_program_ptr,
                     prefetch_settings.kernel_file,
                     prefetch_settings.compile_args,
                     prefetch_core,
-                    prefetch_settings.worker_physical_core,
+                    prefetch_translated_core,
                     prefetch_settings.dispatch_core_type,
-                    prefetch_settings.upstream_cores[0],
-                    prefetch_settings.downstream_cores[0],
+                    upstream_translated_core,
+                    downstream_translated_core,
                     CoreCoord{0, 0},
                     std::map<string, string> {},
                     my_noc_index,
@@ -2426,14 +2433,16 @@ void Device::compile_command_queue_programs() {
                     //Value of each vector entry is the initialization value for the semaphore.
                     tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, dispatch_core, sem, dispatch_settings.dispatch_core_type);
                 }
+                CoreCoord dispatch_translated_core = this->translated_coords_from_logical_coords(CoreCoord{dispatch_core.x, dispatch_core.y}, dispatch_settings.dispatch_core_type);
+                CoreCoord upstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_settings.upstream_cores[0].x, dispatch_settings.upstream_cores[0].y}, dispatch_settings.dispatch_core_type);
                 configure_kernel_variant(
                     *mmio_command_queue_program_ptr,
                     dispatch_settings.kernel_file,
                     dispatch_settings.compile_args,
                     dispatch_core,
-                    dispatch_settings.worker_physical_core,
+                    dispatch_translated_core,
                     dispatch_settings.dispatch_core_type,
-                    dispatch_settings.upstream_cores[0],
+                    upstream_translated_core,
                     CoreCoord{0xffffffff, 0xffffffff},
                     CoreCoord{0, 0},
                     std::map<string, string> {},
@@ -2515,16 +2524,20 @@ void Device::compile_command_queue_programs() {
                 //Value of each vector entry is the initialization value for the semaphore.
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_d_core, sem, prefetch_d_settings.dispatch_core_type);
             }
+            CoreCoord prefetch_d_translated_core = this->translated_coords_from_logical_coords(CoreCoord{prefetch_d_core.x, prefetch_d_core.y}, prefetch_d_settings.dispatch_core_type);
+            CoreCoord upstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{prefetch_d_settings.upstream_cores[0].x, prefetch_d_settings.upstream_cores[0].y}, prefetch_d_settings.dispatch_core_type);
+            CoreCoord downstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{prefetch_d_settings.downstream_cores[0].x, prefetch_d_settings.downstream_cores[0].y}, prefetch_d_settings.dispatch_core_type);
+            CoreCoord dispatch_s_translated_core = this->translated_coords_from_physical_coords(CoreCoord{prefetch_d_settings.downstream_cores[1].x, prefetch_d_settings.downstream_cores[1].y}, prefetch_d_settings.dispatch_core_type);
             configure_kernel_variant(
                 *command_queue_program_ptr,
                 prefetch_d_settings.kernel_file,
                 prefetch_d_settings.compile_args,
                 prefetch_d_core,
-                prefetch_d_settings.worker_physical_core,
+                prefetch_d_translated_core,
                 prefetch_d_settings.dispatch_core_type,
-                prefetch_d_settings.upstream_cores[0],
-                prefetch_d_settings.downstream_cores[0],
-                prefetch_d_settings.downstream_cores[1], // need to update
+                upstream_translated_core,
+                downstream_translated_core,
+                dispatch_s_translated_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2543,16 +2556,20 @@ void Device::compile_command_queue_programs() {
                 //Value of each vector entry is the initialization value for the semaphore.
                 tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_d_core, sem, dispatch_d_settings.dispatch_core_type);
             }
+            CoreCoord dispatch_d_translated_core = this->translated_coords_from_logical_coords(CoreCoord{dispatch_d_core.x, dispatch_d_core.y}, dispatch_d_settings.dispatch_core_type);
+            CoreCoord upstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_d_settings.upstream_cores[0].x, dispatch_d_settings.upstream_cores[0].y}, dispatch_d_settings.dispatch_core_type);
+            CoreCoord downstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_d_settings.downstream_cores[0].x, dispatch_d_settings.downstream_cores[0].y}, dispatch_d_settings.dispatch_core_type);
+            CoreCoord dispatch_s_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_d_settings.downstream_cores[1].x, dispatch_d_settings.downstream_cores[1].y}, dispatch_d_settings.dispatch_core_type);
             configure_kernel_variant(
                 *command_queue_program_ptr,
                 dispatch_d_settings.kernel_file,
                 dispatch_d_settings.compile_args,
                 dispatch_d_core,
-                dispatch_d_settings.worker_physical_core,
+                dispatch_d_translated_core,
                 dispatch_d_settings.dispatch_core_type,
-                dispatch_d_settings.upstream_cores[0],
-                dispatch_d_settings.downstream_cores[0],
-                dispatch_d_settings.downstream_cores[1], // need to update
+                upstream_translated_core,
+                downstream_translated_core,
+                dispatch_s_translated_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2566,15 +2583,18 @@ void Device::compile_command_queue_programs() {
                 for (auto sem : dispatch_s_settings.semaphores) {
                     tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_s_core, sem, dispatch_s_settings.dispatch_core_type);
                 }
+                CoreCoord dispatch_s_translated_core = this->translated_coords_from_logical_coords(CoreCoord{dispatch_s_core.x, dispatch_s_core.y}, dispatch_s_settings.dispatch_core_type);
+                CoreCoord upstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_s_settings.upstream_cores[0].x, dispatch_s_settings.upstream_cores[0].y}, dispatch_s_settings.dispatch_core_type);
+                CoreCoord downstream_translated_core = this->translated_coords_from_physical_coords(CoreCoord{dispatch_s_settings.downstream_cores[0].x, dispatch_s_settings.downstream_cores[0].y}, dispatch_s_settings.dispatch_core_type);
                 configure_kernel_variant(
                     *command_queue_program_ptr,
                     dispatch_s_settings.kernel_file,
                     dispatch_s_settings.compile_args,
                     dispatch_s_core,
-                    dispatch_s_settings.worker_physical_core,
+                    dispatch_s_translated_core,
                     dispatch_s_settings.dispatch_core_type,
-                    dispatch_s_settings.upstream_cores[0],
-                    dispatch_s_settings.downstream_cores[0],
+                    upstream_translated_core,
+                    downstream_translated_core,
                     CoreCoord{0, 0},
                     std::map<string, string> {},
                     dispatch_s_noc_index,
@@ -2996,6 +3016,14 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
 
+CoreCoord Device::translated_coords_from_logical_coords(const CoreCoord &logical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
+}
+
+CoreCoord Device::translated_coords_from_physical_coords(const CoreCoord &physical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_translated_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+}
+
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
@@ -3059,6 +3087,37 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
             NOC_0_Y(noc_index, grid_size.y, physical_cores.end_coord.y),
             NOC_0_X(noc_index, grid_size.x, physical_cores.start_coord.x),
             NOC_0_Y(noc_index, grid_size.y, physical_cores.start_coord.y)
+        );
+    }
+}
+
+uint32_t Device::get_translated_noc_unicast_encoding(const CoreCoord& translated_core) const {
+    const auto& grid_size = this->grid_size();
+    return NOC_XY_ENCODING(
+        NOC_0_X(NOC::NOC_0, grid_size.x, translated_core.x),
+        NOC_0_Y(NOC::NOC_0, grid_size.y, translated_core.y)
+    );
+}
+
+uint32_t Device::get_translated_noc_multicast_encoding(uint8_t noc_index, const CoreRange& translated_cores) const {
+    const auto& grid_size = this->grid_size();
+
+    // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
+    // Start and end translated coords are computed based on NOC_0 (identity encodings)
+    // since in the translated space, NOC_0 and NOC_1 have the same coordinate system
+    if (noc_index == 0) {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(NOC::NOC_0, grid_size.x, translated_cores.start_coord.x),
+            NOC_0_Y(NOC::NOC_0, grid_size.y, translated_cores.start_coord.y),
+            NOC_0_X(NOC::NOC_0, grid_size.x, translated_cores.end_coord.x),
+            NOC_0_Y(NOC::NOC_0, grid_size.y, translated_cores.end_coord.y)
+        );
+    } else {
+        return NOC_MULTICAST_ENCODING(
+            NOC_0_X(NOC::NOC_0, grid_size.x, translated_cores.end_coord.x),
+            NOC_0_Y(NOC::NOC_0, grid_size.y, translated_cores.end_coord.y),
+            NOC_0_X(NOC::NOC_0, grid_size.x, translated_cores.start_coord.x),
+            NOC_0_Y(NOC::NOC_0, grid_size.y, translated_cores.start_coord.y)
         );
     }
 }
