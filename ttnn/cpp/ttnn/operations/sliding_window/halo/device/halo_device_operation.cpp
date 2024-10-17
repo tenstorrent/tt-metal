@@ -27,10 +27,10 @@ void HaloDeviceOperation::validate(const std::vector<Tensor> &input_tensors) con
 
 std::vector<tt::tt_metal::LegacyShape> HaloDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_legacy_shape();
-    tt::tt_metal::LegacyShape output_shape = input_shape;
+    tt::tt_metal::LegacyShape output_shape = input.get_legacy_shape();
+    Padding output_padding = output_shape.padding();
 
-    uint32_t nbatch = input_shape[0];
+    uint32_t nbatch = output_shape[0];
     uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
 
     // output_shape[0] remains same
@@ -38,12 +38,14 @@ std::vector<tt::tt_metal::LegacyShape> HaloDeviceOperation::compute_output_shape
     // output_shape[2] changes
     // output_shape[3] remains same
     output_shape[2] = (uint32_t) ceil((float) total_nsticks / nbatch);
+    // Output tensor is row-major so no padding is needed.
+    output_padding[2] = Padding::PadDimension{0, 0};
 
     log_debug(tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
     log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
     log_debug(tt::LogOp, "num_cores_nhw: {}", config_.num_cores_nhw);
 
-    return {output_shape};
+    return {tt::tt_metal::LegacyShape{output_shape, output_padding}};
 }
 
 std::vector<Tensor> HaloDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
