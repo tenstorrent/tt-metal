@@ -58,21 +58,22 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     uint32_t kernel_size_hw_padded = ceil_multiple_of(kernel_size_hw, tt::constants::TILE_HEIGHT);
     uint32_t in_ntiles_hw = (uint32_t)std::ceil((float)kernel_size_hw_padded / tt::constants::TILE_HEIGHT);
-    uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t)std::ceil((float)output_shape[3] / tt::constants::TILE_WIDTH);
+
+    TT_FATAL(input_shape[3] == output_shape[3], "Input and output channels should be same");
 
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
     constexpr uint32_t MAX_SMALL_KERNEL_SIZE_HW = 16;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
-    const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+    const bool is_wide_reduction = out_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
 
     uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
-        TT_FATAL(input_shape[3] == 16, "Error");
+        TT_FATAL(input_shape[3] == 16, "Input channels should be 16 when less than a tile");
         tile_w = tt::constants::FACE_WIDTH;
     }
     uint32_t out_w_loop_count = std::ceil((float)out_w / nblocks);
@@ -141,8 +142,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
             .set_globally_allocated_address(*reader_indices_buffer);
     auto in_reader_indices_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
 
-    uint32_t in_cb_sz;
-    uint32_t in_nblocks_c = 1;
+    uint32_t in_cb_sz = 0;
+    uint32_t out_full_nblocks_c = 0;
+    uint32_t ntiles_c_per_block = 0;
+    uint32_t ntiles_c_per_block_last = 0;
     if (is_large_kernel) {
         in_cb_sz = (input_shape[3] * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
@@ -150,8 +153,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     } else {
         if (is_wide_reduction) {
             in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * kernel_size_hw_padded;
-            TT_FATAL(in_ntiles_c % MAX_TILES_PER_REDUCTION == 0, "input channels should be multiple of {} tiles. General case TODO.", MAX_TILES_PER_REDUCTION);
-            in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
+            out_full_nblocks_c = std::ceil((float) out_ntiles_c / MAX_TILES_PER_REDUCTION);
+            // each block has MAX_TILES_PER_REDUCTION along width, except the last one when out_ntiles_c is not a multiple of MAX_TILES_PER_REDUCTION
+            ntiles_c_per_block = MAX_TILES_PER_REDUCTION;
+            ntiles_c_per_block_last = out_ntiles_c % MAX_TILES_PER_REDUCTION;
         } else {
             in_cb_sz = input_shape[3] * kernel_size_hw_padded;
         }
@@ -180,7 +185,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     // output of tilize == input to reduce
     uint32_t in_tiled_cb_id = tt::CB::c_intermed0;  // tiled input
     uint32_t in_tiled_cb_pagesize = tile_size(in_df);
-    uint32_t in_tiled_cb_npages = in_ntiles_c * in_ntiles_hw * nblocks;
+    uint32_t in_tiled_cb_npages = out_ntiles_c * in_ntiles_hw * nblocks;
     CircularBufferConfig in_tiled_cb_config =
         CircularBufferConfig(in_tiled_cb_npages * in_tiled_cb_pagesize, {{in_tiled_cb_id, in_df}})
             .set_page_size(in_tiled_cb_id, in_tiled_cb_pagesize);
@@ -207,8 +212,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
     // after reduction
-    uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes / in_nblocks_c;  // there is just one row of channels after each reduction (or 1 block of c if its greater than 8 tiles)
-    uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_nblocks_c;
+    uint32_t out_cb_pagesize = output.shard_spec().value().shape[1] * out_nbytes;  // there is just one row of channels after each reduction
+    uint32_t out_cb_npages = output.shard_spec().value().shape[0];
     CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
                                              .set_page_size(out_cb_id, out_cb_pagesize)
                                              .set_globally_allocated_address(*output.buffer());
@@ -249,11 +254,11 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         log_debug(tt::LogOp, "in_h: {}", in_h);
         log_debug(tt::LogOp, "in_w: {}", in_w);
         log_debug(tt::LogOp, "in_c: {}", input_shape[3]);
-        log_debug(tt::LogOp, "in_ntiles_c: {}", in_ntiles_c);
-        log_debug(tt::LogOp, "in_nblocks_c: {}", in_nblocks_c);
+        log_debug(tt::LogOp, "out_full_nblocks_c: {}", out_full_nblocks_c);
         log_debug(tt::LogOp, "in_nbytes_c: {}", in_nbytes_c);
         log_debug(tt::LogOp, "out_ntiles_c: {}", out_ntiles_c);
-        log_debug(tt::LogOp, "nblocks: {}", nblocks);
+        log_debug(tt::LogOp, "ntiles_c_per_block: {}", ntiles_c_per_block);
+        log_debug(tt::LogOp, "ntiles_c_per_block_last: {}", ntiles_c_per_block_last);
         log_debug(tt::LogOp, "ncores: {}", ncores);
         log_debug(tt::LogOp, "in_nhw_per_core: {}", in_nhw_per_core);
         log_debug(tt::LogOp, "out_nhw_per_core: {}", out_nhw_per_core);
@@ -286,7 +291,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,  // enable split reader
         0,             // split reader id
         bf16_one_u32,
-        in_nblocks_c};
+        out_full_nblocks_c,
+        ntiles_c_per_block,
+        ntiles_c_per_block_last };
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -302,7 +309,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,  // enable split reader
         1,             // split reader id
         bf16_one_u32,
-        in_nblocks_c};
+        out_full_nblocks_c,
+        ntiles_c_per_block,
+        ntiles_c_per_block_last };
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -330,8 +339,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
      */
     std::vector<uint32_t> compute_ct_args = {
         in_ntiles_hw,
-        in_ntiles_c,
-        in_ntiles_hw * in_ntiles_c,
+        out_ntiles_c,
+        in_ntiles_hw * out_ntiles_c,
         kernel_size_hw,
         out_h,
         out_w,
@@ -344,7 +353,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3],
-        in_nblocks_c};
+        out_full_nblocks_c,
+        ntiles_c_per_block,
+        ntiles_c_per_block_last };
 
     auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;

@@ -61,9 +61,9 @@ void kernel_main() {
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
-
-    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
+    constexpr uint32_t out_full_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t out_ntiles_c_per_block = get_compile_time_arg_val(14);
+    constexpr uint32_t out_ntiles_c_per_block_last = get_compile_time_arg_val(15);
 
     constexpr uint32_t TILE_WIDTH = 32;
 
@@ -93,16 +93,18 @@ void kernel_main() {
     uint32_t counter = reader_id;
     while (counter < reader_nindices) {
         uint16_t top_left_local_index = reader_indices_ptr[counter ++];
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++ c_i) {
+        for (uint32_t c_i = 0; c_i < out_full_nblocks_c + 1; ++ c_i) {
+            bool last_block = (c_i == out_full_nblocks_c);
+            uint32_t ntiles_c_curr_block = last_block * out_ntiles_c_per_block_last + (!last_block) * out_ntiles_c_per_block;
             cb_reserve_back(in_cb_id, npages_to_reserve);
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
             for (uint32_t h = 0; h < window_h; ++ h) {
                 for (uint32_t w = 0; w < window_w; ++ w) {
                     uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * TILE_WIDTH * 8 * 2);      // 2 bytes, max 8 tiles
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, TILE_WIDTH * 8 * 2);
-                    out_l1_write_addr += TILE_WIDTH * 8 * 2;
+                    uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * TILE_WIDTH * ntiles_c_curr_block * 2);      // 2 bytes, max 8 tiles
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, TILE_WIDTH * ntiles_c_curr_block * 2);
+                    out_l1_write_addr += TILE_WIDTH * ntiles_c_curr_block * 2;
                 }
             }
             noc_async_read_barrier();
