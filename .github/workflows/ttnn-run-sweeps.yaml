@@ -146,6 +146,7 @@ on:
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_different_memory_configs
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
