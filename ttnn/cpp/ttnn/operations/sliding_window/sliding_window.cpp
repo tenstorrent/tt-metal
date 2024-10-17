@@ -25,8 +25,7 @@ bool SlidingWindowConfig::has_parallel_config() const {
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
     */
 Shape SlidingWindowConfig::get_output_shape() const {
-    if(is_transpose)
-    {
+    if(is_transpose) {
         //Inverse of is_transpose == False
         uint32_t output_h = (input_hw.first - 1) * stride_hw.first - 2 * pad_hw.first + dilation_hw.first * (window_hw.first - 1) + output_pad_hw.first + 1;
         uint32_t output_w  = (input_hw.second -  1) * stride_hw.second - 2 * pad_hw.second + dilation_hw.second * (window_hw.second - 1) + output_pad_hw.second + 1;
@@ -178,8 +177,7 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(c
     uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
     uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
     uint32_t max_index = op_trace_metadata.size();
-    if(config.is_transpose)
-    {
+    if(config.is_transpose) {
         padded_input_w = config.get_transposed_full_input_shape()[2];
     }
     uint32_t dilated_window_h = config.window_hw.first + (config.dilation_hw.first - 1) * (config.window_hw.first - 1 );
