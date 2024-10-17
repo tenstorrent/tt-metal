@@ -6,35 +6,6 @@
 
 using namespace tt;
 
-float inline get_input_from_cb(uint8_t *&cb_addr) {
-    float input = 0;
-#ifdef INPUT_DTYPE_FLOAT32
-    input = *reinterpret_cast<float *>(cb_addr);
-    cb_addr += 4;
-#endif
-#ifdef INPUT_DTYPE_BFLOAT16
-    uint16_t *in_u16_ptr = reinterpret_cast<uint16_t *>(cb_addr);
-    uint32_t num = 0;
-    // num = static_cast<uint32_t>(*in_u16_ptr) << 16;
-    float *f_ptr = reinterpret_cast<float *>(&num);
-    input = *f_ptr;
-    cb_addr += 2;
-#endif
-    return input;
-}
-
-void inline write_output_to_cb(uint8_t *&cb_addr, float output) {
-#ifdef OUTPUT_DTYPE_FLOAT32
-    *(float *)cb_addr = output;
-    cb_addr += 4;
-#endif
-#ifdef OUTPUT_DTYPE_BFLOAT16
-    uint16_t *out_u16_ptr = reinterpret_cast<uint16_t *>(&output) + 1;
-    *(uint16_t *)cb_addr = *out_u16_ptr;
-    cb_addr += 2;
-#endif
-}
-
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(1);
@@ -76,34 +47,32 @@ void kernel_main() {
                 // max_int instead of max_uint to balance the number of 1 and 0 value in output tensor.
                 float rand_float = static_cast<float>(rand_uint32) / max_int;
 
-                float input = get_input_from_cb(in_cb_addr);
-
-                // #ifdef INPUT_DTYPE_FLOAT32
-                //                 input = *reinterpret_cast<float *>(in_cb_addr);
-                //                 in_cb_addr += 4;
-                // #endif
-                // #ifdef INPUT_DTYPE_BFLOAT16
-                //                 uint16_t *in_u16_ptr = reinterpret_cast<uint16_t *>(in_cb_addr);
-                //                 uint32_t u32 = static_cast<uint32_t>(*in_u16_ptr) << 16;
-                //                 float *f_ptr = reinterpret_cast<float *>(&u32);
-                //                 input = *f_ptr;
-                //                 in_cb_addr += 2;
-                // #endif
+                float input = 0;
+#ifdef INPUT_DTYPE_FLOAT32
+                input = *reinterpret_cast<float *>(in_cb_addr);
+                in_cb_addr += 4;
+#endif
+#ifdef INPUT_DTYPE_BFLOAT16  // cast: uint16 => uint32 => float and write to input variable.
+                uint16_t *in_u16_ptr = reinterpret_cast<uint16_t *>(in_cb_addr);
+                uint32_t u32 = static_cast<uint32_t>(*in_u16_ptr) << 16;
+                float *f_ptr = reinterpret_cast<float *>(&u32);
+                input = *f_ptr;
+                in_cb_addr += 2;
+#endif
                 float output = 0;
                 if (rand_float <= input) {
                     output = 1;
                 }
 
-                write_output_to_cb(intermed1_cb_addr, output);
-                // #ifdef OUTPUT_DTYPE_FLOAT32
-                //                 *(float *)intermed1_cb_addr = output;
-                //                 intermed1_cb_addr += 4;
-                // #endif
-                // #ifdef OUTPUT_DTYPE_BFLOAT16
-                //                 uint16_t *out_u16_ptr = reinterpret_cast<uint16_t *>(&output) + 1;
-                //                 *(uint16_t *)intermed1_cb_addr = *out_u16_ptr;
-                //                 intermed1_cb_addr += 2;
-                // #endif
+#ifdef OUTPUT_DTYPE_FLOAT32
+                *(float *)intermed1_cb_addr = output;
+                intermed1_cb_addr += 4;
+#endif
+#ifdef OUTPUT_DTYPE_BFLOAT16
+                uint16_t *out_u16_ptr = reinterpret_cast<uint16_t *>(&output) + 1;
+                *(uint16_t *)intermed1_cb_addr = *out_u16_ptr;
+                intermed1_cb_addr += 2;
+#endif
                 intermed_cb_addr += 1;
             }
         }
