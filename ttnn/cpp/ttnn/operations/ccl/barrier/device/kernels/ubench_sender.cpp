@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "tt_metal/hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 #include "debug/assert.h"
 #include <array>
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "ethernet/dataflow_api.h"
 
 
 struct addr_sem_pair {
@@ -17,9 +17,14 @@ struct addr_sem_pair {
 static constexpr bool DISABLE_CONTEXT_SWITCHING = true;
 static constexpr uint8_t NUM_CHANNELS = 8;
 
-FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address) {
-    eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-    eth_wait_for_receiver_done();
+FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
+    if (is_sender) {
+        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
+        eth_wait_for_receiver_done();
+    } else {
+        eth_wait_for_bytes(16);
+        eth_receiver_channel_done(0);
+    }
 }
 
 FORCE_INLINE
@@ -73,6 +78,9 @@ void kernel_main() {
     const uint32_t num_samples = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t max_concurrent_samples = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t transfer_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t local_receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t local_receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_start_semaphore = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
     ASSERT(max_concurrent_samples <= NUM_CHANNELS);
     uint32_t last_channel_sync_addr = 0;
@@ -86,17 +94,21 @@ void kernel_main() {
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    //for (uint32_t i = 0; i < max_concurrent_samples; i++) {
-    //    *(volatile uint32_t*)channels_sem_addrs[i] = 0;
-    //}
+    for (uint32_t i = 0; i < max_concurrent_samples; i++) {
+        *(volatile uint32_t*)channels_sem_addrs[i] = 0;
+    }
+
     {
 
     // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
     for (uint32_t i = 0; i < 2000000000; i++) {
         asm volatile("nop");
     }
-    eth_setup_handshake(handshake_addr);
+    eth_setup_handshake(handshake_addr, true);
     }
+
+    uint64_t receiver_start_semaphore_noc_addr = get_noc_addr(local_receiver_noc_x, local_receiver_noc_y, receiver_start_semaphore);
+    noc_semaphore_inc(receiver_start_semaphore_noc_addr, 1);
 
     // Clear the ring
     forward_ping<false>(channels_addrs, channels_sem_addrs, channels_syncs_addrs, max_concurrent_samples, 16);

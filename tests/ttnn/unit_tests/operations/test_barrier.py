@@ -68,16 +68,7 @@ def is_unsupported_case_n300(input_shape, dim, mem_config, num_devices, num_link
 
 
 def run_with_trace(
-    mesh_device,
-    devices,
-    all_gather_topology,
-    input_tensor_mesh,
-    dim,
-    num_links,
-    output_mem_config,
-    n_worker,
-    n_buffer,
-    num_iter,
+    mesh_device, all_gather_topology, input_tensor_mesh, dim, num_links, output_mem_config, n_worker, n_buffer, num_iter
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -95,7 +86,6 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
     )
-    ttnn.run_routing()
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
 
@@ -112,12 +102,11 @@ def run_with_trace(
             num_buffers_per_channel=n_buffer,
             topology=all_gather_topology,
         )
-        tt_out_tensor = ttnn.barrier(
+        ttnn.barrier(
             input_tensor_mesh,
             memory_config=output_mem_config,
             topology=all_gather_topology,
         )
-        ttnn.run_routing()
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
@@ -254,7 +243,8 @@ def run_all_gather_on_t3000_impl(
 ):
     if mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
-
+    if all_gather_topology == ttnn.Topology.Linear:
+        pytest.skip("Linear topology not yet supported on barrier op")
     (is_known_failure, message) = is_unsupported_case_t3k(
         input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout
     )
@@ -1219,8 +1209,6 @@ def run_all_gather_sharded(
         )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-    # TODO remove this
-    trace_mode = True
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -1251,7 +1239,6 @@ def run_all_gather_sharded(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
             )
-            ttnn.run_routing()
         ## Wait for completion
         for d in mesh_device.get_devices():
             ttnn.synchronize_device(d)
@@ -1310,62 +1297,13 @@ def run_all_gather_sharded_t3k(
 ):
     if t3k_mesh_device.get_num_devices() < num_devices:
         pytest.skip("Not T3000!")
+    if all_gather_topology == ttnn.Topology.Linear:
+        pytest.skip("Linear topology not yet supported on barrier op")
 
     t3k_mesh_device.enable_async(enable_async)
 
     return run_all_gather_sharded(
         t3k_mesh_device,
-        num_devices,
-        input_shape,
-        input_shard_shape,
-        shard_grid,
-        dim,
-        num_links,
-        orientation,
-        input_dtype,
-        tensor_layout,
-        tensor_mem_layout,
-        # num_cores,
-        use_program_cache,
-        function_level_defaults,
-        all_gather_topology,
-        enable_async,
-        n_worker,
-        n_buffer,
-        num_iter,
-        trace_mode,
-    )
-
-
-def run_all_gather_sharded_n300(
-    mesh_device,
-    num_devices,
-    input_shape,
-    input_shard_shape,
-    shard_grid,
-    dim,
-    num_links,
-    orientation,
-    input_dtype,
-    tensor_layout,
-    tensor_mem_layout,
-    # num_cores,
-    use_program_cache,
-    function_level_defaults,
-    all_gather_topology,
-    enable_async,
-    n_worker=None,
-    n_buffer=None,
-    num_iter=1,
-    trace_mode=False,
-):
-    if mesh_device.get_num_devices() != 2:
-        pytest.skip("Not N300!")
-
-    mesh_device.enable_async(enable_async)
-
-    return run_all_gather_sharded(
-        mesh_device,
         num_devices,
         input_shape,
         input_shard_shape,
@@ -1943,7 +1881,6 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     tt_out_tensor = ttnn.all_gather(input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config)
     ttnn.barrier(input_tensor_mesh, memory_config=mem_config)
-    ttnn.run_routing()
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
         eq, output = comp_equal(tt_output_tensor, input_tensor)
