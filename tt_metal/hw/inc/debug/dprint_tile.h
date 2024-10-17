@@ -8,7 +8,7 @@
 #include "llk_io.h"
 
 // Printing tiles from CBs requires reading CB config from generated files
-#if defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
 #include "chlkc_unpack_data_format.h"
 #include "chlkc_unpack_tile_dims.h"
 #include "chlkc_pack_data_format.h"
@@ -53,6 +53,7 @@ typedef struct {
     uint8_t data_format;
 } tile_info_t;
 
+#if defined(DEBUG_PRINT_ENABLED)
 inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb,
@@ -64,38 +65,39 @@ inline tile_info_t get_tile_info(
 ) {
     tile_info_t info = {0};
 #if defined(UCK_CHLKC_PACK)
-        info.cb_ptr = CB_WR_PTR(cb);  // PACK only has write pointer
-        info.data_format = pack_dst_format[cb];
-        info.tile_dim_r = pack_tile_r_dim[cb];
-        info.tile_dim_c = pack_tile_c_dim[cb];
-        info.tile_size = pack_tile_size[cb];
-        info.face_dim_r = pack_tile_face_r_dim[cb];
-        info.num_faces = pack_tile_num_faces[cb];
+    info.cb_ptr = CB_WR_PTR(cb);  // PACK only has write pointer
+    info.data_format = pack_dst_format[cb];
+    info.tile_dim_r = pack_tile_r_dim[cb];
+    info.tile_dim_c = pack_tile_c_dim[cb];
+    info.tile_size = pack_tile_size[cb];
+    info.face_dim_r = pack_tile_face_r_dim[cb];
+    info.num_faces = pack_tile_num_faces[cb];
 #elif defined(UCK_CHLKC_UNPACK)
-        info.cb_ptr = CB_RD_PTR(cb);  // UNPACK only has read pointer
-        info.data_format = unpack_src_format[cb];
-        info.tile_dim_r = unpack_tile_r_dim[cb];
-        info.tile_dim_c = unpack_tile_c_dim[cb];
-        info.tile_size = unpack_tile_size[cb];
-        info.face_dim_r = unpack_tile_face_r_dim[cb];
-        info.num_faces = unpack_tile_num_faces[cb];
+    info.cb_ptr = CB_RD_PTR(cb);  // UNPACK only has read pointer
+    info.data_format = unpack_src_format[cb];
+    info.tile_dim_r = unpack_tile_r_dim[cb];
+    info.tile_dim_c = unpack_tile_c_dim[cb];
+    info.tile_size = unpack_tile_size[cb];
+    info.face_dim_r = unpack_tile_face_r_dim[cb];
+    info.num_faces = unpack_tile_num_faces[cb];
 #elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
-        // For BRISC/NCRISC, user chooses which pointer, and specifies whether the CB is input/output
-        info.cb_ptr = (ptr_type == TSLICE_WR_PTR) ? CB_WR_PTR(cb) : CB_RD_PTR(cb);
-        info.data_format = (cb_type == TSLICE_INPUT_CB) ? unpack_src_format[cb] : pack_dst_format[cb];
-        info.tile_dim_r = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_r_dim[cb] : pack_tile_r_dim[cb];
-        info.tile_dim_c = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_c_dim[cb] : pack_tile_c_dim[cb];
-        info.tile_size = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_size[cb] : pack_tile_size[cb];
-        info.face_dim_r = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_face_r_dim[cb] : pack_tile_face_r_dim[cb];
-        info.num_faces = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_num_faces[cb] : pack_tile_num_faces[cb];
+    // For BRISC/NCRISC, user chooses which pointer, and specifies whether the CB is input/output
+    info.cb_ptr = (ptr_type == TSLICE_WR_PTR) ? CB_WR_PTR(cb) : CB_RD_PTR(cb);
+    info.data_format = (cb_type == TSLICE_INPUT_CB) ? unpack_src_format[cb] : pack_dst_format[cb];
+    info.tile_dim_r = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_r_dim[cb] : pack_tile_r_dim[cb];
+    info.tile_dim_c = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_c_dim[cb] : pack_tile_c_dim[cb];
+    info.tile_size = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_size[cb] : pack_tile_size[cb];
+    info.face_dim_r = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_face_r_dim[cb] : pack_tile_face_r_dim[cb];
+    info.num_faces = (cb_type == TSLICE_INPUT_CB) ? unpack_tile_num_faces[cb] : pack_tile_num_faces[cb];
 #else
-        info.cb_ptr = 0;
-        info.data_format = static_cast<uint8_t>(DataFormat::Invalid);
-        return info;
+    info.cb_ptr = 0;
+    info.data_format = static_cast<uint8_t>(DataFormat::Invalid);
+    return info;
 #endif
     info.face_dim_c = info.tile_dim_r * info.tile_dim_c / info.num_faces / info.face_dim_r;
     return info;
 }
+#endif // defined(DEBUG_PRINT_ENABLED)
 
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES=32*2>
@@ -201,7 +203,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
                                             row_in_face * tile_info.face_dim_c + col_in_face;
                         this->data[byte_idx++] = cb_data[data_offset + data_idx];
                     }
-                    if (byte_idx >= MAX_BYTES) {
+                    if (byte_idx - 2 >= MAX_BYTES) {
                         max_count_exceeded = true;
                         break;
                     }
