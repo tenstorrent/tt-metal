@@ -95,6 +95,7 @@ ParallelConfig determine_parallel_config(
         conv_out_2d_matrix_width_ntiles = output_channels;
     }
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    printf("grid dims: %ld, %ld\n", compute_with_storage_grid_size.x, compute_with_storage_grid_size.y);
     std::vector<uint32_t> device_grid_size = {
         (uint32_t)compute_with_storage_grid_size.x, (uint32_t)compute_with_storage_grid_size.y};
     CoreCoord device_grid_size_coord = {
@@ -106,7 +107,7 @@ ParallelConfig determine_parallel_config(
         if(shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             return find_closest_largest_divisor(conv_out_2d_matrix_height_ntiles, max_num_cores);
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0]);
+            return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[1]);
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return 1u;
         }
@@ -136,6 +137,10 @@ ParallelConfig determine_parallel_config(
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_channels;
             uint32_t cores_y =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
+                printf("total_cores_for_channels: %d\n", total_cores_for_channels);
+                printf("num_cores_channels: %d\n", num_cores_channels);
+                printf("cores_x: %d\n", cores_x);
+                printf("cores_y: %d\n", cores_y);
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
             CoreRangeSet grid = CoreRangeSet({core_range});
             return grid;
@@ -162,9 +167,12 @@ uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
     auto grid_size = pconfig.grid.bounding_box().grid_size();
     uint32_t num_cores = pconfig.grid.num_cores();
     uint32_t num_cores_nhw = 0;
-    if(pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+    if (pconfig.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         return 1;
     }
+    printf("grid_size.x: %ld\n", grid_size.x);
+    printf("grid_size.y: %ld\n", grid_size.y);
+    printf("num_cores: %d\n", num_cores);
 
     if (pconfig.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_nhw = num_cores;
@@ -211,6 +219,8 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t channels = tensor_shape.with_tile_padding()[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
+    printf("num_cores_nhw: %d\n", num_cores_nhw);
+    printf("num_cores_channels: %d\n", num_cores_channels);
     auto shard_scheme = parallel_config.shard_scheme;
     auto shard_orientation = parallel_config.shard_orientation;
 
@@ -222,6 +232,8 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
+    printf("channels: %d\n", channels);
+    printf("channel_shard: %d\n", channel_shard);
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
