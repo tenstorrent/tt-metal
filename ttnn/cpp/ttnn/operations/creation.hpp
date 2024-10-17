@@ -13,6 +13,9 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -199,10 +202,8 @@ struct FullLikeWith {
     }
 };
 
-struct ZerosLike : FullLikeWith<0.0f> {};
 struct OnesLike : FullLikeWith<1.0f> {};
 
-inline constexpr ZerosLike zeros_like{};
 inline constexpr OnesLike ones_like{};
 
 struct Empty {
@@ -230,6 +231,52 @@ struct EmptyLike {
         return create_device_tensor(tensor.get_shape(), dtype_value, layout_value, device, mem_cfg);
     }
 };
+
+
+struct ZerosLike {
+   static ttnn::Tensor invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor& tensor,
+    const std::optional<DataType>& dtype = std::nullopt,
+    const std::optional<Layout>& layout = std::nullopt,
+    const std::optional<std::reference_wrapper<Device>>& device_arg = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt ) {
+
+        if(!optional_output_tensor.has_value()) {
+            Device* device = device_arg.has_value() ? &(device_arg.value().get()) : tensor.device();
+            Layout layout_value = layout.value_or(tensor.get_layout());
+            DataType dtype_value = dtype.value_or(tensor.get_dtype());
+            MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+            optional_output_tensor = create_device_tensor(tensor.get_shape(), dtype_value, layout_value, device, mem_cfg);
+        }
+
+        // this if() {...} can be skipped if RM support is not needed for zeros_like
+        if(optional_output_tensor.value().get_layout() == Layout::ROW_MAJOR) {
+            Tensor x = optional_output_tensor.value();
+            x = ttnn::to_layout(x, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, x.device());
+            ttnn::fill(x, 0, std::nullopt, x);
+            x = ttnn::to_layout(x, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, x.device());
+            ttnn::assign(x, optional_output_tensor.value());
+            return optional_output_tensor.value();
+        }
+
+        ttnn::fill(optional_output_tensor.value(), 0, std::nullopt, optional_output_tensor);
+        return optional_output_tensor.value();
+    }
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& tensor,
+        const std::optional<DataType>& dtype = std::nullopt,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+        return invoke(ttnn::DefaultQueueId, tensor, dtype, layout, device, memory_config, optional_output_tensor);
+    }
+
+};
+
 
 struct Full {
     static ttnn::Tensor invoke(

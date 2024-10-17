@@ -87,5 +87,6 @@ enum SfpuType {
     ceil,
     unused,
     reshuffle_rows,
-    cumsum
+    cumsum,
+    fill
 };

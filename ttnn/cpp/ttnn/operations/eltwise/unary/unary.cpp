@@ -194,6 +194,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MAX>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MIN>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::REMAINDER>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FILL>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
