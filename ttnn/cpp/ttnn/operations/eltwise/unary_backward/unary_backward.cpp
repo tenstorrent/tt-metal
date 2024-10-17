@@ -207,8 +207,9 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(uint8_t queu
     std::vector<std::optional<Tensor>> grad_tensor;
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
-    tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
+    // Tensor tanh_res = ttnn::tanh(queue_id, input, output_mem_config);
+    // tanh_res = ttnn::square(queue_id, tanh_res, output_mem_config);
+    Tensor tanh_res = ttnn::square(queue_id, input, output_mem_config);
     tanh_res = ttnn::rsub(queue_id, tanh_res, 1.0f, output_mem_config);
     ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
