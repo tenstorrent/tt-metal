@@ -7,7 +7,7 @@ from functools import partial
 
 import torch
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
+from tests.sweep_framework.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -59,7 +59,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float16), input_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.glu)
+    golden_function = ttnn.get_golden_function(ttnn.geglu)
     torch_output_tensor = golden_function(torch_input_tensor, dim=-1)
 
     input_tensor = ttnn.from_torch(
@@ -71,7 +71,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.glu(input_tensor, dim=-1, memory_config=output_memory_config)
+    result = ttnn.geglu(input_tensor, dim=-1, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
