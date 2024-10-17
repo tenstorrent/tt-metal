@@ -75,7 +75,11 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     # Embedding on host
     embd = HostEmbedding(model_args)
-    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+
+    if model_args.is_vision():
+        state_dict_prefix = "text_model"
+    else:
+        state_dict_prefix = ""
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = kv_cache_len
