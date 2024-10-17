@@ -448,6 +448,34 @@ std::ostream& operator<<(std::ostream& os, const std::set<T>& set) {
     return os;
 }
 
+// Specialization for std::unordered_map
+template <typename Key, typename T, typename Hash, typename KeyEqual, typename Allocator>
+std::ostream& operator<<(std::ostream& os, const std::unordered_map<Key, T, Hash, KeyEqual, Allocator>& umap) {
+    using tt::stl::reflection::operator<<;
+    bool isFirst = true;
+    os << "{";
+    for (const auto& [key, value] : umap) {
+        os << (isFirst ? "" : ",") << key << "=" << value;
+        isFirst = false;
+    }
+    os << "}";
+    return os;
+}
+
+// Specialization for std::unordered_map
+template <typename Key, typename T, typename KeyEqual, typename Allocator>
+std::ostream& operator<<(std::ostream& os, const std::map<Key, T, KeyEqual, Allocator>& map) {
+    using tt::stl::reflection::operator<<;
+    bool isFirst = true;
+    os << "{";
+    for (const auto& [key, value] : map) {
+        os << (isFirst ? "" : ",") << key << "=" << value;
+        isFirst = false;
+    }
+    os << "}";
+    return os;
+}
+
 template <typename T>
     requires(tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value))
 std::ostream& operator<<(std::ostream& os, const T& object) {
@@ -990,6 +1018,34 @@ struct fmt::formatter<std::set<T>> {
     }
 };
 
+template <typename Key, typename T, typename Hash, typename KeyEqual, typename Allocator>
+struct fmt::formatter<std::unordered_map<Key, T, Hash, KeyEqual, Allocator>> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
+        return ctx.end();
+    }
+
+    auto format(const std::unordered_map<Key, T, Hash, KeyEqual, Allocator>& umap, format_context &ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << umap;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename Key, typename T, typename KeyEqual, typename Allocator>
+struct fmt::formatter<std::map<Key, T, KeyEqual, Allocator>> {
+    constexpr auto parse(format_parse_context &ctx) -> format_parse_context::iterator {
+        return ctx.end();
+    }
+
+    auto format(const std::map<Key, T, KeyEqual, Allocator>& map, format_context &ctx) const -> format_context::iterator {
+        using tt::stl::reflection::operator<<;
+        std::stringstream ss;
+        ss << map;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
 template <typename T>
     requires(
         tt::stl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array<T>::value or
@@ -1052,6 +1108,28 @@ inline hash_t hash_object(const std::reference_wrapper<Ts...>& reference) noexce
     return hash_object(reference.get());
 }
 
+// Specialization for std::unordered_map
+template <typename Key, typename T, typename Hash, typename KeyEqual, typename Allocator>
+inline hash_t hash_object(const std::unordered_map<Key, T, Hash, KeyEqual, Allocator>& umap) {
+    std::size_t hash = 0;
+    for (const auto& pair : umap) {
+        hash ^= hash_object(pair.first) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= hash_object(pair.second) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
+// Specialization for std::map
+template <typename Key, typename T, typename KeyEqual, typename Allocator>
+inline hash_t hash_object(const std::map<Key, T, KeyEqual, Allocator>& map) {
+    std::size_t hash = 0;
+    for (const auto& pair : map) {
+        hash ^= hash_object(pair.first) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        hash ^= hash_object(pair.second) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    return hash;
+}
+
 template <typename T>
 inline hash_t hash_object(const T& object) noexcept {
     if constexpr (std::numeric_limits<T>::is_integer) {
@@ -1112,6 +1190,16 @@ inline hash_t hash_object(const T& object) noexcept {
         } else {
             return 0;
         }
+    } else if constexpr (is_specialization_v<T, std::map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        return hash_object(object);
+    } else if constexpr (is_specialization_v<T, std::unordered_map>) {
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::unordered_map of type {}: {}\n", get_type_name<T>(), object);
+        }
+        return hash_object(object);
     } else if constexpr (tt::stl::concepts::Reflectable<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing struct {} using reflect library: {}\n", get_type_name<T>(), object);
@@ -1345,7 +1433,9 @@ struct to_json_t<std::map<K, V>> {
     nlohmann::json operator()(const std::map<K, V>& object) {
         nlohmann::json json_object = nlohmann::json::object();
         for (const auto& [key, value] : object) {
-            json_object[to_json(key)] = to_json(value);
+            // json_object[to_json(key)] = to_json(value);
+            // error: use of overloaded operator '[]' is ambiguous (with operand types 'nlohmann::json' (aka 'basic_json<>') and 'nlohmann::json')
+            json_object.emplace(to_json(key), to_json(value));
         }
         return json_object;
     }
