@@ -18,6 +18,7 @@
 #include "c_tensix_core.h"
 
 #include "kernel_includes.hpp"
+#include "debug/dprint.h"
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -29,6 +30,7 @@ extern uint32_t __kernel_init_local_l1_base[];
 extern uint32_t __fw_export_end_text[];
 
 void kernel_launch(uint32_t kernel_base_addr) {
+  DPRINT << "----ncrisk\n";
   DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME

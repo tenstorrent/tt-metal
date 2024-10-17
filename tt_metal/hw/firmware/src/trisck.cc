@@ -14,6 +14,7 @@
 #include "chlkc_list.h"
 
 #include "tools/profiler/kernel_profiler.hpp"
+#include "debug/dprint.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -38,6 +39,7 @@ extern uint32_t __fw_export_end_text[];
 
 void kernel_launch(uint32_t kernel_base_addr)
 {
+    DPRINT << "trisc: " << kernel_base_addr << ENDL();
   DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME

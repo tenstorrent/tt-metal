@@ -644,7 +644,6 @@ void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs
 }
 
 void Program::populate_dispatch_data(Device *device) {
-    fprintf(stderr, "in populate\n");
     auto extract_dst_noc_unicast_info =
         [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -771,7 +770,6 @@ void Program::populate_dispatch_data(Device *device) {
                         kernel_group.core_ranges.ranges(), core_type);
 
                 vector<KernelHandle> kernel_ids;
-                fprintf(stderr, "about to set dst addrs\n");
                 for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
                     auto &optional_id = kernel_group.kernel_ids[dispatch_class];
                     if (optional_id) {
@@ -781,8 +779,8 @@ void Program::populate_dispatch_data(Device *device) {
                             // TODO: ugly to pull this out of the launch msg (will go away)
                             // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
                             dst_addr = kernel_group.launch_msg.kernel_config.kernel_text_offset[dispatch_class + proc_sub_class];
+                            fprintf(stderr, "pop_disp_data: setting dst addr[%d] to: %d\n", dispatch_class + proc_sub_class, dst_addr);
                             proc_sub_class++;
-                            fprintf(stderr, "setting dst addr to: %d\n", dst_addr);
                         }
                     }
                 }
@@ -981,7 +979,6 @@ uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t b
 
 uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset) {
 
-    fprintf(stderr, "finalize kernel bins\n");
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
@@ -1000,11 +997,13 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
                         kg.kernel_bin_sizes[0] = binary_packed_size;
                         kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                        fprintf(stderr, "finalize offset[%d]: %d\n", 0, offset);
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
                         kg.kernel_bin_sizes[1] = binary_packed_size;
                         kg.launch_msg.kernel_config.kernel_text_offset[1] = offset;
+                        fprintf(stderr, "finalize offset[%d]: %d\n", 1, offset);
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
 
@@ -1015,7 +1014,7 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                         constexpr uint32_t max_math_processors_count = 3;
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
                             uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
-                            fprintf(stderr, "offset[%d]: %d\n", 2 + proc_type_index, offset);
+                            fprintf(stderr, "finalize offset[%d]: %d\n", 2 + proc_type_index, offset);
                             kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
                             kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                             offset += binary_packed_size;

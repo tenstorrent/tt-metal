@@ -2721,7 +2721,6 @@ void Device::configure_command_queue_programs() {
     command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-    fprintf(stderr, "confgured\n");
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.

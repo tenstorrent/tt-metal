@@ -935,7 +935,7 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
 
                 // TODO: pack all these writes into 1 linear write
                 uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
-
+                fprintf(stderr, "got offset[%d]: %d\n", kernel_idx, kernel_config_buffer_offset);
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
@@ -962,7 +962,8 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                         .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                     RecordDispatchData(
                         program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
-                    dst_addr += write_length;
+                    fprintf(stderr, "writing for %d %d - %d\n", kernel_idx, kernel_config_buffer_offset, write_length);
+                    kernel_config_buffer_offset += write_length;
 
                     kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
                         .start_page = (uint16_t)page_offset,

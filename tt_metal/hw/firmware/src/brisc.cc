@@ -440,6 +440,7 @@ int main() {
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::BRISC);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                DPRINT << "brisc going: " << (uint32_t)kernel_address << ENDL();;
                 (*kernel_address)((uint32_t)kernel_address);
                 RECORD_STACK_USAGE();
             } else {
