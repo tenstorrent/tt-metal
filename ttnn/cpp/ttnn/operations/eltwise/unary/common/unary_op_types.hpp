@@ -83,7 +83,8 @@ enum class UnaryOpType {
     LEFT_SHIFT,
     REMAINDER,
     FMOD,
-    DROPOUT
+    DROPOUT,
+    FILL
 };
 
 struct UnaryWithParam {

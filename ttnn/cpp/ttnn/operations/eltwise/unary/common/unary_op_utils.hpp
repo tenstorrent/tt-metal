@@ -59,6 +59,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::REMAINDER:
         case UnaryOpType::DROPOUT:
+        case UnaryOpType::FILL:
         case UnaryOpType::FMOD: return true;
         default: return false;
     }

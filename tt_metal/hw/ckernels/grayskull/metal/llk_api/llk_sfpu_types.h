@@ -65,4 +65,5 @@ enum SfpuType {
   unary_lt,
   tiled_prod,
   unused,
+  fill,
 };
