@@ -675,11 +675,11 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             if (bias_tensor_.get_dtype() != weights_bias_dtype) {
                 bias_tensor_ = ttnn::to_dtype(bias_tensor_, weights_bias_dtype);
             }
-            bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         } else {
             bias_tensor_ = convert_conv_bias_tensor_to_tiled_layout_block_sharded(
                 bias_tensor.value(), num_cores_c, weights_bias_dtype);
         }
+        bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
     }
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
