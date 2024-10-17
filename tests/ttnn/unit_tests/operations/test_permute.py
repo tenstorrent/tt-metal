@@ -74,7 +74,6 @@ def test_permute_on_less_than_4D(device, perm):
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
 
 
-@pytest.mark.skip(reason="4360: permute is incorrect")
 @pytest.mark.parametrize("b", [1])
 @pytest.mark.parametrize("s", [8])
 @pytest.mark.parametrize("h", [1500])
