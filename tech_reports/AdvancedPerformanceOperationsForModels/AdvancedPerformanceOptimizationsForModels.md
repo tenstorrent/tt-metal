@@ -187,7 +187,10 @@ In addition, for our example of using one command queue only for writing inputs,
 Normally for performance we try to allocate tensors in L1, but many models are not able to fit in L1 if we keep the input tensor in L1 memory. To work around this, we can allocate our input in DRAM so that we can keep the tensor persistent in memory, then run an operation to move it to L1. For performance, we’d expect to allocate the input as DRAM sharded and move it to L1 sharded using the reshard operation.
 
 For using 2 command queues where one is just for writes, and one for running programs and reading, we will need to create and use 2 events.
-The first event we use is an event to signal that the write has completed on command queue 1\. This event will be waited on by command queue 0 so that it only executes operations after the write has completed. The second event we have is for signaling that command queue 0 has consumed the input tensor, and that it is okay for command queue 1 to overwrite it with new data. This is waited on by command queue 1 before it writes the next input.
+The first event we use is an event to signal that the write has completed on command queue 1. This event will be waited on by command queue 0 so that it only executes operations after the write has completed. The second event we have is for signaling that command queue 0 has consumed the input tensor, and that it is okay for command queue 1 to overwrite it with new data. This is waited on by command queue 1 before it writes the next input.
+
+<!-- ![image6](images/image6.png){width=15 height=15} -->
+<img src="images/image6.png" style="width:1000px;"/>
 
 ```py
 # This example uses 1 CQ for only writing inputs (CQ 1), and one CQ for executing programs/reading back the output (CQ 0)
@@ -233,6 +236,9 @@ The first event we use is an event to signal that the write has completed on com
 When putting reads and writes on the same CQ, we don't want to just write our input tensor, then stall waiting for the output, as this means we have basically blocked CQ 1 until the model has finished running.
 Instead we can restructure the loop so that we write the first input outside the loop. Then in the loop we run the model, and then enqueue the next write before we enqueue the readback of the current output.
 This way CQ1 will always have started/finished writing the next input and allows overlapping the read of the current output with the next iteration of the model.
+
+<!-- ![image7](images/image7.png){width=15 height=15} -->
+<img src="images/image7.png" style="width:1000px;"/>
 
 ```py
 # This example uses 1 CQ for writing inputs and reading outputs (CQ 1), and one CQ for executing programs (CQ 0)
