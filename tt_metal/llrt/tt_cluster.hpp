@@ -70,7 +70,7 @@ class Cluster {
     const metal_SocDescriptor &get_soc_desc(chip_id_t chip) const;
     uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
-        return this->get_driver(chip).get_harvesting_masks_for_soc_descriptors().at(chip);
+        return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);
     }
 
     //! device driver and misc apis
@@ -97,43 +97,36 @@ class Cluster {
         vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(target);
         return device->get_tlb_data_from_target(virtual_chip_coord);
     }
 
     uint32_t get_m_dma_buf_size(chip_id_t chip_id) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
         return 0;
     }
 
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
-        tt_SiliconDevice *device =
-            dynamic_cast<tt_SiliconDevice *>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack traversals
     tt::Writer get_static_tlb_writer(tt_cxy_pair target) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);
-        tt_SiliconDevice* device = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(mmio_device_id).get());
+        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
         const metal_SocDescriptor &soc_desc = this->get_soc_desc(target.chip);
         tt_cxy_pair virtual_target = soc_desc.convert_to_umd_coordinates(target);
         return device->get_static_tlb_writer(virtual_target);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
-        uint32_t associated_mmio_device_id = this->get_associated_mmio_device(device_id);
-        tt_SiliconDevice* driver = dynamic_cast<tt_SiliconDevice*>(this->mmio_device_id_to_driver_.at(associated_mmio_device_id).get());
-        return driver->get_numa_node_for_pcie_device(associated_mmio_device_id);
+        uint32_t mmio_device_id = this->get_associated_mmio_device(device_id);
+        tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
+        return driver_->get_numa_node_for_pcie_device(mmio_device_id);
     }
 
     void write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr) const;
@@ -239,12 +232,9 @@ class Cluster {
     void assert_risc_reset();
     void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
     void open_driver(
-        chip_id_t mmio_device_id,
-        const std::set<chip_id_t> &controlled_device_ids,
         const bool &skip_driver_allocs = false);
-    void start_driver(chip_id_t mmio_device_id, tt_device_params &device_params) const;
+    void start_driver(tt_device_params &device_params) const;
 
-    tt_device &get_driver(chip_id_t device_id) const;
     void get_metal_desc_from_tt_desc(
         const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
         const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks);
@@ -265,7 +255,7 @@ class Cluster {
 
     // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device
     // driver
-    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
+    std::unique_ptr<tt_device> driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
