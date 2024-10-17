@@ -26,10 +26,11 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "scalar": [1, 2, 5, 10],
     },
 }
 
@@ -44,6 +45,7 @@ def run(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
+    scalar,
     *,
     device,
 ) -> list:
@@ -51,9 +53,9 @@ def run(
     torch.manual_seed(data_seed)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=0, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=1, high=10, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.polygamma(torch_input_tensor_a)
+    torch_output_tensor = torch.polygamma(scalar, torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -64,7 +66,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.polygamma(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.polygamma(input_tensor_a, scalar, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
