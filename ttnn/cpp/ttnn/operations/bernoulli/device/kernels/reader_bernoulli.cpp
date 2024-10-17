@@ -5,7 +5,6 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
