@@ -8,7 +8,8 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes
+
+from tests.sweep_framework.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -83,6 +84,9 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        input_shape = sanitize_shape_rm(input_shape)
 
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
