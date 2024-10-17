@@ -278,10 +278,15 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_w,
     bool fp32_accum,
     bool use_shallow_conv_variant) {
+
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
             "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
+    }
+    if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED)
+    {
+        act_block_h_override = 0;
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / 32
@@ -748,6 +753,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
+
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,

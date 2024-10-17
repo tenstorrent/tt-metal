@@ -186,6 +186,7 @@ def run_conv(
         pcc = 0.9969
     else:
         pcc = 0.998
+
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     assert passing
@@ -341,6 +342,7 @@ def run_conv_with_split(
         (768, 768, 16, 16, 3, 3, 0, 0, 1),
         (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
+        (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -349,13 +351,13 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,
@@ -377,12 +379,15 @@ def test_conv_ws(
     stride_h = stride
     stride_w = stride
     batch_size = 2
-    fp32_accum = False
-    packer_l1_acc = False
+    fp32_accum = True
+    packer_l1_acc = True
     deallocate_activation = False
     debug = False
     groups = 1
 
+    # TODO: #13541: Fix auto shard to choose Width Sharding & re-enable this case.
+    if input_channels == 1280 and output_channels == 1280 and input_height == 16:
+        auto_shard = False
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -440,6 +445,7 @@ def test_conv_ws(
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div,
+        act_block_h_override=32,
     )
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -471,7 +477,7 @@ def test_conv_ws(
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
     reader_patterns_cache.clear()
 
-    pcc = 0.94
+    pcc = 0.99
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"{pcc_msg} Threshold : {pcc}")
     if not passing:
@@ -1049,6 +1055,7 @@ def test_resnet50_conv_wh_fp32(
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("enable_auto_formatting", [True, False])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_sd_conv(
     device,
     use_program_cache,
@@ -1069,6 +1076,7 @@ def test_sd_conv(
     use_1d_systolic_array,
     config_override,
     enable_auto_formatting,
+    auto_shard,
 ):
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
         if enable_auto_formatting:
@@ -1092,6 +1100,7 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             split_factor=3 if input_channels == 1920 else 2,
+            auto_shard=auto_shard,
         )
     else:
         run_conv(
@@ -1115,6 +1124,7 @@ def test_sd_conv(
             use_shallow_conv_variant=(input_channels == 16),
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
+            auto_shard=auto_shard,
         )
 
 
