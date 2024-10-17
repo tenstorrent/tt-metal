@@ -508,7 +508,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, bool> shard_or_reshard_tensor_if_requir
             // reshape to [1, 1, N*H*W, C]
             input_tensor = ttnn::reshape(
                 input_tensor,
-                ttnn::Shape(std::array<uint32_t, 4>{
+                ttnn::SimpleShape(std::array<uint32_t, 4>{
                     1,
                     1,
                     input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
