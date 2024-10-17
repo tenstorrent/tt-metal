@@ -10,6 +10,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/op_a/op_a.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
@@ -1735,6 +1736,12 @@ void py_module(py::module& module) {
         ttnn::logit,
         "eps", "eps", 0.0f,
         R"doc(Performs logit function on :attr:`input_tensor`, :attr:`eps`. Not available for Wormhole_B0.)doc");
+    // not a composite op but using this pybind for default value
+    detail::bind_unary_composite_float_with_default(
+        module,
+        ttnn::op_a,
+        "fill_value", "fill_value", 0.0f,
+        R"doc(Performs op_a function on :attr:`input_tensor`, :attr:`fill_value`. available for Wormhole_B0.)doc");
     detail::bind_unary_composite_float(
         module,
         ttnn::rpow,
