@@ -56,7 +56,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Preallocate Input and Output Tensors on Device
     auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape.padded_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
     auto output_buffer = ttnn::allocate_buffer_on_device(output_buf_size_datums * datum_size_bytes, device, np_out.get_padded_shape(), DataType::BFLOAT16, Layout::TILE, mem_cfg);
-    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
+    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer->get_unsafe_buffer()};
     auto output_storage = tt::tt_metal::DeviceStorage{output_buffer};
     Tensor input_tensor = Tensor(input_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
     Tensor output_tensor = Tensor(output_storage, np_out.get_shape(), DataType::BFLOAT16, Layout::TILE);

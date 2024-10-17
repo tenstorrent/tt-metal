@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/buffers/buffer.hpp"
+#include <mutex>
 
 #include "llrt/llrt.hpp"
 #include "tt_metal/common/assert.hpp"
@@ -28,7 +29,11 @@ void validate_buffer_size_and_page_size(
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
-    TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
+
+    if (size == 0)
+        return;
+
+    TT_FATAL(page_size != 0, "Buffer page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
     TT_FATAL(
         valid_page_size,
@@ -131,7 +136,14 @@ Buffer::Buffer(
     bottom_up_(bottom_up),
     buffer_page_mapping_(nullptr),
     allocate_(allocate) {
+
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
+
+    if(size == 0) {
+        allocation_status_ = AllocationStatus::ALLOCATED;
+        return;
+    }
+
     validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
     if (allocate) {
         this->allocate();
@@ -140,6 +152,10 @@ Buffer::Buffer(
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     BufferPageMapping buffer_page_mapping;
+    if(buffer.size() == 0) {
+        return buffer_page_mapping;
+    }
+
     bool row_major = buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR;
     uint32_t num_cores = buffer.num_cores();
 
@@ -241,7 +257,8 @@ Buffer::Buffer(Buffer &&other) :
     shard_parameters_(std::move(other.shard_parameters_)),
     bottom_up_(other.bottom_up_),
     buffer_page_mapping_(std::move(other.buffer_page_mapping_)),
-    allocate_(other.allocate_) {
+    allocate_(other.allocate_),
+    allocation_status_(other.allocation_status_.load()) {
     // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
     // transferred to `this`
     other.device_ = nullptr;
@@ -259,6 +276,7 @@ Buffer &Buffer::operator=(Buffer &&other) {
         this->bottom_up_ = other.bottom_up_;
         this->buffer_page_mapping_ = std::move(other.buffer_page_mapping_);
         this->allocate_ = other.allocate_;
+        this->allocation_status_ = other.allocation_status_.load();
         // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
         // transferred to `this`
         other.device_ = nullptr;
@@ -267,11 +285,52 @@ Buffer &Buffer::operator=(Buffer &&other) {
 }
 
 void Buffer::allocate() {
+    if(allocation_status_ != AllocationStatus::NOT_ALLOCATED) {
+        return;
+    }
+
+    allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+
     TT_ASSERT(this->device_ != nullptr);
     // L1 and Trace buffers (which live in DRAM) are allocated top down!
     bool bottom_up = this->bottom_up_.value_or(this->is_dram());
     detail::AllocateBuffer(this, bottom_up);
     detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
+
+    allocation_status_ = AllocationStatus::ALLOCATED;
+}
+
+void Buffer::deallocate() {
+    if (allocation_status_ == AllocationStatus::NOT_ALLOCATED) {
+        return;
+    }
+
+    if (this->device_ == nullptr
+        or not this->device_->initialized_
+        or this->size_ == 0) {
+        return;
+    }
+
+    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+    detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
+    detail::DeallocateBuffer(this);
+
+    allocation_status_ = AllocationStatus::NOT_ALLOCATED;
+}
+
+Buffer::AllocationStatus Buffer::get_allocation_status()
+{
+    return allocation_status_;
+}
+
+uint32_t Buffer::address() const {
+    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id() , "Buffer::address must be called in device worker thread");
+    return static_cast<uint32_t>(address_);
+}
+
+void Buffer::set_address(uint64_t addr) {
+    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id(), "Buffer::set_address must be called in device worker thread");
+    address_ = addr;
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -323,7 +382,7 @@ DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) c
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
+    DeviceAddr base_page_address = address() + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
@@ -333,18 +392,6 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping(
         this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
     return this->buffer_page_mapping_;
-}
-
-void Buffer::deallocate() {
-
-    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0 or not this->allocate_) {
-        return;
-    }
-    // Mark as deallocated
-    this->size_ = 0;
-    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
-    detail::DeallocateBuffer(this);
 }
 
 Buffer::~Buffer() { this->deallocate(); }

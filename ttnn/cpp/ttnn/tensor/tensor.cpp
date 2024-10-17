@@ -662,8 +662,6 @@ Tensor create_device_tensor(
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", padded_shape, data_type, layout, device, memory_config);
 
     if (memory_config.is_sharded()) {
-        TT_ASSERT(memory_config.shard_spec.has_value());
-
         auto& shard_spec = memory_config.shard_spec.value();
         auto& shard_shape = shard_spec.shape;
 

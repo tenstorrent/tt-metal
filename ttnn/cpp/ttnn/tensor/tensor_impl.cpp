@@ -180,6 +180,7 @@ void validate_sharded_buffer_allocation(
     }
 }
 
+<<<<<<< Updated upstream
 namespace detail {
 
 DeviceBuffer allocate_interleaved_buffer_on_device(
@@ -237,6 +238,15 @@ DeviceBuffer allocate_buffer_on_device(
         return detail::allocate_sharded_buffer_on_device(
             buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, tile);
     }
+=======
+DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout) {
+    auto buffer_size_bytes = layout.get_packed_buffer_size_bytes(shape);
+    auto page_size_bytes = layout.get_page_size_bytes(shape);
+    auto shard_spec_buffer = layout.get_shard_spec_buffer(shape);
+    auto memory_config = layout.get_memory_config();
+
+    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
+>>>>>>> Stashed changes
 }
 
 void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {

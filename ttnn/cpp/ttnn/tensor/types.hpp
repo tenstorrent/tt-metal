@@ -400,7 +400,7 @@ struct DeviceStorage {
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
-    inline bool is_allocated() const { return buffer && buffer->size() > 0; }
+    inline bool is_allocated() const { return buffer && buffer->get_allocation_status() == Buffer::AllocationStatus::ALLOCATED; }
 };
 
 using BorrowedBuffer = std::variant<

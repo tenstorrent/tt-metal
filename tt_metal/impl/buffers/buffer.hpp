@@ -173,16 +173,24 @@ class Buffer {
     Buffer(Buffer &&other);
     Buffer &operator=(Buffer &&other);
 
-    virtual ~Buffer();
+    ~Buffer();
+
+    enum class AllocationStatus: uint32_t {
+        NOT_ALLOCATED,
+        ALLOCATION_REQUESTED,
+        ALLOCATED
+    };
+
+    AllocationStatus get_allocation_status();
+
     Device *device() const { return device_; }
 
     DeviceAddr size() const { return static_cast<DeviceAddr>(size_); }
 
-    void set_size(DeviceAddr size) { size_ = size; this->buffer_page_mapping_ = nullptr; }
     // Returns address of buffer in the first bank
-    uint32_t address() const { return static_cast<uint32_t>(address_); }
+    uint32_t address() const;
 
-    void set_address(uint64_t addr) { address_ = addr; }
+    void set_address(uint64_t addr);
 
     DeviceAddr page_size() const { return page_size_; }
 
@@ -264,10 +272,12 @@ class Buffer {
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
-   private:
-    virtual void allocate();
+    bool is_allocated() const;
 
-    virtual void deallocate();
+    void allocate();
+    void deallocate();
+
+   private:
     friend void DeallocateBuffer(Buffer &buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
@@ -281,6 +291,13 @@ class Buffer {
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
     bool allocate_ = true;
+
+    // It is possible to create a Buffer with allocate=false and then allocate it later.
+    // There is no guarantee that allocation and access happen in the same thread
+    // We track the status here to enforce access to buffer address from main thread only
+    // This is an intermediate solution till async is moved to metal
+    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::NOT_ALLOCATED;
+
    protected:
     std::optional<bool> bottom_up_;
 };

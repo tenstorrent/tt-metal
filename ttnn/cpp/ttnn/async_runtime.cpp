@@ -8,10 +8,8 @@
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 
 namespace ttnn {
-using DeviceBuffer = std::shared_ptr<Buffer>;
-using queue_id = uint8_t;
 
-DeviceBuffer allocate_interleaved_buffer_on_device(
+DeviceBufferPromise allocate_interleaved_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
     const ttnn::SimpleShape& shape,
@@ -20,15 +18,15 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     uint32_t page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
+    return std::make_shared<BufferPromise>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
-DeviceBuffer allocate_contiguous_buffer_on_device(
+DeviceBufferPromise allocate_contiguous_buffer_on_device(
     size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
     return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
-DeviceBuffer allocate_sharded_buffer_on_device(
+DeviceBufferPromise allocate_sharded_buffer_on_device(
     size_t buffer_size_bytes,
     Device* device,
     const ttnn::SimpleShape& shape,
@@ -46,11 +44,11 @@ DeviceBuffer allocate_sharded_buffer_on_device(
         page_size = tt::tt_metal::tensor_impl::get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
     }
 
-    return std::make_shared<Buffer>(
+    return std::make_shared<BufferPromise>(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
 }
 
-DeviceBuffer allocate_buffer_on_device(
+DeviceBufferPromise allocate_buffer_on_device(
     size_t buffer_size_bytes,
     types::Device* device,
     const ttnn::SimpleShape& shape,
