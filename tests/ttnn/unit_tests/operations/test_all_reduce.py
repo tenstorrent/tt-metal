@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 
 
-def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
+def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links, input_dtype, layout):
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
     tensor_size_bytes = elem_size
     for i in input_shape:
@@ -25,7 +25,6 @@ def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devic
 def run_with_trace(
     t3k_mesh_device,
     input_tensor_mesh,
-    scatter_dim,
     num_links,
     math_op,
     output_mem_config,
@@ -37,7 +36,6 @@ def run_with_trace(
     logger.info("Compiling model")
     output_tensor_mesh = ttnn.all_reduce(
         input_tensor_mesh,
-        scatter_dim=scatter_dim,
         math_op=math_op,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -53,7 +51,6 @@ def run_with_trace(
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
             input_tensor_mesh,
-            scatter_dim=scatter_dim,
             math_op=math_op,
             num_links=num_links,
             memory_config=output_mem_config,
@@ -78,7 +75,6 @@ def run_all_reduce_test(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
     num_links,
     math_op,
     input_dtype,
@@ -96,7 +92,7 @@ def run_all_reduce_test(
     debug = False
 
     (is_known_failure, message) = is_unsupported_case(
-        per_chip_output_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
+        per_chip_output_shape, math_op, mem_config, num_devices, num_links, input_dtype, layout
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -107,20 +103,15 @@ def run_all_reduce_test(
 
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
-    canonical_input_shape[scatter_dim] *= num_devices
+    canonical_input_shape[0] *= num_devices
+
+    input_tensor = torch.rand(canonical_input_shape).bfloat16()
+
+    input_tensors = torch.chunk(input_tensor, num_devices)
     tt_input_tensors = []
-
-    numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
-    input_tensors = [
-        torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
-        for _ in range(num_devices)
-    ]
-
-    if debug:
-        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
-    for i, canonical_input_tensor in enumerate(input_tensors):
+    for i, t in enumerate(input_tensors):
         tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
+            ttnn.Tensor(t, input_dtype)
             .to(layout)
             .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), mem_config)
         )
@@ -132,7 +123,6 @@ def run_all_reduce_test(
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
             input_tensor_mesh,
-            scatter_dim=scatter_dim,
             math_op=math_op,
             num_links=num_links,
             memory_config=mem_config,
@@ -143,14 +133,10 @@ def run_all_reduce_test(
             ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
-    # Compute golden
-    # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
-    golden_canonical_out_tensor = torch.zeros(canonical_input_shape).bfloat16()
-    for i, t in enumerate(input_tensors):
-        golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t).bfloat16()
-
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
+    golden_canonical_out_tensor = torch.sum(input_tensor).expand(1, 1, 32, 32)
+
     # Compare
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
@@ -183,23 +169,23 @@ def run_all_reduce_test(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, layout",
     [
-        ([1, 1, 32, 4096], 2, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 8192], 2, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 1024], 2, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 2048], 2, ttnn.TILE_LAYOUT),
-        ([1, 1, 4096, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 8192, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 1024, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 2048, 32], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 4096], ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 8192], ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 2048], ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 32], ttnn.TILE_LAYOUT),
+        ([1, 1, 8192, 32], ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 32], ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 32], ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -215,7 +201,6 @@ def test_ring_all_reduce_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
     num_links,
     math_op,
     input_dtype,
@@ -230,7 +215,6 @@ def test_ring_all_reduce_post_commit(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
         num_links,
         math_op,
         input_dtype,

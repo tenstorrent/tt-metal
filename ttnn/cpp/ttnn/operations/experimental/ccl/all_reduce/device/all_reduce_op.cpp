@@ -7,30 +7,19 @@
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "tt_metal/host_api.hpp"
-
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <cstdint>
 
 namespace ttnn {
 
 void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
-        TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
-            "All reduce input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
-        TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
-            "All reduce input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
-
         TT_FATAL(!t.is_sharded(), "Sharded tensors are not supported for all reduce currently");
     }
 }
 
 std::vector<ttnn::SimpleShape> AllReduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     auto shape = input_tensors[0].get_logical_shape();
-    TT_FATAL(
-        shape[this->scatter_dim] % this->ring_size == 0,
-        "The size of the scatter dimension must be a multiple of the ring size");
-    shape[this->scatter_dim] /= this->ring_size;
     return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
 
@@ -46,7 +35,7 @@ operation::ProgramWithCallbacks AllReduce::create_program(
         input_tensors.at(0),
         output_tensors.at(0),
         this->binary_op_type,
-        this->scatter_dim,
+        0,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -73,7 +62,6 @@ namespace experimental{
 namespace ccl{
 Tensor all_reduce(
     const Tensor& input_tensor,
-    const uint32_t scatter_dim,
     ttnn::operations::reduction::ReduceType math_op,
     const uint32_t num_links,
     const MemoryConfig& output_mem_config,
@@ -87,7 +75,7 @@ Tensor all_reduce(
     auto devices = input_tensor.get_workers();
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     operation::launch_op(
-        [binary_op_type, scatter_dim, num_links, output_mem_config, topology, devices, user_defined_num_workers, user_defined_num_buffers_per_channel](
+        [binary_op_type, num_links, output_mem_config, topology, devices, user_defined_num_workers, user_defined_num_buffers_per_channel](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -116,26 +104,12 @@ Tensor all_reduce(
             }
             TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error in all reduce op setup");
 
-            std::vector<Tensor> reduced_tensors =  operation::run(
-                ttnn::AllReduce{
-                    binary_op_type,
-                    scatter_dim,
-                    num_links,
-                    num_devices,
-                    device_index,
-                    receiver_device_id,
-                    sender_device_id,
-                    output_mem_config,
-                    topology,
-                    user_defined_num_workers,
-                    user_defined_num_buffers_per_channel},
+            const auto& gathered_tensor = operation::run(
+                create_all_gather_struct(input_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
                 {input_tensor});
-            const auto& reduced_tensor = reduced_tensors.at(0);
 
-            return operation::run(
-                create_all_gather_struct(reduced_tensor, scatter_dim, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
-                {reduced_tensor});
-        },
+            return {ttnn::sum(gathered_tensor.at(0))};
+            },
      {input_tensor},
      output_tensors);
 
