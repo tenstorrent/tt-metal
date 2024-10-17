@@ -56,7 +56,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     bool pad_c = false;
     bool tiled_only = false;
     bool pad_n = false;
-    uint32_t ROW_MAJOR_STICK_WIDTH = 16; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
+    constexpr uint32_t ROW_MAJOR_STICK_WIDTH = tt::constants::FACE_WIDTH; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
     uint32_t W = a.get_padded_shape()[-1];
     uint32_t H = a.get_padded_shape()[-2];
     switch (transpose_dim) {
@@ -231,7 +231,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
         }, {input_typecasted}, output_tensors);
 
     auto output = ttnn::reshape(output_tensors.at(0), ttnn::Shape(output_shape, padded_output_shape));
-    output = initial_rank < 4 ? ttnn::squeeze_from_4D(output, initial_rank) : output;
+    output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 
 }
