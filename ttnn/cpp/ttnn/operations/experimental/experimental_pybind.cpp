@@ -7,6 +7,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/pool/avgpool/avg_pool_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
+#include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -21,19 +28,15 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
-#include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
+    pool::detail::bind_avg_pool2d(module);
+
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);
     transformer::detail::bind_nlp_create_qkv_heads(module);
