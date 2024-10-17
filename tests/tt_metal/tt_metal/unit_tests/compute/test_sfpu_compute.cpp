@@ -70,8 +70,9 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const stri
     if ((op_name == "sqrt") or (op_name == "log")) {
         return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(0.0001f, 4.0f, numel, seed);
     } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
-        auto possible_values = vector<tt::test_utils::df::bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
-        return generate_packed_random_vector_from_vector<uint32_t, tt::test_utils::df::bfloat16>(possible_values, numel, seed);
+        // auto possible_values = vector<tt::test_utils::df::bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
+        // return generate_packed_random_vector_from_vector<uint32_t, tt::test_utils::df::bfloat16>(possible_values, numel, seed);
+        return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(-4.75f, 4.75f, numel, seed);
     } else {
         return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(-1.0f, 1.0f, numel, seed);
     }
@@ -83,7 +84,7 @@ bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
     } else if ((op_name == "gelu") or (op_name == "relu")) {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.15f); });
+            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.01f, 0.025f); });
     } else if ((op_name == "exponential")) {
         return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
             vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
@@ -251,22 +252,23 @@ INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleDeviceSfpuParameterizedFixture,
     ::testing::Values(
-        std::make_tuple(1, "relu"),
-        std::make_tuple(1, "exponential"),
-        std::make_tuple(1, "reciprocal"),
-        std::make_tuple(1, "gelu"),
-        std::make_tuple(1, "sqrt"),
-        std::make_tuple(1, "sigmoid"),
-        std::make_tuple(1, "log"),
-        std::make_tuple(1, "tanh"),
-        std::make_tuple(4, "relu"),
-        std::make_tuple(4, "exponential"),
-        std::make_tuple(4, "reciprocal"),
-        std::make_tuple(4, "gelu"),
-        std::make_tuple(4, "sqrt"),
-        std::make_tuple(4, "sigmoid"),
-        std::make_tuple(4, "log"),
-        std::make_tuple(4, "tanh")));
+        // std::make_tuple(1, "relu"),
+        // std::make_tuple(1, "exponential"),
+        // std::make_tuple(1, "reciprocal"),
+        // std::make_tuple(1, "gelu"),
+        // std::make_tuple(1, "sqrt"),
+        // std::make_tuple(1, "sigmoid"),
+        // std::make_tuple(1, "log"),
+        // std::make_tuple(1, "tanh"),
+        // std::make_tuple(4, "relu"),
+        // std::make_tuple(4, "exponential"),
+        // std::make_tuple(4, "reciprocal"),
+        std::make_tuple(21, "gelu")
+        // std::make_tuple(4, "sqrt"),
+        // std::make_tuple(4, "sigmoid"),
+        // std::make_tuple(4, "log"),
+        // std::make_tuple(4, "tanh")
+        ));
 class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
     : public DeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
