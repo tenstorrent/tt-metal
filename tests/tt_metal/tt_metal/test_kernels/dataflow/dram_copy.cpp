@@ -33,8 +33,7 @@ void kernel_main() {
 #else
         tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
-        uint64_t dispatch_addr = NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                                             NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR);
+        uint64_t dispatch_addr = NOC_XY_ADDR(mailboxes->go_message.master_x, mailboxes->go_message.master_y, DISPATCH_MESSAGE_ADDR);
         noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31, false);
 #endif
 
