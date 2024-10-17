@@ -57,4 +57,4 @@ struct MorehAdam {
 namespace ttnn {
 constexpr auto moreh_adam =
     ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_adam", ttnn::operations::moreh::moreh_adam::MorehAdam>();
-}
+}  // namespace ttnn
