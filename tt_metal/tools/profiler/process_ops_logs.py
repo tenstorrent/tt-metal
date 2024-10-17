@@ -343,7 +343,7 @@ def get_device_data_generate_report(
         if cleanup_device_log:
             os.remove(deviceTimesLog)
     else:
-        logger.info("No device logs found")
+        logger.warning(f"No device logs found here: {deviceTimesLog}")
     return rowDicts
 
 

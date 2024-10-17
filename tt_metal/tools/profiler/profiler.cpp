@@ -255,6 +255,7 @@ void DeviceProfiler::dumpResultToFile(
     if (!std::filesystem::exists(log_path))
     {
         log_file.open(log_path);
+        log_info("Device profiler log path is set to {}", log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture) << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
         log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, run ID, run host ID,  zone name, zone phase, source line, source file" << std::endl;
     }

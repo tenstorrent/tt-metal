@@ -342,6 +342,8 @@ void DumpDeviceProfileResults(Device *device, bool lastDump) {
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
+    log_info("Dumping device {} profiler data", device_id);
+
     auto device_num_hw_cqs = device->num_hw_cqs();
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_type)) {

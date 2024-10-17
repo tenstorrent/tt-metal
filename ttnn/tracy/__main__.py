@@ -101,6 +101,7 @@ def main():
 
         if not doReport:
             code = None
+            logger.info(f"Running {' '.join(args)}")
             if options.module:
                 import runpy
 

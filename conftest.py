@@ -213,6 +213,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     yield mesh_device
 
     for device in mesh_device.get_devices():
+        logger.info(f"Dumping profiler for device {device}")
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
