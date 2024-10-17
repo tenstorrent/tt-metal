@@ -116,54 +116,6 @@ def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, hidden_size, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """
-    Prepare inputs for decode mode.
-    x: (batch, seq, hidden_dim)
-    """
-
-    if len(x.shape) == 3:
-        batch = x.shape[0]
-        seq_len = x.shape[1]
-        assert x.shape[2] == hidden_size
-    elif len(x.shape) == 4:
-        seq_len = x.shape[0]
-        assert x.shape[1] == 1
-        batch = x.shape[2]
-        assert x.shape[3] == hidden_size
-
-    assert seq_len == 1, "Only supporting decode mode"
-
-    # Support input on device
-    if torch.is_tensor(x):  # Input on host -> Use torch
-        x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
-        # Pad small batches to 32
-        if batch < 32:
-            zeros = torch.zeros(1, seq_len, 32, hidden_size)
-            zeros[:, :, :batch, :] = x
-            x = zeros
-    elif len(x.shape) == 3:  # Input on device -> Use ttnn
-        x = ttnn.reshape(
-            x, (batch, seq_len, 1, hidden_size)
-        )  # [batch, seqlen, hidden_dim] -> [batch, seqlen, 1, hidden_dim]
-        x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, hidden_dim]
-    elif len(x.shape) == 4:
-        pass  # already in [seq_len, 1, batch, hidden_dim]
-
-    if torch.is_tensor(x):
-        x = ttnn.from_torch(
-            x,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            memory_config=memory_config,
-        )
-    else:  # Convert the row major layout from embedding back to tile layout
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-    return x
-
-
 # Sample logits from a distribution
 def sample_top_p(probs: torch.Tensor, p: float):
     assert 0 <= p <= 1
@@ -230,29 +182,6 @@ def get_rot_transformation_mat(dhead):
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
     return rot_emb_matrix
-
-
-def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
-    """
-    Prepare inputs for prefill mode.
-    x: (batch, seq, dim)
-    B: batch (1)
-    S: sequence len
-    H: dim
-    """
-
-    x_1BSH = x_bsh.unsqueeze(0)
-
-    # input goes to DRAM
-    xs_1BSH = ttnn.from_torch(
-        x_1BSH,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
-    )
-    return xs_1BSH
 
 
 def get_single_rot_mat(

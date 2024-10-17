@@ -88,12 +88,16 @@ class TtTransformerBlock(LightweightModule):
         mode="decode",
         page_table=None,
     ) -> ttnn.Tensor:
-        # Use L1 interleaved for decode because self.decoder_norm's gather requires interleaved inputs
+        # x is fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
         # FIXME: move to sharded residuals once support for this is added
-        skip_mem_cfg = self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        # FIXME: Currently, for decode mode, we are using DRAM intereleaved as L1 interleaved results in h being corrupted in MLP
+        skip_mem_cfg = (
+            ttnn.DRAM_MEMORY_CONFIG
+        )  # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
-        # Attention Norm and layer
+        # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+        # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -104,15 +108,15 @@ class TtTransformerBlock(LightweightModule):
             page_table,
         )
 
-        # Residual Add
+        # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
         ttnn.deallocate(attn_out)
 
-        # FF Norm and Layer
+        # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
+        # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)
-
-        # Residual Add
+        # ff_out and h are both fractured across devices
         out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
 
-        return out
+        return out  # fractured across devices

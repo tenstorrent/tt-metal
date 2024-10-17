@@ -141,8 +141,8 @@ def main(stdscr):
                         if entry["process"] and entry["process"].poll() is None:
                             running_entry = entry
                             entry["stop_event"].set()
-                            terminate_process_tree(entry["process"].pid)
                             entry["status"] = "Terminating"
+                            terminate_process_tree(entry["process"].pid)
                             break
 
                 # Set all other jobs to "Exiting"
@@ -177,6 +177,14 @@ def main(stdscr):
                         command_input = input_fields[0]["value"] or "demo"
                         model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
+
+                        if command_input == "modules":
+                            command_input = "attention,attention-prefill,mlp,lm-head"
+
+                        if command_input == "tests":
+                            command_input = (
+                                "attention,attention-prefill,mlp,lm-head,decoder,decoder-prefill,model,model-prefill"
+                            )
 
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
@@ -236,7 +244,7 @@ def main(stdscr):
             else:
                 # Ignore enter key when exiting
                 continue
-        elif c == curses.KEY_BACKSPACE or c == 127:
+        elif c == curses.KEY_BACKSPACE or c == 127 or (c == ord("x") and current_line >= len(input_fields)):
             if current_line < len(input_fields):
                 current_field = current_line
                 # Remove last character from current field
@@ -253,20 +261,33 @@ def main(stdscr):
                             entry["stop_event"].set()
                             terminate_process_tree(entry["process"].pid)
                             entry["status"] = "Terminating"
-                        elif entry["status"] in ["Waiting", "Cancelled", "Error", "Finished"]:
-                            # Remove the entry if it's already cancelled or not started
+                        elif entry["status"] != "Resetting":
+                            # Remove the entry if it's already cancelled
                             output_entries.pop(entry_index)
                             total_lines -= 1
                             if current_line >= total_lines:
                                 current_line = total_lines - 1
-                        else:
-                            # Set to cancelled if not running and not already cancelled
-                            entry["status"] = "Cancelled"
-                            current_line = (current_line + 1) % total_lines
                     screen_needs_update.set()
         elif c == 9:  # Tab key
             current_line = (current_line + 1) % total_lines
             screen_needs_update.set()
+        elif c == ord("r") and current_line >= len(input_fields):
+            entry_index = current_line - len(input_fields)
+            if entry_index < len(output_entries):
+                entry = output_entries[entry_index]
+                with entry["lock"]:
+                    if entry["status"] in ["Finished", "Error", "Cancelled"]:
+                        # Reset the entry to "Waiting" status
+                        entry["status"] = "Waiting"
+                        entry["output"] = ""
+                        if "speed" in entry:
+                            del entry["speed"]
+                        if "pcc" in entry:
+                            del entry["pcc"]
+                        entry["process"] = None
+                        entry["log_file"] = None
+                        entry["stop_event"].clear()
+                        screen_needs_update.set()
         else:
             if current_line < len(input_fields) and not exiting:
                 current_field = current_line
@@ -478,7 +499,13 @@ def worker_thread_func(output_entries, stop_event, screen_lock, screen_needs_upd
         running_entry = None
         for entry in output_entries:
             with entry["lock"]:
-                if entry["process"] and entry["process"].poll() is None:
+                # Check if the process is still running (poll() returns None for running processes)
+                # or if the entry is in a transitional state
+                if (entry["process"] and entry["process"].poll() is None) or entry["status"] in [
+                    "Resetting",
+                    "Terminating",
+                    "Initializing device",
+                ]:
                     running_entry = entry
                     break
 
@@ -486,6 +513,11 @@ def worker_thread_func(output_entries, stop_event, screen_lock, screen_needs_upd
             for entry in output_entries:
                 with entry["lock"]:
                     if entry["status"] == "Waiting":
+                        with open("running.txt", "a") as f:
+                            # Write a list of all the entry statuses in output_entries
+                            for e in output_entries:
+                                f.write(f"{e['command_name']} {e['model']} {e['device']} {e['status']}\n")
+                            f.write("\n")
                         run_entry_command(entry, screen_lock, output_entries, screen_needs_update)
                         break
         # Set screen_needs_update whenever there's a change in output entries
@@ -504,13 +536,16 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Define command shortcuts
     command_shortcuts = {
-        "demo": "pytest models/demos/llama3/demo/demo.py::test_llama_demo[wormhole_b0-True-mesh_device0-device_params0-instruct_weights-1_batch]",
+        "demo": "pytest models/demos/llama3/demo/demo.py -k instruct_weights-1",
+        "demo1": "pytest models/demos/llama3/demo/demo.py -k single_layer",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
-        "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py::test_llama_mlp_inference[wormhole_b0-True-mesh_device0-32]",
+        "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
+        "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
-        "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py::test_llama_decoder_inference[wormhole_b0-True-mesh_device0-4096]",
-        "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-4096]",
+        "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
+        "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
+        "model": "pytest models/demos/llama3/tests/test_llama_model.py -k full",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
         "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
@@ -567,10 +602,6 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
 
             # Update status and output based on output
             status, output, speed, pcc = parse_output_line(line, previous_line, entry["status"])
-            # Append input and output of parse_output_line to a log file
-            with open("parse_output_log.txt", "a") as parse_log:
-                parse_log.write(f"Input: {line.strip()}, Previous status: {entry['status']}\n")
-                parse_log.write(f"Output: Status: {status}, Output: {output}, Speed: {speed}, PCC: {pcc}\n\n")
             previous_line = line.strip()
             with entry["lock"]:
                 if status != entry["status"] or output or speed is not None or pcc is not None:
@@ -596,20 +627,12 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
         process.wait()
 
         with entry["lock"]:
-            if entry["status"] == "Terminating":
-                entry["status"] = "Resetting"
-                screen_needs_update.set()
-                reset_device(entry)
-                entry["status"] = "Cancelled"
-            elif process.returncode != 0:
-                entry["status"] = "Resetting"
-                screen_needs_update.set()
-                reset_device(entry)
-                entry["status"] = "Error"
-                # Try to find exception name in the log
+            if process.returncode != 0:
                 exception_name = find_exception_in_log(entry["log_file"].name)
-                if exception_name:
-                    entry["output"] = exception_name
+                entry["status"] = "Error"
+                entry["output"] = exception_name
+                reset_device_async(entry, screen_lock, screen_needs_update)
+                screen_needs_update.set()
             else:
                 entry["status"] = "Finished"
         entry["process"] = None
@@ -740,6 +763,12 @@ def find_exception_in_log(log_filename):
                 if len(parts) > 1:
                     exception_name = parts[1].strip()
                 break
+
+            # Check for lines starting with "E   "
+            e_match = re.match(r"E\s+(.+)", line)
+            if e_match:
+                exception_name = e_match.group(1).strip()
+                break
     return exception_name
 
 
@@ -754,14 +783,25 @@ def terminate_process_tree(pid):
         pass  # Process already terminated
 
 
-def reset_device(entry):
-    hostname = os.environ.get("HOSTNAME", "unknown")
-    config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
-    reset_cmd = ["tt-smi", "-r", config_file]
-    try:
-        subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except subprocess.CalledProcessError as e:
-        entry["output"] = f"Reset failed: {e.stderr.strip()}"
+def reset_device_async(entry, screen_lock, screen_needs_update):
+    def reset_thread():
+        hostname = os.environ.get("HOSTNAME", "unknown")
+        config_file = os.path.expanduser(f"~/.config/tenstorrent/reset_config_{hostname}.json")
+        reset_cmd = ["tt-smi", "-r", config_file]
+        try:
+            result = subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except subprocess.CalledProcessError as e:
+            pass
+        finally:
+            with entry["lock"]:
+                entry["status"] = previous_status
+            screen_needs_update.set()
+
+    previous_status = entry["status"]
+    entry["status"] = "Resetting"
+    reset_thread = threading.Thread(target=reset_thread)
+    reset_thread.daemon = True
+    reset_thread.start()
 
 
 def draw_help_bar(stdscr, current_line, num_input_fields, num_output_entries):
@@ -777,7 +817,9 @@ def get_help_text(current_line, num_input_fields, num_output_entries):
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
-        return "Enter: View log | Backspace/x: Cancel/remove entry | ↑↓: Navigate entries | Esc: Exit"
+        return (
+            "Enter: View log | Backspace/x: Cancel/remove entry | r: Restart entry | ↑↓: Navigate entries | Esc: Exit"
+        )
 
 
 if __name__ == "__main__":

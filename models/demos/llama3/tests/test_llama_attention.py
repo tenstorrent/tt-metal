@@ -10,7 +10,6 @@ from models.demos.llama3.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
-    prepare_inputs_ttnn,
     get_single_rot_mat,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
@@ -39,7 +38,8 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
 
     first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -88,17 +88,17 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-        attention_input = prepare_inputs_ttnn(
+        attention_input = model_args.prepare_inputs_ttnn_decode(
             tt_attention_input,
-            model_args.dim,
-            mesh_device,
-            memory_config=model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            force_replicated=True,
         )
 
-        tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat)
+        tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat, mode="decode")
         # multi-device attention module returns replicated output
+
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[0]
+            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, :, :, : model_args.dim]
             .view(1, -1, model_args.dim)
             .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
         )  # [ batch, seq, hidden_dim]

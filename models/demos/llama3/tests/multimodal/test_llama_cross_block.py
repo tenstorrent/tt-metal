@@ -75,9 +75,8 @@ def test_llama_cross_attention_transformer_block_inference(
 
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
-    tt_xattn_tokens = prepare_inputs_ttnn_prefill(
+    tt_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
-        mesh_device,
     )
 
     """
@@ -120,15 +119,13 @@ def test_llama_cross_attention_transformer_block_inference(
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
         if mode == "prefill":
-            tt_x = prepare_inputs_ttnn_prefill(
+            tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
-                mesh_device,
             )
         else:
-            tt_x = prepare_inputs_ttnn(
+            tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
-                model_args.dim,
-                mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
             )
 
         xattn_mask = torch.bernoulli(

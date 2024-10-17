@@ -9,7 +9,6 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     get_single_rot_mat,
-    prepare_inputs_ttnn,
     sample,
     encode_prompt_llama_instruct,
     HostEmbedding,
@@ -160,10 +159,9 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     for i in range(generation_length):
         current_pos = generation_start_pos + i
 
-        decode_input = prepare_inputs_ttnn(
+        decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            model_args.dim,
-            tt_model.mesh_device,
+            ttnn.L1_MEMORY_CONFIG,
         )
         current_pos_tensor = ttnn.from_torch(
             torch.tensor([current_pos] * batch),

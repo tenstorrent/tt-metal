@@ -22,17 +22,6 @@ from pathlib import Path
 from tqdm import tqdm
 
 
-def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
-    """Helper function based on logic used in reference model:
-    https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
-    """
-    hidden_dim = int(2 * (4 * dim) / 3)
-    if ffn_dim_multiplier is not None:
-        hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-    hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-    return hidden_dim
-
-
 class TtModelArgs:
     paged_attention_config = None
 
@@ -71,10 +60,11 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct/",
         "LLAMA3_2_1B_PARAMS": "models/demos/llama3/model_params/Llama3.2-1B-Instruct",
         "LLAMA3_2_3B_PARAMS": "models/demos/llama3/model_params/Llama3.2-3B-Instruct",
+        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct",
         "LLAMA3_2_11B_PARAMS": "models/demos/llama3/model_params/Llama3.2-11B-Vision-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/demos/llama3/model_params/Llama3.1-70B-Instruct",
     }
 
     def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
@@ -83,13 +73,6 @@ class TtModelArgs:
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
-        # A single device cannot fit the full 128k context length
-        if self.num_devices == 1:
-            self.max_seq_len = 8192 * 4  # 32k
-            self.kv_seq_len = 8192 * 4  # 32k
-            self.sliding_window = 8192 * 4  # 32k
-
-        # Default folder location for weights and cached files
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
@@ -149,7 +132,16 @@ class TtModelArgs:
 
         self.n_local_heads = self.n_heads // self.num_devices
 
-        self.n_local_heads = self.n_heads // self.num_devices
+        # Reduce full 128k context length for combinations with memory constraints
+        # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
+        # Default folder location for weights and cached files
+        # TODO Generalize for all llama3 weights
+        is_8b = self.dim == 4096 and self.n_layers == 32
+        is_70b = self.dim == 8192 and self.n_layers == 80
+        if self.num_devices == 1 and is_8b or is_70b:
+            self.max_seq_len = 8192 * 4  # 32k
+            self.kv_seq_len = 8192 * 4  # 32k
+            self.sliding_window = 8192 * 4  # 32k
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -231,30 +223,22 @@ class TtModelArgs:
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
-            # Update the existing configurations using the new class methods
-            self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.model_config["XQKV_DECODE_PROGCFG"] = self.dram_matmul_config(
-                m=self.tile_padded_batch_rows, k=self.dim, n=self.qkv_size // self.num_devices, grid_size=(4, 8)
-            )
-
             def find_largest_divisor(n, max_divisor=8):
                 for i in range(max_divisor, 0, -1):
                     if n % i == 0:
                         return i
                 return 1  # Fallback to 1 if no divisor found
 
-            divisor = find_largest_divisor(self.n_heads // self.num_devices)
-            grid_size_x = self.n_heads // self.num_devices // divisor
-            grid_size_y = (self.n_heads // self.num_devices) // grid_size_x
+            # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
-                grid_size_x * grid_size_y == self.n_heads // self.num_devices
-            ), f"Grid size mismatch: {grid_size_x} * {grid_size_y} != {self.n_heads // self.num_devices}"
-
+                self.n_heads % self.num_devices == 0,
+                f"n_heads must be divisible by num_devices: {self.n_heads} % {self.num_devices}",
+            )
             self.model_config["ATTN_OUTPUT_PROGCFG"] = self.dram_matmul_config(
                 m=self.tile_padded_batch_rows,
                 k=self.dim // self.num_devices,
                 n=self.dim,
-                grid_size=(grid_size_x, grid_size_y),
+                num_cores=self.n_heads // self.num_devices,
             )
 
             dense_out_core_grid_size = (8, 2)  # TODO: revisit num cores - use same num cores as rest of attention??
@@ -291,20 +275,6 @@ class TtModelArgs:
                 m=seq_len, k=self.hidden_dim, n=self.dim, grid_size=(8, 4)
             )
 
-            mlp_grid = lambda dim: (1 if dim // self.num_devices // self.tile_size < 16 else 2, 8)
-            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = self.dram_matmul_config(
-                m=self.tile_padded_batch_rows,
-                k=self.dim,
-                n=self.hidden_dim // self.num_devices,
-                grid_size=mlp_grid(self.dim),
-            )
-            self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = self.dram_matmul_config(
-                m=self.tile_padded_batch_rows,
-                k=self.hidden_dim // self.num_devices,
-                n=self.dim,
-                grid_size=mlp_grid(self.hidden_dim),
-            )
-
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 2048),
                 k=self.dim,
@@ -334,13 +304,14 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
-                in0_block_w=1,  # how much inner dim you take each time
+                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // 256
+                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(self.qkv_size / self.num_devices / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
@@ -428,7 +399,7 @@ class TtModelArgs:
             )
 
             # Width sharded
-            mlp_core_grid = ttnn.CoreGrid(y=mlp_grid(self.dim)[0], x=mlp_grid(self.dim)[1])
+            mlp_core_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
@@ -439,17 +410,47 @@ class TtModelArgs:
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=self.hidden_dim // self.num_devices,
+                num_cores=mlp_core_grid.num_cores,
+            )
 
-            attn_input_grid = ttnn.CoreGrid(y=4, x=8)
+            mlp2_core_grid = self.dram_shard_core_grid_for_k(self.hidden_dim // self.num_devices)
+            self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.hidden_dim // self.num_devices // mlp2_core_grid.num_cores,
+                ),
+                mlp2_core_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["DECODE_MLP_W2_PRG_CONFIG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.hidden_dim // self.num_devices,
+                n=self.dim,
+                num_cores=mlp2_core_grid.num_cores,
+            )
+
+            attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
                     self.tile_padded_batch_rows,
                     self.dim // attn_input_grid.num_cores,
-                ),  # Shard shape: [32, 128] -> 1 shard per core
+                ),
                 attn_input_grid,
                 ttnn.ShardStrategy.WIDTH,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["XQKV_DECODE_PROGCFG"] = self.dram_matmul_config(
+                m=self.tile_padded_batch_rows,
+                k=self.dim,
+                n=self.qkv_size // self.num_devices,
+                num_cores=attn_input_grid.num_cores,
             )
 
             # Vision model configs
@@ -547,38 +548,25 @@ class TtModelArgs:
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
-            norm_core_grid = ttnn.CoreGrid(x=8, y=4)
-            self.model_config["SHARDED_NORM_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
-                (
-                    self.tile_padded_batch_rows,
-                    self.dim // norm_core_grid.num_cores,
-                ),
-                norm_core_grid,
-                ttnn.ShardStrategy.WIDTH,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[norm_core_grid.x, norm_core_grid.y],
-                subblock_w=self.dim // norm_core_grid.num_cores // self.tile_size,
+                compute_with_storage_grid_size=[attn_input_grid.x, attn_input_grid.y],
+                subblock_w=self.dim // attn_input_grid.num_cores // self.tile_size,
                 block_h=self.tile_padded_batch_rows // self.tile_size,
-                block_w=self.dim // norm_core_grid.num_cores // self.tile_size,
+                block_w=self.dim // attn_input_grid.num_cores // self.tile_size,
                 inplace=False,
             )
-
-            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[self.lm_head_core_grid.x, self.lm_head_core_grid.y],
-                subblock_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
-                block_h=self.tile_padded_batch_rows // self.tile_size,
-                block_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
-                inplace=False,
-            )
-
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=[mlp_core_grid.x, mlp_core_grid.y],
                 subblock_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
                 block_h=self.tile_padded_batch_rows // self.tile_size,
                 block_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
+                inplace=False,
+            )
+            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[self.lm_head_core_grid.x, self.lm_head_core_grid.y],
+                subblock_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
+                block_h=self.tile_padded_batch_rows // self.tile_size,
+                block_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
                 inplace=False,
             )
 
@@ -598,12 +586,6 @@ class TtModelArgs:
                 ),
             )
 
-            # self.model_config["ATTN_ALL_GATHER_MATMUL_INPUT_MEMCFG"] = ttnn.MemoryConfig(
-            #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            #     ttnn.BufferType.L1,
-            #     ttnn.ShardSpec(num_to_core_range_set(self.max_batch_size), (32, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False),  # padded local heads
-            # )
-
             self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape]) if self.mesh_device else False
             self.is_multichip = self.num_devices > 1
 
@@ -612,7 +594,7 @@ class TtModelArgs:
             return False
         if all([dim > 1 for dim in self.mesh_device.shape]):  # 2D grid
             return True
-        elif self.dim >= 8192 and mode == "prefill":
+        elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 
@@ -622,6 +604,84 @@ class TtModelArgs:
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
         return None
+
+    def prepare_inputs_ttnn_decode(self, x, input_mem_cfg, force_replicated=False):
+        """
+        Prepare inputs for decode mode.
+        x: (batch, seq, dim)
+        """
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if force_replicated
+            else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+        )
+
+        if len(x.shape) == 3:
+            batch = x.shape[0]
+            seq_len = x.shape[1]
+            assert x.shape[2] == self.dim
+        elif len(x.shape) == 4:
+            seq_len = x.shape[0]
+            assert x.shape[1] == 1
+            batch = x.shape[2]
+            assert x.shape[3] == self.dim
+
+        assert seq_len == 1, "Only supporting decode mode"
+
+        # Support input on device
+        if torch.is_tensor(x):  # Input on host -> Use torch
+            x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, dim]
+            # Pad small batches to 32
+            if batch < 32:
+                zeros = torch.zeros(1, seq_len, 32, self.dim)
+                zeros[:, :, :batch, :] = x
+                x = zeros
+        elif len(x.shape) == 3:  # Input on device -> Use ttnn
+            x = ttnn.reshape(x, (batch, seq_len, 1, self.dim))  # [batch, seqlen, dim] -> [batch, seqlen, 1, dim]
+            x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, dim]
+        elif len(x.shape) == 4:
+            pass  # already in [seq_len, 1, batch, dim]
+
+        if torch.is_tensor(x):
+            x = ttnn.from_torch(
+                x,
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=input_mem_cfg,
+            )
+        else:  # Convert the row major layout from embedding back to tile layout
+            x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        return x
+
+    def prepare_inputs_ttnn_prefill(self, x_bsh, force_replicated=False):
+        """
+        Prepare inputs for prefill mode.
+        x: (batch, seq, hidden_dim)
+        B: batch (1)
+        S: sequence len
+        H: dim
+        """
+
+        x_1BSH = x_bsh.unsqueeze(0)
+
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if force_replicated
+            else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+        )
+
+        # input goes to DRAM
+        xs_1BSH = ttnn.from_torch(
+            x_1BSH,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        return xs_1BSH
 
     def _set_llama_params_from_dict(self, params):
         # Text params
@@ -781,15 +841,60 @@ class TtModelArgs:
             fuse_batch=fuse_batch,
         )
 
-    @staticmethod
+    def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
+        rows, cols = self.find_grid(k // self.tile_size)
+        return ttnn.CoreGrid(x=cols, y=rows)
+
+    def find_grid(self, N):
+        """
+        Find the number of rows and columns for a grid of cores such that
+        the total number of tiles N can be evenly divided among the cores.
+        Each core will have the same integer number of tiles.
+        The grid size is limited to a maximum of 2 rows and 8 columns.
+
+        Parameters:
+            N (int): Total number of tiles to be distributed.
+
+        Returns:
+            tuple: A tuple (rows, cols) representing the grid dimensions.
+
+        Raises:
+            AssertionError: If it's not possible to find such a grid configuration.
+        """
+        max_rows = 2
+        max_cols = 8  # Maximum number of rows or columns
+        max_cores = max_rows * max_cols  # Maximum number of cores (8x2 grid)
+
+        # Find all possible numbers of cores that divide N and are less than or equal to max_cores
+        possible_cores = [k for k in range(1, max_cores + 1) if N % k == 0]
+        possible_cores.sort(reverse=True)  # Start checking from the largest number of cores
+
+        for cores in possible_cores:
+            # Try to find a grid configuration with the current number of cores
+            for rows in range(1, max_rows + 1):
+                if cores % rows == 0:
+                    cols = cores // rows
+                    if cols <= max_cols:
+                        return rows, cols
+
+        # If no configuration is found, assert an error
+        raise AssertionError(
+            f"Cannot find a grid configuration for {N} tiles that evenly divides into {max_cores} cores of max size {max_rows}x{max_cols}."
+        )
+
     def dram_matmul_config(
-        m: int, k: int, n: int, grid_size: Tuple[int, int]
+        self, m: int, k: int, n: int, num_cores=None
     ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
+        if num_cores is None:
+            # Default to using 2 rows of 8 cores as this is fastest, but use 1 row if K is too small
+            # Warning: this does not handle the case in which K is too large for 2 rows of 8 cores
+            # In that case override grid_size or update this logic to do so
+            num_cores = self.dram_shard_core_grid_for_k(k).num_cores
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=math.ceil(k / (32 * grid_size[0] * grid_size[1])),  # k/32/16
-            per_core_M=math.ceil(m / 32),
-            per_core_N=math.ceil(n / (32 * grid_size[0] * grid_size[1])),
+            in0_block_w=math.ceil(k / (self.tile_size * num_cores)),
+            per_core_M=math.ceil(m / self.tile_size),
+            per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=None,
         )
 
@@ -809,7 +914,7 @@ def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
 def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
 
-    logger.info(f"Loading {len(checkpoints)} checkpoint files")
+    (f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
         if n_layers:
             # Layer range is in the file name, like layers_start-end.pth

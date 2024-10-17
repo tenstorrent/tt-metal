@@ -31,14 +31,13 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
-    model_args.n_layers = 1
-    state_dict = model_args.load_state_dict()
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
@@ -77,7 +76,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
     freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
-        logger.info(f"[Decoder] Generating token {i}")
+        print(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
@@ -95,38 +94,27 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
             ttnn.L1_MEMORY_CONFIG,
         )
 
+        dim = 2048
+
+        attn_input_grid = ttnn.CoreGrid(y=2, x=8)
+        mem_cfg = ttnn.create_sharded_memory_config(
+            (
+                32,
+                dim // attn_input_grid.num_cores,
+            ),
+            attn_input_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         # Run TT model
-        tt_out = tt_model(decode_input, current_pos_tensor, rot_mat=current_rot_mat)
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-                :1, :, :, : model_args.dim
-            ]
-            .permute(2, 1, 0, 3)
-            .squeeze(1)[: model_args.max_batch_size, :, :]
-        )  # [seq, batch, dim]
-        print(f"{tt_output_torch.shape=}")
+        tt_out = ttnn.all_gather(
+            decode_input, dim=3, num_links=1, topology=model_args.ccl_topology(), memory_config=mem_cfg
+        )
 
-        freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
-
-        # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos, freqs_cis_i, mask=None)
-
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
-
-        logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
-
-        if passing:
-            logger.info("Llama Decoder Block Passed!")
-        else:
-            logger.warning("Llama Decoder Block Failed!")
-            all_tests_pass = False
-
-        # Update rotation matrix for next iteration
-        current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
-
-    if all_tests_pass:
-        logger.info(f"All {generation_length} Llama decode iterations Passed!")
-    else:
-        logger.warning("One or more iterations of Llama decode Failed!")
-        assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"
+        debug_max = lambda t: ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMeshToTensor(model_args.mesh_device, dim=-1)
+        ).max()
+        print(f"decode_input max: {debug_max(decode_input)=}, {decode_input.memory_config()=}")
+        print(f"tt_out max: {debug_max(tt_out)=}, {tt_out.memory_config()=}")

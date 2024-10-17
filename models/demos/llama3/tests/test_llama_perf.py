@@ -9,7 +9,6 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn,
     sample,
     HostEmbedding,
     get_single_rot_mat,
@@ -61,25 +60,8 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     profiler.clear()
 
     profiler.start("weight_loading")
-    if model_args.is_vision():
-        state_dict_prefix = "text_model."
-    else:
-        state_dict_prefix = ""
+    state_dict = model_args.load_state_dict()
 
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
-    state_dict = {
-        k: v
-        for k, v in state_dict.items()
-        if (
-            any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k
-            in [
-                state_dict_prefix + "tok_embeddings.weight",
-                state_dict_prefix + "norm.weight",
-                state_dict_prefix + "output.weight",
-            ]
-        )
-    }
     profiler.end("weight_loading")
 
     prompts = ["This is a test"] * model_args.max_batch_size
@@ -167,22 +149,21 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
 
-    # Initialize tt_out_tok with the first token
-    tt_out_tok = ttnn.from_torch(
-        torch.nn.functional.pad(
-            encoded_prompts_tensor[:, 0].unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0
-        ),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.uint32,
-    )
+    for i in range(generation_length):
+        current_pos = generation_start_pos + i
+        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
+        tt_decode_input = pt_decode_input
+        decode_input = model_args.prepare_inputs_ttnn_decode(
+            tt_decode_input,
+            ttnn.L1_MEMORY_CONFIG,
+        )
 
-    current_pos = ttnn.from_torch(
-        torch.tensor([generation_start_pos] * batch),
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        dtype=ttnn.int32,
-    )
+        current_pos_tensor = ttnn.from_torch(
+            torch.tensor([current_pos] * batch),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.int32,
+        )
 
     for i in range(generation_length):
         # Run TT model

@@ -10,10 +10,6 @@ import ttnn
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
-)
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -83,9 +79,8 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
 
     pt_xattn_tokens = (torch.rand(batch, vision_seq_len, dim) * 2) - 1
     tt_xattn_tokens = pt_xattn_tokens.clone()
-    tt_xattn_tokens = prepare_inputs_ttnn_prefill(
+    tt_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
-        mesh_device,
     )
 
     """
@@ -128,17 +123,14 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
         if mode == "prefill":
-            tt_x = prepare_inputs_ttnn_prefill(
+            tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
-                mesh_device,
             )
         else:
-            tt_x = prepare_inputs_ttnn(
+            tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
-                model_args.dim,
-                mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
             )
-
         xattn_mask = torch.bernoulli(
             torch.full(
                 (

@@ -1,10 +1,10 @@
 import math
-import ttnn
 import torch
-import torch.nn as nn
+import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class LMHead(nn.Module):
+class LMHead(LightweightModule):
     def __init__(
         self,
         args,
@@ -75,7 +75,7 @@ class LMHead(nn.Module):
                 args.tile_padded_batch_rows,
                 args.dim,
                 split_size,
-                (args.lm_head_core_grid.y, args.lm_head_core_grid.x),
+                args.lm_head_core_grid.num_cores,
             )
             for split_size in split_sizes
         ]

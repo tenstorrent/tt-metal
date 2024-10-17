@@ -359,7 +359,7 @@ class TtLlamaAttention(LightweightModule):
                 scatter_dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(dense_out)
             return dense_out_reduced
@@ -503,16 +503,7 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
 
-        # all gather matmul
-        if self.is_multichip and self.ccl_topology == ttnn.Topology.Ring:
-            attn_output_11SH = ttnn.all_gather(
-                attn_output_11SH,
-                dim=3,
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
+        # TODO All-gather matmul fused in prefill has issues when we use the batch dim. Should be more efficient to do reduce scatter instead.
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -525,7 +516,8 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        if self.is_multichip and not self.ccl_topology == ttnn.Topology.Ring:
+        # Reduce-scatter
+        if self.is_multichip:
             dense_out_reduced = ttnn.reduce_scatter(
                 output_11SH,
                 scatter_dim=3,
