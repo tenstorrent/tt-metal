@@ -1445,11 +1445,11 @@ TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnEth) {
 }
 
 TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
+    create_device(DispatchCoreType::WORKER);
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
 
-    create_device(DispatchCoreType::WORKER);
     CoreRangeSet eth_cores = local_test_functions::get_all_active_eth_cores(device_);
 
     CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
@@ -1498,13 +1498,12 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensix) {
 }
 
 TEST_F(RandomProgramFixture, TestRandomizedProgramsOnEth) {
+    create_device(DispatchCoreType::WORKER);
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
 
-    create_device(DispatchCoreType::ETH);
     CoreRangeSet cores = local_test_functions::get_all_active_eth_cores(device_);
-    std::cout << cores.str() << std::endl;
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
@@ -1526,17 +1525,15 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnEth) {
 }
 
 TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
+    create_device(DispatchCoreType::WORKER);
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
 
-    create_device(DispatchCoreType::WORKER);
     CoreRangeSet eth_cores = local_test_functions::get_all_active_eth_cores(device_);
-    std::cout << "eth cores: " << eth_cores.str() << std::endl;
 
     CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange tensix_cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
-    std::cout << "tensix cores: " << tensix_cores.str() << std::endl;
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
