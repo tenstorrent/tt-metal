@@ -58,7 +58,7 @@ def test_ring_reduce_scatter_post_commit(
     use_program_cache,
     function_level_defaults,
     enable_async,
-    num_iters=1,
+    num_iters=5,
 ):
     run_reduce_scatter_test(
         n300_mesh_device,
