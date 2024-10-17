@@ -34,7 +34,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    output_tensor_mesh = ttnn.all_reduce(
+    output_tensor_mesh = ttnn.experimental.all_reduce(
         input_tensor_mesh,
         math_op=math_op,
         num_links=num_links,
@@ -102,19 +102,18 @@ def run_all_reduce_test(
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
     # Generate input tensors
-    canonical_input_shape = per_chip_output_shape.copy()
-    canonical_input_shape[0] *= num_devices
 
-    input_tensor = torch.rand(canonical_input_shape).bfloat16()
-
-    input_tensors = torch.chunk(input_tensor, num_devices)
     tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
+    input_tensors = []
+    for i in range(num_devices):
+        input_tensor = torch.rand(per_chip_output_shape).bfloat16()
         tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype)
+            ttnn.Tensor(input_tensor, input_dtype)
             .to(layout)
             .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), mem_config)
         )
+        input_tensors.append(input_tensor)
+    unchunked_input_tensor = torch.cat(input_tensors)
 
     assert len(tt_input_tensors) == num_devices
 
@@ -135,7 +134,7 @@ def run_all_reduce_test(
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
-    golden_canonical_out_tensor = torch.sum(input_tensor).expand(1, 1, 32, 32)
+    golden_canonical_out_tensor = torch.sum(unchunked_input_tensor).expand(1, 1, 32, 32)
 
     # Compare
     mismatch = False
