@@ -94,6 +94,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    bool exp_approx_mode = program_config.has_value() ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true) : true;
 
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();
@@ -523,6 +524,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
     // Compute
     auto compute_kernels_id = CreateKernel(
