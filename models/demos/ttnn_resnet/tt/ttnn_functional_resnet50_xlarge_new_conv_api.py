@@ -75,8 +75,8 @@ def ResnetLinear(
     """
 
     matmul_config = hardcoded_matmul_config_linear[batch_size]
-    weight = weight.to_rank(4)
-    bias = bias.to_rank(4)
+    weight = weight.reshape(weight.shape.to_rank(4))
+    bias = bias.reshape(bias.shape.to_rank(4))
 
     def linear_(act):
         output = ttnn.linear(
