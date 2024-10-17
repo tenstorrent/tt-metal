@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 #include "debug/dprint.h"
 
@@ -39,79 +40,86 @@ void noc_async_read_tile_dram_sharded(uint32_t src_addr, uint32_t dest_addr, uin
 void kernel_main() {
     constexpr uint32_t input_addr = get_compile_time_arg_val(0);
     constexpr uint32_t input_start_tile_id = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t block_num_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t noc = get_compile_time_arg_val(2);
+    constexpr uint32_t num_layers = get_compile_time_arg_val(3);
 
-    constexpr uint32_t block_size_bytes = page_size * num_pages;
-
-    const uint32_t bank_id = get_arg_val<uint32_t>(0);
-    const uint32_t vc = get_arg_val<uint32_t>(1);
+    uint32_t rt_args_idx = 0;
+    const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    tt_l1_ptr uint32_t* num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    tt_l1_ptr uint32_t* num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    tt_l1_ptr uint32_t* block_num_tiles = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
 
     constexpr uint32_t cb_id = 0;
-
-    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<page_size, true>(input_addr, bank_id, vc);
-    uint32_t src_read_addr = 0;
-
-#ifdef ARCH_GRAYSKULL
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        // Operand 1
-        cb_reserve_back(cb_id, block_num_tiles);
-        auto l1_write_addr = get_write_ptr(cb_id);
-
-        for (uint32_t h = 0; h < num_pages; ++h) {
-            noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
-            src_read_addr += page_size;
-            l1_write_addr += page_size;
-        }
-
-        noc_async_read_barrier();
-        cb_push_back(cb_id, block_num_tiles);
-    }
-#else
     constexpr uint32_t total_num_blocks_in_buffer = 3;
-    constexpr uint32_t total_num_trid = 4;
-    uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
-    uint32_t curr_block_trid = 1;
-    uint32_t block_trid_to_wait = 1;
 
-    cb_reserve_back(cb_id, block_num_tiles);
-    uint32_t l1_write_addr_offset = 0;
-    uint32_t l1_write_addr_start = get_write_ptr(cb_id);
-    uint32_t l1_write_addr = l1_write_addr_start;
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
+    uint32_t src_read_addr = 0;
+    uint32_t src_read_addr_offset_bytes = 0;
 
-        for (uint32_t h = 0; h < num_pages; ++h) {
-            noc_async_read_tile_dram_sharded_with_state_with_trid(
-                src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
-            src_read_addr += page_size;
-            l1_write_addr += page_size;
+    for (uint32_t l = 0; l < num_layers; ++l) {
+        uint32_t curr_page_size = page_size[l];
+        uint32_t curr_num_pages = num_pages[l];
+        uint32_t curr_num_blocks = num_blocks[l];
+        uint32_t curr_block_num_tiles = block_num_tiles[l];
+
+        uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
+        uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
+
+        // DPRINT << "curr_page_size   " << curr_page_size << ENDL();
+        // DPRINT << "curr_num_pages   "<<curr_num_pages << ENDL();
+        // DPRINT << "curr_num_blocks    "  << curr_num_blocks << ENDL();
+        // DPRINT << "curr_block_num_tiles    " <<  curr_block_num_tiles<< ENDL();
+        // DPRINT << "curr_block_size_bytes    " <<  curr_block_size_bytes<< ENDL();
+        // DPRINT << "curr_layer_size_bytes    " <<  curr_layer_size_bytes<< ENDL();
+
+        uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
+        src_read_addr = src_read_addr_offset_bytes;
+
+        uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
+        uint32_t curr_block_trid = 1;
+        uint32_t block_trid_to_wait = 1;
+
+        cb_reserve_back(cb_id, curr_block_num_tiles);
+        uint32_t l1_write_addr_offset = 0;
+        uint32_t l1_write_addr_start = get_write_ptr(cb_id);
+        uint32_t l1_write_addr = l1_write_addr_start;
+        for (uint32_t block = 0; block < curr_num_blocks; ++block) {
+            noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
+
+            for (uint32_t h = 0; h < curr_num_pages; ++h) {
+                noc_async_read_tile_dram_sharded_with_state_with_trid(
+                    src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
+                src_read_addr += curr_page_size;
+                l1_write_addr += curr_page_size;
+            }
+
+            if (num_free_blocks_in_buffer == 2) {
+                noc_async_read_barrier_with_trid(block_trid_to_wait);
+                cb_push_back(cb_id, curr_block_num_tiles);
+                // wait for next block trid
+                block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
+                // reserve for next block
+                cb_reserve_back(cb_id, curr_block_num_tiles * 2);
+            } else {
+                num_free_blocks_in_buffer -= 1;
+            }
+
+            if (curr_block_trid == total_num_blocks_in_buffer) {
+                l1_write_addr_offset = 0;
+                curr_block_trid = 1;
+            } else {
+                l1_write_addr_offset += curr_block_size_bytes;
+                curr_block_trid += 1;
+            }
+            l1_write_addr = l1_write_addr_start + l1_write_addr_offset;
         }
+        // last block to wait
+        noc_async_read_barrier_with_trid(block_trid_to_wait);
+        cb_push_back(cb_id, curr_block_num_tiles);
 
-        if (num_free_blocks_in_buffer == 2) {
-            noc_async_read_barrier_with_trid(block_trid_to_wait);
-            cb_push_back(cb_id, block_num_tiles);
-            // wait for next block trid
-            block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
-            // reserve for next block
-            cb_reserve_back(cb_id, block_num_tiles * 2);
-        } else {
-            num_free_blocks_in_buffer -= 1;
-        }
+        src_read_addr_offset_bytes += curr_layer_size_bytes;
 
-        if (curr_block_trid == total_num_blocks_in_buffer) {
-            l1_write_addr_offset = 0;
-            curr_block_trid = 1;
-        } else {
-            l1_write_addr_offset += block_size_bytes;
-            curr_block_trid += 1;
-        }
-        l1_write_addr = l1_write_addr_start + l1_write_addr_offset;
     }
-    // last block to wait
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
-    cb_push_back(cb_id, block_num_tiles);
-#endif
+
 }
