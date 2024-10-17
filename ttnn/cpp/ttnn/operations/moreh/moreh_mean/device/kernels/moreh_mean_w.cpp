@@ -51,7 +51,7 @@ void MAIN {
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     cb_wait_front(cb_input, onetile);
 #if defined FP32_DEST_ACC_EN
-                    unpack_reconfig_data_format(cb_input, cb_scaler);
+                    reconfig_data_format(cb_input, cb_scaler);
 #endif
                     mm_init_short(cb_input, cb_scaler, false);
                     matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
@@ -100,7 +100,7 @@ void MAIN {
             }
 
 #if defined FP32_DEST_ACC_EN
-            unpack_reconfig_data_format(cb_input, cb_scaler);
+            reconfig_data_format(cb_input, cb_scaler);
 #endif
             mm_init_short(cb_input, cb_scaler, false);
             matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);

@@ -11,32 +11,7 @@ from models.utility_functions import comp_allclose
 from loguru import logger
 
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
-
-
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
-    if npu_tensor is None:
-        return None
-    if not isinstance(shape, (list, tuple)):
-        shape = tuple(shape)
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(shape).to_torch()
-    return cpu_tensor
-
-
-def to_npu(
-    cpu_tensor,
-    device,
-    *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
-    shape=None,
-):
-    if cpu_tensor is None:
-        return None
-    if shape is not None:
-        cpu_tensor = cpu_tensor.view(shape)
-    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    return npu_tensor
+from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH, to_ttnn, to_torch
 
 
 def torch_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True):
@@ -94,16 +69,16 @@ def tt_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_m
     gamma_beta_shape = [1, 1, 1, C]
     mean_rstd_shape = [1, 1, N, num_groups]
 
-    npu_input = to_npu(input, device)
-    npu_gamma = to_npu(gamma, device, shape=gamma_beta_shape)
-    npu_beta = to_npu(beta, device, shape=gamma_beta_shape)
+    npu_input = to_ttnn(input, device=device)
+    npu_gamma = to_ttnn(gamma, device=device, shape=gamma_beta_shape)
+    npu_beta = to_ttnn(beta, device=device, shape=gamma_beta_shape)
 
     npu_mean = npu_rstd = None
     if compute_mean_rstd:
         npu_mean = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
-        npu_mean = to_npu(npu_mean, device)
+        npu_mean = to_ttnn(npu_mean, device=device)
         npu_rstd = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
-        npu_rstd = to_npu(npu_rstd, device)
+        npu_rstd = to_ttnn(npu_rstd, device=device)
 
     # Forward
     npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.group_norm(
@@ -117,12 +92,12 @@ def tt_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_m
         rstd=npu_rstd,
     )
 
-    tt_output = to_cpu(npu_output, input.shape)
+    tt_output = to_torch(npu_output, shape=input.shape)
 
     tt_mean = tt_rstd = None
     if compute_mean_rstd:
-        tt_mean = to_cpu(npu_mean, mean_rstd_shape).view(N, num_groups)
-        tt_rstd = to_cpu(npu_rstd, mean_rstd_shape).view(N, num_groups)
+        tt_mean = to_torch(npu_mean, shape=mean_rstd_shape).view(N, num_groups)
+        tt_rstd = to_torch(npu_rstd, shape=mean_rstd_shape).view(N, num_groups)
 
     return tt_output, tt_mean, tt_rstd
 
@@ -148,26 +123,26 @@ def tt_group_norm_backward(
     var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
     rstd = (var + eps).rsqrt()
 
-    npu_output_grad = to_npu(output_grad, device)
-    npu_input = to_npu(input, device)
-    npu_mean = to_npu(mean, device, shape=mean_rstd_shape)
-    npu_rstd = to_npu(rstd, device, shape=mean_rstd_shape)
-    npu_gamma = to_npu(gamma, device, shape=gamma_beta_shape)
+    npu_output_grad = to_ttnn(output_grad, device=device)
+    npu_input = to_ttnn(input, device=device)
+    npu_mean = to_ttnn(mean, device=device, shape=mean_rstd_shape)
+    npu_rstd = to_ttnn(rstd, device=device, shape=mean_rstd_shape)
+    npu_gamma = to_ttnn(gamma, device=device, shape=gamma_beta_shape)
 
     npu_dx = None
     if input_requires_grad:
         npu_dx = torch.empty(input.shape, dtype=torch.bfloat16)
-        npu_dx = to_npu(npu_dx, device)
+        npu_dx = to_ttnn(npu_dx, device=device)
 
     npu_dg = None
     if gamma_requires_grad:
         npu_dg = torch.empty(gamma_beta_shape, dtype=torch.bfloat16)
-        npu_dg = to_npu(npu_dg, device)
+        npu_dg = to_ttnn(npu_dg, device=device)
 
     npu_db = None
     if beta_requires_grad:
         npu_db = torch.empty(gamma_beta_shape, dtype=torch.bfloat16)
-        npu_db = to_npu(npu_db, device)
+        npu_db = to_ttnn(npu_db, device=device)
 
     # Backward
     npu_dx, npu_dg, npu_db = ttnn.operations.moreh.group_norm_backward(
@@ -183,13 +158,13 @@ def tt_group_norm_backward(
         beta_grad=npu_db,
     )
 
-    tt_input_grad = to_cpu(npu_dx, input.shape)
+    tt_input_grad = to_torch(npu_dx, shape=input.shape)
 
     tt_gamma_grad = tt_beta_grad = None
     if npu_dg is not None:
-        tt_gamma_grad = to_cpu(npu_dg, gamma_beta_shape).view(C)
+        tt_gamma_grad = to_torch(npu_dg, shape=gamma_beta_shape).view(C)
     if npu_db is not None:
-        tt_beta_grad = to_cpu(npu_db, gamma_beta_shape).view(C)
+        tt_beta_grad = to_torch(npu_db, shape=gamma_beta_shape).view(C)
 
     return tt_input_grad, tt_gamma_grad, tt_beta_grad
 
@@ -349,10 +324,16 @@ def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, d
     ],
 )
 def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device, use_program_cache):
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 def run_test_moreh_group_norm_backward(
@@ -550,9 +531,15 @@ def test_moreh_group_norm_backward_callback(
     device,
     use_program_cache,
 ):
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_test_moreh_group_norm_backward(
             N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
         )
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

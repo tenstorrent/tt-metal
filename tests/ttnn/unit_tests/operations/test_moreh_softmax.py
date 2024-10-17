@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_npu,
+    to_ttnn,
 )
 
 
@@ -343,7 +343,7 @@ def test_softmax_callback(shape_dim_strategy, device, use_program_cache):
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
 
     assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
@@ -385,7 +385,7 @@ def test_softmax_backward_callback(shape_dim_strategy, device, use_program_cache
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
 
     assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
     tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)

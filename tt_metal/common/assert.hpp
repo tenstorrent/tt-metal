@@ -154,7 +154,7 @@ void tt_assert(
     do {                                                                                                    \
         if (not(condition)) [[unlikely]]                                                                    \
             tt::assert::tt_assert(__FILE__, __LINE__, "TT_ASSERT", (condition), #condition, ##__VA_ARGS__); \
-    } while (0)
+    } while (0) // NOLINT(cppcoreguidelines-macro-usage)
 #endif
 #else
 #define TT_ASSERT(condition, ...)
@@ -171,5 +171,5 @@ void tt_assert(
             tt::assert::tt_throw(__FILE__, __LINE__, "TT_FATAL", #condition, message, ##__VA_ARGS__); \
             __builtin_unreachable();                                                                  \
         }                                                                                             \
-    } while (0)
+    } while (0) // NOLINT(cppcoreguidelines-macro-usage)
 #endif

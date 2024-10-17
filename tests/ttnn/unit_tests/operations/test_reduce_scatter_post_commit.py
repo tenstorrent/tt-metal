@@ -6,8 +6,8 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -81,7 +81,7 @@ def run_with_trace(
 
 
 def run_reduce_scatter_test(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     scatter_dim,
@@ -96,8 +96,10 @@ def run_reduce_scatter_test(
     num_iters=1,
     topology=ttnn.Topology.Ring,
 ):
-    if len(t3k_mesh_device.get_device_ids()) != 8:
-        pytest.skip("Not T3000!")
+    if len(mesh_device.get_device_ids()) < num_devices:
+        pytest.skip(
+            f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
+        )
 
     debug = False
 
@@ -107,9 +109,11 @@ def run_reduce_scatter_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    t3k_mesh_device.enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
+
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, scatter_dim: {scatter_dim}")
 
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
@@ -121,14 +125,13 @@ def run_reduce_scatter_test(
         torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
         for _ in range(num_devices)
     ]
-
     if debug:
         input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
     for i, canonical_input_tensor in enumerate(input_tensors):
         tt_input_tensors.append(
             ttnn.Tensor(canonical_input_tensor, input_dtype)
             .to(layout)
-            .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), mem_config)
+            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
         )
 
     assert len(tt_input_tensors) == num_devices
@@ -145,10 +148,11 @@ def run_reduce_scatter_test(
             topology=topology,
         )
 
-        for device_id in t3k_mesh_device.get_device_ids():
-            ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+        for device_id in mesh_device.get_device_ids():
+            ttnn.synchronize_device(mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
+    # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
     # Compute golden
     # TODO: Make it model how reduce scatter actually works for numerical correctness/ordering
     golden_canonical_out_tensor = torch.zeros(canonical_input_shape).bfloat16()
@@ -167,7 +171,7 @@ def run_reduce_scatter_test(
         eq, output = comp_pcc(tt_output_tensor, golden_output_tensors[i])
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -184,6 +188,7 @@ def run_reduce_scatter_test(
 
 
 # ~2:45 extra time in the current state
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -252,6 +257,7 @@ def test_ring_reduce_scatter_post_commit(
 
 
 # ~2:45 extra time in the current state
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -263,6 +269,10 @@ def test_ring_reduce_scatter_post_commit(
     "per_chip_output_shape, scatter_dim, layout",
     [
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
+        ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -333,8 +343,10 @@ def run_reduce_scatter_sharded_test(
     n_buffer=None,
     trace_mode=False,
 ):
-    if len(t3k_mesh_device.get_device_ids()) != 8:
-        pytest.skip("Not T3000!")
+    if len(t3k_mesh_device.get_device_ids()) < num_devices:
+        pytest.skip(
+            f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(t3k_mesh_device.get_device_ids())}"
+        )
 
     debug = False
 
@@ -437,6 +449,7 @@ def run_reduce_scatter_sharded_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -529,6 +542,7 @@ def test_width_sharded_reduce_scatter_post_commit(
     )
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.skip("Hangs")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
@@ -603,6 +617,7 @@ def test_height_sharded_reduce_scatter_post_commit(
     )
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

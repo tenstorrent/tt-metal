@@ -33,8 +33,8 @@
 #define MEM_L1_SIZE (1464 * 1024)
 
 #define MEM_ETH_BASE 0x0
-// -32 for ETH barrier, see comment in eth_l1_address_map
-#define MEM_ETH_SIZE (512 * 1024 - 32)
+// Top 64K is reserved for syseng
+#define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
 
 #define MEM_LOCAL_BASE 0xFFB00000
 #define MEM_BRISC_LOCAL_SIZE (8 * 1024)
@@ -55,7 +55,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE (5 * 4 * 512 + 4 * 32 + 1600 + 160)
+#define MEM_MAILBOX_SIZE 12256
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -105,13 +105,12 @@
 #define MEM_IERISC_FIRMWARE_SIZE (24 * 1024)
 #define MEM_IERISC_RESERVED1 0
 #define MEM_IERISC_RESERVED1_SIZE 1024
-#define MEM_IERISC_MAILBOX_BASE (MEM_IERISC_RESERVED1 + MEM_IERISC_RESERVED1_SIZE)
 // TODO: reduce this when mailbox sizes are core type aware for some members (eg watcher/dprint)
-#define MEM_IERISC_MAILBOX_SIZE 3104
+// TODO: also, move into gap above in the reserved area
+#define MEM_IERISC_MAILBOX_BASE (MEM_IERISC_RESERVED1 + MEM_IERISC_RESERVED1_SIZE)
+#define MEM_IERISC_MAILBOX_SIZE 3232
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
-#define MEM_IERISC_RESERVED2 4128
-#define MEM_IERISC_RESERVED2_SIZE 4064
-#define MEM_IERISC_FIRMWARE_BASE (MEM_IERISC_RESERVED2 + MEM_IERISC_RESERVED2_SIZE)
+#define MEM_IERISC_FIRMWARE_BASE (MEM_IERISC_MAILBOX_END)
 #define MEM_IERISC_MAP_END (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
 #define MEM_IERISC_STACK_SIZE 1024

@@ -4,6 +4,7 @@
 
 from loguru import logger
 import os
+import pytest
 import torch
 import torchvision
 
@@ -15,7 +16,6 @@ from models.utility_functions import (
     is_wormhole_b0,
     is_grayskull,
     divup,
-    _nearest_y,
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -166,9 +166,6 @@ class ResNet50TestInfra:
         use_pretrained_weight,
         dealloc_input,
         final_output_mem_config,
-        inputs_mesh_mapper=None,
-        weights_mesh_mapper=None,
-        output_mesh_composer=None,
         model_location_generator=None,
     ):
         super().__init__()
@@ -182,12 +179,17 @@ class ResNet50TestInfra:
         self.math_fidelity = math_fidelity
         self.dealloc_input = dealloc_input
         self.final_output_mem_config = final_output_mem_config
-        self.inputs_mesh_mapper = inputs_mesh_mapper
-        self.weights_mesh_mapper = weights_mesh_mapper
-        self.output_mesh_composer = output_mesh_composer
+        self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
+
+        if batch_size <= 2:
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        elif batch_size == 8:
+            pytest.skip("Skipping batch size 8 due to memory config issue")
+        elif is_wormhole_b0() and batch_size == 20:
+            pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
 
         torch_model = (
             load_resnet50_model(model_location_generator).eval()
@@ -231,11 +233,22 @@ class ResNet50TestInfra:
             stride=self.resnet50_first_conv_stride,
             dealloc_input=dealloc_input,
             final_output_mem_config=final_output_mem_config,
-            mesh_mapper=weights_mesh_mapper,
         )
         self.ops_parallel_config = {}
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+    def get_mesh_mappers(self, device):
+        is_mesh_device = isinstance(device, ttnn.MeshDevice)
+        if is_mesh_device:
+            inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+            output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+        else:
+            inputs_mesh_mapper = None
+            weights_mesh_mapper = None
+            output_mesh_composer = None
+        return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
@@ -262,15 +275,13 @@ class ResNet50TestInfra:
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mesh_mapper
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
         )
         return tt_inputs_host, input_mem_config
 
-    def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+    def setup_dram_sharded_input(self, device, torch_input_tensor=None):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(
-            device, torch_input_tensor, mesh_mapper=mesh_mapper, mesh_composer=mesh_composer
-        )
+        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device, torch_input_tensor)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet(
@@ -336,9 +347,6 @@ def create_test_infra(
     use_pretrained_weight=True,
     dealloc_input=True,
     final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
-    inputs_mesh_mapper=None,
-    weights_mesh_mapper=None,
-    output_mesh_composer=None,
     model_location_generator=None,
 ):
     return ResNet50TestInfra(
@@ -350,8 +358,5 @@ def create_test_infra(
         use_pretrained_weight,
         dealloc_input,
         final_output_mem_config,
-        inputs_mesh_mapper,
-        weights_mesh_mapper,
-        output_mesh_composer,
         model_location_generator,
     )

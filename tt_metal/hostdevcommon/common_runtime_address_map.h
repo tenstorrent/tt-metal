@@ -8,26 +8,16 @@
 #include "common_values.hpp"
 #include "dev_mem_map.h"
 #include "noc/noc_parameters.h"
-#include "hostdevcommon/profiler_common.h"
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.
 */
-
-// TODO: move these out of the memory map into profiler code
-constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
-constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC = kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT +  kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT + kernel_profiler::PROFILER_L1_OP_MIN_OPTIONAL_MARKER_COUNT) * PROFILER_OP_SUPPORT_COUNT;
-constexpr static std::uint32_t PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC = PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * sizeof(uint32_t);
-
-static_assert (PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
 
 // Kernel config buffer is WIP
 // Size is presently based on the old sizes of the RTAs + CB config + Sems
 // plus some extra space freed up in the mem map
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = MEM_MAP_END;
 constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128 + 512;
-
-constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = MEM_IERISC_MAP_END;
 
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;

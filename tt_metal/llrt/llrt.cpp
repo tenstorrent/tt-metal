@@ -51,6 +51,8 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
       lock.unlock();
       auto *ptr = new ll_api::memory(path);
 
+      // TODO: pass pack_spans into reader, generate text/data sizes
+      // from segment sizes and pack there
       if (pack_spans == PackSpans::PACK) {
           uint64_t data_start = MEM_LOCAL_BASE;
           uint64_t text_start = processor_to_fw_base_addr[riscv_id];
@@ -69,63 +71,6 @@ ll_api::memory get_risc_binary(string const &path, uint32_t riscv_id, PackSpans 
     }
 
     return *slot->second.get();
-}
-
-// Return the code size in 16 byte units
-// This matches what the fw needs for datamovement
-// and...squeezes more data into the launch message (2^20=1M)
-uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
-
-    uint64_t range_min, range_max;
-    switch (riscv_id) {
-        case 0:
-            range_min = MEM_BRISC_FIRMWARE_BASE;
-            range_max = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
-            break;
-        case 1:
-            range_min = MEM_NCRISC_FIRMWARE_BASE;
-            range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
-            break;
-        case 2:
-            range_min = MEM_TRISC0_FIRMWARE_BASE;
-            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
-            break;
-        case 3:
-            range_min = MEM_TRISC1_FIRMWARE_BASE;
-            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
-            break;
-        case 4:
-            range_min = MEM_TRISC2_FIRMWARE_BASE;
-            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
-            break;
-        case 5:
-            range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::FIRMWARE_BASE + eth_l1_mem::address_map::FIRMWARE_SIZE;
-            break;
-        case 6:
-            range_min = MEM_IERISC_FIRMWARE_BASE;
-            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
-            break;
-        default: TT_THROW("Bad riscv_id: {}", riscv_id);
-    }
-
-    uint64_t min = std::numeric_limits<decltype(min)>::max();
-    uint64_t max = 0;
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-
-        uint32_t len_bytes = len_words * sizeof(uint32_t);
-        // Only use the addresses within the firmware code range
-        if (addr >= range_min && addr + len_bytes <= range_max) {
-            if (addr < min) {
-                min = addr;
-            }
-            if (addr + len_bytes > max) {
-                max = addr + len_bytes;
-            }
-        }
-    });
-
-    return (uint16_t)((max - min + 15) >> 4);
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -311,6 +256,7 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
+    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();

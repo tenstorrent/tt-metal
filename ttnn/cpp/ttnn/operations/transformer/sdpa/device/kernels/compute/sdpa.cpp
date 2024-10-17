@@ -161,7 +161,7 @@ void mul_block_bcast_scalar_inplace() {
 
     constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
     constexpr uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
-    unpack_reconfig_data_format(in0_cb, in1_scalar_cb);
+    reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short();
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
@@ -277,7 +277,7 @@ void matmul_blocks(const uint32_t& in0_cb, const uint32_t& in1_cb, const uint32_
 
     mm_block_init_short(in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
-    unpack_reconfig_data_format(in1_cb, in0_cb);
+    reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);
 
     uint32_t output_num_tiles = M * N;
@@ -342,6 +342,9 @@ void MAIN {
 
     constexpr uint32_t num_cores = get_compile_time_arg_val(21);
 
+    constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
+
     const uint32_t core_id    = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(2);
@@ -398,7 +401,12 @@ void MAIN {
 
                 // Get Q chunk
                 const uint32_t q_low_idx = q_chunk * Sq_chunk_t; // This is the sequence index of the first tile of this chunk
-                const uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+                uint32_t q_high_idx;
+                if constexpr (is_causal) {
+                    q_high_idx = q_low_idx + Sq_chunk_t;
+                } else {
+                    q_high_idx = St;
+                }
                 cb_wait_front(cb_q_in, q_chunk_tiles);
 
                 // loop while k_low < q_high
@@ -418,13 +426,21 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    if (!(q_low_idx >= k_high_idx)) {
-                        /* QK += MASK */
-                        unpack_reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                    if constexpr (is_causal) {
+                        if (!(q_low_idx >= k_high_idx)) {
+                            /* QK += MASK */
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        }
+                    } else {
+                        if constexpr (use_provided_mask) {
+                            /* QK += MASK */
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                        }
                     }
 
-                    unpack_reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                    reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
 
                     if (k_chunk > 0) {
@@ -440,7 +456,7 @@ void MAIN {
 
                     /* OUT_IM = QK @ V_CHUNK */
                     matmul_blocks(cb_qk_im, cb_v_in, cb_out_im, Sq_chunk_t, DHt, Sk_chunk_t, out_num_blocks, out_in0_num_subblocks, out_in1_num_subblocks, out_in0_block_w, out_subblock_h, out_subblock_w, false /*transpose*/);
-                    unpack_reconfig_data_format_srca(cb_out_im);
+                    reconfig_data_format_srca(cb_out_im);
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */

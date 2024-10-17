@@ -120,7 +120,7 @@ void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16)
     PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
 
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated() ));
+    MATH(( llk_math_hw_configure_disaggregated(icb0, icb1) ));
 }
 
 

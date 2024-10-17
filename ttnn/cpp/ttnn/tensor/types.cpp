@@ -4,11 +4,13 @@
 
 #include <cstdint>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace ttnn {
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, const std::optional<Tile>& tile) {
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
     SimpleShape physical_shape = logical_shape;
+    auto rank = physical_shape.rank();
     if (layout == Layout::TILE) {
         auto tile_height = tt::constants::TILE_HEIGHT;
         auto tile_width = tt::constants::TILE_WIDTH;
@@ -17,12 +19,18 @@ SimpleShape get_physical_shape(const SimpleShape& logical_shape, Layout layout, 
             tile_height = tile_shape[0];
             tile_width = tile_shape[1];
         }
-        auto rank = physical_shape.rank();
         if (rank >= 1) {
             physical_shape[rank - 1] = (physical_shape[rank - 1] + tile_width - 1) / tile_width * tile_width;
             if (rank >= 2) {
                 physical_shape[rank - 2] = (physical_shape[rank - 2] + tile_height - 1) / tile_height * tile_height;
             }
+        }
+    }
+    if (layout == Layout::ROW_MAJOR) {
+        auto element_size = tt::tt_metal::tensor_impl::element_size_bytes(data_type);
+        auto row_alignment = sizeof(uint32_t) / element_size;
+        if (rank >= 1) {
+            physical_shape[rank - 1] = (physical_shape[rank - 1] + row_alignment - 1) / row_alignment * row_alignment;
         }
     }
     return physical_shape;
@@ -205,6 +213,15 @@ const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
             rank - 1,
             normalized_index);
     return normalized_index;
+}
+
+Array4D LegacyShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    Array4D ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
 }
 
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {

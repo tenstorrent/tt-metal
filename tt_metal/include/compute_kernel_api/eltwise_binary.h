@@ -33,7 +33,7 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb=16)
     UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1) ));
 
     MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
-    MATH(( llk_math_hw_configure_disaggregated() ));
+    MATH(( llk_math_hw_configure_disaggregated(icb0, icb1) ));
 
     PACK(( llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb) ));
     PACK(( llk_pack_init(ocb) ));
