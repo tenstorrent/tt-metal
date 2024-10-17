@@ -10,18 +10,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    get_lib_dtype,
 )
 from models.utility_functions import skip_for_grayskull
 from collections import Counter
-
-
-def get_lib_dtype(lib, dtype):
-    """Maps dtype to corresponding library dtype."""
-    dtype_map = {
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-    }
-    return dtype_map.get(dtype, None)
 
 
 def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, compute_kernel_options=None):
