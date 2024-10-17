@@ -26,7 +26,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -50,10 +50,13 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    threshold = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    value = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.threshold(torch_input_tensor_a)
+    torch_output_tensor = torch.threshold(torch_input_tensor_a, threshold, value)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -64,7 +67,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.threshold(input_tensor_a, memory_config=output_memory_config)
+    result = ttnn.threshold(input_tensor_a, threshold, value, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

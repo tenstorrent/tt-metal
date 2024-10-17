@@ -73,8 +73,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.tanshrink)
-    torch_output_tensor = golden_function(torch_input_tensor_a)
+    torch_output_tensor = torch.nn.functional.tanhshrink(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
