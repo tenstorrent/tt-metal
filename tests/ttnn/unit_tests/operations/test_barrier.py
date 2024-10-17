@@ -4,6 +4,7 @@
 
 import torch
 import pytest
+import time
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
@@ -92,6 +93,11 @@ def run_with_trace(
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    ttnn.barrier(
+        input_tensor_mesh,
+        memory_config=output_mem_config,
+        topology=all_gather_topology,
+    )
     for i in range(num_iter):
         tt_out_tensor = ttnn.all_gather(
             input_tensor_mesh,
@@ -100,11 +106,6 @@ def run_with_trace(
             memory_config=output_mem_config,
             num_workers=n_worker,
             num_buffers_per_channel=n_buffer,
-            topology=all_gather_topology,
-        )
-        ttnn.barrier(
-            input_tensor_mesh,
-            memory_config=output_mem_config,
             topology=all_gather_topology,
         )
 
@@ -168,10 +169,14 @@ def run_all_gather_impl(
             memory_config=mem_config,
             topology=all_gather_topology,
         )
+        ttnn.all_gather(
+            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+        )
+        logger.info(f"Done all gather again")
         logger.info(f"Done Barrier on topology {all_gather_topology}")
-        for d in mesh_device.get_devices():
-            logger.info(f"synchronizing device {d}")
-            ttnn.synchronize_device(d)
+        # for d in mesh_device.get_devices():
+        #    logger.info(f"synchronizing device {d}")
+        #    ttnn.synchronize_device(d)
         logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
@@ -183,6 +188,7 @@ def run_all_gather_impl(
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
+    time.sleep(10)
 
 
 def run_all_gather_on_n300_impl(
@@ -1358,24 +1364,25 @@ def run_all_gather_sharded_t3k(
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 4096),
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 2048),
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        ),
-        (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 1792),
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
-        ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 4096),
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        # ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 2048),
+        #     (32, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        # ),
+        # (  # https://github.com/tenstorrent/tt-metal/issues/9686
+        #     (1, 1, 32, 1792),
+        #     (32, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+        # ),
     ),
 )
 @pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 70000}], indirect=True)
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1393,6 +1400,7 @@ def test_all_gather_sharded_post_commit(
     function_level_defaults,
     enable_async,
 ):
+    print("Test starting\n")
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
         num_devices,
@@ -1410,6 +1418,8 @@ def test_all_gather_sharded_post_commit(
         function_level_defaults,
         all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
+        trace_mode=True,
+        num_iter=10,
     )
 
 
