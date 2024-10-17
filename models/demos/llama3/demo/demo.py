@@ -506,12 +506,14 @@ def run_llama3_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_en
         ("models/demos/llama3/demo/input_data_prefill_128.json", False, 3),
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1),
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/llama3/demo/input_data_long.json", True, 1),
     ],
     ids=[
         "general_weights-1_batch",
         "general_weights-3_batch",
         "instruct_weights-1_batch",
         "instruct_weights-3_batch",
+        "instruct_weights-long",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 5560320, "num_command_queues": 2}], indirect=True)
