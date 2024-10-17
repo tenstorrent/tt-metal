@@ -42,36 +42,12 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32
     for (uint32_t i = 0; i < rm_input.get_shape().rank(); i++) {
         final_shape.push_back(rm_input.get_shape()[i]);
     }
-<<<<<<< HEAD
 
     final_shape[normalized_dim] *= repeat;
 
     auto unsqueezed_tensor = ttnn::unsqueeze(rm_input, normalized_dim + 1);
     for (uint32_t i = 0; i < repeat; i++) {
         combined_tensors.push_back(unsqueezed_tensor);
-=======
-    if (normalized_dim <= 1) {
-        for (int i = 0; i < repeat; i++) {
-            combined_tensors.push_back(input_a);
-        }
-        // TODO: For dim = 1 facing issue with concat_op
-        if (normalized_dim) {
-            Tensor concat_out = ttnn::concat(combined_tensors, 2);
-            return ttnn::reshape_on_device(concat_out, ttnn::SimpleShape{shape_wh[0], shape_wh[1] * repeat, shape_wh[2], shape_wh[3]});
-        } else {
-            Tensor concat_out = ttnn::concat(combined_tensors, 1);
-            return ttnn::reshape_on_device(concat_out, ttnn::SimpleShape{shape_wh[0] * repeat, shape_wh[1], shape_wh[2], shape_wh[3]});
-        }
-    } else {
-        Tensor reshape_out = ttnn::reshape_on_device(input_a, ttnn::SimpleShape{1, 1, shape_wh[0] * shape_wh[1] * shape_wh[2], shape_wh[3]});
-        for (int i = 0; i < repeat; i++) {
-            combined_tensors.push_back(reshape_out);
-        }
-        Tensor concat_out = ttnn::concat(combined_tensors, 1);
-        std::vector<int64_t> permute_dims = {0, 2, 1, 3};
-        Tensor permute_out = ttnn::permute(concat_out, permute_dims);
-        return ttnn::reshape_on_device(permute_out, ttnn::SimpleShape{shape_wh[0], shape_wh[1], shape_wh[2] * repeat, shape_wh[3]});
->>>>>>> #13707: Rework
     }
 
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
