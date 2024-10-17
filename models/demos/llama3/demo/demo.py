@@ -530,7 +530,7 @@ def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weig
 
     mesh_device.enable_async(True)
 
-    return run_llama_demo_n300(
+    return run_llama3_demo(
         user_input=input_prompts,
         batch_size=1,
         mesh_device=mesh_device,
