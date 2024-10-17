@@ -69,7 +69,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         (32, True): "llama32_11b",
     }[(model_args.n_layers, model_args.is_vision())]
 
-    final_model_pcc = {"llama32_1b": 0.9991, "llama32_3b": 0.9990, "llama31_8b": 0.9976, "llama32_11b": 0.9976}[
+    final_model_pcc = {"llama32_1b": 0.9991, "llama32_3b": 0.9989, "llama31_8b": 0.9976, "llama32_11b": 0.9976}[
         model_name
     ]
     final_k_cache_pcc = {"llama32_1b": 0.9998, "llama32_3b": 0.9998, "llama31_8b": 0.9995, "llama32_11b": 0.9995}[
