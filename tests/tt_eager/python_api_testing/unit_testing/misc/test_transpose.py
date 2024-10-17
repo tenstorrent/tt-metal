@@ -393,7 +393,7 @@ def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
+    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
@@ -724,7 +724,7 @@ def test_transpose_4d_wh_rm(shape, device):
 
 @pytest.mark.parametrize(
     "shape",
-    [[4, 3, 1280, 40], [1, 1200, 1280]],
+    [[4, 3, 1280, 40], [1, 1, 1200, 1280], [1, 1, 4096, 4096]],
 )
 def test_transpose_4d_wh_tile(shape, device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
@@ -742,17 +742,12 @@ def test_transpose_4d_wh_tile(shape, device):
         [[1, 8, 4096, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
         [[1, 9, 8, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
         [[64, 4, 49, 32], [-2, -1], ttnn.ROW_MAJOR_LAYOUT],  # Page size must be divisible by sizeof(uint32_t)
-        [
-            [1, 16, 6, 64],
-            [-1, -2],
-            ttnn.ROW_MAJOR_LAYOUT,
-        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
         [[1, 1370, 1, 3, 1280], [0, -2], ttnn.ROW_MAJOR_LAYOUT],  # greater than 4D
         [[12, 3], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # need tensor for this one
     ],
 )
 def test_transpose_failures(config, device):
-    pytest.skip("Failures after #13217 and #13005 fixed")
+    pytest.skip("Failures to fix after #13217 and #13005 are in - 5D, HC PCC issue and unaligned RM tensor")
     torch_input = torch.randn(config[0], dtype=torch.bfloat16)
     torch_output = torch_input.transpose(config[1][0], config[1][1])
 

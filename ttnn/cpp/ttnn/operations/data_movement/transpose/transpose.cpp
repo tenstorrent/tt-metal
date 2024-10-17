@@ -17,6 +17,41 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
+
+inline uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a) {
+    // Circular Buffer sizes:
+    uint32_t element_size = input_tensor_a.element_size();
+    uint32_t Wt = input_tensor_a.get_padded_shape()[-1]/tt::constants::TILE_WIDTH;
+    uint32_t Ht = input_tensor_a.get_padded_shape()[-2]/tt::constants::TILE_HEIGHT;
+    uint32_t HtWt = Ht*Wt;
+    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
+    uint32_t tile_size = tt::tt_metal::detail::TileSize(data_format);
+
+    uint32_t cb_src0_size = 2*Wt*tile_size;
+    uint32_t cb_output_size = 2*Ht*tile_size;
+    uint32_t cb_im_size = Ht*Wt*tile_size;
+    uint32_t cb_im2_size = Ht*tile_size;
+    return cb_src0_size + cb_output_size + cb_im_size + cb_im2_size;
+
+}
+
+inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
+    tt::tt_metal::Device* device = input_tensor_a.device();
+    const std::vector<uint32_t>& bank_ids =
+        device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
+    std::optional<uint64_t> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
+    return max_l1_space;
+}
+
+inline bool rm_enough_available_space(const Tensor& input_tensor_a) {
+    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(input_tensor_a);
+    return max_l1_space > estimated_size_of_cbs;
+}
+
 inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const MemoryConfig& output_mem_config) {
     bool pad_c = false;
     bool tiled_only = false;
@@ -47,10 +82,9 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
                 tiled_only = true;
             }
             else if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
-                tiled_only = a.shape()[-2] > 256; // horrible hack because PCC on transpose HW row major is terrible on GS in this code path - kernel spits out garbage and has some demuxing for greater than this size that doesn't work
-            }
-            else if (a.device()->arch() == tt::ARCH::WORMHOLE_B0) {
-                tiled_only = !a.is_sharded(); // CB blows up on large sizes, just use tiled in the meantime for interleaved - sharded is needed for some model perf
+                tiled_only = a.shape()[-2] > 256; // hangs right now past this dimension, #13660 will turn it from a hang into a PCC issue for GS and improve perf for WH
+            } else if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR && !rm_enough_available_space(a)) { // rm is L1 intensive, if it overflows we can do tiled which allocates much smaller CBs
+                tiled_only = true;
             }
             break;
         default:
