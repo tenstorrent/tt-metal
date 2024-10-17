@@ -130,7 +130,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t in_channels,
            uint32_t out_channels,
            std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },
@@ -157,7 +157,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t in_channels,
            uint32_t out_channels,
            std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },
@@ -198,7 +198,7 @@ void py_bind_conv2d(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool, bool>(),
+            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool/*, bool*/>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
@@ -220,8 +220,8 @@ void py_bind_conv2d(py::module& module) {
             py::arg("output_layout") = Layout::TILE,
             py::arg("enable_act_double_buffer") = false,
             py::arg("enable_split_reader") = false,
-            py::arg("enable_subblock_padding") = false,
-            py::arg("use_non_tile_height") = false
+            py::arg("enable_subblock_padding") = false/*,
+            py::arg("use_non_tile_height") = false*/
         );
         py_conv_config.def_readwrite("math_fidelity", &Conv2dConfig::math_fidelity);
         py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
@@ -244,7 +244,7 @@ void py_bind_conv2d(py::module& module) {
         py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer);
         py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
         py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
-        py_conv_config.def_readwrite("use_non_tile_height", &Conv2dConfig::use_non_tile_height);
+        //py_conv_config.def_readwrite("use_non_tile_height", &Conv2dConfig::use_non_tile_height);
 
     py::class_<OptimizedConvParallelizationConfig>(module, "OptimizedConvParallelizationConfig")
         .def(

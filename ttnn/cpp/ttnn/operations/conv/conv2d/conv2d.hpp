@@ -47,7 +47,7 @@ struct Conv2dConfig {
     bool enable_act_double_buffer = false;
     bool enable_split_reader = false;
     bool enable_subblock_padding = false;
-    bool use_non_tile_height = false;
+    //bool use_non_tile_height = false;
     static constexpr auto attribute_names = std::make_tuple(
         "math_fidelity",
         "dtype",
@@ -69,8 +69,8 @@ struct Conv2dConfig {
         "output_layout",
         "enable_act_double_buffer",
         "enable_split_reader",
-        "enable_subblock_padding"
-        "use_non_tile_height");
+        "enable_subblock_padding"/*,
+        "use_non_tile_height"*/);
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->math_fidelity),
@@ -93,8 +93,8 @@ struct Conv2dConfig {
             std::cref(this->output_layout),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_split_reader),
-            std::cref(this->enable_subblock_padding),
-            std::cref(this->use_non_tile_height));
+            std::cref(this->enable_subblock_padding)/*,
+            std::cref(this->use_non_tile_height)*/);
     }
 };
 
@@ -129,7 +129,7 @@ std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_hei
 OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
 template<typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -142,7 +142,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     std::array<uint32_t, 2> stride);
 
 template<typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
