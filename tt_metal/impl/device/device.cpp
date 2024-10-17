@@ -715,7 +715,7 @@ void Device::configure_kernel_variant(
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
     if (force_watcher_no_inline) {
-        defines.at("WATCHER_NOINLINE") = std::to_string(force_watcher_no_inline);
+        defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
     }
     if (llrt::OptionsG.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
