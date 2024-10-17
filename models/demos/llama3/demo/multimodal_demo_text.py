@@ -5,17 +5,18 @@ from loguru import logger
 from PIL import Image as PIL_Image
 from termcolor import cprint
 
-from models.llama3.api.datatypes import ImageMedia
-
-# TODO: Import ImageMedia from symlink reference folder
-
 import importlib
 
 llama_reference_generation = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.generation"
 )
 
+# Must import from reference for formatter to understand type of ImageMedia
+datatypes = importlib.import_module("models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.api.datatypes")
+ImageMedia = datatypes.ImageMedia
+
 # THIS_DIR = Path(__file__).parent.resolve()
+# TODO: Generalize not to cglagovich home :)
 THIS_DIR = Path("/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/models/scripts/")
 
 import torch
@@ -79,7 +80,6 @@ def test_llama_multimodal_demo_text(
         model_parallel_size=model_parallel_size,
     )
 
-    # torch.nn.modules.module.register_module_forward_hook(lambda mod, inp, out: print(f'Module {mod} forward'))
     if target == "tt":
         logger.info(f"Creating TT model on {len(mesh_device.get_devices())} devices")
         model = create_multimodal_model(generator.args, mesh_device)
