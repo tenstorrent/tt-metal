@@ -27,7 +27,7 @@ struct RuntimeArgsData {
             throw std::out_of_range(
                 "Index " + std::to_string(index) + " is larger than runtime args size " + std::to_string(rt_args_count)
             );
-            std::unreachable();
+            __builtin_unreachable();
         }
         return true;
     }
@@ -42,13 +42,13 @@ struct RuntimeArgsData {
         if (in_bounds(index)) [[likely]] {
             return this->rt_args_data[index];
         }
-        std::unreachable();
+        __builtin_unreachable();
     }
     inline const std::uint32_t& at(std::size_t index) const {
         if (in_bounds(index)) [[likely]] {
             return this->rt_args_data[index];
         }
-        std::unreachable();
+        __builtin_unreachable();
     }
     inline std::uint32_t * data() noexcept {
         return rt_args_data;
