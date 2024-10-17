@@ -160,7 +160,6 @@ class CrossAttentionTransformer(torch.nn.Module):
             return_intermediate=return_intermediate,
         )
 
-        # self.text_model = CrossAttentionTransformerText(args)
         self.text_model = TtLlamaCrossAttentionTransformerText(
             mesh_device,
             state_dict,
