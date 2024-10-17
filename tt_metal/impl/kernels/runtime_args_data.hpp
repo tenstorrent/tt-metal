@@ -16,19 +16,19 @@ struct RuntimeArgsData {
     std::uint32_t * rt_args_data;
     std::size_t rt_args_count;
 
-    inline std::uint32_t & operator[](std::size_t index);
+    std::uint32_t & operator[](std::size_t index);
 
-    inline const std::uint32_t& operator[](std::size_t index) const;
+    const std::uint32_t& operator[](std::size_t index) const;
 
-    inline std::uint32_t & at(std::size_t index);
+    std::uint32_t & at(std::size_t index);
 
-    inline const std::uint32_t& at(std::size_t index) const;
+    const std::uint32_t& at(std::size_t index) const;
 
-    inline std::uint32_t * data() noexcept;
+    std::uint32_t * data() noexcept;
 
-    inline const std::uint32_t * data() const noexcept;
+    const std::uint32_t * data() const noexcept;
 
-    inline std::size_t size() const noexcept;
+    std::size_t size() const noexcept;
 };
 
 }
