@@ -77,13 +77,14 @@ enum class UnaryOpType {
     BITWISE_NOT,
     BITWISE_AND,
     BITWISE_OR,
+    LEFT_SHIFT,
     RIGHT_SHIFT,
     FLOOR,
     CEIL,
-    LEFT_SHIFT,
+    ROUND,
     REMAINDER,
     FMOD,
-    DROPOUT
+    DROPOUT,
 };
 
 struct UnaryWithParam {

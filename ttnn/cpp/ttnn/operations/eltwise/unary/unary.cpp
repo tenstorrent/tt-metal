@@ -109,6 +109,7 @@ template struct ExecuteUnary<UnaryOpType::NEZ>;
 template struct ExecuteUnary<UnaryOpType::RECIP>;
 template struct ExecuteUnary<UnaryOpType::RELU>;
 template struct ExecuteUnary<UnaryOpType::RELU6>;
+template struct ExecuteUnary<UnaryOpType::ROUND>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID>;
 template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
