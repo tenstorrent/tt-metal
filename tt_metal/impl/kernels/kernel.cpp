@@ -387,7 +387,10 @@ void EthernetKernel::read_binaries(Device *device) {
     std::vector<ll_api::memory> binaries;
     int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
     const JitBuildState &build_state = device->build_kernel_state(JitBuildProcessorType::ETHERNET, erisc_id);
-    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), erisc_id + 5, ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP);
+    // TODO: fix when active eth supports relo
+    ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
+        ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
+    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), erisc_id + 5, ll_api::memory::PackSpans::PACK, relo_type);
     binaries.push_back(binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);

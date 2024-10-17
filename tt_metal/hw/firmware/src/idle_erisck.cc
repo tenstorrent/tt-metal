@@ -18,7 +18,7 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dataflow_api.h"
-
+#include "debug/dprint.h"
 #include <kernel_includes.hpp>
 
 extern uint32_t __kernel_init_local_l1_base[];

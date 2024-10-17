@@ -101,8 +101,8 @@ int main(int argc, char *argv[]) {
         WAYPOINT("R");
 
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::NCRISC);
-        void (*kernel_address)(uint32_t) =
-            (void (*)(uint32_t))(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #ifdef ARCH_BLACKHOLE
         (*kernel_address)((uint32_t)kernel_address);
 #else
