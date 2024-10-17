@@ -52,9 +52,9 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
 
 ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     const auto layout = tensor.get_layout();
-    auto shape_with_padding = shape.with_tile_padding();
+    auto shape_with_padding = shape.padded_shape();
     auto tensor_shape = tensor.get_shape();
-    auto tensor_shape_with_padding = tensor_shape.with_tile_padding();
+    auto tensor_shape_with_padding = tensor_shape.padded_shape();
 
     //Constraint in device kernel
     uint32_t ROW_MAJOR_WIDTH = 8;

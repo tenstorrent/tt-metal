@@ -227,11 +227,8 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor &a, Tensor& o
     uint32_t old_stick_size = a.get_legacy_shape()[3] * a.element_size();
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
-    if (old_stick_size > new_stick_size) {
-        TT_FATAL(old_stick_size % new_stick_size == 0, "Last dimension of the old shape should be divisible by the last dimension of the new shape or vice versa");
-    } else {
-        TT_FATAL(new_stick_size % old_stick_size == 0, "Last dimension of the old shape should be divisible by the last dimension of the new shape or vice versa");
-    }
+    TT_FATAL(std::max(old_stick_size, new_stick_size) % std::min(old_stick_size, new_stick_size) == 0,
+        "Last dimension of the old shape ({}) should be divisible by the last dimension of the new shape ({}) or vice versa", old_stick_size, new_stick_size);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

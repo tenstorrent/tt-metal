@@ -25,7 +25,7 @@ namespace detail {
         ) {
         TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
         TT_ASSERT(shape.logical_shape().volume() == input_tensor.get_logical_volume(),
-            "Required shape volume must match old shape volume");
+            "Required shape volume ({}) must match old shape volume ({})", shape.logical_shape().volume(), nput_tensor.get_logical_volume());
         auto device_buffer = input_tensor.device_buffer();
         uint32_t size_in_bytes = device_buffer->size();
         std::vector<uint16_t> data_vec;
@@ -63,7 +63,7 @@ ttnn::Tensor ReshapeOperation::invoke(
         // since handled within the tensor reshape method
         return input_tensor.reshape(output_shape);
     }
-    if (input_tensor.get_shape().padded_shape() == padded_output_shape) {
+    if (input_tensor.get_padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(input_tensor, output_mem_config);
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
