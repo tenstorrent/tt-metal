@@ -62,10 +62,11 @@ class LMHeadTest(MatmulTestBase):
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
 def test_lm_head_matmul(
     mesh_device, iterations, determinism_check_iterations, use_program_cache, simulate_bh_harvesting
 ):
+    if simulate_bh_harvesting and is_blackhole() == False:
+        pytest.skip("Blackhole harvesting simulation is only supported for Blackhole devices")
     # Initialize input configurations
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -97,7 +98,7 @@ def test_lm_head_matmul(
     )
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
-        math_fidelity=ttnn.experimental.tensor.MathFidelity.LoFi,
+        math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
@@ -143,7 +144,7 @@ def test_specific_chip_lm_head_matmul(
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
     test_lm_head_matmul(
-        mesh_device.get_device(logical_chip_id), iterations, determinism_check_iterations, use_program_cache
+        mesh_device.get_device(logical_chip_id), iterations, determinism_check_iterations, use_program_cache, False
     )
 
 
@@ -155,4 +156,4 @@ def test_specific_chip_lm_head_matmul(
     indirect=["board_mesh_device"],
 )
 def test_specific_board_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache):
-    test_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache)
+    test_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)

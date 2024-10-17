@@ -457,6 +457,14 @@ def pytest_addoption(parser):
         default=None,
         help="Number of iterations to run",
     )
+
+    parser.addoption(
+        "--simulate-bh-harvesting",
+        action="store_true",
+        default=False,
+        help="Simulate BH harvesting",
+    )
+
     parser.addoption(
         "--determinism-check-iterations",
         action="store",
@@ -482,6 +490,12 @@ def iterations(request):
         return int(iterations)
     # default is 100000
     return 100000
+
+
+@pytest.fixture
+def simulate_bh_harvesting(request):
+    simulate_bh_harvesting = request.config.getoption("--simulate-bh-harvesting")
+    return simulate_bh_harvesting
 
 
 @pytest.fixture

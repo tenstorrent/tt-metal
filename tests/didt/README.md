@@ -48,9 +48,9 @@ If you wish to check if the output is deterministic, simply pass in the --determ
 
 Tests are only supported with `1chips` ID because multi-chip/board BH has not been brought up yet.
 
-By default the Blackhole workload compute grid is 13x10 (1 column is reserved for fast-dispatch). Adding `-k "sim-bh-2col-harvested"` will simulate 2 column harvesting on Blackhole by reducing the compute grid to 11x10.
+By default the Blackhole workload compute grid is 13x10 (1 column is reserved for fast-dispatch). Adding `--simulate_bh_harvesting` will simulate 2 column harvesting on Blackhole by reducing the compute grid to 11x10.
 
-`WH_ARCH_YAML` is not supported  but setting env var `TT_METAL_ETH_DISPATCH=1` will enable the unharvested workload to run on 14x10 compute grid. Running with `-k "sim-bh-2col-harvested"` is not supported with `TT_METAL_ETH_DISPATCH`
+`WH_ARCH_YAML` is not supported  but setting env var `TT_METAL_ETH_DISPATCH=1` will enable the unharvested workload to run on 14x10 compute grid. Running with `--simulate_bh_harvesting` is not supported with `TT_METAL_ETH_DISPATCH`
 
 
 ## Legacy commands
