@@ -138,9 +138,13 @@ class WorkExecutor {
         }
     }
 
+    std::thread::id get_worker_thread_id() const {
+        return this->worker_queue.worker_thread_id.load();
+    }
+
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
+        if (get_worker_thread_id() == std::this_thread::get_id() or
             not(this->worker_state == WorkerState::RUNNING)) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.

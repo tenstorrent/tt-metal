@@ -225,6 +225,8 @@ struct Tensor {
 
     bool is_allocated() const;
 
+    bool is_empty() const;
+
     bool is_contiguous() const {
         if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
             return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
