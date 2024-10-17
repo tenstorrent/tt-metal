@@ -97,7 +97,6 @@ void kernel_main() {
     uint32_t total_eltwise_kernel_num_pages = get_arg_val<uint32_t>(arg_idx++);
 
     auto readback_accumulation_signaler = reader_signaler<is_line_reduce_scatter>::build(arg_idx);
-    arg_idx += readback_accumulation_signaler.get_args_consumed();
 
     #ifdef SHARDED_MEM_LAYOUT
     uint32_t output_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
