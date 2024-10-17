@@ -393,7 +393,7 @@ def test_tranpose_hw_rm_with_program_cache(device, n, c, h, w, use_program_cache
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.num_program_cache_entries() == 3
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
