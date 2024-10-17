@@ -68,7 +68,8 @@ jobs:
       pull-requests: write
       # OPTIONAL: auto-closing conversations requires the `contents` permission
       contents: write
-    if: github.event_name == 'pull_request'  # Only run this job on pull request events
+    # if: github.event_name == 'pull_request'  # Only run this job on pull request events
+    if : false
     steps:
     - uses: actions/checkout@v4
       with:
