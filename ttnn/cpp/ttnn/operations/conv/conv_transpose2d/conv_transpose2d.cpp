@@ -93,8 +93,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const conv2d::Conv2dConfig> conv_config_)
-    {
+    std::optional<const conv2d::Conv2dConfig> conv_config_)   {
         conv2d::Conv2dConfig conv_config = conv_config_.value_or(conv2d::Conv2dConfig());
 
         //Inverse of sliding_window.get_output_shape()
@@ -216,9 +215,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         ttnn::Tensor weight_tensor_on_device = weight_tensor;
         std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
         if (!weight_is_on_device) {
+
             // prepare weights in desired layout and move to device
-
-
             tie(weight_tensor_on_device, bias_tensor_on_device) = conv2d::prepare_conv_weights_biases_and_move_to_device(
                 transform_weights_for_conv_transpose2d(weight_tensor),
                 bias_tensor,
@@ -254,9 +252,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
         // ttnn::operations::core::deallocate(halo_output);
-        return {conv_output, output_height, output_width, halo_output, bias_tensor_on_device};
-
-
+        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 
 template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv_transpose2d<Device>(
