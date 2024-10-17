@@ -28,34 +28,6 @@ def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     return hidden_dim
 
 
-# TODO Add other default params for models in the family
-DEFAULT_LLAMA3_2_3B_PARAMS = {
-    "dim": 3072,
-    "ffn_dim_multiplier": 1.0,
-    "multiple_of": 256,
-    "n_heads": 24,
-    "n_kv_heads": 8,
-    "n_layers": 28,
-    "norm_eps": 1e-05,
-    "rope_theta": 500000.0,
-    "use_scaled_rope": True,
-    "vocab_size": 128256,
-}
-
-DEFAULT_LLAMA3_1_8B_PARAMS = {
-    "dim": 4096,
-    "ffn_dim_multiplier": 1.3,
-    "multiple_of": 1024,
-    "n_heads": 32,
-    "n_kv_heads": 8,
-    "n_layers": 32,
-    "norm_eps": 1e-05,
-    "rope_theta": 500000.0,
-    "use_scaled_rope": True,
-    "vocab_size": 128256,
-}
-
-
 class TtModelArgs:
     paged_attention_config = None
 
@@ -92,6 +64,13 @@ class TtModelArgs:
         "DEC_SKIP_OUTPUT",
         "OUTPUT_MM",
     )
+
+    LOCAL_LLAMA_PARAMS = {
+        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct/",
+        "LLAMA3_2_1B_PARAMS": "models/demos/llama3/model_params/Llama3.2-1B-Instruct",
+        "LLAMA3_2_3B_PARAMS": "models/demos/llama3/model_params/Llama3.2-3B-Instruct",
+        "LLAMA3_2_11B_PARAMS": "models/demos/llama3/model_params/Llama3.2-11B-Vision-Instruct",
+    }
 
     def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
         # Add this near the top of the class, with other class attributes
@@ -147,7 +126,21 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-        self._set_llama_params(self.DEFAULT_CKPT_DIR)
+
+        if not dummy_weights:
+            self._set_llama_params(self.DEFAULT_CKPT_DIR)
+        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
+            if "3.1-8B" in LLAMA_DIR:
+                local_params = "LLAMA3_1_8B_PARAMS"
+            elif "3.2-1B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_1B_PARAMS"
+            elif "3.2-3B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_3B_PARAMS"
+            elif "3.2-11B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_11B_PARAMS"
+            else:
+                raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+            self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
