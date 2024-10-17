@@ -20,7 +20,7 @@ struct RuntimeArgsData {
     std::uint32_t * rt_args_data;
     std::size_t rt_args_count;
 
-    inline bool in_bounds(std::size_t index) {
+    inline bool in_bounds(std::size_t index) const {
         if(index >= rt_args_count) [[unlikely]] {
             std::cerr << "TT_FATAL: Index " << index << " is larger than runtime args size " 
                       << rt_args_count << " at " << __FILE__ << ":" << __LINE__ << std::endl;
