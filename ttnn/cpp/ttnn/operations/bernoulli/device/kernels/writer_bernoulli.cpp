@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common/constants.hpp"
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 using namespace tt;
 
@@ -42,10 +41,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 uint32_t rand_uint32 = *intermed_cb_addr;
-                if (rand_uint32 == 0) {
-                    DPRINT << i << "-" << k + j * constants::TILE_WIDTH << "-" << rand_uint32 << " ";
-                }
-                // The hardware PRNG is not uniformly distribute.
+                //  hardware PRNG is not uniformly distribute.
                 // Generated rand_floats in range [0, max_uint32 / 2] has higher ratio compared to (max_uint32 / 2,
                 // max_uint32), which makes the output tensor contains more 1 value than 0. I divide rand_float with
                 // max_int instead of max_uint to balance the number of 1 and 0 value in output tensor.

@@ -57,7 +57,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     auto out_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_dtype_tile_size = tile_size(out_data_format);
-    constexpr uint32_t intermed1_cb_id = CB::c_out0;
+    constexpr uint32_t intermed1_cb_id = CB::c_intermed1;
     CircularBufferConfig cb_intermed1_config =
         CircularBufferConfig(1 * out_dtype_tile_size, {{intermed1_cb_id, out_data_format}})
             .set_page_size(intermed1_cb_id, out_dtype_tile_size);

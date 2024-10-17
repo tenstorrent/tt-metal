@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from loguru import logger
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
