@@ -959,11 +959,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
     }
 
-    uint32_t output_rows_h = output.shard_spec().value().shape[0];
+    //uint32_t output_rows_h = output.shard_spec().value().shape[0];
 
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles_padded * weight_block_w_ntiles;
     uint32_t output_block_num_tiles = enable_subblock_padding ? (act_block_h_ntiles_padded * weight_block_w_ntiles) : writer_output_block_num_tiles;
+
+    uint32_t aligned_output_num_pages = use_non_tile_height ? output.shard_spec().value().shape[0] : writer_output_block_num_tiles;
 
     std::vector<uint32_t> reader_rt_args;
     std::vector<uint32_t> reader_compile_time_args;
@@ -1254,7 +1256,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         out_dram_addr,
         weight_dram_addr,
         bias_dram_addr,
-        output_rows_h,
+        aligned_output_num_pages,
         use_non_tile_height,
     };
     if (split_reader) {
@@ -1297,7 +1299,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         untilize_out,
 
         bias_ntiles_per_core,
-        output_rows_h,
+        aligned_output_num_pages,
         use_non_tile_height};
 
     auto writer_mcast_noc = NOC::NOC_0;
