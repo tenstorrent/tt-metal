@@ -397,6 +397,24 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) 
     this->get_driver(virtual_chip_coord.chip).assert_risc_reset_at_core(virtual_chip_coord);
 }
 
+CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    auto& soc_desc = this->get_soc_desc(chip_id);
+    CoreCoord physical_coord = soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+    return this->get_translated_coordinate_from_physical_coordinates(chip_id, physical_coord, core_type);
+}
+
+CoreCoord Cluster::get_translated_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord, const CoreType& core_type) const {
+    auto& soc_desc = this->get_soc_desc(chip_id);
+    if (not (core_type == CoreType::WORKER or core_type == CoreType::ETH)) {
+        return physical_coord;
+    }
+    tt_cxy_pair virtual_chip_coord = soc_desc.convert_to_umd_coordinates(tt_cxy_pair(chip_id, physical_coord.x, physical_coord.y));
+    std::size_t c = virtual_chip_coord.x;
+    std::size_t r = virtual_chip_coord.y;
+    this->get_driver(chip_id).translate_to_noc_table_coords(chip_id, r, c);
+    return CoreCoord{c, r};
+}
+
 inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, uint32_t noc_y, uint64_t offset) {
     uint64_t result = chip_y;
     uint64_t noc_addr_local_bits_mask = (1UL << NOC_ADDR_LOCAL_BITS) - 1;
