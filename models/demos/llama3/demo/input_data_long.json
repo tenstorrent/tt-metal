@@ -1,0 +1,6 @@
+[
+    {
+        "prompt": "Take three specific quotes from the above reference text (marked in a ```markdown block```) to summarize by means of metaphor what it can teach us about the value of AI in the modern age. The first quote should be from the first third of the text, the second quote from the middle and the final quote from the last third of the text. Be brief and exact in your answer.",
+        "context": "https://www.gutenberg.org/cache/epub/84/pg84.txt"
+    }
+]
