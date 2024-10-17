@@ -22,14 +22,16 @@ namespace py = pybind11;
 void py_module(py::module& module) {
     py::class_<SDPAProgramConfig>(module, "SDPAProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::optional<bool>>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("q_chunk_size").noconvert(),
-            py::arg("k_chunk_size").noconvert())
+            py::arg("k_chunk_size").noconvert(),
+            py::arg("exp_approx_mode") = std::nullopt)
         .def_readwrite("compute_with_storage_grid_size", &SDPAProgramConfig::compute_with_storage_grid_size)
         .def_readwrite("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
-        .def_readwrite("k_chunk_size", &SDPAProgramConfig::k_chunk_size);
+        .def_readwrite("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
+        .def_readwrite("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode);
 
     py_bind_attention_softmax(module);
     py_bind_concatenate_heads(module);
