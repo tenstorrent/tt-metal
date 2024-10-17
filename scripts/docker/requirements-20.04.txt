@@ -8,7 +8,8 @@ pandoc
 libtbb-dev
 libcapstone-dev
 pkg-config
-cmake
+cmake=3.22.2-0kitware1ubuntu20.04.1
+cmake-data=3.22.2-0kitware1ubuntu20.04.1
 curl
 wget
 python3-pip

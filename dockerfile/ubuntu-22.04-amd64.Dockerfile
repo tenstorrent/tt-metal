@@ -7,13 +7,6 @@ ENV DOXYGEN_VERSION=1.9.6
 
 RUN apt update -y && apt install software-properties-common gpg-agent -y
 
-# Use a newer version of CMake than what is available from Canonical for 22.04
-RUN apt -y update \
-    && apt install -y --no-install-recommends ca-certificates gpg wget \
-    && wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null \
-    && echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ jammy main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null \
-    && rm -rf /var/lib/apt/lists/*
-
 # add custom repo
 RUN add-apt-repository ppa:deadsnakes/ppa
 
