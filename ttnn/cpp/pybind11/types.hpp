@@ -56,7 +56,8 @@ void py_module(py::module& module) {
                 return ss.str();
             })
         .def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); })
-        .def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); });
+        .def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); })
+        .def("to_rank", [](const Shape& self, std::size_t rank) { return self.to_rank(rank); });
 
     [&PyShape]<auto... Ns>(std::index_sequence<Ns...>) {
         (
