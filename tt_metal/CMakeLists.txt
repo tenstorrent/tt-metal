@@ -23,7 +23,7 @@ set(TT_METAL_OBJECTS
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
 
-target_link_libraries(tt_metal PRIVATE metal_header_directories umd_device metal_common_libs compiler_flags magic_enum fmt)
+target_link_libraries(tt_metal PUBLIC metal_header_directories umd_device metal_common_libs magic_enum fmt)
 
 target_precompile_headers(tt_metal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/public/tracy/Tracy.hpp
@@ -35,13 +35,14 @@ target_precompile_headers(tt_metal PRIVATE
     <vector>
 )
 
-target_link_libraries(tt_metal PRIVATE $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)
-target_include_directories(tt_metal
-    PRIVATE
+target_link_libraries(tt_metal PUBLIC compiler_flags $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)
+target_include_directories(tt_metal PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )
+target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(tt_metal PROPERTIES
