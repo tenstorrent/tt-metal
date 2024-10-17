@@ -26,7 +26,7 @@ void assert_and_hang(uint32_t line_num) {
 
     // This exits to base FW
     internal_::disable_erisc_app();
-    erisc_early_exit(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_STACK_SAVE);
+    erisc_exit();
 #endif
 
     while(1) { ; }
