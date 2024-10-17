@@ -42,6 +42,16 @@ run_python_model_tests_wormhole_b0() {
     # Mamba
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
-    # Llama 3.1 8B single-layer dummy weights tight PCC check
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/llama31_8b/tests/test_llama_model.py -k "quick"
+    # Llama3.1-8B
+    llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+    # Llama3.2-1B
+    llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+    # Llama3.2-3B
+    llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+
+    # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
+    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
+        echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+    done
 }

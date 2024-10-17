@@ -35,7 +35,6 @@ target_include_directories(unit_tests_common_o PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
     ${PROJECT_SOURCE_DIR}/tt_metal/common
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/common

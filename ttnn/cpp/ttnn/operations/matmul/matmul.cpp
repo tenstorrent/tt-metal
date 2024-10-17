@@ -58,7 +58,7 @@ ttnn::Tensor bound_matmul(
     const auto height_b = input_tensor_b_shape[-2];
 
     if (width_a != height_b) {
-        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor");
+        TT_THROW("ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). The shape of first tensor was {} and the shape of second tensor was {})", width_a, height_b, input_tensor_a_shape, input_tensor_b_shape);
     }
 
     const bool has_program_config = parameters.program_config.has_value();
