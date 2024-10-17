@@ -165,8 +165,8 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
                                               const Program &program,
                                               const std::vector<Buffer *> &input_buffers,
                                               const std::vector<Buffer *> &output_buffers) {
-        auto grad_dram_buffer = input_buffers.at(0);
-        auto index_dram_buffer = input_buffers.at(1);
+        auto grad_dram_buffer = input_buffers.at(1);
+        auto index_dram_buffer = input_buffers.at(0);
         auto output_dram_buffer = output_buffers.at(0);
 
         auto &runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
