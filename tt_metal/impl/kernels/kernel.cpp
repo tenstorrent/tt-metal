@@ -431,6 +431,7 @@ bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+    fprintf(stderr, "writing to: %d\n", base_address + offsets[riscv_id]);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
     return true;

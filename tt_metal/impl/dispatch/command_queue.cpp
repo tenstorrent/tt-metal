@@ -933,8 +933,8 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                 uint32_t base_address = this->program.kernels_buffer->address();
                 uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
 
-                // TODO: the 0 below assumes tensix, this code should be all programm_core_type major
-                uint32_t dst_addr = this->program.get_program_config(0).kernel_text_offset;
+                // TODO: pack all these writes into 1 linear write
+                uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
 
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
@@ -956,7 +956,7 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                     }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
-                        .addr = dst_addr,
+                        .addr = kernel_config_buffer_offset,
                         .length = (uint16_t)write_length,
                         .num_mcast_dests = (uint8_t)num_mcast_dests,
                         .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
@@ -1465,6 +1465,7 @@ void EnqueueProgramCommand::process() {
 
     bool is_finalized = program.is_finalized();
     if (not is_finalized) {
+        fprintf(stderr, "command queue calling finalize\n");
         program.finalize(device);
     }
 
@@ -3019,6 +3020,7 @@ void EnqueueProgramImpl(
     ZoneScoped;
 
     Device* device = cq.device();
+    fprintf(stderr, "command queue calling compile\n");
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);

@@ -644,23 +644,7 @@ void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs
 }
 
 void Program::populate_dispatch_data(Device *device) {
-    static const uint32_t processor_to_firmware_base[] = {
-        MEM_BRISC_FIRMWARE_BASE,
-        MEM_NCRISC_FIRMWARE_BASE,
-        MEM_TRISC0_FIRMWARE_BASE,
-        MEM_TRISC1_FIRMWARE_BASE,
-        MEM_TRISC2_FIRMWARE_BASE,
-        eth_l1_mem::address_map::FIRMWARE_BASE
-    };
-    static const uint32_t processor_to_firmware_size[] = {
-        MEM_BRISC_FIRMWARE_SIZE,
-        MEM_NCRISC_INIT_IRAM_L1_SIZE,
-        MEM_TRISC0_FIRMWARE_SIZE,
-        MEM_TRISC1_FIRMWARE_SIZE,
-        MEM_TRISC2_FIRMWARE_SIZE,
-        eth_l1_mem::address_map::FIRMWARE_SIZE
-    };
-
+    fprintf(stderr, "in populate\n");
     auto extract_dst_noc_unicast_info =
         [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
@@ -739,17 +723,17 @@ void Program::populate_dispatch_data(Device *device) {
                 // Spans are now packed into one
                 // TODO: code below can be simplified w/ a single span
                 uint32_t num_spans = kernel_bin.num_spans();
-                // TODO: with the kernel config buffer the dst_base_addrs isn't used
-                // TODO: gut all this code and create a single transfer info for a linear write
-                dst_base_addrs.resize(dst_base_addrs.size() + num_spans); // TODO: this is now unused, gut
+                dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
                 riscvs.resize(riscvs.size() + num_spans);
 
                 TT_ASSERT(kernel_bin.num_spans() == 1);
 
+                // TODO: spans are packed into 1 now, just grab it and go
                 kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
+                    dst_base_addrs[transfer_info_index] = dst;
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
@@ -787,9 +771,19 @@ void Program::populate_dispatch_data(Device *device) {
                         kernel_group.core_ranges.ranges(), core_type);
 
                 vector<KernelHandle> kernel_ids;
-                for (auto &optional_id : kernel_group.kernel_ids) {
+                fprintf(stderr, "about to set dst addrs\n");
+                for (int dispatch_class = 0; dispatch_class < kernel_group.kernel_ids.size(); dispatch_class++) {
+                    auto &optional_id = kernel_group.kernel_ids[dispatch_class];
                     if (optional_id) {
                         kernel_ids.push_back(optional_id.value());
+                        int proc_sub_class = 0;
+                        for (uint32_t& dst_addr : kernel_transfer_info.at(optional_id.value()).dst_base_addrs) {
+                            // TODO: ugly to pull this out of the launch msg (will go away)
+                            // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
+                            dst_addr = kernel_group.launch_msg.kernel_config.kernel_text_offset[dispatch_class + proc_sub_class];
+                            proc_sub_class++;
+                            fprintf(stderr, "setting dst addr to: %d\n", dst_addr);
+                        }
                     }
                 }
 
@@ -987,6 +981,7 @@ uint32_t Program::finalize_cbs(uint32_t programmable_core_type_index, uint32_t b
 
 uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_core_type_index, uint32_t base_offset) {
 
+    fprintf(stderr, "finalize kernel bins\n");
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     uint32_t max_offset = 0;
@@ -1020,6 +1015,7 @@ uint32_t Program::finalize_kernel_bins(Device *device, uint32_t programmable_cor
                         constexpr uint32_t max_math_processors_count = 3;
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count; proc_type_index++) {
                             uint32_t binary_packed_size = kernel->get_binary_packed_size(device, proc_type_index);
+                            fprintf(stderr, "offset[%d]: %d\n", 2 + proc_type_index, offset);
                             kg.kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
                             kg.launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                             offset += binary_packed_size;
@@ -1057,6 +1053,9 @@ uint32_t& Program::get_program_config_size(uint32_t programmable_core_type_index
 }
 
 void Program::finalize(Device *device) {
+
+    this->construct_core_range_set_for_worker_cores();
+
     // Store the number of tensix "go signals" for use by CQ
     // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
     // TODO: should store all the counts
@@ -1096,6 +1095,11 @@ void Program::finalize(Device *device) {
 
     // The sem offsets cross programmable_core_types so must be set after the loop above
     this->set_launch_msg_sem_offsets();
+
+    // TODO: This check is wrong - it populates dispatch data for dispatch kernels
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+        this->populate_dispatch_data(device);  // TODO: maybe rename
+    }
 
     finalized_ = true;
 }
@@ -1196,11 +1200,6 @@ void Program::compile(Device *device, bool fd_bootloader_mode) {
     }
 
     sync_build_step(events);
-
-    this->construct_core_range_set_for_worker_cores();
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
-        this->populate_dispatch_data(device);  // TODO: maybe rename
-    }
 
     if (detail::CompilationReporter::enabled()) {
         detail::CompilationReporter::inst().flush_program_entry(*this, enable_persistent_kernel_cache);
