@@ -28,7 +28,7 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
         TT_THROW("Tensor rank is greater than 4");
     }
 
-    const auto tensor_shape_4D = tensor_shape.to_rank<4>();
+    const auto tensor_shape_4D = tensor_shape.to_rank(4);
     return ttnn::reshape(tensor, tensor_shape_4D);
 }
 
@@ -47,13 +47,10 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
         }
     }
 
-    switch (rank) {
-        case 1: return ttnn::reshape(tensor, shape.to_rank<1>());
-        case 2: return ttnn::reshape(tensor, shape.to_rank<2>());
-        case 3: return ttnn::reshape(tensor, shape.to_rank<3>());
-        case 4: return tensor;
-        default: TT_THROW("Invalid choice!");
+    if (rank == 4) {
+        return tensor;
     }
+    return ttnn::reshape(tensor, shape.to_rank(rank));
 }
 
 ttnn::Tensor to_device(const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config) {

@@ -791,7 +791,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
 
     // format to HW
     Tensor y_hw = ttnn::reshape_on_device(
-        y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+        y, ttnn::SimpleShape{1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]});
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
@@ -800,7 +800,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
 
     // reformat
     Tensor z_1 = ttnn::reshape_on_device(
-        z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+        z_0, ttnn::SimpleShape{y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]});
     z_0.deallocate();
 
     return z_1;

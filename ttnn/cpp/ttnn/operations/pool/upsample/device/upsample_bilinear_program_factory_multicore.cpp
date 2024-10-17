@@ -48,7 +48,7 @@ Tensor HaloTensorCreation(const Tensor &input){
 
     input_tensor = ttnn::reshape(
         input_tensor,
-        Shape(std::array<uint32_t, 4>{
+        SimpleShape(std::array<uint32_t, 4>{
             1,
             1,
             input.get_shape()[0] * input.get_shape()[1] * input.get_shape()[2],

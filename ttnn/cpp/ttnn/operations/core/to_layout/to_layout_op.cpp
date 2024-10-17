@@ -151,7 +151,7 @@ Tensor to_layout_impl(
 
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
+            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
@@ -190,7 +190,7 @@ Tensor to_layout_impl(
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
-            return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape}));
+            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
         } else if (layout == ttnn::TILE_LAYOUT) {
             std::vector<uint32_t> padded_output_shape;
             std::vector<uint32_t> padded_input_start;
@@ -205,7 +205,6 @@ Tensor to_layout_impl(
             tensor = tensor.pad(padded_output_shape, ttnn::SimpleShape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
-
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

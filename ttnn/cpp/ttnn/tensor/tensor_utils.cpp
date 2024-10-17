@@ -456,42 +456,37 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
 }
 
-const tt::tt_metal::LegacyShape infer_dims_for_reshape(int N, int C, int H, int W, uint32_t old_volume) {
-    vector<int> ns{N, C, H, W};
-    int neg_idx = -1;
-    for (int i = 0; i < ns.size(); i++) {
-        if (ns[i] == -1) {
-            TT_ASSERT(neg_idx == -1, "Only one -1 is allowed in reshape");
-            neg_idx = i;
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::vector<int32_t>& shape) {
+    int64_t old_volume = tensor.get_logical_volume();
+    int64_t new_volume = 1;
+    int64_t index_of_negative_1 = -1;
+    for (auto index = 0; index < shape.size(); ++index) {
+        if (shape[index] == -1) {
+            if (index_of_negative_1 != -1) {
+                std::string error_msg = "Shape cannot have more than 1 elements that is set to -1! Shape used: (";
+                for(auto & s: shape) {
+                    error_msg += std::to_string(s) + ",";
+                }
+                error_msg += ")";
+                TT_THROW("{}", error_msg);
+            }
+            index_of_negative_1 = index;
         } else {
-            TT_ASSERT(ns[i] > 0, "New shape entries can only have -1 or positive values");
+            TT_FATAL(shape[index] > 0, "New shape entries can only have -1 or positive values");
+            new_volume *= shape[index];
         }
     }
 
-    switch (neg_idx) {
-        case 0:
-            TT_ASSERT(old_volume % C * H * W == 0);
-            N = old_volume / (C * H * W);
-            break;
-        case 1:
-            TT_ASSERT(old_volume % N * H * W == 0);
-            C = old_volume / (N * H * W);
-            break;
-        case 2:
-            TT_ASSERT(old_volume % N * C * W == 0);
-            H = old_volume / (N * C * W);
-            break;
-        case 3:
-            TT_ASSERT(old_volume % N * C * H == 0);
-            W = old_volume / (N * C * H);
-            break;
-        case -1:  // In case where there is no negative value in ns
-            TT_ASSERT(N * C * H * W == old_volume);
-            break;
-        default: TT_ASSERT(false && "Unexpected neg_idx in reshape!");
+    std::vector<uint32_t> new_shape(shape.size());
+    std::copy(shape.begin(), shape.end(), new_shape.begin());
+    if (index_of_negative_1 == -1) {
+        TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");
+    } else {
+        TT_FATAL(old_volume % new_volume == 0, "Invalid arguments to reshape");
+        new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
-    return {(uint32_t)N, (uint32_t)C, (uint32_t)H, (uint32_t)W};
+    return ttnn::SimpleShape(std::move(new_shape));
 }
 
 bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }
@@ -597,12 +592,12 @@ void insert_buffer_and_shape_for_device(
                 s.insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->shape);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 s.insert_buffer_and_shape_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->shape.value);
+                    shard.tensor_attributes->shape);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
