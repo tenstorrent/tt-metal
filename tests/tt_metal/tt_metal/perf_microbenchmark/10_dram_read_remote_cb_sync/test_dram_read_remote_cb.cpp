@@ -87,10 +87,14 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t num_blocks,
     uint32_t cb_num_blocks,
     uint32_t num_receivers,
+    uint32_t num_mixed_df_layers,
     uint32_t cb_padding,
     std::shared_ptr<tt::tt_metal::Buffer> input_buffer,
     std::shared_ptr<tt::tt_metal::Buffer> output_buffer
     ) {
+
+    log_info("created program");
+
     tt_metal::Program program = tt_metal::Program();
 
     auto all_cores = dram_reader_core.merge(l1_receiver_cores);
@@ -99,6 +103,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     uint32_t kt = k / 32;
     uint32_t nt = n / 32;
     uint32_t block_h = kt / num_blocks;
+    uint32_t num_tile_rows_write = block_h;
     uint32_t block_w = nt;
     uint32_t block_num_tiles = block_h * block_w;
 
@@ -121,6 +126,25 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .set_page_size(reader_cb_index, single_tile_size);
     auto reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_core, reader_cb_config);
 
+    // mixed cb dataformat
+    uint32_t next_layer_num_blocks = num_blocks * 1;
+    uint32_t next_layer_block_h = kt / next_layer_num_blocks;
+    uint32_t next_layer_block_num_tiles = next_layer_block_h * block_w;
+    uint32_t next_layer_num_tile_rows_write = next_layer_block_h;
+    uint32_t next_layer_receiver_block_num_tile = next_layer_block_num_tiles / num_receivers;
+
+    uint32_t next_layer_single_tile_size = single_tile_size;
+    if (tile_format == tt::DataFormat::Float16_b) {
+        next_layer_single_tile_size = 1088;
+    } else {
+        next_layer_single_tile_size = 2048;
+    }
+    uint32_t next_layer_reader_page_size, next_layer_reader_num_pages;
+    get_max_page_size_and_num_pages(block_num_tiles, next_layer_single_tile_size, next_layer_reader_page_size, next_layer_reader_num_pages);
+
+    uint32_t next_layer_writer_page_size, next_layer_writer_num_pages;
+    get_max_page_size_and_num_pages(block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
+
     // L1 receiver CB
     uint32_t receiver_cb_index = 0;
     uint32_t receiver_cb_size = block_h * block_w * single_tile_size * cb_num_blocks / num_receivers + cb_padding;
@@ -142,11 +166,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t) input_buffer->address(),
         (std::uint32_t) start_tile_id,
-        (std::uint32_t) num_blocks,
-        (std::uint32_t) reader_num_pages,
-        (std::uint32_t) block_num_tiles,
-        (std::uint32_t) reader_page_size,
-        (std::uint32_t) tt_metal::NOC::RISCV_0_default
+        (std::uint32_t) tt_metal::NOC::RISCV_0_default,
+        (std::uint32_t) num_mixed_df_layers
     };
 
     auto reader_kernel = tt_metal::CreateKernel(
@@ -160,17 +181,11 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = reader_compile_time_args});
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t) num_blocks,
-        (std::uint32_t) block_num_tiles,
         (std::uint32_t) tt_metal::NOC::RISCV_0_default,
         (std::uint32_t) receiver_cb_addr,
         (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) writer_num_pages,
-        (std::uint32_t) writer_page_size,
-        (std::uint32_t) single_tile_size,
         (std::uint32_t) num_receivers,
-        (std::uint32_t) block_h,
-        (std::uint32_t) receiver_block_num_tile
+        (std::uint32_t) num_mixed_df_layers
     };
 
     auto writer_kernel = tt_metal::CreateKernel(
@@ -184,11 +199,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .compile_args = writer_compile_time_args});
 
     std::vector<uint32_t> receiver_compile_time_args = {
-        (std::uint32_t) num_blocks,
-        (std::uint32_t) receiver_block_num_tile,
         (std::uint32_t) reader_cb_addr,
         (std::uint32_t) receiver_cb_size,
-        (std::uint32_t) single_tile_size
+        (std::uint32_t) num_mixed_df_layers,
     };
 
     auto receiver_kernel = tt_metal::CreateKernel(
@@ -210,6 +223,18 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         (std::uint32_t) bank_id,
         (std::uint32_t) vc
     };
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        reader_rt_args.push_back(i%2 == 0 ? reader_page_size : next_layer_reader_page_size);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        reader_rt_args.push_back(i%2 == 0 ? reader_num_pages : next_layer_reader_num_pages);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        reader_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        reader_rt_args.push_back(i%2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
+    }
     tt_metal::SetRuntimeArgs(program, reader_kernel, dram_reader_core_coord, reader_rt_args);
 
     // writer rt
@@ -232,6 +257,24 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     for (uint32_t i=0; i < num_receivers; ++i) {
         writer_rt_args.push_back(pages_sent_semaphore_ids[i]);
     }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? writer_page_size : next_layer_writer_page_size);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? writer_num_pages : next_layer_writer_num_pages);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? block_num_tiles : next_layer_block_num_tiles);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? single_tile_size : next_layer_single_tile_size);
+    }
+    for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+        writer_rt_args.push_back(i%2 == 0 ? num_tile_rows_write : next_layer_num_tile_rows_write);
+    }
     tt_metal::SetRuntimeArgs(program, writer_kernel, dram_reader_core_coord, writer_rt_args);
 
     // reciever rt
@@ -245,6 +288,16 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 
         receiver_rt_args.push_back(pages_acked_semaphore_ids[i]);
         receiver_rt_args.push_back(pages_sent_semaphore_ids[i]);
+
+        for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+            receiver_rt_args.push_back(i%2 == 0 ? single_tile_size : next_layer_single_tile_size);
+        }
+        for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+            receiver_rt_args.push_back(i%2 == 0 ? num_blocks : next_layer_num_blocks);
+        }
+        for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+            receiver_rt_args.push_back(i%2 == 0 ? receiver_block_num_tile : next_layer_receiver_block_num_tile);
+        }
 
         log_info("l1_receiver_core_coords: {}", l1_receiver_core_coords[i]);
 
@@ -438,6 +491,8 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
                                         .shard_parameters = shard_spec});
     tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
 
+    log_info("created sharded tensor");
+
     return input_buffer;
 }
 
@@ -455,6 +510,7 @@ int main(int argc, char **argv) {
     uint32_t cb_num_blocks = 8;
     uint32_t cb_padding = 16;
     uint32_t num_receivers = 1;
+    uint32_t num_mixed_df_layers = 1;
     uint64_t k = 8192, n = 128;
 
     try {
@@ -481,6 +537,8 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--data-type", 0);
             std::tie(num_receivers, input_args) =
                 test_args::get_command_option_uint64_and_remaining_args(input_args, "--num-receivers", 1);
+            std::tie(num_mixed_df_layers, input_args) =
+                test_args::get_command_option_uint64_and_remaining_args(input_args, "--num-mixed-df-layers", 1);
 
 
             test_args::validate_remaining_args(input_args);
@@ -488,6 +546,9 @@ int main(int argc, char **argv) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
+
+        log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
+        log_info("num_receivers: {} ", num_receivers);
 
         if (use_device_profiler) {
             #if !defined(TRACY_ENABLE)
@@ -550,25 +611,42 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::shared_ptr<tt::tt_metal::Buffer> input_buffer;
+        std::vector<std::shared_ptr<tt::tt_metal::Buffer> > input_buffers(num_mixed_df_layers);
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
         tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
         tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
         if (tile_format == tt::DataFormat::Bfp8_b) {
-            auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
-            std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
-            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
+            for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+                if (i%2 == 0) { // even layers
+                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
+                    std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
+                } else { // odd layers
+                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
+                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
+                }
+            }
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
             output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Bfp8_b, l1_receiver_core, num_receivers);
 
         } else {
-            auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-            auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
-            vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
-            input_buffer = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
+            for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
+                if (i%2 == 0) { // even layers
+                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
+                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    vector<uint32_t> packed_input_vec_tile_layout = pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Float16_b, dram_reader_core, num_banks);
+                } else {
+                    auto input_vec_tilized = tt::test_utils::tilize(tensor_fp8.get_values(), k, n);
+                    std::vector<uint32_t> packed_input_vec_tile_layout = pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
+                    input_buffers[i] = create_and_transfer_data_sharded_cb(device, packed_input_vec_tile_layout, kt, nt, tt_metal::BufferType::DRAM, tt::DataFormat::Bfp8_b, dram_reader_core, num_banks);
+                }
+            }
 
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
@@ -578,7 +656,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, kernel, output_cb_addr] = create_program(device, dram_reader_core, l1_receiver_core, single_tile_size, tile_format, k, n, num_blocks, cb_num_blocks, num_receivers, cb_padding, input_buffer, output_buffer);
+        auto [program, kernel, output_cb_addr] = create_program(device, dram_reader_core, l1_receiver_core, single_tile_size, tile_format, k, n, num_blocks, cb_num_blocks, num_receivers, num_mixed_df_layers, cb_padding, input_buffers[0], output_buffer);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application

@@ -11,23 +11,25 @@
 
 constexpr uint32_t ALIGNED_PAGE_SIZE = 16;
 
-constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
-constexpr uint32_t block_num_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t noc = get_compile_time_arg_val(2);
-constexpr uint32_t cb_start_addr = get_compile_time_arg_val(3);
-constexpr uint32_t cb_wr_ptr = get_compile_time_arg_val(3);
-constexpr uint32_t cb_size = get_compile_time_arg_val(4);
-constexpr uint32_t coalesced_num_pages = get_compile_time_arg_val(5);
-constexpr uint32_t coalesced_page_size = get_compile_time_arg_val(6);
-constexpr uint32_t page_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_receivers = get_compile_time_arg_val(8);
-constexpr uint32_t num_tile_rows = get_compile_time_arg_val(9);
-constexpr uint32_t receiver_block_num_tiles = get_compile_time_arg_val(10);
+constexpr uint32_t noc = get_compile_time_arg_val(0);
+constexpr uint32_t cb_start_addr = get_compile_time_arg_val(1);
+constexpr uint32_t cb_wr_ptr = get_compile_time_arg_val(1);
+constexpr uint32_t cb_size = get_compile_time_arg_val(2);
+constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
+constexpr uint32_t num_layers = get_compile_time_arg_val(4);
 
 tt_l1_ptr uint32_t* noc_x;
 tt_l1_ptr uint32_t* noc_y;
 tt_l1_ptr uint32_t* pages_acked_semaphore_addr;
 tt_l1_ptr uint32_t* pages_sent_semaphore_addr;
+tt_l1_ptr uint32_t* coalesced_page_size;
+tt_l1_ptr uint32_t* coalesced_num_pages;
+tt_l1_ptr uint32_t* num_blocks;
+tt_l1_ptr uint32_t* block_num_tiles;
+tt_l1_ptr uint32_t* page_size;
+tt_l1_ptr uint32_t* num_tile_rows;
+
+uint32_t start_page_size;
 
 template<uint32_t num_recv_cbs>
 struct RemoteSenderCBInterface {
@@ -54,15 +56,15 @@ RemoteSenderCBInterface<num_receivers> remote_cb_interface;
 
 template<uint32_t aligned_page_size>
 FORCE_INLINE void setup_remote_sender_cb_interface() {
-    uint32_t num_pages = cb_size / page_size;
-    uint32_t cb_size_page_aligned = num_pages * page_size;
+    uint32_t num_pages = cb_size / start_page_size;
+    uint32_t cb_size_page_aligned = num_pages * start_page_size;
 
     remote_cb_interface.fifo_size = cb_size;
     remote_cb_interface.fifo_limit = cb_size + cb_start_addr;
     remote_cb_interface.fifo_limit_page_aligned = cb_size_page_aligned + cb_start_addr;
 
-    remote_cb_interface.fifo_page_size = page_size;
-    remote_cb_interface.fifo_aligned_num_pages = num_pages * page_size / aligned_page_size;
+    remote_cb_interface.fifo_page_size = start_page_size;
+    remote_cb_interface.fifo_aligned_num_pages = num_pages * start_page_size / aligned_page_size;
 
     remote_cb_interface.fifo_wr_ptr = cb_wr_ptr;
 
@@ -83,8 +85,9 @@ FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size) {
     uint32_t num_pages = remote_cb_interface.fifo_size / page_size;
     uint32_t cb_size_page_aligned = num_pages * page_size;
 
-    remote_cb_interface.fifo_aligned_num_pages = num_pages * page_size / remote_cb_interface.aligned_page_size;
     remote_cb_interface.fifo_limit_page_aligned = cb_size_page_aligned + remote_cb_interface.fifo_start_addr;
+    remote_cb_interface.fifo_page_size = page_size;
+    remote_cb_interface.fifo_aligned_num_pages = num_pages * page_size / remote_cb_interface.aligned_page_size;
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t num_pages) {
@@ -265,20 +268,53 @@ void kernel_main() {
     pages_acked_semaphore_addr = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_receivers)));
     pages_sent_semaphore_addr = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_receivers)));
 
+    coalesced_page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    coalesced_num_pages = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    num_blocks = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    block_num_tiles = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    page_size = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+    num_tile_rows = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_layers)));
+
+    start_page_size = page_size[0];
+
     constexpr uint32_t cb_id = 0;
 
     setup_remote_sender_cb_interface<ALIGNED_PAGE_SIZE>();
 
-    for (uint32_t block = 0; block < num_blocks; ++block) {
+    // DPRINT << "num_layers " << num_layers << ENDL();
 
-        cb_wait_front(cb_id, block_num_tiles);
+    for (uint32_t l = 0; l < num_layers; ++l) {
+        uint32_t curr_coalesced_page_size = coalesced_page_size[l];
+        uint32_t curr_coalesced_num_pages = coalesced_num_pages[l];
+        uint32_t curr_num_blocks = num_blocks[l];
+        uint32_t curr_block_num_tiles = block_num_tiles[l];
+        uint32_t curr_page_size = page_size[l];
+        uint32_t curr_num_tile_rows = num_tile_rows[l];
+        uint32_t curr_receiver_block_num_tiles = curr_block_num_tiles / num_receivers;
 
-        uint32_t local_cb_addr = get_read_ptr(cb_id);
-        remote_cb_reserve_back(receiver_block_num_tiles);
-        remote_cb_push_back_and_write_pages(local_cb_addr, receiver_block_num_tiles, num_tile_rows, coalesced_num_pages, coalesced_page_size, noc_x, noc_y, noc);
+        setup_remote_cb_page_size(curr_page_size);
 
-        cb_pop_front(cb_id, block_num_tiles);
+        // DPRINT << "curr_coalesced_page_size " << curr_coalesced_page_size << ENDL();
+        // DPRINT << "curr_coalesced_num_pages "<<curr_coalesced_num_pages << ENDL();
+        // DPRINT << "curr_num_blocks "  << curr_num_blocks << ENDL();
+        // DPRINT << "curr_block_num_tiles " <<  curr_block_num_tiles<< ENDL();
+        // DPRINT << "curr_page_size " <<  curr_page_size<< ENDL();
+        // DPRINT << "curr_num_tile_rows " <<  curr_num_tile_rows<< ENDL();
+        // DPRINT << "curr_receiver_block_num_tiles   " << curr_receiver_block_num_tiles << ENDL();
 
+        for (uint32_t block = 0; block < curr_num_blocks; ++block) {
+
+            cb_wait_front(cb_id, curr_block_num_tiles);
+
+            // DPRINT  << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), true, true) << ENDL();
+
+            uint32_t local_cb_addr = get_read_ptr(cb_id);
+            remote_cb_reserve_back(curr_receiver_block_num_tiles);
+            remote_cb_push_back_and_write_pages(local_cb_addr, curr_receiver_block_num_tiles, curr_num_tile_rows, curr_coalesced_num_pages, curr_coalesced_page_size, noc_x, noc_y, noc);
+
+            cb_pop_front(cb_id, curr_block_num_tiles);
+
+        }
     }
 
 }
