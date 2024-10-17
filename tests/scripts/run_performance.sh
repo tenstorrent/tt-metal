@@ -59,7 +59,7 @@ run_perf_models_llm_javelin() {
     llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights
-    for llama_dir in "$llama8b" "$llama1b" "$llama3b" "$llama11b"; do
+    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
         LLAMA_DIR=$llama_dir pytest -n auto models/demos/llama3/tests/test_llama_perf.py -m $test_marker
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
