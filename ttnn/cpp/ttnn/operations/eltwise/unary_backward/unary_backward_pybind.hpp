@@ -345,7 +345,8 @@ void bind_unary_backward_two_float_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -355,18 +356,21 @@ void bind_unary_backward_two_float_with_default(
             input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float, optional): {3} , Default to {4}
-            {5} (float, optional): {6} , Default to {7}
+            {2} (float, optional): {3} , Defaults to {4}.
+            {5} (float, optional): {6} , Defaults to {7}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {9}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
+            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -376,7 +380,8 @@ void bind_unary_backward_two_float_with_default(
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -1080,7 +1085,14 @@ void py_module(py::module& module) {
         "max",
         "Maximum value",
         1.0,
-        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
 
 
     detail::bind_unary_backward_float_with_default(

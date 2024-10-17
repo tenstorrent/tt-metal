@@ -24,9 +24,17 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     "threshold",
     [-20, -10, 10, 20, 5, 0],
 )
-def test_bw_softplus(input_shapes, beta, threshold, device):
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_bw_softplus(input_shapes, beta, threshold, input_dtype, layout, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=input_dtype, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=layout
+    )
+    grad_tensor = ttnn.from_torch(
+        grad_data, dtype=input_dtype, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=layout
+    )
 
     tt_output_tensor_on_device = ttnn.softplus_bw(grad_tensor, input_tensor, beta=beta, threshold=threshold)
 
@@ -45,9 +53,17 @@ def test_bw_softplus(input_shapes, beta, threshold, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_bw_default_softplus(input_shapes, device):
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_bw_default_softplus(input_shapes, input_dtype, layout, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=input_dtype, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=layout
+    )
+    grad_tensor = ttnn.from_torch(
+        grad_data, dtype=input_dtype, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG, layout=layout
+    )
 
     tt_output_tensor_on_device = ttnn.softplus_bw(grad_tensor, input_tensor)
 
