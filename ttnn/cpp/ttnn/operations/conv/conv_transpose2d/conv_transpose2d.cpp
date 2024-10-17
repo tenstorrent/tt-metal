@@ -100,10 +100,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
             .batch_size = batch_size,
             .input_hw = {input_height, input_width},
-            .window_hw = kernel_size,
-            .stride_hw = stride,
-            .pad_hw = padding,
-            .output_pad_hw = output_padding,
+            .window_hw = {kernel_size[0], kernel_size[1]},
+            .stride_hw = {stride[0], stride[1]},
+            .pad_hw = {padding[0], padding[1]},
+            .output_pad_hw = {output_padding[0], output_padding[1]},
             .dilation_hw = {dilation[0], dilation[1]},
             .is_transpose = true
         };
