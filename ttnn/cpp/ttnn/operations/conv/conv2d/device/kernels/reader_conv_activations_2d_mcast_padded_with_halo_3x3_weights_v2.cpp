@@ -5,10 +5,13 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
+
+#define dump(a) \
+    do { DPRINT << "Activations: "<< #a " = " << a << ENDL(); } while(false);
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -74,6 +77,7 @@ void kernel_main() {
     constexpr uint32_t window_inner                     = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(10);
     constexpr uint32_t padded_conv_act_size_w           = get_compile_time_arg_val(13);
+    constexpr uint32_t act_block_w_extra_align_bytes    = get_compile_time_arg_val(14);
     constexpr uint32_t act_num_blocks_h                 = get_compile_time_arg_val(16);
     constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(17);
     constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(18);
@@ -83,6 +87,24 @@ void kernel_main() {
     const uint32_t act_mcast_receiver_semaphore_addr    = get_semaphore(get_compile_time_arg_val(22));
     constexpr uint32_t act_mcast_sender_size_bytes      = get_compile_time_arg_val(23);
     constexpr bool transpose_mcast                      = get_compile_time_arg_val(24) == 1;
+
+    dump(stride_h);
+    dump(stride_w);
+    dump(dilation_h);
+    dump(dilation_w);
+    dump(conv_act_size_w);
+    dump(conv_act_c_read_bytes);
+    dump(window_inner);
+    dump(act_block_h_datums);
+    dump(padded_conv_act_size_w);
+    dump(act_block_w_extra_align_bytes);
+    dump(act_num_blocks_h);
+    dump(act_block_num_tiles);
+    dump(act_w_num_outer);
+    dump(act_mcast_num_dests);
+    dump(act_mcast_num_cores);
+    dump(act_mcast_sender_size_bytes);
+    /*dump(transpose_mcast);*/
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i); i+=1;
@@ -115,7 +137,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
     act_mcast_sender_semaphore_valid_addr_ptr[0] = 1; // Load const 1 to be used as semaphore valid value sent from sender to receivers
     uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
-
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
@@ -144,7 +165,11 @@ void kernel_main() {
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr),coalesced_read_bytes);
+    /*print_pages(act_l1_read_addr, 40, 128);*/
+    dump(coalesced_read_bytes);
+    dump(conv_act_c_read_bytes);
 
+    int temp = 1;
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     for (uint32_t nbh = 0; nbh < act_num_blocks_h; nbh++) {
@@ -158,7 +183,9 @@ void kernel_main() {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
             #if DILATION_W == 1
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
             read_channels(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, coalesced_read_bytes, stride_h_bytes);
+            l1_write_addr_act += act_block_w_extra_align_bytes;
             #else
             read_dilated_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
             read_dilated_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
@@ -167,7 +194,17 @@ void kernel_main() {
         }
         // incrementing num issued in one shot is actually slower
         // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
+        /*DPRINT << act_block_w_extra_align_bytes;*/
         noc_async_read_barrier();
+        DPRINT << "Read acttions " << ENDL();
+        /*print_pages(get_write_ptr(cb_id_act_row_major_bfloat16), 32*9, act_mcast_sender_size_bytes/2/32/9);*/
+        DPRINT<< temp << ENDL();
+        if(temp < 2) {
+            /*print_pages(get_write_ptr(cb_id_act_row_major_bfloat16), 40*9, act_mcast_sender_size_bytes/2/40/9);*/
+        }
+        /*print_pages(get_write_ptr(cb_id_act_row_major_bfloat16), 40*9, act_block_h_datums/2/9/40, 0);*/
+        temp++;
+        /*print_pages(get_read_ptr(cb_id_sharded_act), 16, 64);*/
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
         // Round robin self-mcast and receive tilized act matrix in cb_id_act

@@ -17,7 +17,18 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
+#include "debug/dprint.h"
+
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+   DPRINT_UNPACK(DPRINT << "======" << ENDL());
+   for (uint16_t r = 0; r < 32; ++ r) {
+   //for (int32_t r = 0; r < 1; ++ r) {
+     SliceRange sr = SliceRange{.h0 = r, .h1 = (uint16_t)(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+     DPRINT_UNPACK(DPRINT << (uint)r << " " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL());
+   }
+   DPRINT_UNPACK(DPRINT << "++++++" << ENDL());
+}
 
 // #include "debug_macros.h"
 
@@ -101,10 +112,11 @@ void MAIN {
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(13); // out_subblock_h * out_subblock_w;
     constexpr bool tilize_in0                 = get_compile_time_arg_val(14);
     constexpr bool untilize_out               = get_compile_time_arg_val(15);
+    constexpr uint32_t out_cb_id               = get_compile_time_arg_val(17);
 
 
     #ifdef WIDTH_SHARDED
-    constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(17);
+    constexpr uint32_t in0_nblocks_w_tilize   = get_compile_time_arg_val(18);
     #endif
 
     constexpr uint32_t out_block_num_tiles    = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
@@ -119,7 +131,7 @@ void MAIN {
     constexpr uint32_t matmul_partials_cb                       = tt::CB::c_intermed0;
     constexpr uint32_t tilized_in0_cb_id                        = tt::CB::c_intermed1;
     //constexpr uint32_t untilize_mode_reblock_cb                 = tt::CB::c_intermed2;
-    constexpr uint32_t out_cb_id                                = tt::CB::c_out0;
+    /*constexpr uint32_t out_cb_id                                = tt::CB::c_out0;*/
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
