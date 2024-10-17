@@ -86,8 +86,10 @@ def run_all_reduce_test(
     num_iters=1,
     topology=ttnn.Topology.Ring,
 ):
-    if len(t3k_mesh_device.get_device_ids()) != 8:
-        pytest.skip("Not T3000!")
+    if len(t3k_mesh_device.get_device_ids()) < num_devices:
+        pytest.skip(
+            f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(t3k_mesh_device.get_device_ids())}"
+        )
 
     debug = False
 
@@ -99,8 +101,9 @@ def run_all_reduce_test(
 
     t3k_mesh_device.enable_async(enable_async)
     if enable_async:
-        logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
+        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
 
     tt_input_tensors = []
@@ -134,7 +137,7 @@ def run_all_reduce_test(
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
-    golden_canonical_out_tensor = torch.sum(unchunked_input_tensor).expand(1, 1, 32, 32)
+    golden_canonical_out_tensor = torch.sum(unchunked_input_tensor, 0)
 
     # Compare
     mismatch = False
@@ -159,7 +162,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-# ~2:45 extra time in the current state
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -168,16 +170,22 @@ def run_all_reduce_test(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, layout",
+    "per_chip_output_shape",
     [
-        ([1, 1, 32, 4096], ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 8192], ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 1024], ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 2048], ttnn.TILE_LAYOUT),
-        ([1, 1, 4096, 32], ttnn.TILE_LAYOUT),
-        ([1, 1, 8192, 32], ttnn.TILE_LAYOUT),
-        ([1, 1, 1024, 32], ttnn.TILE_LAYOUT),
-        ([1, 1, 2048, 32], ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 4096]),
+        ([1, 1, 32, 8192]),
+        ([1, 1, 32, 1024]),
+        ([1, 1, 32, 2048]),
+        ([1, 1, 4096, 32]),
+        ([1, 1, 8192, 32]),
+        ([1, 1, 1024, 32]),
+        ([1, 1, 2048, 32]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
     ],
 )
 @pytest.mark.parametrize(

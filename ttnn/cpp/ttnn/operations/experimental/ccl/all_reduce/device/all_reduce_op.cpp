@@ -104,11 +104,26 @@ Tensor all_reduce(
             }
             TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error in all reduce op setup");
 
-            const auto& gathered_tensor = operation::run(
-                create_all_gather_struct(input_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
-                {input_tensor});
+            auto shape = input_tensor.shape();
+            auto rank = shape.rank();
 
-            return {ttnn::sum(gathered_tensor.at(0))};
+            uint32_t merged_dim_size = 1;
+            for (uint32_t i = 0; i <= rank - 3; ++i) {
+                merged_dim_size *= shape[i];
+            }
+
+            std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
+
+            auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+
+            const auto& gathered_tensor = operation::run(
+                create_all_gather_struct(reshaped_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                {reshaped_tensor});
+
+            auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);
+            auto final_output = ttnn::reshape(sum_tensor, shape);
+
+            return {final_output};
             },
      {input_tensor},
      output_tensors);
