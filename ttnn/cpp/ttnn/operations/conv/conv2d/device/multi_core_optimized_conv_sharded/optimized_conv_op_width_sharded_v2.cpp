@@ -203,8 +203,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t input_size_h = conv_act_size_h + (pad_h*2);
     uint32_t input_size_w = conv_act_size_w + (pad_w*2);
-    if(sliding_window_config.is_transpose)
-    {
+    if(sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
         input_size_h = input_shape[1];
         input_size_w = input_shape[2];
