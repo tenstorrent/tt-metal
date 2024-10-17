@@ -51,6 +51,11 @@ MorehBiasAddBackwardOperation::shape_return_value_t MorehBiasAddBackwardOperatio
 
 MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.bias_grad.has_value()) {
+        return tensor_args.bias_grad.value();
+    }
+
+    TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
     const auto& output_shape = compute_output_shapes(operation_attributes, tensor_args);
     auto dtype = tensor_args.bias.value().get_dtype();
     Layout layout{Layout::TILE};
@@ -58,9 +63,6 @@ MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperati
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
 
-    if (tensor_args.bias_grad.has_value()) {
-        return tensor_args.bias_grad.value();
-    }
     return create_device_tensor(output_shape, dtype, layout, device, bias_grad_memory_config);
 }
 
