@@ -75,7 +75,7 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
             enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-                kernel_init();
+                kernel_init(0);
             }
             mailboxes->go_message.signal = RUN_MSG_DONE;
 

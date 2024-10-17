@@ -116,7 +116,7 @@ class Hal {
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
-
+    std::string_view get_name(HalProgrammableCoreType core_type) const;
     uint32_t get_processor_count(uint32_t core_type_index) const;
 
     template <typename T = DeviceAddr>

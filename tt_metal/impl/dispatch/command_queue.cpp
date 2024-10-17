@@ -932,7 +932,10 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             } else {
                 uint32_t base_address = this->program.kernels_buffer->address();
                 uint32_t page_offset = kg_transfer_info.page_offsets[kernel_idx];
-                uint32_t dst_addr = kg_transfer_info.dst_base_addrs[kernel_idx];
+
+                // TODO: pack all these writes into 1 linear write
+                uint32_t kernel_config_buffer_offset = kg_transfer_info.dst_base_addrs[kernel_idx];
+                fprintf(stderr, "got offset[%d]: %d\n", kernel_idx, kernel_config_buffer_offset);
                 uint32_t aligned_length = align(kg_transfer_info.lengths[kernel_idx], hal.get_alignment(HalMemType::DRAM));
                 uint32_t padding = aligned_length - kg_transfer_info.lengths[kernel_idx];
                 while (aligned_length != 0) {
@@ -953,13 +956,14 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                     }
                     kernel_bins_dispatch_subcmds.back().emplace_back(CQDispatchWritePackedLargeSubCmd{
                         .noc_xy_addr = noc_encoding,
-                        .addr = dst_addr,
+                        .addr = kernel_config_buffer_offset,
                         .length = (uint16_t)write_length,
                         .num_mcast_dests = (uint8_t)num_mcast_dests,
                         .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_NONE});
                     RecordDispatchData(
                         program, DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
-                    dst_addr += write_length;
+                    fprintf(stderr, "writing for %d %d - %d\n", kernel_idx, kernel_config_buffer_offset, write_length);
+                    kernel_config_buffer_offset += write_length;
 
                     kernel_bins_prefetch_subcmds.back().emplace_back(CQPrefetchRelayPagedPackedSubCmd{
                         .start_page = (uint16_t)page_offset,
@@ -1174,7 +1178,11 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
         device_command_sequence.add_dispatch_write_packed_large(
-            dram_alignment, kernel_bins_dispatch_subcmds[i].size(), kernel_bins_dispatch_subcmds[i]);
+            dram_alignment,
+            kernel_bins_dispatch_subcmds[i].size(),
+            kernel_bins_dispatch_subcmds[i],
+            0,
+            DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE);
         device_command_sequence.add_prefetch_relay_paged_packed(
             kernel_bins_write_packed_large_data_aligned_sizeB[i],
             kernel_bins_prefetch_subcmds[i],
@@ -1457,6 +1465,7 @@ void EnqueueProgramCommand::process() {
 
     bool is_finalized = program.is_finalized();
     if (not is_finalized) {
+        fprintf(stderr, "command queue calling finalize\n");
         program.finalize(device);
     }
 
@@ -3011,6 +3020,7 @@ void EnqueueProgramImpl(
     ZoneScoped;
 
     Device* device = cq.device();
+    fprintf(stderr, "command queue calling compile\n");
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
     detail::ValidateCircularBufferRegion(program, device);

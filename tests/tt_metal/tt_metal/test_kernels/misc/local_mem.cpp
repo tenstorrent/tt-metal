@@ -19,7 +19,6 @@ void kernel_main() {
 namespace NAMESPACE {
 void MAIN {
 #endif
-
     if (nonzero[0] != 0xAABB0000 ||
         nonzero[1] != 0xAABB0001 ||
         nonzero[2] != 0xAABB0002 ||

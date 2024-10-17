@@ -19,4 +19,4 @@ __firmware_global_pointer = ORIGIN(ERISC_DATA) + 0x7f0;
 
 INCLUDE "erisc-b0-app-sections.ld"
 INCLUDE "tensix-address.ld"
-_Z11kernel_initv = ORIGIN(REGION_APP_KERNEL_CODE);
+_Z11kernel_initm = ORIGIN(REGION_APP_KERNEL_CODE);
