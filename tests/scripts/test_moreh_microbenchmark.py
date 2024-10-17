@@ -769,7 +769,7 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
 @pytest.mark.parametrize(
     "arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
     [
-        ("wormhole_b0", 1000, np.array([32, 32]), 1, 1, 1, 0, 1, 1, 2),
+        ("wormhole_b0", 1000, np.array([96, 32]), 1, 1, 1, 0, 1, 1, 3),
     ],
 )
 def test_dram_read_remote_cb_sync(

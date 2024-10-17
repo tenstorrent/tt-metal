@@ -30,6 +30,7 @@ tt_l1_ptr uint32_t* page_size;
 tt_l1_ptr uint32_t* num_tile_rows;
 
 uint32_t start_page_size;
+uint32_t layer = 0;
 
 template<uint32_t num_recv_cbs>
 struct RemoteSenderCBInterface {
@@ -88,6 +89,12 @@ FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size) {
     remote_cb_interface.fifo_limit_page_aligned = cb_size_page_aligned + remote_cb_interface.fifo_start_addr;
     remote_cb_interface.fifo_page_size = page_size;
     remote_cb_interface.fifo_aligned_num_pages = num_pages * page_size / remote_cb_interface.aligned_page_size;
+
+    uint32_t curr_fifo_wr_ptr = remote_cb_interface.fifo_wr_ptr;
+    bool fifo_wr_ptr_exceed_fifo_limit = curr_fifo_wr_ptr > remote_cb_interface.fifo_limit_page_aligned;
+    uint32_t num_pages_till_fifo_limit = (remote_cb_interface.fifo_limit_page_aligned - curr_fifo_wr_ptr) / page_size;
+    remote_cb_interface.fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ?
+        remote_cb_interface.fifo_start_addr : remote_cb_interface.fifo_limit_page_aligned - num_pages_till_fifo_limit * page_size;
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t num_pages) {
@@ -198,6 +205,11 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(uint32_t local_cb_addr, ui
     uint32_t len_bytes = num_pages * remote_cb_interface.fifo_page_size;
     uint32_t pages_sent = len_bytes / remote_cb_interface.aligned_page_size;
 
+    // DPRINT << "remote_cb_interface.fifo_page_size " << remote_cb_interface.fifo_page_size << ENDL();
+    // DPRINT << "coalesced_page_size " << coalesced_page_size << ENDL();
+
+    DPRINT << "new_layer" <<ENDL();
+
     uint32_t next_receiver_start_addr_stride = coalesced_num_pages_per_row * coalesced_page_size;
     uint32_t next_block_row_stride = next_receiver_start_addr_stride * remote_cb_interface.num_receivers;
 
@@ -206,8 +218,14 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(uint32_t local_cb_addr, ui
     uint32_t next_receiver_start_addr_offset = 0;
     for (uint32_t i=0; i < remote_cb_interface.num_receivers; ++i) {
 
+        // DPRINT << "remote_noc_x[i] " << remote_noc_x[i] << ENDL();
+        // DPRINT << "remote_noc_y[i] " << remote_noc_y[i] << ENDL();
+
         uint32_t src_addr = local_cb_addr + next_receiver_start_addr_offset;
         dest_addr = remote_cb_interface.fifo_wr_ptr;
+
+        // DPRINT << "remote_cb_interface  " <<  remote_cb_interface.fifo_wr_ptr << ENDL();
+
         uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_x[i]), DYNAMIC_NOC_Y(noc, remote_noc_y[i])));
         uint64_t dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
@@ -219,19 +237,58 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(uint32_t local_cb_addr, ui
                 dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
                 if ((dest_addr + coalesced_page_size) > remote_cb_interface.fifo_limit_page_aligned) {
+                    // DPRINT << "non align  " << ENDL();
+
+                    // DPRINT << "src_addr " << src_addr - local_cb_addr<< ENDL();
+                    // DPRINT << "dest_addr  " <<  dest_addr - remote_cb_interface.fifo_start_addr << ENDL();
+
+
+                    // DPRINT << "dest_addr " << dest_addr << ENDL();
+                    // DPRINT << "coalesced_page_size " << coalesced_page_size << ENDL();
+                    // DPRINT << "dest_addr + coalesced_page_size " << dest_addr + coalesced_page_size << ENDL();
+                    // DPRINT << "remote_cb_interface.fifo_limit_page_aligned " << remote_cb_interface.fifo_limit_page_aligned << ENDL();
+                    // uint32_t first_len_bytes;
+                    // if (remote_cb_interface.fifo_limit_page_aligned > dest_addr) {
+                    //     uint32_t first_num_pages = (remote_cb_interface.fifo_limit_page_aligned - dest_addr) / remote_cb_interface.fifo_page_size;
+                    //     first_len_bytes = first_num_pages * remote_cb_interface.fifo_page_size;
+                    // } else {
+                    //     first_len_bytes = 0;
+                    // }
 
                     uint32_t first_len_bytes = remote_cb_interface.fifo_limit_page_aligned - dest_addr;
                     uint32_t second_len_bytes = coalesced_page_size - first_len_bytes;
 
+                    // DPRINT << "first_len_bytes  " <<  first_len_bytes << ENDL();
+                    // DPRINT << "second_len_bytes  " <<  second_len_bytes << ENDL();
+
                     if (first_len_bytes != 0) {
-                        noc_async_write_one_packet(src_addr, dest_noc_addr, first_len_bytes, noc);
+                    //     if ((layer == 0 or layer ==  1)) {
+                    //         DPRINT << "do not read  " << ENDL();
+                    //     } else {
+                    //         if (h == 1 or h == 2) {
+                    //             DPRINT << "do not read row " << ENDL();
+                    //         } else {
+                                noc_async_write_one_packet(src_addr, dest_noc_addr, first_len_bytes, noc);
+                            // }
+                        // }
                         src_addr += first_len_bytes;
                     }
 
                     dest_addr = remote_cb_interface.fifo_start_addr;
                     dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
 
-                    noc_async_write_one_packet(src_addr, dest_noc_addr, second_len_bytes, noc);
+                    // DPRINT << "src_addr " << src_addr - local_cb_addr<< ENDL();
+                    // DPRINT << "dest_addr  " <<  dest_addr - remote_cb_interface.fifo_start_addr << ENDL();
+
+                    // if ((layer == 0 or layer ==  1)) {
+                    //     DPRINT << "do not read  " << ENDL();
+                    // } else {
+                    //     if (h == 1 or h == 2) {
+                    //         DPRINT << "do not read row " << ENDL();
+                    //     } else {
+                            noc_async_write_one_packet(src_addr, dest_noc_addr, second_len_bytes, noc);
+                    //     }
+                    // }
 
                     src_addr += second_len_bytes;
                     dest_addr += second_len_bytes;
@@ -240,7 +297,31 @@ FORCE_INLINE void remote_cb_push_back_and_write_pages(uint32_t local_cb_addr, ui
                     noc_async_write_one_packet_set_state(dest_noc_addr, coalesced_page_size, noc);
 
                 } else {
-                    noc_async_write_one_packet_with_state(src_addr, dest_noc_addr, noc);
+
+                    // if ((layer == 0 or layer ==  1)) {
+                    //     DPRINT << "do not read  " << ENDL();
+                    // } else {
+                    //     if (h == 1 or h == 2) {
+                    //         DPRINT << "do not read row " << ENDL();
+                    //     } else {
+                    //         DPRINT << "align  " << ENDL();
+                    //         DPRINT << "src_addr " << src_addr<< ENDL();
+                    //         DPRINT << "src_addr " << src_addr - local_cb_addr<< ENDL();
+                    //         DPRINT << "dest_addr " << dest_addr<< ENDL();
+                    //         DPRINT << "dest_addr " << dest_addr - remote_cb_interface.fifo_start_addr << ENDL();
+                    //         DPRINT << "dest_noc_addr " << dest_noc_addr << ENDL();
+                    //         DPRINT << "get_noc_addr_helper(remote_noc_xy, dest_addr) " << get_noc_addr_helper(remote_noc_xy, dest_addr) << ENDL();
+
+                            // // src_addr = local_cb_addr;
+                            // dest_addr = remote_cb_interface.fifo_start_addr;
+                            // dest_noc_addr = get_noc_addr_helper(remote_noc_xy, dest_addr);
+
+                            // noc_async_write_one_packet_set_state(dest_noc_addr, coalesced_page_size, noc);
+                            noc_async_write_one_packet_with_state(src_addr, dest_noc_addr, noc);
+                    //     }
+
+                    // }
+
 
                     src_addr += coalesced_page_size;
                     dest_addr += coalesced_page_size;
@@ -306,6 +387,9 @@ void kernel_main() {
 
             cb_wait_front(cb_id, curr_block_num_tiles);
 
+            // if (l == 2)
+            //     DPRINT  << TSLICE(cb_id, 0, SliceRange{ .h0 = 25, .h1 = 26, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1 }, true) << ENDL();
+
             // DPRINT  << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), true, true) << ENDL();
 
             uint32_t local_cb_addr = get_read_ptr(cb_id);
@@ -315,6 +399,9 @@ void kernel_main() {
             cb_pop_front(cb_id, curr_block_num_tiles);
 
         }
+        layer++;
+
+        // DPRINT << "done" <<ENDL();
     }
 
 }

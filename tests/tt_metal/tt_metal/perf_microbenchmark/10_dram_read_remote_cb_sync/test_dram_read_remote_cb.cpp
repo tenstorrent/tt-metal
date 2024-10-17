@@ -155,6 +155,9 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             .set_page_size(receiver_cb_index, receiver_page_size).set_globally_allocated_address(*output_buffer);
     auto receiver_cb = tt_metal::CreateCircularBuffer(program, l1_receiver_cores, receiver_cb_config);
 
+    log_info("reader_cb_size: {}", reader_cb_size);
+    log_info("receiver_cb_size: {}", receiver_cb_size);
+
     // semaphore
     std::vector<uint32_t> pages_acked_semaphore_ids(num_receivers);
     std::vector<uint32_t> pages_sent_semaphore_ids(num_receivers);
@@ -448,6 +451,184 @@ bool validation_fp16(
     return pass;
 }
 
+bool validation_mixed_df(
+    tt::deprecated::Tensor<bfloat16> input_tensor_fp16,
+    tt::deprecated::Tensor<float> input_tensor_fp8,
+    const tt::DataFormat &data_format,
+    uint32_t num_blocks,
+    uint32_t cb_num_blocks,
+    uint32_t kt,
+    uint32_t nt,
+    std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+    uint32_t num_mixed_df_layers
+) {
+    bool pass = true;
+
+
+    std::vector<uint32_t> result;
+    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+
+    auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
+    auto result_flat_layout_bfp16 = convert_to_flat_layout(result_bfp16);
+    auto result_untilized_fp16 = tt::test_utils::untilize(result_flat_layout_bfp16, kt*32 / num_blocks * cb_num_blocks, nt*32);
+
+    auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
+    std::vector<float> result_untilized_fp8 = tt::test_utils::untilize(result_bfp8, result_bfp8.size() / (nt*32), nt*32);
+
+    log_info("num_cb_elements: {}", result_untilized_fp16.size());
+    log_info("num_cb_elements: {}", result_untilized_fp8.size());
+
+    int max_cb_num_datums = result_untilized_fp8.size();
+    int min_cb_num_datums = result_untilized_fp16.size();
+
+    std::vector<float> golden_vec(max_cb_num_datums);
+    std::vector<float> result_vec_fp16(min_cb_num_datums);
+    std::vector<float> result_vec_fp8(max_cb_num_datums);
+    std::vector<float> result_vec(max_cb_num_datums);
+
+    const auto& values_fp16 = input_tensor_fp16.get_values();
+    const auto& values_fp8 = input_tensor_fp8.get_values();
+
+    int index = 0;
+    int index_fp16 = 0;
+    int index_fp8 = 0;
+    for (int l = 0; l < num_mixed_df_layers; ++l) {
+        if (l % 2 == 0) {
+            index_fp16 = index;
+            for (int i = 0; i < values_fp16.size(); ++i) {
+                golden_vec[index] = to_float(values_fp16[i]);
+                index++;
+
+                if (index == max_cb_num_datums) {
+                    index = 0;
+                }
+            }
+        } else {
+            index_fp8 = index;
+            for (int i = 0; i < values_fp8.size(); ++i) {
+                golden_vec[index] = (float)values_fp8[i];
+                index++;
+
+                if (index == max_cb_num_datums) {
+                    index = 0;
+                }
+            }
+        }
+
+    }
+
+    log_info("start index of fp16: {}", index_fp16);
+    log_info("start index of fp8: {}", index_fp8);
+
+    for (int i=0; i<result_untilized_fp16.size(); ++i) {
+        result_vec_fp16[i] = to_float(static_cast<bfloat16>(result_untilized_fp16[i]));
+    }
+    for (int i=0; i<result_untilized_fp8.size(); ++i) {
+        result_vec_fp8[i] = result_untilized_fp8[i];
+    }
+
+    // if (num_mixed_df_layers % 2 == 0) { // end layer is fp8
+
+    // } else {
+    //     int index = 0;
+    //     for (int i=index_fp16; i < max_cb_num_datums; ++i) {
+    //         result_vec[i] = result_vec_fp16[index];
+    //         index++;
+    //     }
+    // }
+
+
+    // if (index_fp16 > index_fp8) {
+    //     log_info("index_fp16 > index_fp8");
+
+    //     int len_fp8 = (index_fp16 - index_fp8);
+    //     for (int i=index_fp8; i < len_fp8; ++i) {
+    //         result_vec[i] = result_vec_fp8[i];
+    //     }
+    //     for (int i=0; i < index_fp8; ++i) {
+    //         result_vec[i] = result_vec_fp16[i];
+    //     }
+    //     for (int i=index_fp16; i < len; ++i) {
+    //         result_vec[i] = result_vec_fp16[i];
+    //     }
+
+    // } else if (index_fp16 < index_fp8) {
+    //     log_info("index_fp16 < index_fp8");
+
+    //     int len_fp16 = (index_fp8 - index_fp16);
+    //     for (int i=index_fp16; i < len_fp16; ++i) {
+    //         result_vec[i] = result_vec_fp16[i];
+    //     }
+    //     for (int i=0; i < index_fp8; ++i) {
+    //         result_vec[i] = result_vec_fp8[i];
+    //     }
+    //     for (int i=index_fp8; i < len; ++i) {
+    //         result_vec[i] = result_vec_fp8[i];
+    //     }
+
+    // } else {
+    //     log_info("index_fp16 = index_fp8");
+
+    //     if (num_mixed_df_layers % 2 == 0) { // end layer is fp8
+    //         log_info("last layer is fp8");
+    //         for (int i=0; i < len; ++i) {
+    //             result_vec[i] = result_vec_fp8[i];
+    //         }
+    //     } else {
+    //         log_info("last layer is fp16");
+    //         for (int i=0; i < len; ++i) {
+    //             result_vec[i] = result_vec_fp16[i];
+    //         }
+    //     }
+    // }
+
+    // for (uint32_t i=0; i < golden_vec.size(); ++i ) {
+    //     std::cout << golden_vec[i] << " ";
+
+    //     if ((i+1) %32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    // std::cout << std::endl;
+    // std::cout << std::endl;
+
+    // for (uint32_t i=0; i < result_vec.size(); ++i ) {
+    //     std::cout << result_vec[i] << " ";
+
+    //     if ((i+1) %32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    // std::cout << std::endl;
+    // std::cout << std::endl;
+
+    for (uint32_t i=0; i < result_vec_fp16.size(); ++i ) {
+        std::cout << result_vec_fp16[i] << " ";
+
+        if ((i+1) %32 == 0) {
+            std::cout << std::endl;
+        }
+    }
+
+    // std::cout << std::endl;
+    // std::cout << std::endl;
+
+    // for (uint32_t i=0; i < result_vec_fp8.size(); ++i ) {
+    //     std::cout << result_vec_fp8[i] << " ";
+
+    //     if ((i+1) %32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
+
+    pass &= pcc(golden_vec, result_vec) >= 0.9999;
+    if (!pass) {
+        log_error(LogTest, "validation single core failed");
+    }
+    return pass;
+}
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
     tt_metal::Device* device,
@@ -550,6 +731,10 @@ int main(int argc, char **argv) {
         log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
         log_info("num_receivers: {} ", num_receivers);
 
+        if (num_mixed_df_layers > 1) {
+            TT_FATAL(df == 1, "must start with bfloat16 format for mix_df test");
+        }
+
         if (use_device_profiler) {
             #if !defined(TRACY_ENABLE)
             log_error(
@@ -615,7 +800,7 @@ int main(int argc, char **argv) {
         std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
         tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::RANDOM, 100, std::chrono::system_clock::now().time_since_epoch().count());
+        tt::deprecated::Tensor<float> tensor_fp8 = tt::deprecated::initialize_tensor<float>(input_shape, tt::deprecated::Initialize::INCREMENT, 100, std::chrono::system_clock::now().time_since_epoch().count());
         if (tile_format == tt::DataFormat::Bfp8_b) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i%2 == 0) { // even layers
@@ -673,24 +858,37 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        if (tile_format == tt::DataFormat::Bfp8_b) {
-            pass = validation_bfp8_b(
-                tensor_fp8,
-                tile_format,
-                num_blocks,
-                cb_num_blocks,
-                kt,
-                nt,
-                output_buffer);
+        if (num_mixed_df_layers == 1) {
+            if (tile_format == tt::DataFormat::Bfp8_b) {
+                pass = validation_bfp8_b(
+                    tensor_fp8,
+                    tile_format,
+                    num_blocks,
+                    cb_num_blocks,
+                    kt,
+                    nt,
+                    output_buffer);
+            } else {
+                pass = validation_fp16(
+                    tensor_fp16,
+                    tile_format,
+                    num_blocks,
+                    cb_num_blocks,
+                    kt,
+                    nt,
+                    output_buffer);
+            }
         } else {
-            pass = validation_fp16(
-                tensor_fp16,
-                tile_format,
-                num_blocks,
-                cb_num_blocks,
-                kt,
-                nt,
-                output_buffer);
+            pass = validation_mixed_df(
+                    tensor_fp16,
+                    tensor_fp8,
+                    tile_format,
+                    num_blocks,
+                    cb_num_blocks,
+                    kt,
+                    nt,
+                    output_buffer,
+                    num_mixed_df_layers);
         }
 
         pass &= tt_metal::CloseDevice(device);
