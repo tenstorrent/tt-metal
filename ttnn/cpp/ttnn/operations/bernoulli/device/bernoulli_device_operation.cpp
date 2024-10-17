@@ -31,6 +31,9 @@ void BernoulliDeviceOperation::validate_inputs(
         TT_FATAL(
             output.value().get_dtype() == DataType::BFLOAT16 || output.value().get_dtype() == DataType::FLOAT32,
             "Bernoulli: Output tensor must be Float32 or Bfloat16");
+        TT_FATAL(
+            input.get_logical_volume() == output.value().get_logical_volume(),
+            "Bernoulli: Output and input tensor shape must be equal");
     }
 }
 
@@ -52,7 +55,7 @@ BernoulliDeviceOperation::shape_return_value_t BernoulliDeviceOperation::compute
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.out.has_value()) {
-        return {tensor_args.out.value()};
+        return tensor_args.out.value();
     }
 
     auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);

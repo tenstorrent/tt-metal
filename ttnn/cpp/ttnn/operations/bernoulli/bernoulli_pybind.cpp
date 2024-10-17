@@ -26,7 +26,6 @@ void bind_bernoulli_operation(py::module &module) {
     Returns:
         Tensor: A new tensor with the same shape as `input` contains only 1 or 0.
     )doc";
-    ;
 
     bind_registered_operation(
         module,

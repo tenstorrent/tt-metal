@@ -24,7 +24,6 @@ void kernel_main() {
         uint32_t in_cb_write_ptr = get_write_ptr(in_cb_id);
         noc_async_read_tile(i, input_addrg, in_cb_write_ptr);
         noc_async_read_barrier();
-        uint16_t *ptr = reinterpret_cast<uint16_t *>(in_cb_write_ptr);
         cb_push_back(in_cb_id, 1);
     }
 }
