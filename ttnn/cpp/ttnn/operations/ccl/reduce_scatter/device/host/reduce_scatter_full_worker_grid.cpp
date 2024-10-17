@@ -611,7 +611,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     TT_ASSERT(input_tensor_num_units_per_tensor_slice > 0);
     constexpr bool enable_bidirectional = true;
-    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(topology == Topology::Linear ? 2 : 8), input_tensor_num_units_per_tensor_slice);
+    constexpr std::size_t default_num_workers = 8;
+    uint32_t max_num_workers = std::min<std::size_t>(user_defined_num_workers.value_or(default_num_workers), input_tensor_num_units_per_tensor_slice);
     if (topology == ttnn::ccl::Topology::Linear) {
         max_num_workers = std::max<std::size_t>(max_num_workers, 2);
     }
@@ -835,9 +836,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         receiver_device_id,
         sender_device_id);
 
-    std::size_t total_num_workers = worker_cores.size();
     auto override_runtime_arguments_callback =
-        [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, worker_cores, total_num_workers, ring_index](
+        [topology_config, worker_receiver_kernel_id, worker_sender_kernel_id, optional_line_start_ccl_send_kernel, worker_cores, second_worker_cores_list](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -851,9 +851,20 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
                 auto core = worker_cores.at(i);
                 auto& worker_receiver_runtime_args = worker_receiver_runtime_args_by_core[core.x][core.y];
                 worker_receiver_runtime_args.at(0) = input.buffer()->address();
+                worker_receiver_runtime_args.at(1) = output.buffer()->address();
 
                 auto& worker_sender_runtime_args = worker_sender_runtime_args_by_core[core.x][core.y];
                 worker_sender_runtime_args.at(0) = output.buffer()->address();
+            }
+
+            if (second_worker_cores_list.has_value()) {
+                TT_FATAL(optional_line_start_ccl_send_kernel.has_value(), "Internal error: line start CCL send kernel was not found but we split the worker grid to place it onto some worker cores");
+                auto const &line_start_worker_cores = second_worker_cores_list.value();
+                auto &ccl_send_kernel_rt_args_by_core = GetRuntimeArgs(program, optional_line_start_ccl_send_kernel.value());
+                for (auto const& core : line_start_worker_cores) {
+                    auto& line_start_kernel_rt_args = ccl_send_kernel_rt_args_by_core[core.x][core.y];
+                    line_start_kernel_rt_args.at(0) = input.buffer()->address();
+                }
             }
         };
 

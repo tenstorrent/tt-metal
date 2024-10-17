@@ -19,8 +19,6 @@
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = MEM_MAP_END;
 constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128 + 512;
 
-constexpr static std::uint32_t IDLE_ERISC_L1_KERNEL_CONFIG_BASE = MEM_IERISC_MAP_END;
-
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
 

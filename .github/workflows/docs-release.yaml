@@ -89,7 +89,7 @@ jobs:
           cp -Lr docs/source/ttnn/* ttnn-docs
           rm ttnn-docs/conf.py  # Do not change conf.py
           echo "Copy tutorials and examples for TTNN from a different repo area."
-          cp -Lr ttnn/examples ttnn-docs/ttnn
+          cp -Lr ttnn/ttnn/examples ttnn-docs/ttnn
           echo "Make sure the links are updated in ttnn/usage.rst to the correct spot for the tutorials and examples."
           sed -i "s/..\/..\/..\/..\/ttnn\/examples/examples/g" ttnn-docs/ttnn/usage.rst
 

@@ -19,7 +19,6 @@ struct ScaledDotProductAttention {
     const std::optional<SDPAProgramConfig> program_config;
     const bool is_causal;
     const DeviceComputeKernelConfig compute_kernel_config;
-    const std::optional<uint32_t> valid_seq_len;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

@@ -30,21 +30,30 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Row Major layout is not supported"
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -53,9 +62,9 @@ parameters = {
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_dtype,
+    input_layout,
+    input_memory_config,
     output_memory_config,
     *,
     device,
@@ -65,22 +74,23 @@ def run(
 
     upper_limit = torch.tensor(1, dtype=torch.bfloat16).uniform_(low, high).item()
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    torch_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.relu(torch.min(torch_input_tensor_a, torch.tensor(upper_limit)))
+    golden_function = ttnn.get_golden_function(ttnn.relu_max)
+    torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=input_dtype,
+        layout=input_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_memory_config,
     )
 
     start_time = start_measuring_time()
-    result = ttnn.relu_max(input_tensor_a, upper_limit, memory_config=output_memory_config)
+    result = ttnn.relu_max(input_tensor, upper_limit, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

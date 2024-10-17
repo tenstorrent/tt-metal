@@ -725,7 +725,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_) {
+    std::optional<const Conv2dConfig> conv_config_,
+    const std::optional<const MemoryConfig> memory_config) {
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
@@ -885,6 +886,11 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
         ttnn::operations::core::deallocate(halo_output);
+
+        if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
+            conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
+        }
+
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
@@ -902,7 +908,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             matmul_input = ttnn::operations::downsample::downsample(
                 input_tensor_post_tm, {batch_size, input_height, input_width, stride[0], stride[1]});
             if (conv_config.deallocate_activation) {
-                // input_tensor_post_tm.deallocate();
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
             }
         }
@@ -917,9 +922,13 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.dtype,
             compute_kernel_config});
         if (conv_config.deallocate_activation) {
-            // matmul_input.deallocate();
             ttnn::operations::core::deallocate(matmul_input);
         }
+
+        if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
+            matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
+        }
+
         return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 }
@@ -1031,7 +1040,8 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_);
+    std::optional<const Conv2dConfig> conv_config_,
+    const std::optional<const MemoryConfig> memory_config);
 
 template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<MeshDevice>(
     const ttnn::Tensor& input_tensor,
@@ -1048,7 +1058,8 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_);
+    std::optional<const Conv2dConfig> conv_config_,
+    const std::optional<const MemoryConfig> memory_config);
 
 }  // namespace conv2d
 }  // namespace operations
