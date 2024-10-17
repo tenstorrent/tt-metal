@@ -17,10 +17,7 @@ using namespace tt::tt_metal;
 std::mt19937 rng(std::time(0));
 std::uniform_int_distribution d(1, 1 << 20);
 
-uint32_t get_random_seed() {
-    std::cout << d(rng) << " ";
-    return d(rng);
-}
+uint32_t get_random_seed() { return d(rng); }
 
 BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -60,11 +57,11 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     auto out_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_dtype_tile_size = tile_size(out_data_format);
-    constexpr uint32_t out_cb_id = CB::c_out0;
-    CircularBufferConfig cb_out_config =
-        CircularBufferConfig(num_tiles * out_dtype_tile_size, {{out_cb_id, out_data_format}})
-            .set_page_size(out_cb_id, out_dtype_tile_size);
-    CBHandle cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    constexpr uint32_t intermed1_cb_id = CB::c_out0;
+    CircularBufferConfig cb_intermed1_config =
+        CircularBufferConfig(1 * out_dtype_tile_size, {{intermed1_cb_id, out_data_format}})
+            .set_page_size(intermed1_cb_id, out_dtype_tile_size);
+    CBHandle cb_intermed1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
     const uint32_t input_is_dram = input.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -73,7 +70,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_bernoulli.cpp";
     const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, out_cb_id, output_is_dram};
+    const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
     std::map<string, string> writer_defines;

@@ -10,7 +10,7 @@ using namespace tt;
 void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t intermed1_cb_id = get_compile_time_arg_val(2);
     constexpr bool output_is_dram = get_compile_time_arg_val(3) == 1;
 
     uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -19,13 +19,14 @@ void kernel_main() {
     uint32_t end_id = start_id + num_tiles;
 
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = out_addr, .page_size = get_tile_size(out_cb_id), .data_format = get_dataformat(out_cb_id)};
+        .bank_base_address = out_addr,
+        .page_size = get_tile_size(intermed1_cb_id),
+        .data_format = get_dataformat(intermed1_cb_id)};
 
-    uint32_t max_uint = 2147483647;
+    uint32_t max_int = 2147483647;
 
-    cb_reserve_back(out_cb_id, 1);
-    uint32_t out_cb_write_ptr = get_write_ptr(out_cb_id);
-    uint8_t *out_cb_addr = reinterpret_cast<uint8_t *>(out_cb_write_ptr);
+    cb_reserve_back(intermed1_cb_id, 1);
+    uint32_t intermed1_cb_write_ptr = get_write_ptr(intermed1_cb_id);
 
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(in_cb_id, 1);
@@ -36,17 +37,19 @@ void kernel_main() {
 
         uint8_t *in_cb_addr = reinterpret_cast<uint8_t *>(in_cb_read_ptr);
         uint32_t *intermed_cb_addr = reinterpret_cast<uint32_t *>(intermed_cb_read_ptr);
+        uint8_t *intermed1_cb_addr = reinterpret_cast<uint8_t *>(intermed1_cb_write_ptr);
 
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 uint32_t rand_uint32 = *intermed_cb_addr;
-                float rand_float = static_cast<float>(rand_uint32) / max_uint;
+                if (rand_uint32 == 0) {
+                    DPRINT << i << "-" << k + j * constants::TILE_WIDTH << "-" << rand_uint32 << " ";
+                }
                 // The hardware PRNG is not uniformly distribute.
-                // Generated rand_floats in range [0, 0.5] has higher ratio compared to (0.5, 1).
-                // I *2 rand_float < 0.5 to make it more uniform.
-                // if (rand_float < 0.5f) {
-                //     rand_float *= 2;
-                // }
+                // Generated rand_floats in range [0, max_uint32 / 2] has higher ratio compared to (max_uint32 / 2,
+                // max_uint32), which makes the output tensor contains more 1 value than 0. I divide rand_float with
+                // max_int instead of max_uint to balance the number of 1 and 0 value in output tensor.
+                float rand_float = static_cast<float>(rand_uint32) / max_int;
 
                 float input = 0;
 #ifdef INPUT_DTYPE_FLOAT32
@@ -66,13 +69,13 @@ void kernel_main() {
                 }
 
 #ifdef OUTPUT_DTYPE_FLOAT32
-                *(float *)out_cb_addr = output;
-                out_cb_addr += 4;
+                *(float *)intermed1_cb_addr = output;
+                intermed1_cb_addr += 4;
 #endif
 #ifdef OUTPUT_DTYPE_BFLOAT16
                 uint16_t *out_u16_ptr = reinterpret_cast<uint16_t *>(&output) + 1;
-                *(uint16_t *)out_cb_addr = *out_u16_ptr;
-                out_cb_addr += 2;
+                *(uint16_t *)intermed1_cb_addr = *out_u16_ptr;
+                intermed1_cb_addr += 2;
 #endif
                 intermed_cb_addr += 1;
             }
@@ -80,7 +83,7 @@ void kernel_main() {
         cb_pop_front(in_cb_id, 1);
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_tile(i, output_addrg, out_cb_write_ptr);
+        noc_async_write_tile(i, output_addrg, intermed1_cb_write_ptr);
         noc_async_write_barrier();
     }
 }
