@@ -81,7 +81,7 @@ SECTIONS
 #endif
 
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .data DATA_START :
+  .ldm_data DATA_START :
   {
      . = .; /* Force section emission.  */
      __ldm_data_start = .;
@@ -117,10 +117,10 @@ SECTIONS
     SORT(CONSTRUCTORS)
     *(.data1)
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+
+    /* bss is initialized with 4 byte writes */
+    . = ALIGN(4);
     __ldm_data_end = .;
-  }
-  .bss ALIGN(4):
-  {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
@@ -143,7 +143,6 @@ SECTIONS
   __fw_export_ldm_end = .;
 #endif
 
-#ifdef TYPE_FIRMWARE
   /* Move to end of local memory for stack */
   .stack :
   {
@@ -151,7 +150,6 @@ SECTIONS
    . += FIRMWARE_STACK_SIZE;
     __stack_top = .;
   } > REGION_STACK
-#endif
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }
