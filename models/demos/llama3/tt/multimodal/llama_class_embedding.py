@@ -44,7 +44,6 @@ class TtLlamaClassEmbedding(LightweightModule):
         bsz = x.shape[1]
         # Broadcast class embedding to match input batch size
         class_embedding = ttnn.concat([self.class_embedding] * bsz, dim=1)  # Broadcast batch size
-        # breakpoint()
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat([class_embedding, x], dim=2)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)

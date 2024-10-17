@@ -169,13 +169,11 @@ class TtLlamaCrossAttention(LightweightModule):
         ### EVERYTHING BELOW IS BROKEN OMG
         # BEWARNED! TMs are dangerous!
         # WORKAROUND
-        # breakpoint()
         xk = ttnn.to_layout(xk, layout=ttnn.ROW_MAJOR_LAYOUT)
         xv = ttnn.to_layout(xv, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         xk = xk.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
         xv = xv.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
-        # breakpoint()
         # xk = ttnn.to_memory_config(xk, ttnn.L1_MEMORY_CONFIG)
         # xk = ttnn.to_memory_config(xk, ttnn.DRAM_MEMORY_CONFIG)
         return xk

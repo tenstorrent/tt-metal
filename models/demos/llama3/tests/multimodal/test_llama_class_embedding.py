@@ -26,7 +26,7 @@ from models.utility_functions import (
 from models.utility_functions import (
     nearest_32,
 )
-from models.demos.llama3.tt.llama_class_embedding import (
+from models.demos.llama3.tt.multimodal.llama_class_embedding import (
     TtLlamaClassEmbedding,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs

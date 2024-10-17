@@ -163,7 +163,6 @@ class TtLlamaImageAttention(LightweightModule):
         # xqkv_fused_torch = torch.matmul(x_torch, wqkv).bfloat16().float()
         xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.T).bfloat16().float()
         # xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.tranpose).bfloat16().float()
-        logger.info(xqkv_fused_torch.shape)
         # n, s, d = xqkv_fused_torch.shape[-3:]
         s, d = xqkv_fused_torch.shape[-2:]
         xqkv = xqkv_fused_torch.reshape(s, 3, d // 3)
@@ -202,8 +201,6 @@ class TtLlamaImageAttention(LightweightModule):
         out = torch.nn.functional.linear(attn_output, wo.T).bfloat16().float()
         # out = torch.sum(out, dim=0).unsqueeze(0).unsqueeze(0).bfloat16().float()
         out = out.view(1, 1, 4224, -1)
-
-        # breakpoint()
 
         out_tt = ttnn.from_torch(
             out,
