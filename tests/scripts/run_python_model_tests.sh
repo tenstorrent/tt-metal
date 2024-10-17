@@ -48,11 +48,11 @@ run_python_model_tests_wormhole_b0() {
     llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
     # Llama3.2-3B
     llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-    # Llama3.2-11B
+    # Llama3.2-11B  (#Skip: Weights to big for single-chip ci VM)
     llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
-    for llama_dir in "$llama8b" "$llama1b" "$llama3b" "$llama11b"; do
+    for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
         LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
