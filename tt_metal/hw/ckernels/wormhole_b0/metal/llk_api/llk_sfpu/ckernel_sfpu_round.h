@@ -26,7 +26,7 @@ inline vFloat round_even(vFloat v) {
     return v;
 }
 
-template <bool APPROX, int ITERATIONS = 8>
+template <bool APPROXIMATE, int ITERATIONS = 8>
 void calculate_round() {
     for (int _ = 0; _ < ITERATIONS; ++_) {
         *dst_reg = round_even(*dst_reg);
