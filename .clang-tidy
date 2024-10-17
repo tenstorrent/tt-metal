@@ -1,10 +1,24 @@
-Checks: >
-  bugprone-*,
-  performance-*,
-  modernize-*,
-  readability-*,
-  cppcoreguidelines-*
-  -modernize-use-trailing-return-type
+Checks: "*,
+        -abseil-*,
+        -altera-*,
+        -android-*,
+        -fuchsia-*,
+        -google-*,
+        -llvm*,
+        -modernize-use-trailing-return-type,
+        -zircon-*,
+        -readability-else-after-return,
+        -readability-static-accessed-through-instance,
+        -readability-avoid-const-params-in-decls,
+        -cppcoreguidelines-non-private-member-variables-in-classes,
+        -misc-non-private-member-variables-in-classes,
+        -include-what-you-use,
+        -cppcoreguidelines-avoid-magic-numbers,
+        -readability-magic-numbers,
+"
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+FormatStyle:     none
 
 CheckOptions:
   - key: readability-identifier-length.IgnoredVariableNames
