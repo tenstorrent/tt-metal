@@ -115,6 +115,31 @@ def comp_equal(golden, calculated):
     return equal, output_str
 
 
+def comp_equal_print_error_value(golden, calculated, inp, x):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    while len(golden.shape) < len(calculated.shape):
+        golden = torch.unsqueeze(golden, 0)
+
+    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
+    equal = torch.equal(golden, calculated)
+
+    if not equal:
+        mismatch_mask = golden != calculated
+        mismatch_indices = torch.nonzero(mismatch_mask, as_tuple=True)
+        for idx in zip(*mismatch_indices):
+            print(f"\nGolden              : {golden[idx]}")
+            print(f"Calculated          : {calculated[idx]}")
+            print(f"Torch Input         : {inp[idx]}")
+            print(f"TT Input To torch   : {x[idx]}")
+
+    if not equal:
+        output_str += ", Equal check failed"
+
+    return equal, output_str
+
+
 def comp_shape(golden, calculated):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
