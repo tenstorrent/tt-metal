@@ -181,21 +181,14 @@ class RandomProgramFixture : public ::testing::Test {
      }
 
      void TearDown() override {
-        // if (this->device_->is_initialized()) {
-        //     CloseDevice(this->device_);
-        // }
-        detail::CloseDevices(this->devices_);
+        if (this->device_->is_initialized()) {
+            CloseDevice(this->device_);
+        }
      }
 
      void create_device(const tt::tt_metal::DispatchCoreType dispatch_core_type) {
-         const chip_id_t device_id = 5;
-         this->devices_ =
-             detail::CreateDevices({device_id}, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-            for (auto [id, dev] : this->devices_) {
-                if (id == 5) {
-                    this->device_ = dev;
-                }
-            }
+         const chip_id_t device_id = 0;
+         this->device_ = CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
      }
 
      vector<uint32_t> generate_semaphores(
@@ -287,7 +280,7 @@ class RandomProgramFixture : public ::testing::Test {
 
     private:
      uint32_t seed_;
-     std::map<chip_id_t, Device*> devices_;
+     Device *device;
 
      // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
      uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
