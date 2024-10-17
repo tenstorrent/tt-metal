@@ -4,6 +4,7 @@ FROM ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 ARG UBUNTU_VERSION=20.04
+ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Use a newer version of CMake than what is available from Canonical for 20.04
 RUN apt -y update \

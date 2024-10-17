@@ -37,6 +37,11 @@ project(Metalium
 )
 include(CTest)
 
+option(ENABLE_CCACHE FALSE)
+if(ENABLE_CCACHE)
+    include(cmake/ccache.cmake)
+endif()
+
 CHECK_COMPILERS()
 
 ############################################################################################################################
