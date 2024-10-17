@@ -673,8 +673,6 @@ Tensor create_device_tensor(
 }
 
 Tensor create_device_tensor(const ttnn::SimpleShape& shape, DataType data_type, Layout layout, Device* device, const MemoryConfig& memory_config, const std::optional<Tile>& tile) {
-    TT_FATAL(!tile.has_value(), "Current implementation does not support tile for create_device_tensor");
-
     TensorLayout tensor_layout = [&](){
         if(tile.has_value()){
             return TensorLayout(data_type, PageConfig(TilePageConfig(tile.value())), memory_config);

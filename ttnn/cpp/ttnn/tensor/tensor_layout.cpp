@@ -329,12 +329,12 @@ Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
         }
     }
 
-    if(mMemoryConfig.shard_spec.has_value())
-    {
-        auto& shard_spec = mMemoryConfig.shard_spec.value();
-        height = round_up(height, shard_spec.shape[0]);
-        width = round_up(width, shard_spec.shape[1]);
-    }
+    // if(mMemoryConfig.shard_spec.has_value())
+    // {
+    //     auto& shard_spec = mMemoryConfig.shard_spec.value();
+    //     height = round_up(height, shard_spec.shape[0]);
+    //     width = round_up(width, shard_spec.shape[1]);
+    // }
 
     Size size{height, width};
 

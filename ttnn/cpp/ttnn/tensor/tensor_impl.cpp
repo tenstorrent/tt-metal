@@ -700,7 +700,6 @@ DeviceBuffer initialize_data_on_device(
     ZoneScoped;
     TT_ASSERT(device != nullptr);
 
-    auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
     auto device_buffer = allocate_buffer_on_device(device, shape, tensor_layout);
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
