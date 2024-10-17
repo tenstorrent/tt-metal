@@ -513,8 +513,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    if(sliding_window_config.is_transpose)
-    {
+    if(sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
         conv_act_size_h = input_shape[1];
         conv_act_size_w = input_shape[2];

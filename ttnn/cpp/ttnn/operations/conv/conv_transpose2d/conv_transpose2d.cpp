@@ -31,17 +31,12 @@ Tensor _transform_weights_for_conv_transpose2d(
         ttnn::SimpleShape output_shape{out_channels, in_channels, kernel_height, kernel_width};
         auto output_buffer = owned_buffer::create<T>(output_shape.volume());
 
-
-        for(auto in_kernel_height_index = 0; in_kernel_height_index < kernel_height; in_kernel_height_index++)
-        {
+        for(auto in_kernel_height_index = 0; in_kernel_height_index < kernel_height; in_kernel_height_index++)  {
             auto out_buffer_kh_index = kernel_height - in_kernel_height_index - 1;
-            for(auto in_kernel_width_index = 0; in_kernel_width_index < kernel_width; in_kernel_width_index++)
-            {
+            for(auto in_kernel_width_index = 0; in_kernel_width_index < kernel_width; in_kernel_width_index++)  {
                 auto out_buffer_kw_index = kernel_width - in_kernel_width_index - 1;
-                for(auto in_channels_index = 0; in_channels_index < in_channels; in_channels_index++)
-                {
-                    for(auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++)
-                    {
+                for(auto in_channels_index = 0; in_channels_index < in_channels; in_channels_index++)   {
+                    for(auto out_channels_index = 0; out_channels_index < out_channels; out_channels_index++)   {
                         auto in_idx = in_channels_index * kernel_height * kernel_width * out_channels + out_channels_index * kernel_height * kernel_width + in_kernel_height_index * kernel_width + in_kernel_width_index;
                         auto out_idx = out_channels_index * in_channels * kernel_height * kernel_width + in_channels_index * kernel_height * kernel_width + out_buffer_kh_index * kernel_width + out_buffer_kw_index;
                         output_buffer[out_idx] = input_buffer[in_idx];
@@ -65,7 +60,6 @@ Tensor _transform_weights_for_conv_transpose2d(
             },
             conv_weight_tensor.get_storage());
     };
-
     return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
