@@ -8,7 +8,7 @@ import ttnn
 import torch
 import torch.nn as nn
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
-from models.demos.llama3.tt.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
+from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.llama_model import LMHead
 from models.common.rmsnorm import RMSNorm
 import ttnn
@@ -97,7 +97,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
         num_splits = 4  # arbitrary, reasonable number
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)
-        # breakpoint()
 
         cache_name = lambda name, suffix, split: weight_cache_path / (state_dict_prefix + f"{name}{suffix}{split}")
         as_interleaved_tensor = lambda name, suffix, split, type, dim: ttnn.as_tensor(
@@ -255,7 +254,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             xattn_layer_idx,
         ) in enumerate(self.text_and_xattn_layers):
             if not text_only_inference:
-                # print(f'Running xattn layer {xattn_layer_idx}')
                 h = xattn_layer(
                     h,
                     xattn_mask=xattn_mask,
@@ -264,7 +262,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
                 )
-            # print(f'Running llama layer {idx}')
             h = layer(
                 h,
                 current_pos,

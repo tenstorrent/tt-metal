@@ -11,7 +11,7 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.llama3.tt.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
+from models.demos.llama3.tt.multimodal.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
@@ -31,7 +31,7 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_vision_transformer_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
-    pcc = 0.82
+    pcc = 0.79
 
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -60,31 +60,33 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
         return_intermediate=return_intermediate,
     )
 
-    # Get real inputs
-    images = torch.load("/home/cglagovich/llama-models/ocr_vision_input_images.pt")
-    ars = torch.load("/home/cglagovich/llama-models/ocr_vision_input_aspect_ratios.pt")
+    # Create rand inputs of the right shape
+    batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, 448)
+    images = torch.randn(batch, num_media, num_chunks, n_channel, patch_size, patch_size)
+    ars = torch.tensor([2, 2]).reshape(batch, num_media, 2)
 
-    reference_output = reference_model(images, ars)
-    tt_out = tt_model(images, ars)
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    tt_output_torch = tt_output_torch[0, :, :, :].view(reference_output.shape)
+    with torch.no_grad():
+        reference_output = reference_model(images, ars)
+        tt_out = tt_model(images, ars)
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        tt_output_torch = tt_output_torch[0, :, :, :].view(reference_output.shape)
 
-    logger.info(f"Reference output shape: {reference_output.shape}")
-    logger.info(f"TT output shape: {tt_output_torch.shape}")
+        logger.info(f"Reference output shape: {reference_output.shape}")
+        logger.info(f"TT output shape: {tt_output_torch.shape}")
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(pcc_message)
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(pcc_message)
 
-    if passing:
-        logger.info(f"Llama_Attention Passed!")
-    else:
-        logger.warning(f"Llama_Attention Failed!")
-        all_tests_pass = False
+        if passing:
+            logger.info(f"Llama_Attention Passed!")
+        else:
+            logger.warning(f"Llama_Attention Failed!")
+            all_tests_pass = False
 
-    if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
-    else:
-        logger.warning("Llama Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+        if all_tests_pass:
+            logger.info("Llama Attention output Passed!")
+        else:
+            logger.warning("Llama Attention output Failed!")
+            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

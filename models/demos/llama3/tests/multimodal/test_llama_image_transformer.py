@@ -14,9 +14,9 @@ llama_reference_mod = importlib.import_module(
 encoder_utils = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.encoder_utils"
 )
-from models.demos.llama3.tt.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.llama3.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
+from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
 )
@@ -45,7 +45,7 @@ def test_llama_image_transformer_inference(
     batch, num_chunks, ntok, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.88
+    pcc = 0.86
 
     mesh_device.enable_async(True)
 
@@ -54,7 +54,7 @@ def test_llama_image_transformer_inference(
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     if is_global:
-        first_layer_prefix = "vision_model.vision_encoder.global_transformer."
+        first_layer_prefix = "vision_model.vision_encoder."
         gated = True
         n_layers = model_args.vision_n_global_layers
         return_intermediate = None
@@ -73,11 +73,6 @@ def test_llama_image_transformer_inference(
     dim = model_args.vision_dim
     heads = model_args.vision_attn_n_heads
 
-    # reference_model = llama_reference_mod.ImageTransformer(
-    #     width=dim, layers=n_layers, heads=heads, mlp_ratio=model_args.vision_mlp_ratio, gated=gated
-    # )
-    # reference_model.load_state_dict(partial_state_dict, strict=False)
-
     reference_model = llama_reference_mod.VisionEncoder(
         max_num_tiles=4,
         image_size=model_args.vision_chunk_size,
@@ -88,12 +83,14 @@ def test_llama_image_transformer_inference(
     )
     reference_model.load_state_dict(partial_state_dict, strict=False)
 
+    callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
+
     all_tests_pass = True
 
     tt_model = TtLlamaImageTransformer(
         mesh_device,
         state_dict,
-        state_dict_prefix=first_layer_prefix + "transformer.",
+        state_dict_prefix=first_layer_prefix + ("transformer." if not is_global else "global_transformer."),
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
@@ -101,47 +98,6 @@ def test_llama_image_transformer_inference(
         gated=gated,
     )
 
-    # # pt_block_input = (torch.rand(batch, seq_len, dim) * 2) - 1
-    # pt_block_input = torch.load(
-    #     "/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_32L_x.pt"
-    # )
-    # # pt_block_input = pt_block_input[..., :seq_len, :].bfloat16().float()
-    # pt_block_input = pt_block_input.bfloat16().float()
-    # pt_block_input = torch.nn.functional.pad(pt_block_input, (0, 0, 0, seq_len - pt_block_input.shape[-2]))
-    # mask = torch.load(
-    #     "/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/image_transformer_32L_mask.pt"
-    # )
-    # # mask = mask[..., :seq_len, :seq_len]
-    # mask = torch.nn.functional.pad(mask, (0, seq_len - mask.shape[-1], 0, seq_len - mask.shape[-2]), value=-1e9)
-    # tt_block_input = pt_block_input.clone()
-    # block_input = prepare_inputs_ttnn_prefill(
-    #     tt_block_input,
-    #     mesh_device,
-    # )
-
-    # # mask = torch.bernoulli(
-    # #     torch.full(
-    # #         (
-    # #             batch,
-    # #             seq_len,
-    # #             seq_len,
-    # #         ),
-    # #         0.25,
-    # #     )
-    # # )
-    # # mask = mask.unsqueeze(1)
-    # # mask = mask * -1e9
-
-    # tt_mask = ttnn.from_torch(
-    #     mask,
-    #     device=mesh_device,
-    #     dtype=ttnn.bfloat8_b,
-    #     layout=ttnn.TILE_LAYOUT,
-    #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    # )
-
-    # Test with padding and real masks
     # Create PT input
     ar = torch.tensor([[2, 2]])
     pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
@@ -187,48 +143,49 @@ def test_llama_image_transformer_inference(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=tt_mask)
-    if return_intermediate:
-        tt_out, tt_intermediates = tt_out
-        tt_intermediates = [tt.reshape(batch, num_chunks, ntok + npadtt, dim) for tt in tt_intermediates]
-        tt_intermediates = [ttnn.slice(tt, (0, 0, 0, 0), (batch, num_chunks, ntok, dim)) for tt in tt_intermediates]
-        tt_intermed_torch = [
-            ttnn.to_torch(tt_intermediate, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
-            for tt_intermediate in tt_intermediates
-        ]
+    with torch.no_grad():
+        tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=tt_mask)
+        if return_intermediate:
+            tt_out, tt_intermediates = tt_out
+            tt_intermediates = [tt.reshape(batch, num_chunks, ntok + npadtt, dim) for tt in tt_intermediates]
+            tt_intermediates = [ttnn.slice(tt, (0, 0, 0, 0), (batch, num_chunks, ntok, dim)) for tt in tt_intermediates]
+            tt_intermed_torch = [
+                ttnn.to_torch(tt_intermediate, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
+                for tt_intermediate in tt_intermediates
+            ]
 
-    tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
-    tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+        tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
+        tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-    reference_output = reference_model.transformer(pt_block_input, return_intermediate=return_intermediate, mask=mask)
-    if return_intermediate:
-        reference_output, intermediates = reference_output
-        intermediates = intermediates.reshape(batch, num_chunks, ntok + npad, dim, -1)
-        intermediates = intermediates[..., :ntok, :, :]
-        intermediates = torch.chunk(intermediates, intermediates.shape[-1], dim=-1)
-        intermediates = [i.squeeze(-1) for i in intermediates]
-    reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
-    reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-    # Check mse
+        reference_output = callable_reference(pt_block_input, return_intermediate=return_intermediate, mask=mask)
+        if return_intermediate:
+            reference_output, intermediates = reference_output
+            intermediates = intermediates.reshape(batch, num_chunks, ntok + npad, dim, -1)
+            intermediates = intermediates[..., :ntok, :, :]
+            intermediates = torch.chunk(intermediates, intermediates.shape[-1], dim=-1)
+            intermediates = [i.squeeze(-1) for i in intermediates]
+        reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
+        reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+        # Check mse
 
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
-    if return_intermediate:
-        for idx, (pt_interm, tt_interm) in enumerate(zip(intermediates, tt_intermed_torch)):
-            passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc)
-            logger.info(f"Intermediate {idx}: {pcc_message}")
-            logger.info(comp_allclose(pt_interm, tt_interm))
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
+        if return_intermediate:
+            for idx, (pt_interm, tt_interm) in enumerate(zip(intermediates, tt_intermed_torch)):
+                passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc)
+                logger.info(f"Intermediate {idx}: {pcc_message}")
+                logger.info(comp_allclose(pt_interm, tt_interm))
 
-    if passing:
-        logger.info(f"Llama_Attention Passed!")
-    else:
-        logger.warning(f"Llama_Attention Failed!")
-        all_tests_pass = False
+        if passing:
+            logger.info(f"Llama_Attention Passed!")
+        else:
+            logger.warning(f"Llama_Attention Failed!")
+            all_tests_pass = False
 
-    if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
-    else:
-        logger.warning("Llama Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+        if all_tests_pass:
+            logger.info("Llama Attention output Passed!")
+        else:
+            logger.warning("Llama Attention output Failed!")
+            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

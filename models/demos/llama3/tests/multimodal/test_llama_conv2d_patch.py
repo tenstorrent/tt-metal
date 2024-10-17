@@ -24,7 +24,7 @@ from models.utility_functions import (
 from models.utility_functions import (
     nearest_32,
 )
-from models.demos.llama3.tt.llama_conv2d_patch import (
+from models.demos.llama3.tt.multimodal.llama_conv2d_patch import (
     TtLlamaConv2dPatch,
 )
 

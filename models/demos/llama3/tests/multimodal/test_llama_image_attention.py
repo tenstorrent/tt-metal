@@ -14,8 +14,8 @@ llama_reference_mod = importlib.import_module(
 encoder_utils = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.encoder_utils"
 )
-from models.demos.llama3.tt.llama_image_block import TtLlamaImageTransformerBlock
-from models.demos.llama3.tt.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
+from models.demos.llama3.tt.multimodal.llama_image_attention import TtLlamaImageAttention
+from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
@@ -33,15 +33,15 @@ from models.utility_functions import skip_for_grayskull
     ((1, 4, 1024),),
 )
 @pytest.mark.parametrize(
-    "gated",
-    (True, False),
-)
-@pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
-def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc = 0.99
 
@@ -51,31 +51,25 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    if gated:
-        first_layer_prefix = "vision_model.vision_encoder.global_transformer.resblocks.0."
-    else:
-        first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.31."
+    first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.attn."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    dim = model_args.vision_dim
-    heads = model_args.vision_attn_n_heads
-    reference_model = llama_reference_mod.ImageTransformerBlock(
-        d_model=dim, n_head=heads, mlp_ratio=model_args.vision_mlp_ratio, gated=gated
-    )
+    dim = 1280
+    heads = 16
+    reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
     reference_model.load_state_dict(partial_state_dict)
 
     all_tests_pass = True
 
-    tt_model = TtLlamaImageTransformerBlock(
+    tt_model = TtLlamaImageAttention(
         mesh_device,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        gated=gated,
     )
 
     # Create PT input
@@ -99,6 +93,10 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
         attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+    # Make striped attention mask to mask out our padding between 8 and 32
+    # Striped mask doesn't affect PCC
+    # tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
+
     attention_input = attention_input.reshape(1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
@@ -111,6 +109,8 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
+
+    # Doing contract in tt is correct!!
     tt_out = tt_out.reshape(batch, num_chunks, ntok + 32, dim)
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
