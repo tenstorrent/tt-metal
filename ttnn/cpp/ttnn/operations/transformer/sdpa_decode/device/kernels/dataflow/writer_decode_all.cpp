@@ -401,26 +401,26 @@ void kernel_main() {
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write partial across phase
             uint32_t num_heads_to_write = num_q_heads/num_kv_heads; // each head is one row in a tile
             uint32_t SUBTILE_LINE_BYTES = 16*ELEMENT_SIZE; //size of 16 elements (in a row)
-            uint32_t starting_row = cur_head * num_heads_to_write;
-            uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
 
             if (! is_out_sharded){
                 for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
 
-                    uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer) + in_tile_offset_by_starting_head;
-                    uint32_t l1_read_addr = get_read_ptr(cb_out) + tile*tile_bytes + in_tile_offset_by_starting_head;
+                    uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
+                    uint32_t l1_read_addr = get_read_ptr(cb_out) + tile*tile_bytes;
 
                     // write partial output for each head
                     for (uint32_t head = 0; head < num_heads_to_write; ++head) {
+                        uint32_t starting_row = cur_head * num_heads_to_write + head;
+                        uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
+                        uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
+                        uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
 
                         // Write first phase
-                        noc_async_write(l1_read_addr, out_writer_noc_addr, SUBTILE_LINE_BYTES);
+                        noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, SUBTILE_LINE_BYTES);
 
                         // Write second phase
-                        noc_async_write(l1_read_addr+256*ELEMENT_SIZE, out_writer_noc_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                        noc_async_write(l1_read_addr_head+256*ELEMENT_SIZE, out_writer_noc_addr_head+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
 
-                        l1_read_addr += SUBTILE_LINE_BYTES;
-                        out_writer_noc_addr += SUBTILE_LINE_BYTES;
 
                         if (++barrier_count == barrier_threshold) {
                             noc_async_writes_flushed();
@@ -445,23 +445,24 @@ void kernel_main() {
                     uint32_t reduce_core_read_noc_x = all_reducer_noc_x[reduce_core_read_index];
                     uint32_t reduce_core_read_noc_y = all_reducer_noc_y[reduce_core_read_index];
 
-                    uint64_t out_reader_base_noc_addr = get_noc_addr(reduce_core_read_noc_x, reduce_core_read_noc_y, get_read_ptr(cb_out)) + in_tile_offset_by_starting_head;
+                    uint64_t out_reader_base_noc_addr = get_noc_addr(reduce_core_read_noc_x, reduce_core_read_noc_y, get_read_ptr(cb_out));
 
                     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                        uint32_t l1_write_addr = get_write_ptr(cb_out) + tile*tile_bytes + in_tile_offset_by_starting_head;
+                        uint32_t l1_write_addr = get_write_ptr(cb_out) + tile*tile_bytes;
                         uint32_t out_reader_noc_addr = out_reader_base_noc_addr;
-
                         // write partial output for each head
                         for (uint32_t head = 0; head < num_heads_to_write; ++head) {
+                            uint32_t starting_row = cur_head * num_heads_to_write + head;
+                            uint32_t in_tile_offset_by_starting_head = starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES : (starting_row - 16) * SUBTILE_LINE_BYTES + 512*ELEMENT_SIZE;
+                            uint32_t out_reader_noc_addr_head = out_reader_noc_addr + in_tile_offset_by_starting_head;
+                            uint32_t l1_write_addr_head = l1_write_addr + in_tile_offset_by_starting_head;
 
                             // Write first phase
-                            noc_async_read(out_reader_noc_addr, l1_write_addr, SUBTILE_LINE_BYTES);
+                            noc_async_read(out_reader_noc_addr_head, l1_write_addr_head, SUBTILE_LINE_BYTES);
 
                             // Write second phase
-                            noc_async_read(out_reader_noc_addr+256*ELEMENT_SIZE, l1_write_addr+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                            noc_async_read(out_reader_noc_addr_head+256*ELEMENT_SIZE, l1_write_addr_head+256*ELEMENT_SIZE, SUBTILE_LINE_BYTES);
 
-                            l1_write_addr += SUBTILE_LINE_BYTES;
-                            out_reader_noc_addr += SUBTILE_LINE_BYTES;
 
                             if (++barrier_count == barrier_threshold) {
                                 noc_async_read_barrier();
