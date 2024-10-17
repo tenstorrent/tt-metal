@@ -18,7 +18,6 @@ namespace ccl {
 struct ExecuteAllReduce {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const uint32_t scatter_dim,
         ttnn::operations::reduction::ReduceType math_op,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
