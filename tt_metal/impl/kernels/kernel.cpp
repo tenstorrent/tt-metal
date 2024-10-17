@@ -308,30 +308,12 @@ uint32_t Kernel::get_binary_text_size(Device *device, int index) const {
         0;
 }
 
-void DataMovementKernel::set_build_options(JitBuildOptions &build_options) const {
-    //ZoneScoped;
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: {
-            build_options.brisc_defines = this->defines_;
-        } break;
-        case DataMovementProcessor::RISCV_1: {
-            build_options.ncrisc_defines = this->defines_;
-        } break;
-        default: TT_THROW("Unsupported data movement processor!"); break;
-    }
-}
-
-void EthernetKernel::set_build_options(JitBuildOptions &build_options) const {
-    build_options.erisc_defines = this->defines_;
-}
-
 void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
-    build_options.hlk_defines = this->defines_;
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
