@@ -7,9 +7,9 @@
 #include <random>
 #include <ttnn/operations/numpy/functions.hpp>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/operations/data_movement/fold/fold.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
