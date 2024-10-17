@@ -188,6 +188,7 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
     }
 
     if (bias_required_grad) {
+        TT_FATAL(bias_grad.has_value(), "bias_grad tensor should not be std::nullopt");
         Tensor output_tensor = ttnn::prim::moreh_bias_add_backward(
             output_grad, bias, bias_grad, bias_grad_memory_config, compute_kernel_config);
         result[2] = std::make_optional(output_tensor);
