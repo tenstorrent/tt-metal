@@ -60,7 +60,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionGQADecode::invoke(
         input_tensor_q_gqa =
         ttnn::to_layout(input_tensor_q, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
         input_tensor_q_gqa = ttnn::transpose(input_tensor_q_gqa, 1, 2);
-        input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::Shape{std::array<uint32_t, 4>{1, Bq, NQH, D}});
+        input_tensor_q_gqa = ttnn::reshape(input_tensor_q_gqa, ttnn::SimpleShape{std::array<uint32_t, 4>{1, Bq, NQH, D}});
         input_tensor_q_gqa =
         ttnn::to_layout(input_tensor_q_gqa, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
     }

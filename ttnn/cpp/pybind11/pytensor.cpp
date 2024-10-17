@@ -419,11 +419,11 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
         tt_shards.push_back(detail::convert_python_tensor_to_tt_tensor(shard, data_type, tile, false));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<tt::tt_metal::LegacyShape> host_owned_shapes;
+    std::vector<ttnn::Shape> host_owned_shapes;
     for (const auto &shard : tt_shards) {
         TT_ASSERT(std::holds_alternative<OwnedStorage>(shard.get_storage()), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-        host_owned_shapes.push_back(shard.get_legacy_shape());
+        host_owned_shapes.push_back(shard.shape());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
     auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
@@ -1593,7 +1593,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "reshape",
-            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(N, C, H, W); },
+            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(infer_dims_for_reshape(self, {N, C, H, W})); },
             R"doc(
                 Reshapes TT tensor
 
@@ -1603,13 +1603,23 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const tt::tt_metal::LegacyShape &shape) -> Tensor { return self.reshape(shape); },
+            [](Tensor &self, const ttnn::Shape &shape) -> Tensor { return self.reshape(shape); },
             R"doc(
                 Reshapes TT tensor
 
                 .. code-block:: python
 
                     reshaped_tensor = tt_tensor.reshape((4, 3, 32))
+            )doc")
+        .def(
+            "reshape",
+            [](Tensor &self, const std::vector<int32_t> &shape) -> Tensor { return self.reshape(infer_dims_for_reshape(self, shape)); },
+            R"doc(
+                Reshapes TT tensor
+
+                .. code-block:: python
+
+                    reshaped_tensor = tt_tensor.reshape((4, -1, 32))
             )doc")
         .def_property(
             "tensor_id",

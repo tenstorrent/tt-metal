@@ -8,11 +8,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor SqueezeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int dim
-    ) {
-
+ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto original_logical_shape = input_tensor.get_shape();
     const auto padded_shape = input_tensor.get_shape().with_tile_padding();
     const auto input_tensor_rank = original_logical_shape.rank();
@@ -40,7 +36,6 @@ ttnn::Tensor SqueezeOperation::invoke(
     }
 
     return ttnn::reshape(input_tensor, ttnn::Shape(original_logical_shape_vector, padded_shape_vector));
-
 }
 
 } // ttnn::operations::data_movement namespace

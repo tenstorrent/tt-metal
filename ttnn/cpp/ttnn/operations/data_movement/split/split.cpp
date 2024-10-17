@@ -102,13 +102,13 @@ namespace detail {
         }
 
         const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
-        const Tensor &reshaped_tensor = ttnn::reshape_on_device(input_tensor, 1, -1, Y, X, mem_config);
+        const Tensor &reshaped_tensor = ttnn::reshape_on_device(input_tensor, std::vector<int32_t>{1, -1, Y, X}, mem_config);
 
         auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
         std::vector<Tensor> results;
         results.reserve(part_reshaped.size());
-        for (auto &part : part_reshaped) results.emplace_back(ttnn::reshape_on_device(part, -1, shape[1], Y, X / 2, mem_config));
+        for (auto &part : part_reshaped) results.emplace_back(ttnn::reshape_on_device(part, std::vector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
 
         return results;
     }
