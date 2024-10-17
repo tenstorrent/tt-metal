@@ -29,7 +29,8 @@ def run(
     # Create random weight and indices tensors in PyTorch
     # weight = torch.arange(weight_shape, dtype=torch.bfloat16) # invalid combination of arguments
     weight = torch.arange(weight_shape[0] * weight_shape[1], dtype=torch.bfloat16).reshape(weight_shape)
-    indices = torch.randint(0, weight_shape[0], indices_shape, dtype=torch.int64)
+    # indices needs to be of type uint32
+    indices = torch.randint(0, weight_shape[0], indices_shape, dtype=torch.int32)
 
     # Create a PyTorch embedding layer and apply it
     torch_embedding = torch.nn.Embedding.from_pretrained(weight, padding_idx=padding_idx)
@@ -37,7 +38,7 @@ def run(
 
     # Convert the weight and indices to ttnn tensor format
     ttnn_weight = ttnn.from_torch(weight, device=device, layout=layout, dtype=dtype)
-    ttnn_indices = ttnn.from_torch(indices, device=device, layout=layout, dtype=dtype)
+    ttnn_indices = ttnn.from_torch(indices, device=device, layout=layout, dtype=ttnn.uint32)
 
     # Measure performance of the embedding operation in ttnn
     start_time = start_measuring_time()
