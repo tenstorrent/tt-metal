@@ -13,7 +13,7 @@ struct MorehLinear {
         const Tensor& input,
         const Tensor& weight,
         const std::optional<Tensor>& bias,
-        std::optional<Tensor>& output,
+        const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig> compute_kernel_config);
 };
