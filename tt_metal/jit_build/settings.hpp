@@ -29,11 +29,6 @@ class JitBuildOptions {
 
     bool dst_full_sync_en;
 
-    std::map<std::string, std::string> hlk_defines;  // preprocessor defines for HLK
-    std::map<std::string, std::string> ncrisc_defines;
-    std::map<std::string, std::string> brisc_defines;
-    std::map<std::string, std::string> erisc_defines;
-
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 
