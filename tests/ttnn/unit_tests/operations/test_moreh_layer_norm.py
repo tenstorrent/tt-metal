@@ -17,52 +17,10 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     TILE_HEIGHT,
     TILE_WIDTH,
+    to_torch,
+    to_ttnn,
 )
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
-
-
-def create_tt_tensor(tensor: torch.Tensor, dtype, device, layout):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
-
-
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
-    if npu_tensor is None:
-        return None
-    if not isinstance(shape, (list,)):
-        shape = list(shape)
-
-    unpad_shape = copy.copy(shape)
-    if shape == []:
-        unpad_shape = [1, 1]
-    if len(shape) == 1:
-        unpad_shape = [1] + shape
-
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(unpad_shape).to_torch().reshape(shape)
-
-    return cpu_tensor
-
-
-def to_npu(
-    cpu_tensor,
-    device,
-    *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
-    shape=None,
-):
-    if cpu_tensor is None:
-        return None
-    if shape is not None:
-        cpu_tensor = cpu_tensor.view(shape)
-
-    if len(cpu_tensor.shape) == 1:
-        cpu_tensor = cpu_tensor.reshape([1, len(cpu_tensor)])
-
-    if len(cpu_tensor.shape) == 0:
-        cpu_tensor = cpu_tensor.reshape([1, 1])
-
-    npu_tensor = create_tt_tensor(cpu_tensor, npu_dtype, device, npu_layout)
-    return npu_tensor
 
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
@@ -124,25 +82,25 @@ def tt_layer_norm(
     cpu_dtype = torch.bfloat16
 
     # input
-    npu_input = to_npu(input, device)
+    npu_input = to_ttnn(input, device=device)
 
     # output
     output = torch.empty_like(input)
-    npu_output = to_npu(output, device)
+    npu_output = to_ttnn(output, device=device)
 
     # gamma
-    npu_gamma = to_npu(gamma, device)
+    npu_gamma = to_ttnn(gamma, device=device)
 
     # beta
-    npu_beta = to_npu(beta, device)
+    npu_beta = to_ttnn(beta, device=device)
 
     # mean for inplace update
     cpu_mean = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
-    npu_mean = to_npu(cpu_mean, device)
+    npu_mean = to_ttnn(cpu_mean, device=device)
 
     # rstd for inplace update
     cpu_rstd = torch.full(mean_rstd_shape, float("nan"), dtype=cpu_dtype)
-    npu_rstd = to_npu(cpu_rstd, device)
+    npu_rstd = to_ttnn(cpu_rstd, device=device)
 
     # Forward
     npu_output, npu_mean, npu_rstd = ttnn.operations.moreh.layer_norm(
@@ -157,9 +115,9 @@ def tt_layer_norm(
         compute_kernel_config=compute_kernel_config,
     )
 
-    tt_output = to_cpu(npu_output, input_shape)
-    tt_mean = to_cpu(npu_mean, mean_rstd_shape) if create_mean_rstd else None
-    tt_rstd = to_cpu(npu_rstd, mean_rstd_shape) if create_mean_rstd else None
+    tt_output = to_torch(npu_output, shape=input_shape)
+    tt_mean = to_torch(npu_mean, shape=mean_rstd_shape) if create_mean_rstd else None
+    tt_rstd = to_torch(npu_rstd, shape=mean_rstd_shape) if create_mean_rstd else None
 
     return tt_output, tt_mean, tt_rstd
 
@@ -183,13 +141,13 @@ def tt_layer_norm_backward(
     cpu_dtype = torch.bfloat16
 
     # input
-    npu_input = to_npu(input, device)
+    npu_input = to_ttnn(input, device=device)
 
     # output_grad
-    npu_output_grad = to_npu(output_grad, device)
+    npu_output_grad = to_ttnn(output_grad, device=device)
 
     # gamma
-    npu_gamma = to_npu(gamma, device)
+    npu_gamma = to_ttnn(gamma, device=device)
 
     # mean, rstd
     mean_rstd_dims = list(range(-normalized_dims, 0))
@@ -198,24 +156,24 @@ def tt_layer_norm_backward(
     var = ((input.clone() - mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True)
     rstd = (var + eps).rsqrt()
 
-    npu_mean = to_npu(mean, device, shape=mean_rstd_shape)
-    npu_rstd = to_npu(rstd, device, shape=mean_rstd_shape)
+    npu_mean = to_ttnn(mean, device=device, shape=mean_rstd_shape)
+    npu_rstd = to_ttnn(rstd, device=device, shape=mean_rstd_shape)
 
     # input_grad for inplace update
     cpu_input_grad = torch.full(input_shape, float("nan"), dtype=cpu_dtype)
-    npu_input_grad = to_npu(cpu_input_grad, device)
+    npu_input_grad = to_ttnn(cpu_input_grad, device=device)
 
     # gamma_grad for inplace update
     npu_gamma_grad = None
     if gamma is not None:
         cpu_gamma_grad = torch.full(gamma_beta_shape, float("nan"), dtype=cpu_dtype)
-        npu_gamma_grad = to_npu(cpu_gamma_grad, device)
+        npu_gamma_grad = to_ttnn(cpu_gamma_grad, device=device)
 
     # beta_grad for inplace update
     npu_beta_grad = None
     if beta is not None:
         cpu_beta_grad = torch.full(gamma_beta_shape, float("nan"), dtype=cpu_dtype)
-        npu_beta_grad = to_npu(cpu_beta_grad, device)
+        npu_beta_grad = to_ttnn(cpu_beta_grad, device=device)
 
     # Backward
     _, npu_gamma_grad, _ = ttnn.operations.moreh.layer_norm_backward(
@@ -231,11 +189,11 @@ def tt_layer_norm_backward(
         compute_kernel_config=compute_kernel_config,
     )
 
-    tt_input_grad = to_cpu(npu_input_grad, input_shape)
-    tt_gamma_grad = to_cpu(npu_gamma_grad, gamma_beta_shape)
+    tt_input_grad = to_torch(npu_input_grad, shape=input_shape)
+    tt_gamma_grad = to_torch(npu_gamma_grad, shape=gamma_beta_shape)
     if tt_gamma_grad is not None:
         tt_gamma_grad = tt_gamma_grad.view(normalized_shape)
-    tt_beta_grad = to_cpu(npu_beta_grad, gamma_beta_shape)
+    tt_beta_grad = to_torch(npu_beta_grad, shape=gamma_beta_shape)
     if tt_beta_grad is not None:
         tt_beta_grad = tt_beta_grad.view(normalized_shape)
 
@@ -589,10 +547,16 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
     ],
 )
 def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache):
-    torch.manual_seed(2023)
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, device)
-    assert device.num_program_cache_entries() == 1
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
@@ -611,10 +575,16 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
 def test_moreh_layer_norm_backward_callback(
     input_shape_normalized_dims, elementwise_affine, eps, device, use_program_cache
 ):
-    torch.manual_seed(2023)
-    for _ in range(2):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, device)
-    assert device.num_program_cache_entries() == (2 if elementwise_affine else 1)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
