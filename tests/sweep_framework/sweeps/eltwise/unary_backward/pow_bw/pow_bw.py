@@ -30,6 +30,7 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
         + gen_shapes([1, 1], [256, 256], [1, 1], 4),
         "allow_exponent_zero": [False],
+        "exponent_range": [[0, 15]],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -42,6 +43,7 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
         + gen_shapes([1, 1], [256, 256], [1, 1], 4),
         "allow_exponent_zero": [True],
+        "exponent_range": [[0, 50]],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -72,6 +74,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     allow_exponent_zero,
+    exponent_range,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -95,11 +98,12 @@ def run(
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
 
-    if allow_exponent_zero:
-        low = 0
-    else:
-        low = 1
-    exponent = torch.tensor(1, dtype=torch.int).random_(low, 10).item()
+    exponent_low, exponent_high = exponent_range
+
+    if not allow_exponent_zero and exponent_low == 0:
+        exponent_low = 1
+
+    exponent = torch.tensor(1, dtype=torch.int).random_(exponent_low, exponent_high).item()
 
     golden_function = ttnn.get_golden_function(ttnn.pow_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, exponent)[0]
@@ -124,5 +128,7 @@ def run(
     output_tensor = ttnn.pow_bw(grad_tensor, input_tensor_a, exponent, memory_config=output_memory_config)[0]
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+
+    passed, output_str = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
