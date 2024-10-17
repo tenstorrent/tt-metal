@@ -7,8 +7,13 @@
 #include <vector>
 #include "common/core_coord.h"
 #include "common/env_lib.hpp"
+#include "core_config.h"
 #include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "impl/device/device.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/kernels/kernel_types.hpp"
+#include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -16,6 +21,7 @@
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
+#include "tt_soc_descriptor.h"
 
 class CommandQueueFixture : public ::testing::Test {
    protected:
@@ -144,14 +150,12 @@ protected:
 
 };
 
-class RandomProgramFixture : public CommandQueueFixture {
+class RandomProgramFixture : public ::testing::Test {
     protected:
-     uint32_t seed_;
-
      static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
-     static const uint32_t MAX_KERNEL_SIZE_BYTES = 8192;
-     static const uint32_t MIN_KERNEL_RUNTIME_CYCLES = 100;
-     static const uint32_t MAX_KERNEL_RUNTIME_CYCLES = 20000;
+     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
+     static const uint32_t MIN_KERNEL_RUNTIME_MICROSECONDS = 100;
+     static const uint32_t MAX_KERNEL_RUNTIME_MICROSECONDS = 20000;
      static const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
      static const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
      static const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
@@ -159,25 +163,51 @@ class RandomProgramFixture : public CommandQueueFixture {
      static const uint32_t MIN_NUM_SEMS = 0;
      static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
      static const uint32_t SEM_VAL = 1;
-     static const uint32_t NUM_PROGRAMS = 100;
+     static const uint32_t NUM_PROGRAMS = 5;
+
+     Device *device_;
 
      void SetUp() override {
-        CommandQueueFixture::SetUp();
+         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+         if (slow_dispatch) {
+             tt::log_info(
+                 tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+             GTEST_SKIP();
+         }
 
-        this->seed_ = tt::parse_env("SEED", 0);
-        srand(this->seed_);
-        log_info(tt::LogTest, "Using seed: {}", this->seed_);
+         this->seed_ = tt::parse_env("TT_METAL_SEED", 0);
+         log_info(tt::LogTest, "Using seed: {}", this->seed_);
+         srand(this->seed_);
+     }
+
+     void TearDown() override {
+        // if (this->device_->is_initialized()) {
+        //     CloseDevice(this->device_);
+        // }
+        detail::CloseDevices(this->devices_);
+     }
+
+     void create_device(const tt::tt_metal::DispatchCoreType dispatch_core_type) {
+         const chip_id_t device_id = 5;
+         this->devices_ =
+             detail::CreateDevices({device_id}, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
+            for (auto [id, dev] : this->devices_) {
+                if (id == 5) {
+                    this->device_ = dev;
+                }
+            }
      }
 
      vector<uint32_t> generate_semaphores(
          Program &program,
          const std::variant<CoreRange, CoreRangeSet> &cores,
+         const CoreType core_type = CoreType::WORKER,
          const uint32_t min = MIN_NUM_SEMS,
          const uint32_t max = MAX_NUM_SEMS) {
          const uint32_t num_sems = this->generate_random_num(min, max);
          vector<uint32_t> sem_ids;
          for (uint32_t i = 0; i < num_sems; i++) {
-             const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL);
+             const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL, core_type);
              sem_ids.push_back(sem_id);
          }
          return sem_ids;
@@ -211,9 +241,9 @@ class RandomProgramFixture : public CommandQueueFixture {
          const bool create_eth_config,
          const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
          const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
-         const uint32_t min_kernel_runtime_cycles = MIN_KERNEL_RUNTIME_CYCLES,
-         const uint32_t max_kernel_runtime_cycles = MAX_KERNEL_RUNTIME_CYCLES) {
-         const std::vector<uint32_t> compile_args = {
+         const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
+         const uint32_t max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS) {
+         std::vector<uint32_t> compile_args = {
              num_unique_rt_args,
              num_common_rt_args,
              UNIQUE_RUNTIME_ARGS_VAL_OFFSET,
@@ -221,20 +251,29 @@ class RandomProgramFixture : public CommandQueueFixture {
              num_sems,
              SEM_VAL};
 
+         uint32_t divisible_by;
+         if (create_eth_config) {
+            divisible_by = 4;
+         } else {
+            divisible_by = 1;
+         }
+
          const uint32_t kernel_size_bytes =
-             this->generate_random_num(min_kernel_size_bytes, max_kernel_size_bytes);
-         const uint32_t kernel_runtime_cycles =
-             this->generate_random_num(min_kernel_runtime_cycles, max_kernel_runtime_cycles);
+             this->generate_random_num(min_kernel_size_bytes, max_kernel_size_bytes, divisible_by);
+         const uint32_t kernel_runtime_microseconds =
+             this->generate_random_num(min_kernel_runtime_microseconds, max_kernel_runtime_microseconds);
 
          const std::map<string, string> defines = {
              {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
-             {"KERNEL_RUNTIME_CYCLES", std::to_string(kernel_runtime_cycles)}};
+             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 
          std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
          if (create_eth_config) {
+             compile_args.push_back(ProgrammableCoreType::ACTIVE_ETH);
              config = EthernetConfig{.compile_args = compile_args, .defines = defines};
          } else {
-             config = DataMovementConfig{.compile_args = compile_args, .defines = defines};
+             compile_args.push_back(ProgrammableCoreType::TENSIX);
+             config = DataMovementConfig{.compile_args = compile_args, .defines = defines}; //randomize processor that we run on
          }
 
          KernelHandle kernel_id = CreateKernel(
@@ -247,6 +286,9 @@ class RandomProgramFixture : public CommandQueueFixture {
      }
 
     private:
+     uint32_t seed_;
+     std::map<chip_id_t, Device*> devices_;
+
      // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
      uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
         return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
