@@ -382,6 +382,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-crt0.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }

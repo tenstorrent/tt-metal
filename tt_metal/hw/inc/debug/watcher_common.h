@@ -14,7 +14,10 @@ namespace internal_ {
 void __attribute__((section("code_l1"))) risc_context_switch();
 void disable_erisc_app();
 }
-extern "C" void erisc_early_exit(std::int32_t stack_save_addr);
+
+// Pointer to exit routine, (so it may be called from a kernel).
+[[gnu::noreturn]] extern void (*erisc_exit)();
+
 #endif
 
 inline uint32_t debug_get_which_riscv()

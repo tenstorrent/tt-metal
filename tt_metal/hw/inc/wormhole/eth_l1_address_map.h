@@ -57,8 +57,6 @@ struct address_map {
   static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
-  // erisc early exit functionality re-uses mailboxes_t::ncrisc_halt_msg_t::stack_save memory
-  static constexpr std::int32_t ERISC_MEM_MAILBOX_STACK_SAVE = ERISC_MEM_MAILBOX_BASE + 4;
 
   static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3232;
   static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
