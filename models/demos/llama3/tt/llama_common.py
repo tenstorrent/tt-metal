@@ -235,7 +235,7 @@ def get_rot_transformation_mat(dhead):
 def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     """
     Prepare inputs for prefill mode.
-    x: (batch, seq, hidden_dim)
+    x: (batch, seq, dim)
     B: batch (1)
     S: sequence len
     H: dim
