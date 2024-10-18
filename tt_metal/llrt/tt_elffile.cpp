@@ -4,6 +4,9 @@
 
 #include "tt_elffile.hpp"
 
+#include <algorithm>
+#include <array>
+
 #include "common/assert.hpp"
 // C
 #include <errno.h>
@@ -45,12 +48,13 @@ using namespace ll_api;
 
 class ElfFile::Impl {
    private:
-    std::span<Elf32_Phdr const> phdrs_;
-    std::span<Elf32_Shdr const> shdrs_;
+    std::span<Elf32_Phdr> phdrs_;
+    std::span<Elf32_Shdr> shdrs_;
     std::string const &path_;
+    ElfFile &owner_;
 
    private:
-    ElfFile &owner_;
+    class Weakener;
 
    public:
     Impl(ElfFile &owner, std::string const &path) : owner_(owner), path_(path) {}
@@ -58,71 +62,69 @@ class ElfFile::Impl {
 
    public:
     void LoadImage();
+    void WeakenDataSymbols(std::span<std::string_view const> strong_names);
 
    private:
-    Elf32_Ehdr const &GetHeader() const { return *reinterpret_cast<Elf32_Ehdr const *>(GetContents().data()); }
-    std::span<Elf32_Phdr const> GetPhdrs() const { return phdrs_; }
-    std::span<Elf32_Shdr const> GetShdrs() const { return shdrs_; }
-    Elf32_Shdr const &GetShdr(unsigned ix) const { return shdrs_[ix]; }
-    std::vector<Segment> &GetSegments() const { return owner_.segments_; }
-    std::span<std::byte> &GetContents() const { return owner_.contents_; }
-    std::span<std::byte> GetContents(Elf32_Phdr const &phdr) {
+    [[nodiscard]] auto GetHeader() const -> Elf32_Ehdr const & { return *ByteOffset<Elf32_Ehdr>(GetContents().data()); }
+    [[nodiscard]] auto GetPhdrs() const -> std::span<Elf32_Phdr const> { return phdrs_; }
+    [[nodiscard]] auto GetShdrs() const -> std::span<Elf32_Shdr const> { return shdrs_; }
+    [[nodiscard]] auto GetShdr(unsigned ix) const -> Elf32_Shdr const & { return shdrs_[ix]; }
+    [[nodiscard]] auto GetSegments() const -> std::vector<Segment> & { return owner_.segments_; }
+    [[nodiscard]] auto GetContents() const -> std::span<std::byte> & { return owner_.contents_; }
+    [[nodiscard]] auto GetContents(Elf32_Phdr const &phdr) const -> std::span<std::byte> {
         return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
     }
-    std::span<std::byte> GetContents(Elf32_Shdr const &shdr) {
+    [[nodiscard]] auto GetContents(Elf32_Shdr const &shdr) const -> std::span<std::byte> {
         return GetContents().subspan(shdr.sh_offset, shdr.sh_size);
     }
-    char const *GetString(size_t offset, unsigned ix) {
-        if (ix >= GetShdrs().size())
-        bad:
-            return "*bad*";
-        auto &shdr = GetShdr(ix);
-        if (shdr.sh_type != SHT_STRTAB)
-            goto bad;
-        auto strings = GetContents(GetShdr(ix));
-        if (offset >= strings.size())
-            goto bad;
-        return ByteOffset<char const>(strings.data(), offset);
+    [[nodiscard]] auto GetString(size_t offset, Elf32_Shdr const &shdr) const -> char const * {
+        return ByteOffset<char const>(GetContents(shdr).data(), offset);
     }
-    char const *GetName(Elf32_Shdr const &shdr) { return GetString(shdr.sh_name, GetHeader().e_shstrndx); }
-    std::span<Elf32_Sym> GetSymbols(Elf32_Shdr const &shdr) {
+    [[nodiscard]] auto GetName(Elf32_Shdr const &shdr) const -> char const * {
+        return GetString(shdr.sh_name, GetShdr(GetHeader().e_shstrndx));
+    }
+    [[nodiscard]] auto GetSymbols(Elf32_Shdr const &shdr) const -> std::span<Elf32_Sym> {
         auto section = GetContents(shdr);
         return std::span(ByteOffset<Elf32_Sym>(section.data()), section.size() / shdr.sh_entsize);
     }
-    char const *GetName(Elf32_Sym const &sym, unsigned lk) { return GetString(sym.st_name, lk); }
-    std::span<Elf32_Rela> GetRelocations(Elf32_Shdr const &shdr) {
+    [[nodiscard]] auto GetName(Elf32_Sym const &sym, unsigned link) const -> char const * {
+        return GetString(sym.st_name, GetShdr(link));
+    }
+    [[nodiscard]] auto GetRelocations(Elf32_Shdr const &shdr) const -> std::span<Elf32_Rela> {
         auto section = GetContents(shdr);
         return std::span(ByteOffset<Elf32_Rela>(section.data()), section.size() / shdr.sh_entsize);
     }
 
-    static bool IsInSegment(Segment const &segment, Elf32_Shdr const &shdr) {
+    [[nodiscard]] static bool IsInSegment(Segment const &segment, Elf32_Shdr const &shdr) {
         // Remember, Segments use word_t sizes
         return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr >= segment.address &&
 	    shdr.sh_addr + shdr.sh_size <=
 	    segment.address + (segment.contents.size() + segment.bss) * sizeof (word_t);
     }
-    bool IsInSegment(unsigned ix, Elf32_Shdr const &shdr) const { return IsInSegment(GetSegments()[ix], shdr); }
-    bool IsInText(Elf32_Shdr const &shdr) const { return IsInSegment(GetSegments().front(), shdr); };
-    int GetSegmentIx(Elf32_Shdr const &shdr) const {
+    [[nodiscard]] bool IsInSegment(unsigned _ix, Elf32_Shdr const &shdr) const {
+        return IsInSegment(GetSegments()[_ix], shdr);
+    }
+    [[nodiscard]] bool IsInText(Elf32_Shdr const &shdr) const { return IsInSegment(GetSegments().front(), shdr); };
+    [[nodiscard]] int GetSegmentIx(Elf32_Shdr const &shdr) const {
         for (unsigned ix = GetSegments().size(); ix--;)
             if (IsInSegment(ix, shdr))
                 return ix;
         return -1;
     };
-    bool IsTextSymbol(Elf32_Sym const &symbol) const {
+    [[nodiscard]] bool IsTextSymbol(Elf32_Sym const &symbol) const {
         return symbol.st_shndx < GetShdrs().size() && IsInText(GetShdr(symbol.st_shndx));
     }
-    bool IsDataSymbol(Elf32_Sym const &symbol) const {
+    [[nodiscard]] bool IsDataSymbol(Elf32_Sym const &symbol) const {
         return symbol.st_shndx < GetShdrs().size() && GetSegmentIx(GetShdr(symbol.st_shndx)) > 0;
     }
 
    private:
     template <typename T = std::byte>
-    static T *ByteOffset(std::byte *base, size_t offset = 0) {
+    [[nodiscard]] static T *ByteOffset(std::byte *base, size_t offset = 0) {
         return reinterpret_cast<T *>(base + offset);
     }
     template <typename T = std::byte>
-    static T const *ByteOffset(std::byte const *base, size_t offset = 0) {
+    [[nodiscard]] static T const *ByteOffset(std::byte const *base, size_t offset = 0) {
         return reinterpret_cast<T const *>(base + offset);
     }
 };
@@ -156,6 +158,23 @@ void ElfFile::ReadImage(std::string const &path) {
     pimpl_->LoadImage();
 }
 
+void ElfFile::WriteImage(std::string const &path) {
+    // open is an os-defined varadic function, it the API to use.
+    int file_descriptor = open(
+        path.c_str(),
+        O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
+        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+    bool failed = file_descriptor < 0;
+    if (!failed) {
+        failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
+        close(file_descriptor);
+    }
+    if (failed)
+        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+}
+
+void ElfFile::WeakenDataSymbols(std::span<std::string_view const> strong) { pimpl_->WeakenDataSymbols(strong); }
+
 void ElfFile::Impl::LoadImage() {
     auto &hdr = GetHeader();
 
@@ -181,11 +200,11 @@ void ElfFile::Impl::LoadImage() {
     if (!hdr.e_phoff || hdr.e_phoff & (sizeof(address_t) - 1) || hdr.e_phentsize != sizeof(Elf32_Phdr) ||
         (hdr.e_phoff + hdr.e_phnum * sizeof(Elf32_Phdr) > GetContents().size()))
         TT_THROW("{}: PHDRS are missing or malformed", path_);
-    phdrs_ = std::span(ByteOffset<Elf32_Phdr const>(GetContents().data(), hdr.e_phoff), hdr.e_phnum);
+    phdrs_ = std::span(ByteOffset<Elf32_Phdr>(GetContents().data(), hdr.e_phoff), hdr.e_phnum);
     if (!hdr.e_shoff || hdr.e_shoff & (sizeof(address_t) - 1) || hdr.e_shentsize != sizeof(Elf32_Shdr) ||
         (hdr.e_shoff + hdr.e_shnum * sizeof(Elf32_Shdr) > GetContents().size()))
         TT_THROW("{}: sections are missing or malformed", path_);
-    shdrs_ = std::span(ByteOffset<Elf32_Shdr const>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
+    shdrs_ = std::span(ByteOffset<Elf32_Shdr>(GetContents().data(), hdr.e_shoff), hdr.e_shnum);
     if (!hdr.e_shstrndx || hdr.e_shstrndx >= GetShdrs().size())
         TT_THROW("{}: string table is missing or malformed", path_);
 
@@ -234,5 +253,91 @@ void ElfFile::Impl::LoadImage() {
         auto &segments = GetSegments();
 	auto text = std::next(segments.begin(), textIx);
         std::rotate(segments.begin(), text, std::next(text, 1));
+    }
+}
+
+class ElfFile::Impl::Weakener {
+    enum { LOCAL, GLOBAL, HWM };
+
+    Elf32_Shdr const &shdr_;
+    std::span<Elf32_Sym> syms_in_;
+    std::vector<unsigned> remap_;
+    std::vector<Elf32_Sym> syms_out_[HWM];
+
+   public:
+    Weakener(Elf32_Shdr const &shdr, std::span<Elf32_Sym> symbols) :
+        shdr_(shdr), syms_in_(symbols.subspan(shdr.sh_info)) {
+        unsigned reserve = syms_in_.size() - shdr_.sh_info;
+        remap_.reserve(reserve);
+        std::ranges::for_each(syms_out_, [=](std::vector<Elf32_Sym> &syms) { syms.reserve(reserve); });
+    }
+
+    void WeakenOrLocalizeSymbols(Impl &impl, std::span<std::string_view const> strong) {
+        auto name_matches = [](std::string_view name, std::span<std::string_view const> list) {
+            return std::ranges::any_of(list, [&](std::string_view pattern) {
+                return pattern.back() == '*' ? name.starts_with(pattern.substr(0, pattern.size() - 1))
+                                             : name == pattern;
+            });
+        };
+
+        // Weaken or hide globals
+        for (auto &sym : syms_in_) {
+            auto kind = GLOBAL;
+            if ((ELF32_ST_BIND(sym.st_info) == STB_GLOBAL || ELF32_ST_BIND(sym.st_info) == STB_WEAK) &&
+                !name_matches(impl.GetName(sym, shdr_.sh_link), strong)) {
+                unsigned bind = impl.IsDataSymbol(sym) ? STB_WEAK : STB_LOCAL;
+                sym.st_info = ELF32_ST_INFO(bind, ELF32_ST_TYPE(sym.st_info));
+                if (bind == STB_LOCAL)
+                    kind = LOCAL;
+            }
+            remap_.push_back(syms_out_[kind].size() ^ (kind == GLOBAL ? ~0U : 0U));
+            syms_out_[kind].push_back(sym);
+        }
+    }
+
+    void UpdateRelocations(std::span<Elf32_Rela> relocs) {
+        // Adjust relocs using remap array.
+        const unsigned num_locals = shdr_.sh_info;
+        for (auto &reloc : relocs) {
+            unsigned sym_ix = ELF32_R_SYM(reloc.r_info);
+            if (sym_ix < num_locals)
+                continue;
+
+            sym_ix = remap_[sym_ix - num_locals];
+            if (bool(sym_ix & (~0U ^ (~0U >> 1))))
+                sym_ix = ~sym_ix + syms_out_[LOCAL].size();
+            reloc.r_info = ELF32_R_INFO(ELF32_R_TYPE(reloc.r_info), sym_ix + num_locals);
+        }
+    }
+
+    void RewriteSymbols() {
+        // Rewrite the symbols
+        std::copy(syms_out_[LOCAL].begin(), syms_out_[LOCAL].end(), syms_in_.begin());
+        const_cast<Elf32_Shdr &>(shdr_).sh_info += syms_out_[LOCAL].size();
+
+        std::copy(
+            syms_out_[GLOBAL].begin(),
+            syms_out_[GLOBAL].end(),
+            std::next(syms_in_.begin(), ssize_t(syms_out_[LOCAL].size())));
+    }
+};
+
+// Any global symbol matching STRONG is preserved.
+// Any global symbol in a data-segment section is weakened
+// Any other global symbol is made local
+void ElfFile::Impl::WeakenDataSymbols(std::span<std::string_view const> strong) {
+    for (unsigned ix = GetShdrs().size(); bool(ix--);) {
+        auto &shdr = GetShdr(ix);
+        if (shdr.sh_type != SHT_SYMTAB || bool(shdr.sh_flags & SHF_ALLOC))
+            continue;
+
+        Weakener weakener(shdr, GetSymbols(shdr));
+        weakener.WeakenOrLocalizeSymbols(*this, strong);
+
+        for (auto const &relhdr : GetShdrs())
+            if (relhdr.sh_type == SHT_RELA && relhdr.sh_link == ix)
+                weakener.UpdateRelocations(GetRelocations(relhdr));
+
+        weakener.RewriteSymbols();
     }
 }
