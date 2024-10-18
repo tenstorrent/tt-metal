@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.utility_functions import torch_random
 
