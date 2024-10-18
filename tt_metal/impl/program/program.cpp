@@ -182,14 +182,14 @@ KernelGroup::KernelGroup(
             if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                 // The code below sets the brisc_noc_id for use by the device firmware
                 // Use 0 if neither brisc nor ncrisc specify a noc
-                if (class_id == utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::DM0)) {
+                if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) { // weird?
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                     if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
-                } else if (class_id == utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::DM1)) {
+                } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) { // weird?
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -235,13 +235,14 @@ struct KernelGroupInt {
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
-    void update(HalProcessorClassType proc_class, size_t kernel_idx) {
-        this->kernel_ids[utils::underlying_type<HalProcessorClassType>(proc_class)] = static_cast<KernelHandle>(kernel_idx);
+    // fix this
+    void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
+        this->kernel_ids[proc_class] = static_cast<KernelHandle>(kernel_idx);
     }
 };
 
 bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
-    for (int class_id = 0; class_id < utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::COUNT); class_id++) {
+    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
         if (this->kernel_ids[class_id] != b.kernel_ids[class_id]) {
             return false;
         }
@@ -253,9 +254,9 @@ bool KernelGroupInt::operator==(const KernelGroupInt &b) const {
 struct KernelGroupIntHasher {
     std::size_t operator()(const KernelGroupInt &x) const {
         return
-            static_cast<size_t>(x.kernel_ids[utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::DM0)].value_or(0)) << 0 |
-            static_cast<size_t>(x.kernel_ids[utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::DM1)].value_or(0)) << 16 |
-            static_cast<size_t>(x.kernel_ids[utils::underlying_type<HalProcessorClassType>(HalProcessorClassType::COMPUTE)].value_or(0)) << 32;
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value_or(0)) << 0 |
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value_or(0)) << 16 |
+            static_cast<size_t>(x.kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value_or(0)) << 32;
     }
 };
 
@@ -289,7 +290,7 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel->dispatch_class(), id);
+                grid[core_index].update(magic_enum::enum_cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
             }
         }
 
@@ -902,7 +903,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         // TODO: kernels should be stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
             (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = utils::underlying_type<HalProcessorClassType>(kernel->dispatch_class());
+            uint32_t dispatch_class = kernel->dispatch_class();
             max_crtas[dispatch_class] =
                 std::max(max_crtas[dispatch_class], (uint32_t)kernel->common_runtime_args().size());
         }
@@ -925,7 +926,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         // TODO: as above, fix when kernels are stored by programmable core type
         if (core_type == kernel->get_kernel_core_type() &&
             (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) == kernel->is_idle_eth()) {
-            uint32_t dispatch_class = utils::underlying_type<HalProcessorClassType>(kernel->dispatch_class());
+            uint32_t dispatch_class = kernel->dispatch_class();
             kernel->set_common_runtime_args_count(max_crtas[dispatch_class]);
         }
     }

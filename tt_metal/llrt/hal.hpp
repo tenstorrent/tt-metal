@@ -10,6 +10,7 @@
 //
 
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <memory>
 #include "tt_metal/common/assert.hpp"
@@ -31,20 +32,8 @@ enum class HalProgrammableCoreType {
 };
 
 enum class HalProcessorClassType {
-    DM0     = 0,
-    DM1     = 1,
-    COMPUTE = 2,
-    COUNT   = 3
-};
-
-enum class HalProcessorType {
-    // Data movement processors
-    DM = 0,
-
-    // Compute processors
-    MATH0 = 0, // UNPACK?
-    MATH1 = 1, // MATH?
-    MATH2 = 2 // PACK?
+    DM      = 0,
+    COMPUTE = 1
 };
 
 enum class HalL1MemAddrType : uint8_t {
@@ -97,13 +86,14 @@ class HalCoreInfoType {
   private:
     HalProgrammableCoreType programmable_core_type_;
     CoreType core_type_;
-    std::vector<std::vector<uint8_t>> processor_classes_; // processor_class_types_?
+    // index represents processor class position, value is the specific processor class
+    std::span<uint8_t> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     bool supports_cbs_;
 
   public:
-    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, const std::vector<std::vector<uint8_t>> &processor_classes,
+    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, const std::span<uint8_t> &processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes, bool supports_cbs);
 
     template <typename T = DeviceAddr>

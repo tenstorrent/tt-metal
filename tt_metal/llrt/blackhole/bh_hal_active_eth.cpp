@@ -15,6 +15,8 @@
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
 
+#include <magic_enum.hpp>
+
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 
@@ -50,11 +52,8 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
-    std::vector<uint8_t> processor_types(1, 0);
-    for (auto dispatch_class_idx = 0; dispatch_class_idx < processor_classes.size(); dispatch_class_idx++) {
-        processor_classes[dispatch_class_idx] = processor_types;
-    }
+    uint8_t dm_processor_type = magic_enum::enum_integer(HalProcessorClassType::DM);
+    std::array<uint8_t, NumEthDispatchClasses> processor_classes{dm_processor_type, dm_processor_type};
 
     return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }

@@ -53,15 +53,9 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumTensixDispatchClasses);
-    std::vector<uint8_t> processor_types;
-    for (auto dispatch_class_idx = 0; dispatch_class_idx < processor_classes.size(); dispatch_class_idx++) {
-        HalProcessorClassType dispatch_class = magic_enum::enum_value<HalProcessorClassType>(dispatch_class_idx);
-        uint32_t num_processors = dispatch_class == HalProcessorClassType::COMPUTE ? 3 : 1;
-        processor_types.resize(num_processors);
-        std::iota(processor_types.begin(), processor_types.end(), 0);
-        processor_classes[dispatch_class_idx] = processor_types;
-    }
+    uint8_t dm_processor_type = magic_enum::enum_integer(HalProcessorClassType::DM);
+    uint8_t compute_processor_type = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    std::array<uint8_t, NumTensixDispatchClasses> processor_classes{dm_processor_type, dm_processor_type, compute_processor_type};
 
     return {HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true};
 }

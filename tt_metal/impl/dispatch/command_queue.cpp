@@ -635,7 +635,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                 if (kernel->get_kernel_core_type() != core_type) {
                     continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                 }
-                if (utils::underlying_type<HalProcessorClassType>(kernel->dispatch_class()) != dispatch_class) {
+                if (kernel->dispatch_class() != dispatch_class) {
                     continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                 }
 
