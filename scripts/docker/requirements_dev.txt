@@ -5,4 +5,3 @@ jq
 openssh-server
 vim
 libmpfr-dev
-ccache
