@@ -26,12 +26,12 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
-        "round_mode": ["None"],
-        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "round_mode": ["None", "floor", "trunc"],
+        "grad_dtype": [ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -43,7 +43,7 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
         + gen_shapes([1, 1], [256, 256], [1, 1], 4),
-        "round_mode": ["None"],
+        "round_mode": ["None", "floor", "trunc"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -159,30 +159,4 @@ def run(
     output_string = output_string[:-2]
     e2e_perf = stop_measuring_time(start_time)
 
-    info_string = f"Round_mode: {round_mode}, Grad_dtype: {grad_dtype}, Input_a_dtype: {input_a_dtype}, Input_b_dtype: {input_b_dtype}"
-
-    return [(passed, output_string), e2e_perf, info_string]
-
-
-from tests.sweep_framework.permutations import *
-
-for suite in parameters.keys():
-    if suite != "nightly":
-        continue
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        if invalidate_vector(vector)[0]:
-            continue
-        try:
-            passed, _, info_string = run(**vector, device=device)
-            if passed[0] != True:
-                pass
-                print(passed)
-                print(info_string)
-        except Exception as exc:
-            print(info_string)
-
-    ttnn.close_device(device)
+    return [(passed, output_string), e2e_perf]
