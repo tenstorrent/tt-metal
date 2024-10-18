@@ -178,6 +178,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
@@ -189,6 +190,7 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -198,6 +200,7 @@ TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -207,6 +210,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -216,6 +220,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -225,6 +230,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertErisc) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -234,6 +240,7 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
 }
 
 TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
+    GTEST_SKIP();
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

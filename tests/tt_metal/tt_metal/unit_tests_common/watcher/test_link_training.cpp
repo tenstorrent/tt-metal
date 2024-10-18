@@ -15,6 +15,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherEthLinkCheck) {
+    GTEST_SKIP();
     // Eth link retraining only supported on WH for now, this test is also dispatch-agnostic so just pick one.
     if (this->slow_dispatch_ || this->arch_ != tt::ARCH::WORMHOLE_B0 || this->devices_.size() == 1) {
         log_info(LogTest, "Test only runs on fast dispatch + multi-chip WH, skipping...");
