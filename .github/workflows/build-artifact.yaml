@@ -76,6 +76,13 @@ jobs:
       - build
       - in-service
     steps:
+      - name: Verify NFS mount
+        shell: bash
+        run: |
+          if [ ! -d "/mnt/MLPerf/ccache" ]; then
+            echo "::error::NFS drive is not mounted; build machine not perperly provisioned."
+            exit 1
+          fi
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
