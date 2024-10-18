@@ -50,8 +50,12 @@ struct EmbeddingOperation {
         bool fuzed_tilized = layout == ttnn::TILE_LAYOUT;
 
         // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
-        if(!fuzed_tilized || input_tensor.get_legacy_shape()[-1] % TILE_HEIGHT) fuzed_tilized = false;
-        if(!fuzed_tilized || weight.get_legacy_shape()[-1] % TILE_WIDTH) fuzed_tilized = false;
+        if (fused_tilized) {
+            if (input_tensor.get_legacy_shape()[-1] % TILE_HEIGHT != 0
+                || weight.get_legacy_shape()[-1] % TILE_WIDTH != 0) {
+                fused_tilized = false;
+            }
+        }
 
         auto embeddings = operation::run(
                                 Embeddings{
