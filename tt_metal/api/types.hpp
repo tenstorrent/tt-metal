@@ -4,33 +4,35 @@
 
 #pragma once
 
-#include "device/tt_cluster_descriptor_types.h"
-#include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include <cstdint>
 
-namespace tt::tt_metal{
+namespace tt::tt_metal {
+inline namespace v0 {
+
+class CommandQueue;
+class Device;
+
+}  // namespace v0
 
 namespace v1 {
 
-// Opaque classes
-class Program;
-class Device;
-class CommandQueue;
-class Trace;
+struct DeviceHandle {
+    uint16_t key = 0;
 
-// Ideally these would be opaque but this work requires
-// completion of the prototype of the runtime args.
-class CircularBuffer;
-class Buffer;
+    bool is_valid() const { return key != 0; }
+};
 
-// Not likely going to be opaque, but pending review of
-// completion of the prototype of the runtime args.
-class Event;
-class RuntimeArgs;
-class RuntimeArgsData;
+struct CommandQueueHandle {
+    public:
+    operator v0::CommandQueue&() const { return command_queue; }
 
-}
+    private:
+    friend CommandQueueHandle GetCommandQueue(DeviceHandle, uint32_t);
+    CommandQueueHandle(v0::CommandQueue& queue) : command_queue(queue) {}
 
+    v0::CommandQueue& command_queue;
+};
 
+}  // namespace v1
 
-}
+}  // namespace tt::tt_metal
