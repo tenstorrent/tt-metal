@@ -55,7 +55,7 @@ inline void calculate_tangent()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v);
+        vInt whole_v = float_to_int16(v, 0);
         v = PI * (v - int32_to_float(whole_v, 0));
         dst_reg[0] = v * sfpu_reciprocal<8>(sfpu_xcot<APPROXIMATION_MODE>(v));
         dst_reg++;
@@ -94,7 +94,7 @@ inline void calculate_sine()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v);
+        vInt whole_v = float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
@@ -114,7 +114,7 @@ inline void calculate_cosine()
     for (int d = 0; d < ITERATIONS; d++)
     {
         vFloat v = dst_reg[0] * FRAC_1_PI + 0.5f;
-        vInt whole_v = float_to_int16(v);
+        vInt whole_v = float_to_int16(v, 0);
         v -= int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
