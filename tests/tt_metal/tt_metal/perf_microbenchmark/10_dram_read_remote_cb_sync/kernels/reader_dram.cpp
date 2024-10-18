@@ -54,6 +54,10 @@ void kernel_main() {
     constexpr uint32_t cb_id = 0;
     constexpr uint32_t total_num_blocks_in_buffer = 3;
 
+    uint32_t block_size_bytes = num_pages[0] * page_size[0];
+    uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
+    uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + block_size_bytes * total_num_blocks_in_buffer;
+
     uint32_t src_read_addr = 0;
     uint32_t src_read_addr_offset_bytes = 0;
 
@@ -66,15 +70,25 @@ void kernel_main() {
         uint32_t curr_block_size_bytes = curr_num_pages * curr_page_size;
         uint32_t curr_layer_size_bytes = curr_num_blocks * curr_block_size_bytes;
 
-        // DPRINT << "curr_page_size   " << curr_page_size << ENDL();
-        // DPRINT << "curr_num_pages   "<<curr_num_pages << ENDL();
-        // DPRINT << "curr_num_blocks    "  << curr_num_blocks << ENDL();
-        // DPRINT << "curr_block_num_tiles    " <<  curr_block_num_tiles<< ENDL();
-        // DPRINT << "curr_block_size_bytes    " <<  curr_block_size_bytes<< ENDL();
-        // DPRINT << "curr_layer_size_bytes    " <<  curr_layer_size_bytes<< ENDL();
-
         uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, curr_page_size, bank_id, vc);
         src_read_addr = src_read_addr_offset_bytes;
+
+        // For debug purpose, use trivial DRAM read method
+        // for (uint32_t block = 0; block < curr_num_blocks; ++block) {
+        //     // Operand 1
+        //     cb_reserve_back(cb_id, curr_block_num_tiles);
+        //     auto l1_write_addr = get_write_ptr(cb_id);
+
+        //     for (uint32_t h = 0; h < curr_num_pages; ++h) {
+        //         noc_async_read_tile_dram_sharded_with_state(src_base_addr, src_read_addr, l1_write_addr);
+        //         src_read_addr += curr_page_size;
+        //         l1_write_addr += curr_page_size;
+        //     }
+
+        //     noc_async_read_barrier();
+
+        //     cb_push_back(cb_id, curr_block_num_tiles);
+        // }
 
         uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;
         uint32_t curr_block_trid = 1;
@@ -83,15 +97,19 @@ void kernel_main() {
         cb_reserve_back(cb_id, curr_block_num_tiles);
         uint32_t l1_write_addr_offset = 0;
         uint32_t l1_write_addr_start = get_write_ptr(cb_id);
+        if (l1_write_addr_start >= l1_buffer_end_addr) {
+            l1_write_addr_start = l1_buffer_start_addr;
+        }
         uint32_t l1_write_addr = l1_write_addr_start;
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
             noc_async_read_tile_dram_sharded_set_trid(curr_block_trid);
 
+            uint32_t temp_l1_write_addr = l1_write_addr;
             for (uint32_t h = 0; h < curr_num_pages; ++h) {
                 noc_async_read_tile_dram_sharded_with_state_with_trid(
-                    src_base_addr, src_read_addr, l1_write_addr, curr_block_trid);
+                    src_base_addr, src_read_addr, temp_l1_write_addr, curr_block_trid);
                 src_read_addr += curr_page_size;
-                l1_write_addr += curr_page_size;
+                temp_l1_write_addr += curr_page_size;
             }
 
             if (num_free_blocks_in_buffer == 2) {
@@ -106,13 +124,15 @@ void kernel_main() {
             }
 
             if (curr_block_trid == total_num_blocks_in_buffer) {
-                l1_write_addr_offset = 0;
                 curr_block_trid = 1;
             } else {
-                l1_write_addr_offset += curr_block_size_bytes;
                 curr_block_trid += 1;
             }
-            l1_write_addr = l1_write_addr_start + l1_write_addr_offset;
+
+            l1_write_addr += block_size_bytes;
+            if (l1_write_addr >= l1_buffer_end_addr) {
+                l1_write_addr = l1_buffer_start_addr;
+            }
         }
         // last block to wait
         noc_async_read_barrier_with_trid(block_trid_to_wait);
