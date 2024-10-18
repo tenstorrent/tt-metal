@@ -76,7 +76,7 @@ class TtModelArgs:
         # Add this near the top of the class, with other class attributes
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         device = mesh_device.get_devices()[0] if mesh_device else None
-        device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
         # A single device cannot fit the full 128k context length
         if self.num_devices == 1:
