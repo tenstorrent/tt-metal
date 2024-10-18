@@ -6,8 +6,6 @@
 #include <cstdint>
 #include <deque>
 #include "impl/kernels/kernel.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
 
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const uint32_t num_unique_rt_args,
