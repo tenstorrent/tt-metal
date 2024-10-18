@@ -379,6 +379,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
         std::vector<uint16_t> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
+            // this core has no output
             continue;
         }
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);

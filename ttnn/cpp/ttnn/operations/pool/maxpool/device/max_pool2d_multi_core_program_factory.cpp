@@ -51,18 +51,12 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
     uint32_t in_nbytes = datum_size(in_df);
     uint32_t out_nbytes = datum_size(out_df);
-    TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout;
 
-    TT_FATAL((in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
-             (input_shape[3] % num_shards_c == 0), "For width sharding, input channels should be divisible by num_shards");
-    TT_FATAL((in_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
-             (output_shape[3] % num_shards_c == 0), "For width sharding, output channels should be divisible by num_shards");
     uint32_t in_nbytes_c = input_shape[3] / num_shards_c * in_nbytes;                                      // row of input (channels)
     uint32_t out_nbytes_c = output_shape[3] / num_shards_c * out_nbytes;                                // row of output (channels)
-    //TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
-    //TT_ASSERT(
-    //    (out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2");  // out_nbytes_c is power of 2
-
+    TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
+    TT_ASSERT(
+        (out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2");  // out_nbytes_c is power of 2
 
     tt::DataFormat indices_df = tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
     uint32_t indices_nbytes = datum_size(indices_df);
@@ -410,7 +404,7 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, is_block_sharded); // should we always pad cores or only for block sharding?
+        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, is_block_sharded); // only pad the indices for block sharding
     auto reader_indices =
         sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
     log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.shape());
