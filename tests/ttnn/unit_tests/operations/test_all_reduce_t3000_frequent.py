@@ -23,7 +23,7 @@ def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links
 
 
 def run_with_trace(
-    t3k_mesh_device,
+    mesh_device,
     input_tensor_mesh,
     num_links,
     math_op,
@@ -39,40 +39,36 @@ def run_with_trace(
         math_op=math_op,
         num_links=num_links,
         memory_config=output_mem_config,
-        num_workers=n_worker,
-        num_buffers_per_channel=n_buffer,
     )
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
 
     # Capture trace
     logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce(
             input_tensor_mesh,
             math_op=math_op,
             num_links=num_links,
             memory_config=output_mem_config,
-            num_workers=n_worker,
-            num_buffers_per_channel=n_buffer,
         )
-    ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
 
     # Run the op
     logger.info("Starting Trace perf test...")
-    ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(t3k_mesh_device, trace_id)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
 
     return output_tensor_mesh
 
 
 def run_all_reduce_test(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     per_chip_output_shape,
     num_links,
@@ -86,9 +82,9 @@ def run_all_reduce_test(
     num_iters=1,
     topology=ttnn.Topology.Ring,
 ):
-    if len(t3k_mesh_device.get_device_ids()) < num_devices:
+    if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
-            f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(t3k_mesh_device.get_device_ids())}"
+            f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(mesh_device.get_device_ids())}"
         )
 
     debug = False
@@ -99,7 +95,7 @@ def run_all_reduce_test(
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
 
-    t3k_mesh_device.enable_async(enable_async)
+    mesh_device.enable_async(enable_async)
     if enable_async:
         logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
@@ -113,7 +109,7 @@ def run_all_reduce_test(
         tt_input_tensors.append(
             ttnn.Tensor(input_tensor, input_dtype)
             .to(layout)
-            .to(t3k_mesh_device.get_device(t3k_mesh_device.get_device_ids()[i]), mem_config)
+            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
         )
         input_tensors.append(input_tensor)
     unchunked_input_tensor = torch.cat(input_tensors)
@@ -131,8 +127,8 @@ def run_all_reduce_test(
             topology=topology,
         )
 
-        for device_id in t3k_mesh_device.get_device_ids():
-            ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+        for device_id in mesh_device.get_device_ids():
+            ttnn.synchronize_device(mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
@@ -216,7 +212,7 @@ def test_ring_all_reduce_post_commit(
     use_program_cache,
     function_level_defaults,
     enable_async,
-    num_iters=1,
+    num_iters=2,
 ):
     run_all_reduce_test(
         t3k_mesh_device,
