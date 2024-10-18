@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "xfail": {
+    "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
         + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
         + gen_shapes([32, 32], [256, 256], [32, 32], 16),
@@ -101,22 +101,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    info_string = f"{beta}, {threshold}"
-
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf, info_string]
-
-
-from tests.sweep_framework.permutations import *
-
-for suite in parameters.keys():
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        passed, _, info_string = run(**vector, device=device)
-        if passed[0] != True:
-            print(passed)
-            print(info_string)
-
-    ttnn.close_device(device)
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
