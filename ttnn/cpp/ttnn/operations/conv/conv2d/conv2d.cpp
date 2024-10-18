@@ -818,7 +818,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     if (conv_config.act_block_h_override == 0 && !input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // This is a path for auto_sharding, set act_block_h_override to min value to
         // be conservative with L1 memory usage.
-        if (conv_config.input_channels_alignment == (constants::TILE_HEIGHT / 2)) {
+        if (conv_config.input_channels_alignment == (constants::TILE_WIDTH / 2)) {
             // shallow conv, requires at least two tiles
             conv_config.act_block_h_override = constants::TILE_HEIGHT * 2;
         } else {
