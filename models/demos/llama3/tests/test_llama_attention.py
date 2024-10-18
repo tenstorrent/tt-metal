@@ -92,6 +92,7 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
             tt_attention_input,
             model_args.dim,
             mesh_device,
+            memory_config=model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
         tt_out = tt_model(attention_input, current_pos_tensor, rot_mats=current_rot_mat)

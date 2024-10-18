@@ -116,7 +116,7 @@ def get_rotation_mat_batched(rot_mat, start_pos, seqlen, batch):
     return rot_emb
 
 
-def prepare_inputs_ttnn(x, hidden_size, mesh_device):
+def prepare_inputs_ttnn(x, hidden_size, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """
     Prepare inputs for decode mode.
     x: (batch, seq, hidden_dim)
@@ -157,6 +157,7 @@ def prepare_inputs_ttnn(x, hidden_size, mesh_device):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=memory_config,
         )
     else:  # Convert the row major layout from embedding back to tile layout
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
