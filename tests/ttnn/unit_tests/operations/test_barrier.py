@@ -188,7 +188,6 @@ def run_all_gather_impl(
         if not eq:
             logger.error(f"output mismatch for tensor {i}")
         assert eq, f"{i} FAILED: {output}"
-    time.sleep(10)
 
 
 def run_all_gather_on_n300_impl(
