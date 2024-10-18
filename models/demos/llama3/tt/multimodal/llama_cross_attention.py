@@ -164,6 +164,9 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         xk = self.k_norm(xk)
+
+        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
         return [xk, xv]
 
         ### EVERYTHING BELOW IS BROKEN OMG
@@ -224,8 +227,8 @@ class TtLlamaCrossAttention(LightweightModule):
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
 
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        # xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        # xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
 
         scores = ttnn.matmul(
             xq,
@@ -310,13 +313,14 @@ class TtLlamaCrossAttention(LightweightModule):
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
 
+        # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
         # NOTE: Using naive SDPA for now since FlashDecode does not allow non-causal mask
         # xq = ttnn.reshape(xq, [self.n_local_heads // self.n_local_kv_heads, self.n_local_kv_heads, seq_len, self.head_dim])
         # NOTE: repeat doesn't work, need to use repeat_interleave
-        # xk = ttnn.repeat(xk, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        # xv = ttnn.repeat(xv, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        # # xk = ttnn.repeat(xk, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
+        # xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        # # xv = ttnn.repeat(xv, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
+        # xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
 
         scores = ttnn.matmul(
             xq,

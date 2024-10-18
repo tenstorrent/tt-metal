@@ -59,9 +59,14 @@ def create_multimodal_model(model_args, mesh_device, dtype=ttnn.bfloat16):
     "target",
     ("tt", "cpu"),
 )
+@pytest.mark.parametrize(
+    "warmup_iters",
+    (0, 1),
+)
 def test_llama_multimodal_demo_text(
     mesh_device,
     target,
+    warmup_iters,
     temperature: float = 0,
     top_p: float = 0.9,
     max_seq_len: int = 512,
@@ -115,14 +120,15 @@ def test_llama_multimodal_demo_text(
     ]
 
     print(f"Running text completion on {target}")
-    for content in interleaved_contents:
-        result = generator.text_completion(
-            content,
-            max_gen_len=max_gen_len,
-            temperature=temperature,
-            top_p=top_p,
-        )
+    for _ in range(warmup_iters + 1):
+        for content in interleaved_contents:
+            result = generator.text_completion(
+                content,
+                max_gen_len=max_gen_len,
+                temperature=temperature,
+                top_p=top_p,
+            )
 
-        cprint(f"{content}", end="")
-        cprint(f"{result.generation}", color="yellow")
-        print("\n==================================\n")
+            cprint(f"{content}", end="")
+            cprint(f"{result.generation}", color="yellow")
+            print("\n==================================\n")
