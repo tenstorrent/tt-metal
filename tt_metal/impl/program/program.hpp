@@ -149,6 +149,8 @@ class Program {
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const { return this->finalized_; }
+    bool is_cached() const { return this->cached_; }
+    void set_cached() { this->cached_ = true; }
     void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
@@ -171,6 +173,7 @@ class Program {
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
+    bool cached_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}

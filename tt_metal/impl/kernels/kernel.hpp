@@ -97,7 +97,7 @@ class Kernel : public JitBuildSettings {
     virtual RISCV processor() const = 0;
     dispatch_core_processor_classes dispatch_class() { return this->dispatch_class_; }
 
-    virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
+    virtual bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
 
     virtual Config config() const = 0;
 
@@ -171,7 +171,7 @@ class DataMovementKernel : public Kernel {
     void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const override;
+    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
@@ -200,7 +200,7 @@ class EthernetKernel : public Kernel {
     void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const override;
+    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
@@ -229,7 +229,7 @@ class ComputeKernel : public Kernel {
     void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
     void read_binaries(Device *device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core) const override;
+    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
