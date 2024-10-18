@@ -8,6 +8,8 @@ FF1 with gelu: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/
 
 LM head: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "2chips"`
 
+Resnet Convolution: `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "2chips"`
+
 ## Variations
 
 ### Supported systems

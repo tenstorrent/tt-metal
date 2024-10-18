@@ -6,24 +6,25 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import MatmulTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 
 
-class LMHeadTest(MatmulTestBase):
+class LMHeadTest(OpTestBase):
     def __init__(
         self,
         mesh_device,
-        seq_len,
-        inner_dim,
-        weights_n,
+        in0_shape,
+        in1_shape,
         in0_mem_config,
         in1_mem_config,
         out_mem_config,
         in0_dtype,
         in1_dtype,
         out_dtype,
+        in0_layout,
+        in1_layout,
         program_config,
         compute_config,
         loop_count=1000,
@@ -32,15 +33,16 @@ class LMHeadTest(MatmulTestBase):
     ):
         super().__init__(
             mesh_device,
-            seq_len,
-            inner_dim,
-            weights_n,
+            in0_shape,
+            in1_shape,
             in0_mem_config,
             in1_mem_config,
             out_mem_config,
             in0_dtype,
             in1_dtype,
             out_dtype,
+            in0_layout,
+            in1_layout,
             program_config,
             compute_config,
             loop_count,
@@ -48,7 +50,7 @@ class LMHeadTest(MatmulTestBase):
             determinism_check_iterations,
         )
 
-    def generate_weights(self, shape):
+    def generate_torch_weights(self, shape):
         return torch.randn(shape) - 0.95
 
 
@@ -104,17 +106,21 @@ def test_lm_head_matmul(
         packer_l1_acc=True,
     )
 
+    in0_shape = [1, 1, seq_len, 4544]
+    in1_shape = [1, 1, 4544, weights_n]
+
     lm_head_test = LMHeadTest(
         mesh_device,
-        seq_len=seq_len,
-        inner_dim=4544,
-        weights_n=weights_n,
+        in0_shape=in0_shape,
+        in1_shape=in1_shape,
         in0_mem_config=in0_mem_config,
         in1_mem_config=in1_mem_config,
         out_mem_config=out_mem_config,
         in0_dtype=ttnn.DataType.BFLOAT8_B,
         in1_dtype=ttnn.DataType.BFLOAT8_B,
         out_dtype=ttnn.DataType.BFLOAT8_B,
+        in0_layout=ttnn.TILE_LAYOUT,
+        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=iterations,
@@ -123,7 +129,7 @@ def test_lm_head_matmul(
     )
 
     # Run test
-    lm_head_test.run_matmul()
+    lm_head_test.run_op_test()
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
