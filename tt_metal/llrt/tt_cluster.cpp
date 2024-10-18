@@ -592,7 +592,7 @@ void *Cluster::host_dma_address(uint64_t offset, chip_id_t src_device_id, uint16
 }
 
 uint64_t Cluster::get_pcie_base_addr_from_device(chip_id_t chip_id) const {
-    return this->driver_->get_pcie_base_addr_from_device();
+    return this->driver_->get_pcie_base_addr_from_device(chip_id);
 }
 
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
