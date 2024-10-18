@@ -20,10 +20,6 @@ inline void llk_math_eltwise_unary_sfpu_rand_uint_init(uint seed = 0) {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_rand_uint(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    // Init a nice per-lane counter
-    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
-    TTI_SFPSHFT(-1 & 0xfff, 0, p_sfpu::LREG0, 1);
-
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::rand_uint<APPROXIMATE>, dst_index, vector_mode);
 }
 
