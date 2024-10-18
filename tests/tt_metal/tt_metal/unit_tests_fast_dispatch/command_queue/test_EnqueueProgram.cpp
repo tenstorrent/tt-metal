@@ -47,27 +47,6 @@ bool does_device_have_active_eth_cores(const Device *device) {
     return !(device->get_active_ethernet_cores(true).empty());
 }
 
-// CoreRangeSet get_all_active_eth_cores(const Device* device, const bool filter_out_cores_reserved_for_fd = false) {
-//     std::set<CoreRange> cores;
-//     std::unordered_set<CoreCoord> active_eth_cores = device->get_active_ethernet_cores(true);
-
-//     if (filter_out_cores_reserved_for_fd) {
-//         const std::vector<CoreCoord>& dispatch_cores =
-//             tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), CoreType::ETH);
-//         for (CoreCoord fd_core : dispatch_cores) {
-//             if (active_eth_cores.contains(fd_core)) {
-//                 active_eth_cores.erase(fd_core);
-//             }
-//         }
-//     }
-
-//     for (CoreCoord core : active_eth_cores) {
-//         cores.emplace(core);
-//     }
-//     CoreRangeSet crs(cores);
-//     return crs;
-// }
-
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
@@ -1506,21 +1485,6 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
 
         bool eth_kernel_added_to_program = false;
         if (rand() % 2 == 0) {
-            // const vector<uint32_t>& sem_ids = generate_semaphores(program, eth_cores, CoreType::ETH, MIN_NUM_SEMS,
-            // MAX_NUM_SEMS / 2); auto [unique_rt_args, common_rt_args] =
-            //     generate_runtime_args(sem_ids, MIN_NUM_RUNTIME_ARGS, MAX_NUM_RUNTIME_ARGS / 4);
-            // const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
-            // KernelHandle kernel_id = create_kernel(
-            //     program,
-            //     eth_cores,
-            //     sem_ids.size(),
-            //     num_unique_rt_args,
-            //     common_rt_args.size(),
-            //     true,
-            //     MIN_KERNEL_SIZE_BYTES,
-            //     MAX_KERNEL_SIZE_BYTES / 2);
-            // SetRuntimeArgs(program, kernel_id, eth_cores, unique_rt_args);
-            // SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
             this->create_kernel(
                 program,
                 CoreType::ETH,
@@ -1534,13 +1498,6 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
             eth_kernel_added_to_program = true;
         }
         if (rand() % 2 == 0 || !eth_kernel_added_to_program) {
-            // const vector<uint32_t>& sem_ids = generate_semaphores(program, tensix_cores, CoreType::WORKER, MIN_NUM_SEMS, MAX_NUM_SEMS / 2);
-            // auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids);
-            // const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
-            // KernelHandle kernel_id =
-            //     create_kernel(program, tensix_cores, sem_ids.size(), num_unique_rt_args, common_rt_args.size(), false);
-            // SetRuntimeArgs(program, kernel_id, tensix_cores, unique_rt_args);
-            // SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
             this->create_kernel(program, CoreType::WORKER, false, MIN_NUM_SEMS, MAX_NUM_SEMS / 2);
         }
 
@@ -1586,23 +1543,6 @@ TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
             max_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
         }
 
-        // const vector<uint32_t>& sem_ids = generate_semaphores(program, cores, CoreType::WORKER, min_num_sems, max_num_sems);
-        // auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
-        // const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
-        // KernelHandle kernel_id = create_kernel(
-        //     program,
-        //     cores,
-        //     sem_ids.size(),
-        //     num_unique_rt_args,
-        //     common_rt_args.size(),
-        //     false,
-        //     min_size_bytes,
-        //     max_size_bytes,
-        //     min_runtime_cycles,
-        //     max_runtime_cycles);
-
-        // SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
-        // SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
         this->create_kernel(
             program,
             CoreType::WORKER,
@@ -1658,23 +1598,6 @@ TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
             max_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
         }
 
-        // const vector<uint32_t>& sem_ids = generate_semaphores(program, cores, CoreType::WORKER, min_num_sems, max_num_sems);
-        // auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
-        // const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
-        // KernelHandle kernel_id = create_kernel(
-        //     program,
-        //     cores,
-        //     sem_ids.size(),
-        //     num_unique_rt_args,
-        //     common_rt_args.size(),
-        //     false,
-        //     min_size_bytes,
-        //     max_size_bytes,
-        //     min_runtime_cycles,
-        //     max_runtime_cycles);
-
-        // SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
-        // SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
         this->create_kernel(
             program,
             CoreType::WORKER,
@@ -1730,24 +1653,6 @@ TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix)
             max_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
         }
 
-        // const vector<uint32_t>& sem_ids =
-        //     generate_semaphores(program, cores, CoreType::WORKER, min_num_sems, max_num_sems);
-        // auto [unique_rt_args, common_rt_args] = generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
-        // const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
-        // KernelHandle kernel_id = create_kernel(
-        //     program,
-        //     cores,
-        //     sem_ids.size(),
-        //     num_unique_rt_args,
-        //     common_rt_args.size(),
-        //     false,
-        //     min_size_bytes,
-        //     max_size_bytes,
-        //     min_runtime_cycles,
-        //     max_runtime_cycles);
-
-        // SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
-        // SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
         this->create_kernel(
             program,
             CoreType::WORKER,
@@ -1764,9 +1669,5 @@ TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix)
         EnqueueProgram(device_->command_queue(), program, false);
     }
 }
-
-// randomness to the corerange that we dispatch to; partition grid into blocks and run on some/all of them; rng(0, 1, 2) - 0: run on full grid, 1 - half grid, 2 - quarters
-// if 1 or 2, randomize num subgrids that we run on
-// run 1 large for every 5 short ones; make short ones run really fast; make long ones 100 microseconds
 
 }  // namespace stress_tests
