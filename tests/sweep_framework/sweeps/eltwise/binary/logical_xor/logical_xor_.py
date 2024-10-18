@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes, gen_with_zeroes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, gen_with_zeroes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
