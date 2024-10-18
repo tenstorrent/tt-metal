@@ -414,7 +414,7 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     std::size_t total_num_edm_channels = num_links * num_edm_channels;
     log_trace(tt::LogOp, "total_num_edm_channels: {}", total_num_edm_channels);
 
-    std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels * num_links, 0);
+    std::vector<uint32_t> num_pages_per_full_chunk(total_num_edm_channels, 0);
 
     for (std::size_t link = 0; link < num_links; link++) {
         const auto& an_edm_builder = cw_per_link_edm_builders.size() > 0 ? cw_per_link_edm_builders.at(link) : ccw_per_link_edm_builders.at(link);
