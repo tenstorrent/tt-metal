@@ -454,6 +454,15 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = input.device()->sfpu_nan();
     float t_inf = input.device()->sfpu_inf();
+    auto arch_env = detect_arch();
+    if(arch_env == tt::ARCH::WORMHOLE_B0){
+        std::cout<<"Arch = WORMHOLE_B0";
+    }else{
+        std::cout<<"Not WH_B0";
+    }
+    std::cout<<"\nDevice : "<<input.device();
+    std::cout<<"\nNan : "<<t_nan;
+    std::cout<<"\nInf : "<<t_inf;
     Tensor cond_result = ttnn::logical_or(
         ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
         ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
