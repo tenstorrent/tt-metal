@@ -19,6 +19,7 @@
 #include "debug_helpers.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
+#include "common/bfloat8.hpp"
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
@@ -248,6 +249,17 @@ static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
                 case tt::DataFormat::Float32: {
                     float *float32_ptr = reinterpret_cast<float *>(data);
                     stream << float32_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::Bfp4_b:
+                case tt::DataFormat::Bfp8_b: {
+                    // Saved the exponent and data together
+                    uint16_t *data_ptr = reinterpret_cast<uint16_t *>(data);
+                    uint8_t val = (data_ptr[i] >> 8) & 0xFF;
+                    uint8_t exponent = data_ptr[i] & 0xFF;
+                    uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
+                    stream << *reinterpret_cast<float *>(&bit_val);
+                    // stream << *reinterpret_cast<float *>(&bit_val) << fmt::format(" (exp={:x}, val={:x}) ", exponent, val);
                     break;
                 }
                 default: break;

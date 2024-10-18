@@ -61,15 +61,35 @@ And example with the different features available is shown below:
         DPRINT_DATA1(DPRINT << "this is the data movement kernel on noc 1" << ENDL());
     }
 
-The APIs for printing data from Circular Buffers can be found in ``debug/dprint_tile.h``.  These APIs use the
-``SliceRange`` struct to print tile contents with a given sample count, starting index, and stride.  An example of
-how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
+Data from Circular Buffers can be printed using the ``TileSlice`` object. It can be constructed as described below, and fed directly to a ``DPRINT`` call.
+
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| Argument        | Type                | Description                                                                                                                                                  |
++=================+=====================+==============================================================================================================================================================+
+| cb_id           | uint8_t             | Id of the Circular Buffer to print data form.                                                                                                                |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| tile_idx        | int                 | Index of tile inside the CB to print data from.                                                                                                              |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| slice_range     | SliceRange          | A struct to describe starting index, ending index, and stride for data to print within the CB. Fields are ``h0``, ``h1``, ``hs``, ``w0``, ``w1``,            |
+|                 |                     | ``ws``, all ``uint8_t``.                                                                                                                                     |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| cb_type         | dprint_tslice_cb_t  | Only used for Data Movement RISCs, specify ``TSLICE_INPUT_CB`` or ``TSLICE_OUTPUT_CB`` depending on if the CB to print from is input or output.              |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| ptr_type        | dprint_tslice_ptr_t | Only used for Data Movement RISCs, specify ``TSLICE_RD_PTR`` to read from the front of the CB, or ``TSLICE_WR_PTR`` to read from the back of the CB.         |
+|                 |                     | UNPACK RISC only reads from the front of the CB, PACK RISC only reads from the back of the CB.                                                               |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| endl_rows       | bool                | Whether to add a newline between printed rows, default ``true``.                                                                                             |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+| print_untilized | bool                | Whether to untilize the CB data while printing it (always done for block float formats), default ``true``.                                                   |
++-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
+
+An example of how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
 to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
-back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Please
-note that currently only CBs with type `DataFormat::Float16_b` are supported for printing.
+back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Currently supported data
+formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, and ``DataFormat::Bfp4_b``.
 
-.. code-block:: sh
+.. code-block:: c++
 
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
@@ -80,7 +100,7 @@ note that currently only CBs with type `DataFormat::Float16_b` are supported for
         ...
 
         // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CB::c_intermed1` and print it.
-        DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
+        DPRINT << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
         // Note that since the MATH core does not have access to CBs, so this is an invalid print:
         DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
 

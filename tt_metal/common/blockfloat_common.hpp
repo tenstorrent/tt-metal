@@ -144,11 +144,107 @@ inline uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_e
     return mantissa;
 }
 
-#if 0
-template <tt::DataFormat BfpFormat>
-uint32_t convert_bfp_to_u32(uint8_t input, uint32_t shared_exp, bool is_exp_a) {
+inline uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t shared_exp, bool is_exp_a) {
+    uint32_t exp = shared_exp;
+    uint32_t out_num = 0;
+    if ((bfp_format == tt::DataFormat::Bfp2_b) || (bfp_format == tt::DataFormat::Bfp2)) {
+        uint32_t sign = data >> 1;
+        uint32_t man = data & 0x1;
+
+        // Shift mantissa up until there is a 1 in bit 1
+        int shift_cnt = 0;
+        if (man == 0) {
+            man = 0;
+            exp = 0;
+        } else {
+            // shift again to put first non-hidden mantissa
+            // bit in bit 1
+            man = man << 1;
+            man = man & 0x1;
+
+            // adjust exponent
+            TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
+            exp = exp - shift_cnt;
+
+            // if exp_a rebias exp to 127
+            if (is_exp_a) {
+                exp = exp - 15 + 127;
+            }
+        }
+
+        // put s, e, m together
+        out_num = (sign << 31) | (exp << 23) | (man << 22);
+    } else if ((bfp_format == tt::DataFormat::Bfp4_b) || (bfp_format == tt::DataFormat::Bfp4)) {
+        uint32_t sign = data >> 3;
+        uint32_t man = data & 0x7;
+
+        // Shift mantissa up until there is a 1 in bit 3
+        int shift_cnt = 0;
+        if (man == 0) {
+            man = 0;
+            exp = 0;
+        } else {
+            while ((man & 0x04) == 0) {
+                man = man << 1;
+                shift_cnt++;
+            }
+            // shift one more time and zero the
+            // hidden top mantissa bit
+            // shift again to put first non-hidden mantissa
+            // bit in bit 3
+            man = man << 1;
+            man = man & 0x7;
+
+            // adjust exponent
+            TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
+            exp = exp - shift_cnt;
+
+            // if exp_a rebias exp to 127
+            if (is_exp_a) {
+                exp = exp - 15 + 127;
+            }
+        }
+
+        // put s, e, m together
+        out_num = (sign << 31) | (exp << 23) | (man << 20);
+    } else if ((bfp_format == tt::DataFormat::Bfp8_b) || (bfp_format == tt::DataFormat::Bfp8)) {
+        uint32_t sign = data >> 7;
+        uint32_t man = data & 0x7f;
+
+        // Shift mantissa up until there is a 1 in bit 6
+        int shift_cnt = 0;
+        if (man == 0) {
+            man = 0;
+            exp = 0;
+        } else {
+            // shift_cnt = 6 - (31 - __builtin_clz(man));
+            // man = (man << (shift_cnt + 1)) & 0x7f;
+            while ((man & 0x40) == 0) {
+                man = man << 1;
+                shift_cnt++;
+            }
+            // shift one more time and zero the
+            // hidden top mantissa bit
+            // shift again to put first non-hidden mantissa
+            // bit in bit 7
+            man = man << 1;
+            man = man & 0x7f;
+
+            // adjust exponent
+            TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
+            exp = exp - shift_cnt;
+
+            // if exp_a rebias exp to 127
+            if (is_exp_a) {
+                exp = exp - 15 + 127;
+            }
+        }
+
+        // put s, e, m together
+        out_num = (sign << 31) | (exp << 23) | (man << 16);
+    }
+    return out_num;
 }
-#endif
 
 template <tt::DataFormat BfpFormat>
 inline uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t> &u32_vec, uint32_t shared_exp, bool is_exp_a) {

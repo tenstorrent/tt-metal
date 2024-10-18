@@ -20,14 +20,6 @@ void kernel_main() {
     }
     cb_push_back(cb_id_in0, 1);
 
-    cb_reserve_back(tt::CB::c_in2, 1);
-    auto float_ptr = reinterpret_cast<float *>(get_write_ptr(tt::CB::c_in2));
-    float float_base = 3.14159274101257324219;
-    for (uint16_t idx = 0; idx < 32*32; idx++) {
-        float_ptr[idx] = float_base + (float) idx;
-    }
-    cb_push_back(tt::CB::c_in2, 1);
-
     DPRINT_DATA0(
         DPRINT << "Test Debug Print: Data0" << ENDL();
         print_test_data();

@@ -40,11 +40,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
-3.14159274 11.141593 19.141592 27.141592
-259.141602 267.141602 275.141602 283.141602
-515.141602 523.141602 531.141602 539.141602
-771.141602 779.141602 787.141602 795.141602
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Unpack
 Basic Types:
 101-1.61800337@0.122558594
@@ -69,11 +65,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
-3.14159274 11.141593 19.141592 27.141592
-259.141602 267.141602 275.141602 283.141602
-515.141602 523.141602 531.141602 539.141602
-771.141602 779.141602 787.141602 795.141602
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Math
 Basic Types:
 101-1.61800337@0.122558594
@@ -89,7 +81,6 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456
 SLICE:
-Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
 Warning: MATH core does not support TileSlice printing, omitting print...
@@ -117,11 +108,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
-3.14159274 11.141593 19.141592 27.141592
-259.141602 267.141602 275.141602 283.141602
-515.141602 523.141602 531.141602 539.141602
-771.141602 779.141602 787.141602 795.141602
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Data1
 Basic Types:
 101-1.61800337@0.122558594
@@ -146,11 +133,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
-3.14159274 11.141593 19.141592 27.141592
-259.141602 267.141602 275.141602 283.141602
-515.141602 523.141602 531.141602 539.141602
-771.141602 779.141602 787.141602 795.141602)";
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b))";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
@@ -168,15 +151,9 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     // A CB with an unsupported data format
     CircularBufferConfig cb_src1_config = CircularBufferConfig(
         buffer_size,
-        {{CB::c_in1, tt::DataFormat::Bfp8_b}}
+        {{CB::c_in1, tt::DataFormat::Bfp2_b}}
     ).set_page_size(CB::c_in1, buffer_size);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-
-    CircularBufferConfig cb_src2_config = CircularBufferConfig(
-        buffer_size * 2,
-        {{CB::c_in2, tt::DataFormat::Float32}}
-    ).set_page_size(CB::c_in2, buffer_size * 2);
-    CBHandle cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.

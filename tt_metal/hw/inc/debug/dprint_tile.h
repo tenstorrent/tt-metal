@@ -6,6 +6,7 @@
 
 #include "hostdevcommon/dprint_common.h"
 #include "llk_io.h"
+#include "debug/ring_buffer.h"
 
 // Printing tiles from CBs requires reading CB config from generated files
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
@@ -54,6 +55,35 @@ typedef struct {
 } tile_info_t;
 
 #if defined(DEBUG_PRINT_ENABLED)
+// Helper function to get a single datum, whose indexing depends on DataFormat
+inline uint8_t get_datum(DataFormat data_format, volatile tt_l1_ptr uint8_t *data, uint32_t idx) {
+    uint32_t adjusted_idx = 0;
+    uint32_t bit_offset = 0;
+    uint32_t mask = 0;
+    switch(data_format) {
+        case DataFormat::Bfp2:
+        case DataFormat::Bfp2_b:
+            adjusted_idx = idx / 4;
+            bit_offset = (idx % 4) * 2;
+            mask = 0x3;
+            break;
+        case DataFormat::Bfp4:
+        case DataFormat::Bfp4_b:
+            adjusted_idx = idx / 2;
+            bit_offset = (idx % 2) * 4;
+            mask = 0xF;
+            break;
+        case DataFormat::Bfp8:
+        case DataFormat::Bfp8_b:
+        default:
+            adjusted_idx = idx / 1;
+            bit_offset = (idx % 1) * 8;
+            mask = 0xFF;
+            break;
+    }
+    return (data[adjusted_idx] >> bit_offset) & mask;
+}
+
 inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb,
@@ -102,12 +132,24 @@ inline tile_info_t get_tile_info(
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES=32*2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
-    static inline int tilize_rm_index(int i) {
-        // map from rm-index to tiled index
-        int w = (i&31), h = (i>>5); // RM i -> RM hw
-        int iface = int(w>=16) + 2*int(h>=16);
-        w &= 15; h &= 15;
-        return (iface<<8) + (h<<4) + w;
+    static inline uint32_t get_tilized_index(tile_info_t &tile_info, uint32_t h, uint32_t w) {
+        uint32_t row_in_face = h % tile_info.face_dim_r;
+        uint32_t col_in_face = w % tile_info.face_dim_c;
+        uint32_t face_idx_r = h / tile_info.face_dim_r;
+        uint32_t face_idx_c = w / tile_info.face_dim_c;
+        uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
+        uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
+        return face_idx * tile_info.face_dim_r * tile_info.face_dim_c + row_in_face * tile_info.face_dim_c +
+               col_in_face;
+    }
+    static inline uint32_t get_exponent_index(tile_info_t &tile_info, uint32_t h, uint32_t w) {
+        uint32_t row_in_face = h % tile_info.face_dim_r;
+        uint32_t col_in_face = w % tile_info.face_dim_c;
+        uint32_t face_idx_r = h / tile_info.face_dim_r;
+        uint32_t face_idx_c = w / tile_info.face_dim_c;
+        uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
+        uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
+        return face_idx * tile_info.face_dim_r + row_in_face;
     }
 
     __attribute__((__noinline__)) TileSlice(
@@ -179,37 +221,28 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         }
 
         // Stride through the data in the CB and place in print data buffer
-        uint8_t *cb_data = reinterpret_cast<uint8_t *>(this->cb_ptr);
+        volatile tt_l1_ptr uint8_t *cb_data = reinterpret_cast<volatile tt_l1_ptr uint8_t *>(this->cb_ptr);
         bool max_count_exceeded = false;
         uint32_t byte_idx = 0;
         for (uint32_t h = slice_range.h0; h < slice_range.h1; h += slice_range.hs) {
             for (uint32_t w = slice_range.w0; w < slice_range.w1; w += slice_range.ws) {
                 // Convert w_idx, h_idx to 1D index using num_rows
-                uint32_t i = w + h * tile_info.tile_dim_r;
                 if (is_bfp_format) {
                     uint32_t data_offset = tile_info.face_dim_r * tile_info.num_faces;
                     // Write 1 byte exponent before each datum. Need to do this since requested stride could put us on
                     // any of the faces.
-                    uint32_t row_in_face = h % tile_info.face_dim_r;
-                    uint32_t col_in_face = w % tile_info.face_dim_c;
-                    uint32_t face_idx_r = h / tile_info.face_dim_r;
-                    uint32_t face_idx_c = w / tile_info.face_dim_c;
-                    uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
-                    uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
-                    uint32_t exponent_idx = face_idx * tile_info.face_dim_r + row_in_face;
-                    this->data[byte_idx++] = cb_data[exponent_idx];
-                    for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
-                        uint32_t data_idx = face_idx * tile_info.face_dim_r * tile_info.face_dim_c +
-                                            row_in_face * tile_info.face_dim_c + col_in_face;
-                        this->data[byte_idx++] = cb_data[data_offset + data_idx];
-                    }
+                    this->data[byte_idx++] = cb_data[TileSlice::get_exponent_index(tile_info, h, w)];
+                    this->data[byte_idx++] = get_datum(
+                        static_cast<DataFormat>(this->data_format),
+                        cb_data + data_offset,
+                        TileSlice::get_tilized_index(tile_info, h, w));
                     if (byte_idx - 2 >= MAX_BYTES) {
                         max_count_exceeded = true;
                         break;
                     }
                 } else {
-                    if (print_untilized)
-                        i = TileSlice::tilize_rm_index(i);  // tilize the index
+                    uint32_t i = (print_untilized) ? TileSlice::get_tilized_index(tile_info, h, w)
+                                                          : w + h * tile_info.tile_dim_r;
                     for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
                         this->data[byte_idx++] = cb_data[i * bytes_per_datum + offset];
                         // If we've gone over the maximum data points to print, break
