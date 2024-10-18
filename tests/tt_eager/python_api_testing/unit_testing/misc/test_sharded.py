@@ -1068,7 +1068,6 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
     assert eq
 
 
-@skip_for_blackhole("Hanging on BH, see #12349")
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
 @pytest.mark.parametrize("out_sharded", [True, False], ids=["out_sharded", "out_unsharded"])
 @pytest.mark.parametrize("M", [1600])
@@ -1278,8 +1277,6 @@ def test_sharded_matmul_2d_transposed(
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-    if activations_dtype != weights_dtype and is_wormhole_b0():
-        pytest.skip("WH does not work with mixed precision")
 
     interleaved_mem_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -1338,7 +1335,6 @@ def test_sharded_matmul_2d_transposed(
     assert passing
 
 
-@skip_for_blackhole("Hanging on BH, see #12349")
 def test_resharded_binary_to_matmul(device, function_level_defaults):
     grid_size_binary = device.compute_with_storage_grid_size()
     num_cores_binary = 98
@@ -1996,7 +1992,6 @@ def test_sharded_matmul_1d_in0(
 
 
 # Have at least one example of 1d matmul with in1 mcasted that runs on WH
-@skip_for_blackhole("Hangs on BH, see #12349")
 def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
     M = 4096
     K = 64
