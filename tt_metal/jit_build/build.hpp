@@ -72,7 +72,6 @@ class JitBuildEnv {
 
     // Tools
     string gpp_;
-    string objcopy_;
 
     // Compilation options
     string cflags_;
