@@ -121,6 +121,9 @@ class CircularBufferConfig {
 
     const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> &page_sizes() const { return this->page_sizes_; }
     const Buffer* shadow_global_buffer;
+
+    const std::unordered_set<uint8_t>& buffer_indices() const {return this->buffer_indices_;}
+
    private:
     void set_config(const std::map<uint8_t, tt::DataFormat> &data_format_spec) {
         if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
