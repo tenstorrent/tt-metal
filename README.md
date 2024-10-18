@@ -95,6 +95,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 ## TT-Metalium Tech Reports
 - [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md) (updated Sept 6th)
 - [Data Formats](./tech_reports/data_formats/data_formats.md) (updated Sept 7th)
+- [Reconfiguring Data Formats](./tech_reports/data_formats/reconfig_data_format.md) (updated Oct 17th)
 - [Handling special floating-point numbers](./tech_reports/Handling_Special_Value/special_values.md) (updated Oct 5th)
 - [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th)
 - [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
