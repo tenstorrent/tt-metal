@@ -175,4 +175,4 @@ scripts/docker @ttmchiou @TT-billteng @tt-rkim
 dockerfile @ttmchiou @TT-billteng @tt-rkim
 
 tt_metal/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @blozano-tt
-ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy @blozano-tt
+ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy

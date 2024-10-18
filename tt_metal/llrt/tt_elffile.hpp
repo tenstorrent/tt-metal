@@ -67,6 +67,14 @@ class ElfFile {
     // Path must remain live throughout processing.
     void ReadImage(std::string const &path);
 
+    // Write the (now-processed) elf file.
+    void WriteImage(std::string const &path);
+
+    // Weaken data symbols, remove all others. Keep STRONG_NAMES
+    // strong (can be non-data symbols).  Names can be exact or simple
+    // globs ending in '*'.
+    void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
    private:
     class Impl;
     // We can't use unique_ptr here, because the above move semantics

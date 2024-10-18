@@ -73,7 +73,8 @@ class Device {
         std::size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
         bool minimal = false,
-        uint32_t worker_core = 0);
+        uint32_t worker_core = 0,
+        uint32_t completion_queue_reader_core = 0);
 
     ~Device();
 
@@ -291,6 +292,7 @@ class Device {
     // all tasks scheduled on this device
     WorkExecutor work_executor;
     uint32_t worker_thread_core;
+    uint32_t completion_queue_reader_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     LaunchMessageRingBufferState worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;

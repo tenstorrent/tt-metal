@@ -195,8 +195,8 @@ ttnn::Tensor ExecutePermute::invoke(
     output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 
     if (input_rank < 4) {
-        const auto shape = output_tensor.get_logical_shape();
-        const auto full_shape = output_tensor.get_padded_shape();
+        const auto shape = output_tensor.get_shape();
+        const auto full_shape = output_tensor.get_shape().with_tile_padding();
         std::vector<uint32_t> shape_vec{};
         std::vector<uint32_t> full_shape_vec{};
         int i = 0;

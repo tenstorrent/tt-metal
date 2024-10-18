@@ -4,10 +4,40 @@
 
 #include <cstdint>
 
-#include "debug/dprint.h"
-
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/eltwise_binary.h"
+
+/* This dummy initialization function is called prior to reduce_init to ensure proper
+ * initialization of the HW and to test reduce_init_short/reduce_init_delta calls.
+ *
+ * - If SHORT_INIT is defined, this function provides API calls
+ *   which initialize the HW properly when supplemented with reduce_init_short or
+ *   reduce_init_delta (note that these two inits are the same except for the "at_start"
+ *   argument; reference reduce.h for more details).
+ * - If SHORT_INIT is not defined, only the PACK configuration function is called with
+ *   a negative value of the defined "at_start" template argument because full reduce_init
+ *   provides other API calls.
+ *
+ * If "at_start = 1", the value that is passed to llk_pack_reduce_config_v2 is 0.
+ * If "at_start = 0", the value that is passed to llk_pack_reduce_config_v2 is 1.
+ *
+ * After dummy_init is called, the proper reduce init call will be invoked with the defined
+ * value of the argument, not the negated value. This will ensure that the "at_start"
+ * argument is tested. Reference llk_pack_reduce_config_v2 for more details.
+ */
+template<bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+ALWI void dummy_init(uint32_t icb = 0, uint32_t icb_scaler = 1, uint32_t ocb = 16)
+{
+#ifdef SHORT_INIT
+    UNPACK(( llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler) ));
+
+    MATH(( llk_math_pack_sync_init<DST_ACCUM_MODE>() ));
+    MATH(( llk_math_hw_configure_disaggregated(icb, icb_scaler) ));
+
+    PACK(( llk_pack_init() ));
+    PACK(( llk_pack_dest_init<false, DST_ACCUM_MODE>() ));
+#endif
+    PACK(( llk_pack_reduce_config_v2<reduce_dim, !at_start, false, DST_ACCUM_MODE>(ocb) ));
+}
 
 namespace NAMESPACE {
 void MAIN {
@@ -15,11 +45,12 @@ void MAIN {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
+    constexpr bool at_start = get_compile_time_arg_val(3);
+    dummy_init<at_start>(tt::CB::c_in0, tt::CB::c_in2);
 #ifndef SHORT_INIT
-    reduce_init<true>(tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init<at_start>(tt::CB::c_in0, tt::CB::c_in2);
 #else
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in2, tt::CB::c_out0);
-    reduce_init_delta<false>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
+    reduce_init_delta<at_start>(tt::CB::c_out0, tt::CB::c_in0, tt::CB::c_in2);
 #endif
 
     cb_wait_front(tt::CB::c_in2, 1); // scaler tile from the reader

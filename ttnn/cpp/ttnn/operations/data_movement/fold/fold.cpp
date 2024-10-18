@@ -67,7 +67,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hc_output.shape()[0], w = transpose_hc_output.shape()[1], c = transpose_hc_output.shape()[2], h = transpose_hc_output.shape()[3];
-    auto reshape_hc_output = ttnn::reshape_on_device(transpose_hc_output, n, (w / stride_w), (c * stride_w), h, L1_mem_config);
+    auto reshape_hc_output = ttnn::reshape_on_device(transpose_hc_output, ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h}, L1_mem_config);
 
     tt::log_debug("reshape_hc_output: {}", reshape_hc_output.shape());
 
@@ -78,7 +78,7 @@ std::vector<Tensor> fold_with_transpose_(
 
     // reshape
     n = transpose_hw_output2.shape()[0], w = transpose_hw_output2.shape()[1], h = transpose_hw_output2.shape()[2], c = transpose_hw_output2.shape()[3];
-    auto reshape_hw_output = ttnn::reshape_on_device(transpose_hw_output2, n, w, (h / stride_h), (c * stride_h), L1_mem_config);
+    auto reshape_hw_output = ttnn::reshape_on_device(transpose_hw_output2, ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)}, L1_mem_config);
 
     tt::log_debug("reshape_hw_output: {}", reshape_hw_output.shape());
 
@@ -212,7 +212,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], c = tt_output_tensor.shape()[2], h = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(n, (w / stride_w), (c * stride_w), h);
+    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
 
     tt::log_debug("reshape_hc_output: {}", tt_output_tensor.shape());
 
@@ -228,7 +228,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], h = tt_output_tensor.shape()[2], c = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(n, w, (h / stride_h), (c * stride_h));
+    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.shape());
 
