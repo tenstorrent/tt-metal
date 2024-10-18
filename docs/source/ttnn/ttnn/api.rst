@@ -150,6 +150,7 @@ Pointwise Unary
    ttnn.log_sigmoid
    ttnn.logical_not
    ttnn.frac
+   ttnn.fill
    ttnn.logit
    ttnn.mish
    ttnn.multigammaln
