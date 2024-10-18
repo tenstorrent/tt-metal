@@ -124,8 +124,8 @@ Tensor halo_op(const Tensor& input_tensor,
                 uint32_t reshard_num_cores_nhw,
                 MemoryConfig output_memory_config,
                 bool is_out_tiled) {
-    TT_ASSERT(input_tensor.memory_config().is_sharded());
-    TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Only height, width or block sharded tensors are supported.");
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
