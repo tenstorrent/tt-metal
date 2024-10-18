@@ -61,8 +61,7 @@ Tensor Expand::invoke(
     const std::vector<int32_t>& sizes,
 
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     auto output_shape = infer_size(input, sizes);
 
     // Convert tile tensor to row major (lmfao)
@@ -70,9 +69,9 @@ Tensor Expand::invoke(
         Tensor rm_input_dev = core::to_device(
             tensor_impl::to_layout_wrapper(input.cpu(true), Layout::ROW_MAJOR), input.device(), std::nullopt);
 
-        return ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt, compute_kernel_config);
+        return ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt);
     }
 
-    return ttnn::prim::expand(input, output_shape, output, memory_config, compute_kernel_config);
+    return ttnn::prim::expand(input, output_shape, output, memory_config);
 }
 }  // namespace ttnn::operations::expand
