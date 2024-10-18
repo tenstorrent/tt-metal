@@ -235,23 +235,21 @@ def prepare_inputs_ttnn_prefill(x_bsh, mesh_device):
     """
     Prepare inputs for prefill mode.
     x: (batch, seq, hidden_dim)
-    B: batch (32)
-    S: sequence len (1)
-    H: dim (4096)
+    B: batch (1)
+    S: sequence len
+    H: dim
     """
-    batch = x_bsh.size(0)
-    seq_len = x_bsh.size(1)
 
     x_1BSH = x_bsh.unsqueeze(0)
 
-    # input goes to L1
+    # input goes to DRAM
     xs_1BSH = ttnn.from_torch(
         x_1BSH,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
     )
     return xs_1BSH
 
@@ -294,3 +292,29 @@ def get_single_rot_mat(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 or not on_host else None,
     )
+
+
+def num_to_corerange_set(x):
+    assert x < 8 or x % 8 == 0
+    num_x = min(x, 8)
+    num_y = x // num_x
+    assert num_x * num_y == x
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(num_x - 1, num_y - 1),
+            ),
+        }
+    )
+
+
+def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
+    """Helper function based on logic used in reference model:
+    https://github.com/meta-llama/llama-models/blob/e4a6ed52a142bb9b5106dcbf48e41f97f8e7378e/models/llama3/reference_impl/model.py#L227C7-L231C83
+    """
+    hidden_dim = int(2 * (4 * dim) / 3)
+    if ffn_dim_multiplier is not None:
+        hidden_dim = int(ffn_dim_multiplier * hidden_dim)
+    hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+    return hidden_dim
