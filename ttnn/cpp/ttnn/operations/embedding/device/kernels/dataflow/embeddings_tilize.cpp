@@ -100,7 +100,7 @@ void kernel_main() {
                 } else {
                     src_noc_addr = get_noc_addr(token, weights);
                 }
-                #elif defined BINARY
+            #elif defined BINARY
                 if (token == 0) {
                     src_noc_addr = zero_noc_addr;
                 } else {
