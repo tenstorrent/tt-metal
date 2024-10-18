@@ -452,8 +452,8 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     Tensor in_rsqrt = ttnn::square(input, output_mem_config);
     in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan = input.device()->sfpu_nan();
+    float t_inf = input.device()->sfpu_inf();
     Tensor cond_result = ttnn::logical_or(
         ttnn::lt(input, ttnn::full_like(input, -1.0f), std::nullopt, output_mem_config),
         ttnn::gt(input, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
