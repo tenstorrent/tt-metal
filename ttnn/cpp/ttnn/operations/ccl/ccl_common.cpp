@@ -462,11 +462,10 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
             tt::LogOp,
             "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
             "nothing");
-        num_workers = total_num_tiles;
-        for (uint32_t w = 0; w < num_workers; ++w) {
+        for (uint32_t w = 0; w < total_num_tiles; ++w) {
             worker_slice_shapes.emplace_back(1, 1);
         }
-        for (uint32_t w = num_workers; w < total_num_tiles; ++w) {
+        for (uint32_t w = total_num_tiles; w < num_workers; ++w) {
             worker_slice_shapes.emplace_back(0, 0);
         }
         return worker_slice_shapes;
@@ -673,11 +672,10 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
             tt::LogOp,
             "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
             "nothing");
-        num_workers = total_num_tiles;
-        for (uint32_t w = 0; w < num_workers; ++w) {
+        for (uint32_t w = 0; w < total_num_tiles; ++w) {
             worker_slice_shapes.emplace_back(1, 1);
         }
-        for (uint32_t w = num_workers; w < total_num_tiles; ++w) {
+        for (uint32_t w = total_num_tiles; w < num_workers; ++w) {
             worker_slice_shapes.emplace_back(0, 0);
         }
         return worker_slice_shapes;
