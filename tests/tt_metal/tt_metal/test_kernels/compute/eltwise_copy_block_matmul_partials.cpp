@@ -9,8 +9,6 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api.h"
 
-#define START_IN_TILE_ID              (0)
-#define START_DST_TILE_ID             (0)
 namespace NAMESPACE {
 void MAIN {
 
@@ -33,9 +31,9 @@ void MAIN {
         cb_reserve_back(out_cb_id, num_single_transfer);
 
         // Copy num_single_transfer tiles from in_cb to DEST
-        copy_block_matmul_partials(in_cb_id, START_IN_TILE_ID, START_DST_TILE_ID, num_single_transfer);
+        copy_block_matmul_partials(in_cb_id, 0, 0, num_single_transfer);
         // Pack num_single_transfer tiles to out_cb
-        matmul_pack_tile(START_DST_TILE_ID, out_cb_id, num_single_transfer);
+        matmul_pack_tile(0, out_cb_id, num_single_transfer);
 
         // Release DEST reg marking compute/pack complete
         release_dst();
