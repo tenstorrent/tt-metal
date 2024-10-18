@@ -295,7 +295,7 @@ def get_single_rot_mat(
     )
 
 
-def num_to_corerange_set(x):
+def num_to_core_range_set(x):
     assert x < 8 or x % 8 == 0
     num_x = min(x, 8)
     num_y = x // num_x
