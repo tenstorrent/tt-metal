@@ -80,7 +80,7 @@ class TtModelArgs:
     def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
         # Add this near the top of the class, with other class attributes
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
-        device = mesh_device.get_devices()[0] if mesh_device else None
+        self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
         # A single device cannot fit the full 128k context length
@@ -187,6 +187,7 @@ class TtModelArgs:
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
+        device = mesh_device.get_devices()[0] if mesh_device is not None else None
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
@@ -562,11 +563,10 @@ class TtModelArgs:
                 inplace=False,
             )
 
-            self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape])
+            self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape]) if self.mesh_device else False
             self.is_multichip = self.num_devices > 1
 
     def is_distributed_norm(self, mode):
-        print(f"self.is_distributed_norm: {self.mesh_device.shape=}")
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in self.mesh_device.shape]):  # 2D grid

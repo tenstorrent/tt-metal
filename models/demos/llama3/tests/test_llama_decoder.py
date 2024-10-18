@@ -77,7 +77,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
     freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
-        print(f"[Decoder] Generating token {i}")
+        logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
