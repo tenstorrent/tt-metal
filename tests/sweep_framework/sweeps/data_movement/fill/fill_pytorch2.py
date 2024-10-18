@@ -16,14 +16,13 @@ random.seed(0)
 
 parameters = {
     "nightly": {
-        "value": [
-            114,
-            120,
-            16,
-            32,
-            61,
-            64,
-            8,
+        "fill_specs": [
+            {"shape": [1, 1, 32, 32], "fill_value": 0.5},
+            {"shape": [1, 3, 64, 64], "fill_value": 1.0},
+            {"shape": [4, 3, 128, 128], "fill_value": -0.1},
+            {"shape": [16, 3, 224, 224], "fill_value": 2.5},
+            {"shape": [32, 64, 64, 64], "fill_value": 0.0},
+            {"shape": [8, 128, 32, 32], "fill_value": -1.5},
         ],
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -46,10 +45,37 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    value,
+    fill_specs,
     dtype,
     layout,
     *,
     device,
 ):
-    raise Exception("Fill is not supported, TODO: generalize assorted fill ops to a single op")
+    device.enable_async(False)
+
+    # Extract the shape and fill_value from the test case
+    shape = fill_specs["shape"]
+    fill_value = fill_specs["fill_value"]
+
+    # Create a tensor filled with `fill_value` using torch.full
+    torch_tensor = torch.full(shape, fill_value, dtype=torch.float32)
+
+    # Convert the torch tensor to the `ttnn` format
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
+
+    # Measure performance of the full operation in `ttnn`
+    start_time = start_measuring_time()
+
+    # Apply the `ttnn.full` operation
+    N, C, H, W = shape
+    ttnn_filled_tensor = ttnn.full(N, C, H, W, fill_value, any=ttnn_tensor, memory_config=None, queue_id=0)
+
+    e2e_perf = stop_measuring_time(start_time)
+
+    # Convert the `ttnn` tensor back to PyTorch for comparison
+    ttnn_output_tensor = ttnn.to_torch(ttnn_filled_tensor)
+
+    # Compare the PyTorch and `ttnn` tensors
+    result = check_with_pcc(torch_tensor, ttnn_output_tensor, 0.999)
+
+    return [result, e2e_perf]
