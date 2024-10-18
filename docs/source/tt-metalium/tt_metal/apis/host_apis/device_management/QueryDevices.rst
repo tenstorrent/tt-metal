@@ -1,6 +1,6 @@
 QueryDevices
 =============
 
-.. doxygenfunction:: GetNumAvailableDevices
+.. doxygenfunction:: tt::tt_metal::v0::GetNumAvailableDevices
 
-.. doxygenfunction:: GetNumPCIeDevices
+.. doxygenfunction:: tt::tt_metal::v0::GetNumPCIeDevices
