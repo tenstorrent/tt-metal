@@ -769,7 +769,12 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
 @pytest.mark.parametrize(
     "arch, freq, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
     [
-        ("wormhole_b0", 1000, np.array([96, 32]), 1, 1, 1, 0, 1, 1, 3),
+        # single layer single receiver test
+        ("wormhole_b0", 1000, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        # single layer multi receiver test
+        ("wormhole_b0", 1000, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        # multi layer multi receiver test
+        ("wormhole_b0", 1000, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
     ],
 )
 def test_dram_read_remote_cb_sync(
@@ -782,10 +787,16 @@ def test_dram_read_remote_cb_sync(
     for _ in range(num_tests):
         k = int(test_vector[0])
         n = int(test_vector[1])
+        input_size = 0
         if data_format == 0:
-            input_size = k * n * 1088 // 1024
+            input_size += k * n * 1088 // 1024
         elif data_format == 1:
-            input_size = k * n * 2048 // 1024
+            input_size += k * n * 2048 // 1024
+        for i in range(num_mixed_df_layers - 1):
+            if i % 2 == 0:
+                input_size += k * n * 1088 // 1024
+            else:
+                input_size += k * n * 2048 // 1024
         run_dram_read_remote_cb_sync_cmd(
             k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers
         )
