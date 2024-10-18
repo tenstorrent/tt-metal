@@ -13,11 +13,10 @@ namespace ttnn::operations::uniform {
 using namespace tt;
 using namespace tt::tt_metal;
 
-uint32_t get_random_seed() {
-    std::mt19937 rng(std::time(0));
-    std::uniform_int_distribution d(1, 1 << 20);
-    return d(rng);
-}
+std::mt19937 rng(std::time(nullptr));
+std::uniform_int_distribution distribution(1, 1 << 20);
+
+auto get_random_seed() -> uint32_t { return distribution(rng); }
 
 UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -25,7 +24,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     tensor_return_value_t& output) {
     Device* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-    int core_h = grid.y;
+    auto core_h = grid.y;
 
     uint32_t units_to_divide = output.volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
