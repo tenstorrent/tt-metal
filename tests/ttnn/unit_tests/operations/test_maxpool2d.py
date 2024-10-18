@@ -452,7 +452,7 @@ def test_run_max_pool_mem_config(
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
-        (  ## resnet shapes
+        (
             [1, 512, 28, 28],
             [1, 512, 14, 14],
             [1, 1024, 6, 6],

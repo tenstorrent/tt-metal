@@ -26,16 +26,16 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
-    TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
-             (input.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) ||
-             (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED),
-             "Only height, width, or block sharded tensors are supported.");
-
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
-    TT_FATAL((out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
-             (out_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) ||
-             (out_mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED),
-             "Only height, width, or block sharded tensors are supported.");
+
+    // check that C dimnenion is a multiple of num_shards_c for all but height sharding
+    TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout;
+    if (in_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        uint32_t num_shards_c = in_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ? input.shard_spec()->num_cores() :
+            input.shard_spec()->grid.ranges().begin()->end_coord.x - input.shard_spec()->grid.ranges().begin()->start_coord.x + 1;
+        const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+        TT_FATAL(input_shape[3] % num_shards_c == 0, "For width and block sharding, input channels should be divisible by num_shards");
+    }
 }
 
 void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
