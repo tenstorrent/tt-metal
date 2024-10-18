@@ -80,7 +80,7 @@ class TtModelArgs:
     def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
         # Add this near the top of the class, with other class attributes
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
-        device = mesh_device.get_devices()[0] if mesh_device else None
+        self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
         # A single device cannot fit the full 128k context length
@@ -187,6 +187,7 @@ class TtModelArgs:
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
+        device = mesh_device.get_devices()[0] if mesh_device is not None else None
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
@@ -525,6 +526,60 @@ class TtModelArgs:
             )
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
+            # RMS NORM
+            norm_core_grid = ttnn.CoreGrid(x=8, y=4)
+            self.model_config["SHARDED_NORM_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
+                (
+                    self.tile_padded_batch_rows,
+                    self.dim // norm_core_grid.num_cores,
+                ),
+                norm_core_grid,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[norm_core_grid.x, norm_core_grid.y],
+                subblock_w=self.dim // norm_core_grid.num_cores // self.tile_size,
+                block_h=self.tile_padded_batch_rows // self.tile_size,
+                block_w=self.dim // norm_core_grid.num_cores // self.tile_size,
+                inplace=False,
+            )
+
+            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[self.lm_head_core_grid.x, self.lm_head_core_grid.y],
+                subblock_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
+                block_h=self.tile_padded_batch_rows // self.tile_size,
+                block_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
+                inplace=False,
+            )
+
+            self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=[mlp_core_grid.x, mlp_core_grid.y],
+                subblock_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
+                block_h=self.tile_padded_batch_rows // self.tile_size,
+                block_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
+                inplace=False,
+            )
+
+            self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape]) if self.mesh_device else False
+            self.is_multichip = self.num_devices > 1
+
+    def is_distributed_norm(self, mode):
+        if not self.is_multichip:
+            return False
+        if all([dim > 1 for dim in self.mesh_device.shape]):  # 2D grid
+            return True
+        elif self.dim >= 8192 and mode == "prefill":
+            return True
+        return False
+
+    def ccl_topology(self):
+        if self.num_devices == 8:  # T3K
+            return ttnn.Topology.Ring
+        elif self.num_devices > 1:  # All other multi chip devices
+            return ttnn.Topology.Linear
+        return None
 
     def _set_llama_params_from_dict(self, params):
         # Text params

@@ -105,9 +105,6 @@ class TtTransformerBlock(LightweightModule):
         )
 
         # Residual Add
-        print(f"{x.shape=}, {x.memory_config()=}")
-        print(f"{attn_out.shape=}, {attn_out.memory_config()=}")
-        print(f"{skip_mem_cfg=}")
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
         ttnn.deallocate(attn_out)
 
