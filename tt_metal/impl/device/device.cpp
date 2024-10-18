@@ -3367,6 +3367,13 @@ void Device::generate_device_headers(const std::string &path) const
     );
 }
 
+namespace v1 {
+
+CommandQueueHandle GetCommandQueue(DeviceHandle device, uint32_t id) {
+    return CommandQueueHandle(DeviceKey(device)->command_queue(id));
+}
+
+}  // namespace v1
 }  // namespace tt_metal
 
 }  // namespace tt

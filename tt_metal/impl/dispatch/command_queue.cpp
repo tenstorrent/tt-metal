@@ -2983,6 +2983,61 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
 
 }  // namespace v0
 
+namespace v1 {
+void EnqueueReadBuffer(
+    CommandQueueHandle cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    std::vector<uint32_t>& dst,
+    bool blocking) {
+    v0::EnqueueReadBuffer(cq, buffer, dst, blocking);
+}
+
+void EnqueueReadBuffer(
+    CommandQueueHandle cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void* dst,
+    bool blocking) {
+    v0::EnqueueReadBuffer(cq, buffer, dst, blocking);
+}
+
+void EnqueueWriteBuffer(
+    CommandQueueHandle cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    std::vector<uint32_t>& src,
+    bool blocking) {
+    v0::EnqueueWriteBuffer(cq, buffer, src, blocking);
+}
+
+void EnqueueWriteBuffer(
+    CommandQueueHandle cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    HostDataType src,
+    bool blocking) {
+    v0::EnqueueWriteBuffer(cq, buffer, src, blocking);
+}
+
+void EnqueueProgram(CommandQueueHandle cq, Program& program, bool blocking) {
+    v0::EnqueueProgram(cq, program, blocking);
+}
+
+void Finish(CommandQueueHandle cq) {
+    v0::Finish(cq);
+}
+
+void EnqueueTrace(CommandQueueHandle cq, uint32_t trace_id, bool blocking) {
+    v0::EnqueueTrace(cq, trace_id, blocking);
+}
+
+void EnqueueRecordEvent(CommandQueueHandle cq, const std::shared_ptr<Event>& event) {
+    v0::EnqueueRecordEvent(cq, event);
+}
+
+void EnqueueWaitForEvent(CommandQueueHandle cq, const std::shared_ptr<Event>& event) {
+    v0::EnqueueWaitForEvent(cq, event);
+}
+
+}  // namespace v1
+
 void EnqueueReadBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
