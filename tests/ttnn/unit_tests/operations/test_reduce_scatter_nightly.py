@@ -88,7 +88,7 @@ def test_reduce_scatter_t3k_8chip_nightly(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.skip("Failing")
+@pytest.mark.skip("Failing")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
