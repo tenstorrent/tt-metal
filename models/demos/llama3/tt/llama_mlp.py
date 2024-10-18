@@ -41,10 +41,10 @@ class TtLlamaMLP(LightweightModule):
 
         # Sharded weights
         self.w1 = as_sharded_tensor(
-            "w1_sharded", dtype, dim=-1
+            "w1_sharded", ttnn.bfloat4_b, dim=-1
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", dtype, dim=-2)
-        self.w3 = as_sharded_tensor("w3_sharded", dtype, dim=-1)
+        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=-2)
+        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b, dim=-1)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -59,7 +59,7 @@ class TtLlamaMLP(LightweightModule):
             pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
             pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
             pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
-            x_in = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_MLP_DECODE_INPUT_MEMCFG"])
+            x_in = x
         else:  # Update the program configs based for prefill
             if seq_len >= 1024:  # Too big to compute. Set different program configs based on seqlen
                 # Reshape input to to fit on device and parallelize computation
@@ -84,6 +84,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG,
         )
+
         w3_out = ttnn.linear(
             x_in,
             self.w3,
@@ -96,7 +97,6 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(x)
         ttnn.deallocate(x_in)
-
         w2_in = ttnn.multiply(
             w1_out,
             w3_out,
@@ -107,6 +107,7 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
+
         # This uses HiFi2 for full precision as it is dram-bound and uses bfp8 inputs
         w2_out = ttnn.linear(
             w2_in,
@@ -127,8 +128,23 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 
         # All reduce
-        if self.args.num_devices > 1:
-            w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+        if self.args.ccl_topology() == ttnn.Topology.Ring:
+            # Ring topology supports reduce scatter
+            w2_out_reduced = ttnn.reduce_scatter(
+                w2_out,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
+        elif self.args.is_multichip:
+            assert (
+                False
+            ), "n300 not supported. TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working"
+            # Line topology required all_gather and local reduction for now
+            w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=self.args.ccl_topology)
             w2_out_reduced = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )

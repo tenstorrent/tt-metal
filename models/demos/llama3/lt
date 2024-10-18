@@ -65,7 +65,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b, 11b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b, 70b) [all]", "value": "", "x": 0, "y": 1},
         {"label": "Device (n150, n300, t3k) [all]", "value": "", "x": 0, "y": 2},
     ]
 
@@ -175,7 +175,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
                         # Parse models, devices, and commands
@@ -184,13 +184,12 @@ def main(stdscr):
                         commands = parse_list(command_input, allow_space=False)
 
                         # Generate combinations (reordered)
-                        # combinations = [(c, m, d) for c in commands for m in models for d in devices]
                         combinations = [
                             (c, m, d)
                             for c in commands
                             for m in models
                             for d in devices
-                            if not (m in ["11b", "11b-b"] and d == "n150")
+                            if not (m in ["11b", "11b-b"] and d == "n150") or not (m == "70b" and d in ["n150", "n300"])
                         ]
 
                         # Create output entries
@@ -678,6 +677,7 @@ def get_llama_dir(model):
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
+        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked/"),
     }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
@@ -687,6 +687,7 @@ def get_llama_dir(model):
         print("  - LLAMA_32_3B_DIR for 3b model")
         print("  - LLAMA_31_8B_DIR for 8b model")
         print("  - LLAMA_32_11B_DIR for 11b model")
+        print("  - LLAMA_31_70B_DIR for 70b model")
         sys.exit(1)
 
     return llama_dir

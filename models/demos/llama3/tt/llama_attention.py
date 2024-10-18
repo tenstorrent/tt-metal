@@ -49,6 +49,8 @@ class TtLlamaAttention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.model_config = configuration.get_model_config()
+        self.ccl_topology = configuration.ccl_topology()
+        self.is_multichip = configuration.is_multichip
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
@@ -184,7 +186,7 @@ class TtLlamaAttention(LightweightModule):
         page_table=None,
     ) -> ttnn.Tensor:
         """
-        x: (seq_len, 1, batch, hidden_dim)
+        x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
         assert self.max_batch_size * self.n_kv_heads < 64
@@ -192,16 +194,15 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        x_sharded = ttnn.interleaved_to_sharded(x, self.model_config["SHARDED_ATTN_INPUT_MEMCFG"])
         xqkv_fused_sharded = ttnn.linear(
-            x_sharded,
+            x,
             self.wqkv,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
         )
-        ttnn.deallocate(x_sharded)
+        ttnn.deallocate(x)
 
         xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(xqkv_fused_sharded)
@@ -317,19 +318,34 @@ class TtLlamaAttention(LightweightModule):
         )  # seqlen, 1, batch, hidden_size
 
         ttnn.deallocate(attn_output_cat)
-        dense_out = ttnn.sharded_to_interleaved(dense_out_sharded, ttnn.L1_MEMORY_CONFIG)
+        dense_out = ttnn.sharded_to_interleaved(
+            dense_out_sharded, ttnn.L1_MEMORY_CONFIG
+        )  # TODO: remove as soon as we have sharded support in for all CCL
 
         ttnn.deallocate(attn_output_cat)
         ttnn.deallocate(dense_out_sharded)
 
         # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+        if self.ccl_topology == ttnn.Topology.Ring:
+            # Ring topology supports reduce scatter
+            dense_out_reduced = ttnn.reduce_scatter(
+                dense_out,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(dense_out)
+            return dense_out_reduced
+        elif self.is_multichip:
+            dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=self.ccl_topology)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
+            # TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working
             ttnn.deallocate(dense_out)
             ttnn.deallocate(dense_out_gathered)
+
             return dense_out_reduced
         else:
             return dense_out
@@ -484,13 +500,28 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # All reduce
-        if self.num_devices > 1:
-            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+        if self.ccl_topology == ttnn.Topology.Ring:
+            # Ring topology supports reduce scatter
+            dense_out_reduced = ttnn.reduce_scatter(
+                output_11SH,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(output_11SH)
+            return dense_out_reduced
+        elif self.is_multichip:
+            assert (
+                False
+            ), "n300 not supported. TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working"
+            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=self.ccl_topology)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )
             ttnn.deallocate(output_11SH)
             ttnn.deallocate(dense_out_gathered)
+
             return dense_out_reduced
         else:
             return output_11SH
