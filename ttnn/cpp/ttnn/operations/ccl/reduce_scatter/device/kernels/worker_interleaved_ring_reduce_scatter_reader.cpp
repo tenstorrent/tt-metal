@@ -157,10 +157,76 @@ static constexpr uint32_t output_tensor_shard_pages_per_shard_x = 0;
 static constexpr bool output_tensor_shard_grid_transposed = 0;
 #endif
 
+struct sharded_tensor_ct_args_t {
+    const uint32_t tensor_shard_grid_height;
+    const uint32_t tensor_shard_grid_width;
+    const uint32_t tensor_shard_grid_start_y_logical;
+    const uint32_t tensor_shard_grid_start_x_logical;
+    const uint32_t tensor_shard_pages_per_shard_y;
+    const uint32_t tensor_shard_pages_per_shard_x;
+    const bool tensor_shard_grid_transposed;
+};
+
+static constexpr auto input_sharded_tensor_ct_args = sharded_tensor_ct_args_t{
+    input_tensor_shard_grid_height,
+    input_tensor_shard_grid_width,
+    input_tensor_shard_grid_start_y_logical,
+    input_tensor_shard_grid_start_x_logical,
+    input_tensor_shard_pages_per_shard_y,
+    input_tensor_shard_pages_per_shard_x,
+    input_tensor_shard_grid_transposed
+};
+
+static constexpr auto output_sharded_tensor_ct_args = sharded_tensor_ct_args_t{
+    output_tensor_shard_grid_height,
+    output_tensor_shard_grid_width,
+    output_tensor_shard_grid_start_y_logical,
+    output_tensor_shard_grid_start_x_logical,
+    output_tensor_shard_pages_per_shard_y,
+    output_tensor_shard_pages_per_shard_x,
+    output_tensor_shard_grid_transposed
+};
+
+struct sharded_tensor_rt_args_t {
+    uint32_t shard_grid_nrows;
+    const uint32_t* shard_grid_row_map;
+    uint32_t shard_grid_ncols;
+    const uint32_t* shard_grid_col_map;
+
+    static sharded_tensor_rt_args_t from_args(std::size_t& arg_idx) {
+        sharded_tensor_rt_args_t args;
+        args.shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
+        args.shard_grid_row_map = reinterpret_cast<const uint32_t*>(get_arg_addr(arg_idx));
+        arg_idx += args.shard_grid_nrows;
+        args.shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
+        args.shard_grid_col_map = reinterpret_cast<const uint32_t*>(get_arg_addr(arg_idx));
+        arg_idx += args.shard_grid_ncols;
+        return args;
+    }
+};
+
 
 
 template <tt::tt_metal::TensorMemoryLayout tensor_memory_layout, bool tensor_is_dram>
-auto build_source_address_generator(std::size_t &arg_idx, reduce_scatter_reader_common_args_t const& args, uint32_t tensor_base_addr) -> typename source_tensor_addrgen<input_tensor_memory_layout, src_is_dram>::type {
+auto build_sharded_tensor_address_generator(sharded_tensor_ct_args_t const& ct_args, sharded_tensor_rt_args_t const &sharded_tensor_rt_args, reduce_scatter_reader_common_args_t const& args, uint32_t tensor_base_addr) -> typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type {
+    ASSERT(is_sharded_mode);
+    return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type(
+        tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
+            sharded_tensor_rt_args.shard_grid_nrows, sharded_tensor_rt_args.shard_grid_row_map, sharded_tensor_rt_args.shard_grid_ncols, sharded_tensor_rt_args.shard_grid_col_map),
+        typename tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tensor_memory_layout>::type(
+            ct_args.tensor_shard_pages_per_shard_y,
+            ct_args.tensor_shard_pages_per_shard_x,
+            ct_args.tensor_shard_grid_height,
+            ct_args.tensor_shard_grid_width,
+            ct_args.tensor_shard_grid_start_y_logical,
+            ct_args.tensor_shard_grid_start_x_logical,
+            ct_args.tensor_shard_grid_transposed),
+        args.page_size,
+        tensor_base_addr);
+}
+
+template <tt::tt_metal::TensorMemoryLayout tensor_memory_layout, bool tensor_is_dram>
+auto build_source_address_generator(std::size_t &arg_idx, reduce_scatter_reader_common_args_t const& args, uint32_t tensor_base_addr) -> typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type {
     if constexpr (tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
         if constexpr (row_major_layout) {
             return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr, args.page_size};
@@ -172,28 +238,34 @@ auto build_source_address_generator(std::size_t &arg_idx, reduce_scatter_reader_
         tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         ASSERT(is_sharded_mode);
-        uint32_t input_shard_grid_nrows = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t* const input_shard_grid_row_map =
-            reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
-        arg_idx += input_shard_grid_nrows;
-        uint32_t input_shard_grid_ncols = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t* const input_shard_grid_col_map =
-            reinterpret_cast<const uint32_t* const>(get_arg_addr(arg_idx));
-        arg_idx += input_shard_grid_ncols;
+        auto sharded_tensor_rt_args = sharded_tensor_rt_args_t::from_args(arg_idx);
 
-        return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type(
-            tt::tt_metal::address_generators::HarvestedWormholeWorkerToNocLookup(
-                input_shard_grid_nrows, input_shard_grid_row_map, input_shard_grid_ncols, input_shard_grid_col_map),
-            typename tt::tt_metal::address_generators::DeviceShardSpecTypeGetter<tensor_memory_layout>::type(
-                input_tensor_shard_pages_per_shard_y,
-                input_tensor_shard_pages_per_shard_x,
-                input_tensor_shard_grid_height,
-                input_tensor_shard_grid_width,
-                input_tensor_shard_grid_start_y_logical,
-                input_tensor_shard_grid_start_x_logical,
-                input_tensor_shard_grid_transposed),
-            args.page_size,
-            tensor_base_addr);
+        return build_sharded_tensor_address_generator<tensor_memory_layout, tensor_is_dram>(input_sharded_tensor_ct_args, sharded_tensor_rt_args, args, tensor_base_addr);
+    } else {
+        ASSERT(false);
+    }
+}
+
+template <tt::tt_metal::TensorMemoryLayout tensor_memory_layout, bool tensor_is_dram>
+auto build_dest_address_generator(std::size_t &arg_idx, reduce_scatter_reader_common_args_t const& args, uint32_t tensor_base_addr) -> typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type {
+    if constexpr (tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
+        if constexpr (row_major_layout) {
+            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr, args.page_size};
+        } else {
+            return typename source_tensor_addrgen<tensor_memory_layout, tensor_is_dram>::type{tensor_base_addr, args.page_size, args.in0_df};
+        }
+    } else if constexpr (
+        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+        tensor_memory_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        ASSERT(is_sharded_mode);
+
+        sharded_tensor_rt_args_t sharded_tensor_rt_args;
+        if constexpr (is_line_reduce_scatter) {
+            sharded_tensor_rt_args = sharded_tensor_rt_args_t::from_args(arg_idx);
+        }
+
+        return build_sharded_tensor_address_generator<tensor_memory_layout, tensor_is_dram>(output_sharded_tensor_ct_args, sharded_tensor_rt_args, args, tensor_base_addr);
     } else {
         ASSERT(false);
     }
@@ -251,7 +323,11 @@ struct signal_receiver {
 
     FORCE_INLINE static signal_receiver build(bool requires_last_input_from_other_sender, std::size_t &arg_idx) {
         if constexpr (connected_to_producer) {
-            return {requires_last_input_from_other_sender, reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)))};
+            if (requires_last_input_from_other_sender) {
+                return {requires_last_input_from_other_sender, reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)))};
+            } else {
+                return {requires_last_input_from_other_sender, 0};
+            }
         } else {
             return {requires_last_input_from_other_sender, 0};
         }
@@ -278,7 +354,7 @@ void kernel_main() {
 
     auto s = build_source_address_generator<input_tensor_memory_layout, src_is_dram>(arg_idx, args, args.input_tensor_addr);
 
-    auto d = build_source_address_generator<output_tensor_memory_layout, dest_is_dram>(arg_idx, args, args.output_tensor_addr);
+    auto d = build_dest_address_generator<output_tensor_memory_layout, dest_is_dram>(arg_idx, args, args.output_tensor_addr);
 
 
     bool width_sliced = args.tensor_slice_shape.x <= args.input_tensor_shape.x;
@@ -376,6 +452,7 @@ void kernel_main() {
         }
 
         for (uint32_t i = 1; i < args.num_transfers; ++i) {
+
             bool last_transfer = i == args.num_transfers - 1;
             uint32_t offset_into_worker_slice = 0;
             std::tie(args.my_ring_idx, curr_ring_slice_start_page_offset) = advance_to_next_transfer_slice(
@@ -385,7 +462,7 @@ void kernel_main() {
                 args.input_tensor_shape,
                 args.tensor_slice_shape,
                 args.is_clockwise_direction);
-            ASSERT(last_page_of_worker);
+            ASSERT(is_line_reduce_scatter || last_page_of_worker);
             last_page_of_worker = false;
             curr_tile_id = curr_ring_slice_start_page_offset + worker_relative_start_offset_into_slice;
 
