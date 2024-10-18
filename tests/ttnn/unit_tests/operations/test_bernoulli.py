@@ -33,14 +33,14 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
         if is_out_alloc:
             ttnn.bernoulli(
                 npu_input,
-                out=npu_output,
-                out_dtype=get_lib_dtype(ttnn, out_dtype),
+                output=npu_output,
+                dtype=get_lib_dtype(ttnn, out_dtype),
                 compute_kernel_config=compute_kernel_config,
             )
         else:
             npu_output = ttnn.bernoulli(
                 npu_input,
-                out_dtype=get_lib_dtype(ttnn, out_dtype),
+                dtype=get_lib_dtype(ttnn, out_dtype),
                 compute_kernel_config=compute_kernel_config,
             )
 

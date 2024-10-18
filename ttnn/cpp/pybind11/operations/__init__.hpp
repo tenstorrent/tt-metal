@@ -55,7 +55,6 @@ void py_module(py::module& module) {
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
-
     //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
@@ -138,12 +137,9 @@ void py_module(py::module& module) {
 
     auto m_uniform = module.def_submodule("uniform", "uniform operations");
     uniform::bind_uniform_operation(m_uniform);
-<<<<<<< HEAD
-=======
 
     auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
->>>>>>> b4b9521731 (#13320: add draft code to test dropout op)
 }
 }  // namespace operations
 

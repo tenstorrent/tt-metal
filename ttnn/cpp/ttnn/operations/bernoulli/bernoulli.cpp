@@ -10,10 +10,10 @@
 namespace ttnn::operations::bernoulli {
 Tensor Bernoulli::invoke(
     const Tensor& input,
-    const std::optional<Tensor>& out,
-    const std::optional<DataType>& out_dtype,
+    const std::optional<Tensor>& output,
+    const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return ttnn::prim::bernoulli(input, out, out_dtype, memory_config, compute_kernel_config);
+    return ttnn::prim::bernoulli(input, output, dtype, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::bernoulli

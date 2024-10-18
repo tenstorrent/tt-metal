@@ -13,8 +13,8 @@ BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_pro
 
 void BernoulliDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto& input = tensor_args.input;
-    auto& output = tensor_args.out;
+    const auto& input = tensor_args.input;
+    const auto& output = tensor_args.output;
 
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Bernoulli: Input tensor need to be on device");
     TT_FATAL(input.buffer() != nullptr, "Bernoulli: Input tensor need to be allocated in buffers on device");
@@ -54,14 +54,14 @@ BernoulliDeviceOperation::shape_return_value_t BernoulliDeviceOperation::compute
 
 BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.out.has_value()) {
-        return tensor_args.out.value();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output.value();
     }
 
     auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
     return create_device_tensor(
         output_shapes,
-        operation_attributes.out_dtype,
+        operation_attributes.dtype,
         Layout::TILE,
         tensor_args.input.device(),
         operation_attributes.memory_config);
@@ -70,16 +70,16 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
 std::tuple<BernoulliDeviceOperation::operation_attributes_t, BernoulliDeviceOperation::tensor_args_t>
 BernoulliDeviceOperation::invoke(
     const Tensor& input,
-    const std::optional<Tensor>& out,
-    const std::optional<DataType>& out_dtype,
+    const std::optional<Tensor>& output,
+    const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
-            out_dtype.value_or(DataType::FLOAT32),
+            dtype.value_or(DataType::FLOAT32),
             memory_config.value_or(input.memory_config()),
             init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
-        tensor_args_t{input, out}};
+        tensor_args_t{input, output}};
 }
 
 }  // namespace ttnn::operations::bernoulli

@@ -9,14 +9,14 @@ namespace ttnn::operations::bernoulli {
 
 struct BernoulliDeviceOperation {
     struct operation_attributes_t {
-        const DataType out_dtype;
+        const DataType dtype;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
         const Tensor& input;
-        const std::optional<Tensor>& out;
+        const std::optional<Tensor>& output;
     };
 
     using shape_return_value_t = SimpleShape;
@@ -55,8 +55,8 @@ struct BernoulliDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const std::optional<Tensor>& out,
-        const std::optional<DataType>& out_dtype,
+        const std::optional<Tensor>& output,
+        const std::optional<DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };

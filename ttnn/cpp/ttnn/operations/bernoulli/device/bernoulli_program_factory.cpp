@@ -27,7 +27,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     Device* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-    int core_h = grid.y;
+    auto core_h = grid.y;
 
     uint32_t units_to_divide = output.volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =

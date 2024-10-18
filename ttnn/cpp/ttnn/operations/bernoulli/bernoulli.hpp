@@ -11,7 +11,7 @@ struct Bernoulli {
     static Tensor invoke(
         const Tensor& input,
         const std::optional<Tensor>& output,
-        const std::optional<DataType>& output_dtype,
+        const std::optional<DataType>& dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
