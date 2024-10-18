@@ -77,6 +77,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -115,6 +116,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
 
@@ -255,6 +257,42 @@ void py_bind_conv2d(py::module& module) {
         py::arg("device"),
         py::arg("conv_config") = std::nullopt);
 
+
+    module.def(
+        "prepare_conv_weights_for_ttnn",
+        [](const ttnn::Tensor& weight_tensor,
+            std::string weights_format,
+            uint32_t in_channels,
+            uint32_t out_channels,
+            uint32_t batch_size,
+            uint32_t input_height,
+            uint32_t input_width,
+            std::array<uint32_t, 2> kernel_size,
+            std::array<uint32_t, 2> stride,
+            std::array<uint32_t, 2> padding,
+            std::array<uint32_t, 2> dilation,
+            uint32_t groups,
+            ttnn::MeshDevice *device,
+            std::optional<const Conv2dConfig> conv_config_) -> ttnn::Tensor {
+                return ttnn::operations::conv::conv2d::prepare_conv_weights_for_ttnn(
+                    weight_tensor, weights_format, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, device, conv_config_);
+        },
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
     module.def(
         "prepare_conv_bias_for_ttnn",
         [](const ttnn::Tensor& bias_tensor,
@@ -269,6 +307,39 @@ void py_bind_conv2d(py::module& module) {
             std::array<uint32_t, 2> dilation,
             uint32_t groups,
             ttnn::Device *device,
+            std::optional<const Conv2dConfig> conv_config_) -> ttnn::Tensor {
+                return ttnn::operations::conv::conv2d::prepare_conv_bias_for_ttnn(
+                    bias_tensor, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, device, conv_config_);
+        },
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_bias_for_ttnn",
+        [](const ttnn::Tensor& bias_tensor,
+            uint32_t in_channels,
+            uint32_t out_channels,
+            uint32_t batch_size,
+            uint32_t input_height,
+            uint32_t input_width,
+            std::array<uint32_t, 2> kernel_size,
+            std::array<uint32_t, 2> stride,
+            std::array<uint32_t, 2> padding,
+            std::array<uint32_t, 2> dilation,
+            uint32_t groups,
+            ttnn::MeshDevice *device,
             std::optional<const Conv2dConfig> conv_config_) -> ttnn::Tensor {
                 return ttnn::operations::conv::conv2d::prepare_conv_bias_for_ttnn(
                     bias_tensor, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, device, conv_config_);
