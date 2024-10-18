@@ -288,7 +288,7 @@ void bind_unary_backward_op_overload_abs(
 }
 
 template <typename unary_backward_operation_t>
-void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+void bind_unary_backward_float(py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& parameter_name_a, const std::string& parameter_a_doc) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -296,7 +296,7 @@ void bind_unary_backward_float(py::module& module, const unary_backward_operatio
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
-            float_value (Number): the input tensor.
+            {3} (float): {4}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -312,7 +312,9 @@ void bind_unary_backward_float(py::module& module, const unary_backward_operatio
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        parameter_name_a,
+        parameter_a_doc);
 
     bind_registered_operation(
         module,
@@ -322,13 +324,13 @@ void bind_unary_backward_float(py::module& module, const unary_backward_operatio
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               float scalar,
+               float parameter_a,
                const std::optional<MemoryConfig>& memory_config)  {
-                return self(grad_tensor, input_tensor, scalar, memory_config);
+                return self(grad_tensor, input_tensor, parameter_a, memory_config);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
-            py::arg("scalar"),
+            py::arg(parameter_name_a.c_str()),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt}
 
@@ -491,7 +493,7 @@ void bind_unary_backward_optional_float_params_with_default(
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
+            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1069,7 +1071,7 @@ void py_module(py::module& module) {
         "max",
         "Maximum value",
         std::nullopt,
-        R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`. Only one of 'min' or 'max' value can be None.)doc");
 
     detail::bind_unary_backward_two_float_with_default(
         module,
@@ -1480,7 +1482,8 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_float(
         module,
         ttnn::rpow_bw,
-        R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc",
+        "exponent","Exponent value");
 
     detail::bind_unary_backward(
         module,
@@ -1766,7 +1769,8 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_float(
         module,
         ttnn::div_no_nan_bw,
-        R"doc(Performs backward operations for div_no_nan on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for div_no_nan on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        "scalar","Denominator value");
 
     detail::bind_unary_backward_op(
         module,
@@ -1860,7 +1864,8 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_float(
         module,
         ttnn::polygamma_bw,
-        R"doc(Performs backward operations for polygamma on :attr:`input_tensor` or :attr:`input_tensor_a`, :attr:`scalar` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for polygamma on :attr:`input_tensor` or attr:`input_tensor_a`, attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        "n", "Order of polygamma function");
 }
 
 }  // namespace unary_backward
