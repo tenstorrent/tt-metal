@@ -1,1 +1,0 @@
-../../../../tests/ttnn/unit_tests/operations/test_barrier_nightly.py
