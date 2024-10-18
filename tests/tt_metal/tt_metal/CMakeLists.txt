@@ -3,6 +3,7 @@ add_library(test_metal_common_libs INTERFACE)
 target_link_libraries(test_metal_common_libs INTERFACE tt_metal test_common_libs)
 
 set (TT_METAL_TESTS_SRCS
+    test_sdpa_nd_bug.cpp
     test_bmm.cpp
     test_add_two_ints.cpp
     # test_compile_args.cpp         <- not tested in run_tt_metal.py
