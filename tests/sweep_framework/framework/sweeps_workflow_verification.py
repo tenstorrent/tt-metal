@@ -9,7 +9,7 @@ with open(".github/workflows/ttnn-run-sweeps.yaml") as file:
     workflow = load(file, Loader)
     workflow_count = len(workflow[True]["workflow_dispatch"]["inputs"]["sweep_name"]["options"])
 
-    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    sweeps_path = pathlib.Path(__file__).parent.parent / "sweeps"
     file_count = len(list(sweeps_path.glob("**/*.py")))
     assert (
         file_count + 1 == workflow_count
