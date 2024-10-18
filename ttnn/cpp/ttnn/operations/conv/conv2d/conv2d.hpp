@@ -183,6 +183,21 @@ Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
 Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
 
 template <typename T>
+std::tuple<OptimizedConvBlockConfig, TensorMemoryLayout> get_opt_conv_op_block_config_and_shard_layout(
+    const uint32_t in_channels,
+    const uint32_t out_channels,
+    const uint32_t batch_size,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const std::array<uint32_t, 2> kernel_size,
+    const std::array<uint32_t, 2> stride,
+    const std::array<uint32_t, 2> padding,
+    const std::array<uint32_t, 2> dilation,
+    const uint32_t groups,
+    const Conv2dConfig conv_config,
+    T *device);
+
+template <typename T>
 ttnn::Tensor prepare_conv_weights_for_ttnn(
     const ttnn::Tensor& weight_tensor,
     std::string weights_format,
