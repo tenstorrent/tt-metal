@@ -46,12 +46,6 @@ void kernel_main() {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 uint32_t rand_uint32 = *intermed_cb_addr;
                 float rand_float = static_cast<float>(rand_uint32) / max_uint;
-                // The hardware PRNG is not uniformly distribute.
-                // Generated rand_floats in range [0, 0.5] has higher ratio compared to (0.5, 1).
-                // I *2 rand_float < 0.5 to make it more uniform.
-                if (rand_float < 0.5f) {
-                    rand_float *= 2;
-                }
                 rand_float = rand_float * random_range + f2u_from.f;
 
 #ifdef OUTPUT_DTYPE_FLOAT32
