@@ -14,10 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from models.utility_functions import torch_random
 
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
