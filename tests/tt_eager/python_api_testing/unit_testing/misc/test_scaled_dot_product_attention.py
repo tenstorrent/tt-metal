@@ -33,7 +33,7 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False):
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
@@ -43,12 +43,20 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
         exp_approx_mode=False,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    if use_high_precision_compute:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
     Q = fa_rand(b, nh, s, d)
     K = fa_rand(b, nkv, s, d)
@@ -118,7 +126,7 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
         pytest.skip("Can cause OOM if profiling is enabled.")
     ttnn.device.DisablePersistentKernelCache()
-    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=True)
 
 
 @pytest.mark.skip(reason="Skip perf test in CI")

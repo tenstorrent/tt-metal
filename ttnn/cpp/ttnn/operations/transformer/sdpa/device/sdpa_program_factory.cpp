@@ -320,7 +320,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b; // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
