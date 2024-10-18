@@ -37,7 +37,6 @@ enum class UnaryCompositeOpType {
     HARDSWISH,
     HARDSIGMOID,
     HARDTANH,
-    CLIP,
     SELU,
     THRESHOLD,
     GLU,
@@ -84,7 +83,6 @@ Tensor _rad2deg(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _hardswish(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardsigmoid(const Tensor&, float scale =  1.0f/6.0f, float shift = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardtanh(const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _clip(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _selu(const Tensor&, float scale = 1.0507, float alpha = 1.67326, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _threshold(const Tensor&, float, float, const std::optional<MemoryConfig>& );
 Tensor _glu(const Tensor&, int32_t, const std::optional<MemoryConfig>& );
@@ -268,13 +266,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::HARDTANH> {
     static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg ) {
         return _hardtanh(t1, low, high, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::CLIP> {
-    static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg ) {
-        return _clip(t1, low, high, mem_cfg);
     }
 };
 
