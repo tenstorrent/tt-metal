@@ -13,7 +13,7 @@ namespace tt::tt_metal {
 namespace utils {
 
 inline void init_neighbor_core_xy_mapping(CoreCoord grid_size, std::map<CoreCoord, CoreCoord>& left_neighbor_core, std::map<CoreCoord, CoreCoord>& right_neighbor_core, bool is_twod = false) {
-    TT_ASSERT((grid_size.x == 12 && grid_size.y == 9) || (grid_size.x == 8 && grid_size.y == 8) || (grid_size.x == 8 && grid_size.y == 7));
+    TT_FATAL((grid_size.x == 12 && grid_size.y == 9) || (grid_size.x == 8 && grid_size.y == 8) || (grid_size.x == 8 && grid_size.y == 7));
     if (is_twod) {
         // 2d decomposition case (block sharded)
         // left-right neighbors are calculated along the x dim

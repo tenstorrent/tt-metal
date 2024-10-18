@@ -51,8 +51,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t out_nbytes = datum_size(out_df);
     uint32_t in_nbytes_c = input_shape[3] * in_nbytes;                                      // row of input (channels)
     uint32_t out_nbytes_c = output_shape[3] * out_nbytes;                                   // row of output (channels)
-    TT_ASSERT((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
-    TT_ASSERT(
+    TT_FATAL((in_nbytes_c & (in_nbytes_c - 1)) == 0, "in_nbytes_c should be power of 2");  // in_nbytes_c is power of 2
+    TT_FATAL(
         (out_nbytes_c & (out_nbytes_c - 1)) == 0, "out_nbytes_c should be power of 2");  // out_nbytes_c is power of 2
 
     tt::DataFormat indices_df = tt::DataFormat::RawUInt16;  // datatype_to_dataformat_converter(reader_indices.get_dtype());
@@ -71,7 +71,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
-    TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
+    TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -93,7 +93,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t ncores_w = grid_size.x;
 
     // TODO: support generic nblocks
-    TT_ASSERT(
+    TT_FATAL(
         out_nhw_per_core % nblocks == 0,
         "number of sticks per core ({}) should be divisible by nblocks ({})",
         out_nhw_per_core,
