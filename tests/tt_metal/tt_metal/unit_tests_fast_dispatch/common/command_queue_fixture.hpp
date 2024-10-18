@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 #include "common/core_coord.h"
@@ -150,7 +151,7 @@ protected:
 
 };
 
-class RandomProgramFixture : public ::testing::Test {
+class RandomProgramFixture : public CommandQueueSingleCardFixture {
     protected:
      static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
      static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -168,34 +169,52 @@ class RandomProgramFixture : public ::testing::Test {
      Device *device_;
 
      void SetUp() override {
-         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-         if (slow_dispatch) {
-             tt::log_info(
-                 tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-             GTEST_SKIP();
-         }
+         CommandQueueSingleCardFixture::SetUp();
+
+         this->device_ = this->devices_[0];
 
          this->seed_ = tt::parse_env("TT_METAL_SEED", 0);
          log_info(tt::LogTest, "Using seed: {}", this->seed_);
          srand(this->seed_);
      }
 
-     void TearDown() override {
-        // if (this->device_->is_initialized()) {
-        //     CloseDevice(this->device_);
-        // }
-        detail::CloseDevices(this->devices_);
-     }
+     void create_kernel(
+         Program &program,
+         const CoreType kernel_core_type,
+         const bool simple_kernel = false,
+         const uint32_t min_num_sems = MIN_NUM_SEMS,
+         const uint32_t max_num_sems = MAX_NUM_SEMS,
+         const uint32_t min_num_rt_args = MIN_NUM_RUNTIME_ARGS,
+         const uint32_t max_num_rt_args = MAX_NUM_RUNTIME_ARGS,
+         const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
+         const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
+         const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
+         const uint32_t max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS) {
+         CoreRangeSet cores = this->get_cores(kernel_core_type);
+         const bool create_eth_config = kernel_core_type == CoreType::ETH;
 
-     void create_device(const tt::tt_metal::DispatchCoreType dispatch_core_type) {
-         const chip_id_t device_id = 5;
-         this->devices_ =
-             detail::CreateDevices({device_id}, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-            for (auto [id, dev] : this->devices_) {
-                if (id == 5) {
-                    this->device_ = dev;
-                }
-            }
+         if (simple_kernel) {
+             this->create_kernel(program, cores, create_eth_config, 0, 0, 0, 0);
+         } else {
+             const vector<uint32_t> sem_ids =
+                 this->generate_semaphores(program, cores, kernel_core_type, min_num_sems, max_num_sems);
+             const auto [unique_rt_args, common_rt_args] =
+                 this->generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
+             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+             KernelHandle kernel_id = this->create_kernel(
+                 program,
+                 cores,
+                 create_eth_config,
+                 sem_ids.size(),
+                 num_unique_rt_args,
+                 common_rt_args.size(),
+                 min_kernel_size_bytes,
+                 max_kernel_size_bytes,
+                 min_kernel_runtime_microseconds,
+                 max_kernel_runtime_microseconds);
+             SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
+             SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+         }
      }
 
      vector<uint32_t> generate_semaphores(
@@ -205,6 +224,7 @@ class RandomProgramFixture : public ::testing::Test {
          const uint32_t min = MIN_NUM_SEMS,
          const uint32_t max = MAX_NUM_SEMS) {
          const uint32_t num_sems = this->generate_random_num(min, max);
+         tt::log_info(tt::LogTest, "Creating {} semaphores", num_sems);
          vector<uint32_t> sem_ids;
          for (uint32_t i = 0; i < num_sems; i++) {
              const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL, core_type);
@@ -218,6 +238,7 @@ class RandomProgramFixture : public ::testing::Test {
          const uint32_t min = MIN_NUM_RUNTIME_ARGS,
          const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
          const uint32_t num_sems = sem_ids.size();
+         TT_FATAL(max >= num_sems, "Max number of runtime args to generate must be >= number of semaphores created");
          const uint32_t max_num_unique_rt_args = max - num_sems;
          const uint32_t num_unique_rt_args = this->generate_random_num(min, max_num_unique_rt_args);
 
@@ -235,10 +256,10 @@ class RandomProgramFixture : public ::testing::Test {
      KernelHandle create_kernel(
          Program &program,
          const std::variant<CoreCoord, CoreRange, CoreRangeSet> &cores,
+         const bool create_eth_config,
          const uint32_t num_sems,
          const uint32_t num_unique_rt_args,
          const uint32_t num_common_rt_args,
-         const bool create_eth_config,
          const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
          const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
          const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
@@ -287,10 +308,65 @@ class RandomProgramFixture : public ::testing::Test {
 
     private:
      uint32_t seed_;
-     std::map<chip_id_t, Device*> devices_;
 
      // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
      uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
+        TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
         return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
+     }
+
+     CoreRangeSet get_cores(const CoreType core_type) {
+        CoreRangeSet all_cores({});
+        if (core_type == CoreType::WORKER) {
+            CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
+            all_cores = CoreRangeSet({{{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}}});
+        }
+        else {
+            std::set<CoreRange> core_ranges;
+            const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            for (CoreCoord eth_core : active_eth_cores) {
+                core_ranges.emplace(eth_core);
+            }
+            all_cores = CoreRangeSet(core_ranges);
+            std::cout << all_cores.str() << std::endl;
+        }
+        CoreRangeSet empty_crs({});
+        all_cores = empty_crs.merge(all_cores);
+
+        CoreRangeSet cores({});
+        const uint32_t num = this->generate_random_num(0, 2);
+        switch (num) {
+            case 0: cores = all_cores; break;
+            case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
+            case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
+        }
+
+        return cores;
+     }
+
+     CoreRangeSet generate_subset_of_cores(const CoreRangeSet& cores, const uint32_t resulting_ratio_of_cores) {
+        uint32_t num_cores = 0;
+        for (CoreRange cr : cores.ranges()) {
+            num_cores += cr.size();
+        }
+
+        std::set<CoreRange> cores_subset;
+        const uint32_t num_cores_to_include_in_subset = num_cores / resulting_ratio_of_cores;
+        uint32_t num_cores_added = 0;
+        while (num_cores_added != num_cores_to_include_in_subset) {
+            for (CoreRange cr : cores.ranges()) {
+                for (CoreCoord core : cr) {
+                    const uint32_t random_num = this->generate_random_num(1, resulting_ratio_of_cores);
+                    if (random_num == 1 && num_cores_added != num_cores_to_include_in_subset) {
+                        cores_subset.emplace(core);
+                        num_cores_added += 1;
+                    }
+                }
+            }
+        }
+
+        CoreRangeSet empty_crs({});
+        CoreRangeSet resulting_cores = empty_crs.merge(cores_subset);
+        return resulting_cores;
      }
 };
