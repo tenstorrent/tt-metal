@@ -31,7 +31,6 @@ parameters = {
         + gen_shapes([32, 32], [256, 256], [32, 32], 8),
         "accurate_mode": [True, False],
         "round_mode": ["None", "floor", "trunc"],
-        "round_mode": [None],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
