@@ -17,7 +17,6 @@ struct ExpandOperation {
         const std::vector<uint32_t> output_shape = {0};
 
         const MemoryConfig memory_config;
-        const DeviceComputeKernelConfig compute_kernel_config;
     };
 
     struct tensor_args_t {
@@ -50,28 +49,7 @@ struct ExpandOperation {
             tensor_return_value_t& output);
     };
 
-    struct ExpandTileFactory {
-        struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
-            CoreCoord core;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-    };
-
-    using program_factory_t = std::variant<ExpandRowMajorFactory, ExpandTileFactory>;
+    using program_factory_t = std::variant<ExpandRowMajorFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -84,8 +62,7 @@ struct ExpandOperation {
         const std::vector<uint32_t>& output_shape,
 
         const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::expand
 

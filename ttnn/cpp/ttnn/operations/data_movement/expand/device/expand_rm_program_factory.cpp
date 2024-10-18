@@ -24,9 +24,6 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
 
-    auto output_mem_config = operation_attributes.memory_config;
-    auto compute_kernel_config = operation_attributes.compute_kernel_config;
-
     // Device Setup
     auto* device = input.device();
     Program program = CreateProgram();
@@ -145,7 +142,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
         all_cores,
         WriterDataMovementConfig(writer_compile_runtime_args));
 
-    auto rows_offset = 0;
+    uint32_t rows_offset = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -156,7 +153,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
             num_copies_this_core = num_copies_per_core_group_2;
         }
 
-        tt::tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             reader_id,
             core,
@@ -168,7 +165,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
                 input.buffer()->page_size(),
             });
 
-        tt::tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             writer_id,
             core,
