@@ -53,10 +53,10 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
         parallel_config = conv::conv2d::determine_parallel_config(
                                             applied_shard_scheme,
                                             batch_size,
-                                            0,          // in_channels -- not used
+                                            channels,
                                             output_shape[1],
                                             output_shape[2],
-                                            0,          // out_channels -- not used
+                                            channels,
                                             input_tensor.device(),
                                             ShardOrientation::ROW_MAJOR,
                                             false);
