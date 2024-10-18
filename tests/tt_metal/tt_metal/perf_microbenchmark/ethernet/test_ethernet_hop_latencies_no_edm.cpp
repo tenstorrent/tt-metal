@@ -146,8 +146,8 @@ std::vector<uint32_t> get_eth_sender_rt_args(
         receiver_y,
         receiver_start_semaphore_id};
     for (std::size_t i = 0; i < max_concurrent_samples; i++) {
-        rt_args.push_back(erisc_semaphore_addresses.at(i));
         rt_args.push_back(erisc_buffer_addresses.at(i));
+        rt_args.push_back(erisc_semaphore_addresses.at(i));
     }
 
     return rt_args;

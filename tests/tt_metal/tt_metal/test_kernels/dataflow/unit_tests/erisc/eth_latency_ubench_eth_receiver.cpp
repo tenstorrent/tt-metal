@@ -179,10 +179,7 @@ void kernel_main() {
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
-    for (uint32_t i = 0; i < 2000000000; i++) {
-        asm volatile("nop");
-    }
+
 
     eth_setup_handshake(handshake_addr, false);
     // We reuse the handshake address to send back acks to the sender core.
