@@ -44,6 +44,8 @@ enum class TargetDevice : uint8_t
 {
     Silicon = 0,
     Simulator = 1,
+    Mockup = 2,  // Used for GraphCaptures without dispatching when there is TT hardware attached to the system
+                 // Requires TT_METAL_MOCKUP_EN=1 ARCH_NAME=wormhole_b0 TT_METAL_SLOW_DISPATCH_MODE=1
     Invalid = 0xFF,
 };
 
