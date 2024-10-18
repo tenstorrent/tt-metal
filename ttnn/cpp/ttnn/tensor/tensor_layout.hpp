@@ -56,6 +56,7 @@ struct RowMajorPageConfig {
     Alignment createDefaultAlignment(DataType dataType) const;
     void validateAlignment(const Alignment& alignment, DataType dataType) const;
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
 };
 struct TilePageConfig {
     Tile tile;
@@ -65,6 +66,7 @@ struct TilePageConfig {
     Alignment createDefaultAlignment(DataType dataType) const;
     void validateAlignment(const Alignment& alignment, DataType dataType) const;
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
 };
 
 class PageConfig {
@@ -78,6 +80,9 @@ public:
     Alignment createDefaultAlignment(DataType dataType) const;
     void validateAlignment(const Alignment& alignment, DataType dataType) const;
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
+    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
+
+    std::optional<Tile> get_tile() const;
     bool isRowMajor() const;
 
 private:

@@ -174,6 +174,16 @@ Size TilePageConfig::get_page_shape(const Size& physical_size, const MemoryConfi
     return Size(tile.get_height(), tile.get_width());
 }
 
+size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
+    const auto size = page_shape.height() * page_shape.width() * utils::element_size_bytes(dataType);
+    return size;
+}
+
+size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
+    const auto tiles_count = page_shape.height() / tile.get_height() * page_shape.width() / tile.get_width();
+    const auto size = tiles_count * tile.get_tile_size(datatype_to_dataformat_converter(dataType));
+    return size;
+}
 
 PageConfig::PageConfig(const Config& config)
     : mConfig(config) {
@@ -204,8 +214,21 @@ Size PageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& m
     return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memoryConfig); }, mConfig);
 }
 
+size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
+    return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dataType); }, mConfig);
+}
+
 bool PageConfig::isRowMajor() const {
     return std::holds_alternative<RowMajorPageConfig>(mConfig);
+}
+
+std::optional<Tile> PageConfig::get_tile() const
+{
+    if(std::holds_alternative<TilePageConfig>(mConfig)) {
+        return std::get<TilePageConfig>(mConfig).tile;
+    }
+
+    return std::nullopt;
 }
 
 
@@ -277,35 +300,7 @@ size_t TensorLayout::get_page_size_bytes(const ttnn::SimpleShape& shape) const {
 }
 
 size_t TensorLayout::get_page_size_bytes(const Size& page_size) const {
-    const size_t elements_in_page = page_size.height() * page_size.width();
-    uint32_t page_size_bytes = get_header_size_bytes();
-
-    switch (mDataType) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::UINT32:
-        case DataType::INT32:
-        case DataType::UINT16:
-        case DataType::UINT8:
-            page_size_bytes += elements_in_page * utils::element_size_bytes(mDataType);
-            break;
-
-        case DataType::BFLOAT8_B:
-            page_size_bytes += elements_in_page;
-            break;
-
-        case DataType::BFLOAT4_B:
-            TT_FATAL(elements_in_page % 2 == 0, "BFLOAT4_B should have even number of elements in a page");
-            page_size_bytes += elements_in_page / 2;
-            break;
-
-        default:
-            TT_THROW("Unsupported data type!");
-    }
-
-    TT_FATAL(page_size_bytes != 0, "Page size should not be zero");
-
-    return page_size_bytes;
+    return mPageConfig.get_page_size_bytes(page_size, mDataType);
 }
 
 Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
@@ -329,13 +324,6 @@ Size TensorLayout::get_physical_shape(const ttnn::SimpleShape& shape) const {
         }
     }
 
-    // if(mMemoryConfig.shard_spec.has_value())
-    // {
-    //     auto& shard_spec = mMemoryConfig.shard_spec.value();
-    //     height = round_up(height, shard_spec.shape[0]);
-    //     width = round_up(width, shard_spec.shape[1]);
-    // }
-
     Size size{height, width};
 
     return size;
@@ -347,16 +335,6 @@ Size TensorLayout::get_page_shape(const Size& physical_size) const {
     }
 
     return mPageConfig.get_page_shape(physical_size, mMemoryConfig);
-}
-
-uint32_t TensorLayout::get_header_size_bytes() const {
-    switch (mDataType) {
-        case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B:
-            return 64;
-        default:
-            return 0;
-    }
 }
 
 Strides TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
