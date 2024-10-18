@@ -10,6 +10,7 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
+#include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
@@ -39,6 +40,7 @@
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -53,7 +55,6 @@ void py_module(py::module& module) {
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
-
 
     //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
@@ -137,6 +138,12 @@ void py_module(py::module& module) {
 
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
+
+    auto m_uniform = module.def_submodule("uniform", "uniform operations");
+    uniform::bind_uniform_operation(m_uniform);
+
+    auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
+    bernoulli::bind_bernoulli_operation(m_bernoulli);
 }
 }  // namespace operations
 
