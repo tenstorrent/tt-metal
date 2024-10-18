@@ -8,12 +8,12 @@
 #include <vector>
 #include "common/core_coord.h"
 #include "common/env_lib.hpp"
-#include "core_config.h"
 #include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
+#include "llrt/hal.hpp"
 #include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -292,10 +292,10 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
          std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
          if (create_eth_config) {
-             compile_args.push_back(ProgrammableCoreType::ACTIVE_ETH);
+             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
              config = EthernetConfig{.compile_args = compile_args, .defines = defines};
          } else {
-             compile_args.push_back(ProgrammableCoreType::TENSIX);
+             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
              DataMovementProcessor processor = this->get_processor();
              config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
          }
