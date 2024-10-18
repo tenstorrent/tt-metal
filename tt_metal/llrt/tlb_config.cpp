@@ -208,21 +208,4 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
     device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
 }
 
-std::unordered_map<std::string, std::int32_t> get_dynamic_tlb_config(tt::ARCH arch) {
-    std::unordered_map<std::string, std::int32_t> dynamic_tlb_config;
-    switch (arch) {
-        case tt::ARCH::GRAYSKULL:
-            dynamic_tlb_config["REG_TLB"] = tt::umd::grayskull::REG_TLB;
-            break;
-        case tt::ARCH::WORMHOLE_B0:
-            dynamic_tlb_config["REG_TLB"] = tt::umd::wormhole::REG_TLB;
-            break;
-        case tt::ARCH::BLACKHOLE:
-            dynamic_tlb_config["REG_TLB"] = tt::umd::blackhole::REG_TLB;
-            break;
-        default: TT_THROW("Configuring dynamic TLBs is not supported for {}", tt::get_string(arch));
-    }
-    return dynamic_tlb_config;
-}
-
 }  // namespace ll_api
