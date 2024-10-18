@@ -110,6 +110,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     // DRAM reader CB
     uint32_t reader_cb_index = 0;
     uint32_t reader_cb_size = block_h * block_w * single_tile_size * 3;
+    // For debug purpose
+    // uint32_t reader_cb_size = block_h * block_w * single_tile_size;
     uint32_t reader_page_size, reader_num_pages;
     get_max_page_size_and_num_pages(block_num_tiles, single_tile_size, reader_page_size, reader_num_pages);
 
@@ -127,7 +129,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     auto reader_cb = tt_metal::CreateCircularBuffer(program, dram_reader_core, reader_cb_config);
 
     // mixed cb dataformat
-    uint32_t next_layer_num_blocks = num_blocks * 1;
+    uint32_t next_layer_num_blocks = num_blocks * 2;
     uint32_t next_layer_block_h = kt / next_layer_num_blocks;
     uint32_t next_layer_block_num_tiles = next_layer_block_h * block_w;
     uint32_t next_layer_num_tile_rows_write = next_layer_block_h;
@@ -140,7 +142,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         next_layer_single_tile_size = 2048;
     }
     uint32_t next_layer_reader_page_size, next_layer_reader_num_pages;
-    get_max_page_size_and_num_pages(block_num_tiles, next_layer_single_tile_size, next_layer_reader_page_size, next_layer_reader_num_pages);
+    get_max_page_size_and_num_pages(next_layer_block_num_tiles, next_layer_single_tile_size, next_layer_reader_page_size, next_layer_reader_num_pages);
 
     uint32_t next_layer_writer_page_size, next_layer_writer_num_pages;
     get_max_page_size_and_num_pages(block_w / num_receivers, next_layer_single_tile_size, next_layer_writer_page_size, next_layer_writer_num_pages);
@@ -425,25 +427,6 @@ bool validation_fp16(
         result_vec[i] = to_float(static_cast<bfloat16>(result_untilized[i]));
     }
 
-    // for (uint32_t i=0; i < golden_vec.size(); ++i ) {
-    //     std::cout << golden_vec[i] << " ";
-
-    //     if ((i+1) %32 == 0) {
-    //         std::cout << std::endl;
-    //     }
-    // }
-
-    // std::cout << std::endl;
-    // std::cout << std::endl;
-
-    // for (uint32_t i=0; i < result_vec.size(); ++i ) {
-    //     std::cout << result_vec[i] << " ";
-
-    //     if ((i+1) %32 == 0) {
-    //         std::cout << std::endl;
-    //     }
-    // }
-
     pass &= (golden_vec == result_vec);
     if (!pass) {
         log_error(LogTest, "validation single core failed");
@@ -460,170 +443,105 @@ bool validation_mixed_df(
     uint32_t kt,
     uint32_t nt,
     std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
-    uint32_t num_mixed_df_layers
+    uint32_t num_mixed_df_layers,
+    uint32_t num_receivers
 ) {
     bool pass = true;
-
 
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout_bfp16 = convert_to_flat_layout(result_bfp16);
-    auto result_untilized_fp16 = tt::test_utils::untilize(result_flat_layout_bfp16, kt*32 / num_blocks * cb_num_blocks, nt*32);
+    auto result_untilized_fp16 = convert_to_flat_layout(result_bfp16);
 
-    auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
-    std::vector<float> result_untilized_fp8 = tt::test_utils::untilize(result_bfp8, result_bfp8.size() / (nt*32), nt*32);
+    std::vector<float> golden_vec(kt*32 / num_blocks * cb_num_blocks * nt*32);
+    std::vector<float> result_vec_fp16(kt*32 / num_blocks * cb_num_blocks * nt*32);
 
-    log_info("num_cb_elements: {}", result_untilized_fp16.size());
-    log_info("num_cb_elements: {}", result_untilized_fp8.size());
+    // compare with the result tilized with tilized
+    auto values_fp16 = tt::test_utils::tilize(input_tensor_fp16.get_values(), kt*32, nt*32);
 
-    int max_cb_num_datums = result_untilized_fp8.size();
-    int min_cb_num_datums = result_untilized_fp16.size();
-
-    std::vector<float> golden_vec(max_cb_num_datums);
-    std::vector<float> result_vec_fp16(min_cb_num_datums);
-    std::vector<float> result_vec_fp8(max_cb_num_datums);
-    std::vector<float> result_vec(max_cb_num_datums);
-
-    const auto& values_fp16 = input_tensor_fp16.get_values();
-    const auto& values_fp8 = input_tensor_fp8.get_values();
-
-    int index = 0;
-    int index_fp16 = 0;
-    int index_fp8 = 0;
+    auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
+    int start_index = 0;
+    int fifo_size = kt*32 / num_blocks * cb_num_blocks * nt*32 * 2 / num_receivers;
+    int fifo_size_page_aligned, page_size, num_pages, layer_transfer_size, fifo_wr_ptr = 0;
     for (int l = 0; l < num_mixed_df_layers; ++l) {
-        if (l % 2 == 0) {
-            index_fp16 = index;
-            for (int i = 0; i < values_fp16.size(); ++i) {
-                golden_vec[index] = to_float(values_fp16[i]);
-                index++;
-
-                if (index == max_cb_num_datums) {
-                    index = 0;
-                }
-            }
+        if (l % 2 == 0) { // fp16
+            page_size = 2048;
         } else {
-            index_fp8 = index;
-            for (int i = 0; i < values_fp8.size(); ++i) {
-                golden_vec[index] = (float)values_fp8[i];
-                index++;
-
-                if (index == max_cb_num_datums) {
-                    index = 0;
-                }
-            }
+            page_size = 1088;
         }
+        layer_transfer_size = page_size * kt * nt / num_receivers;
+        num_pages = fifo_size / page_size;
+        fifo_size_page_aligned = page_size * num_pages;
 
+        bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > fifo_size_page_aligned;
+        uint32_t num_pages_till_fifo_limit = (fifo_size_page_aligned - fifo_wr_ptr) / page_size;
+        // start pointer addr of current layer
+        fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : fifo_size_page_aligned - num_pages_till_fifo_limit * page_size;
+        // start index to read, fifo_wr_ptr / 2 because fp16 format
+        start_index = fifo_wr_ptr == fifo_size_page_aligned ? 0 : fifo_wr_ptr / 2;
+        // end pointer addr of current layer
+        fifo_wr_ptr = (fifo_wr_ptr + layer_transfer_size) % fifo_size_page_aligned;
     }
 
-    log_info("start index of fp16: {}", index_fp16);
-    log_info("start index of fp8: {}", index_fp8);
+    std::vector<std::vector<float> > values_fp16_split(num_receivers, std::vector<float>(values_fp16.size() / num_receivers));
+
+    int index = 0;
+    for (int k = 0; k < kt; ++k) {
+        for (int n = 0; n < num_receivers; ++n) {
+            for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
+                values_fp16_split[n][i + k * nt * 32 * 32 / num_receivers] = to_float(values_fp16[index]);
+                index ++;
+            }
+        }
+    }
+
+    std::vector<std::vector<float> > golden_vec_split(num_receivers, std::vector<float>(golden_vec.size() / num_receivers));
+
+    for (int n = 0; n < num_receivers; ++n) {
+        index = start_index;
+        for (int i = 0; i < kt * nt * 32 * 32 / num_receivers; ++i) {
+            golden_vec_split[n][index] = values_fp16_split[n][i];
+            index ++;
+
+            if (index == num_datums_per_cb) {
+                index = 0;
+            }
+        }
+    }
+
+    index = 0;
+    for (int k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
+        for (int n = 0; n < num_receivers; ++n) {
+            for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
+                golden_vec[index] = golden_vec_split[n][i + k * nt * 32 * 32 / num_receivers];
+                index ++;
+            }
+        }
+    }
 
     for (int i=0; i<result_untilized_fp16.size(); ++i) {
         result_vec_fp16[i] = to_float(static_cast<bfloat16>(result_untilized_fp16[i]));
     }
-    for (int i=0; i<result_untilized_fp8.size(); ++i) {
-        result_vec_fp8[i] = result_untilized_fp8[i];
-    }
 
-    // if (num_mixed_df_layers % 2 == 0) { // end layer is fp8
-
-    // } else {
-    //     int index = 0;
-    //     for (int i=index_fp16; i < max_cb_num_datums; ++i) {
-    //         result_vec[i] = result_vec_fp16[index];
-    //         index++;
-    //     }
-    // }
-
-
-    // if (index_fp16 > index_fp8) {
-    //     log_info("index_fp16 > index_fp8");
-
-    //     int len_fp8 = (index_fp16 - index_fp8);
-    //     for (int i=index_fp8; i < len_fp8; ++i) {
-    //         result_vec[i] = result_vec_fp8[i];
-    //     }
-    //     for (int i=0; i < index_fp8; ++i) {
-    //         result_vec[i] = result_vec_fp16[i];
-    //     }
-    //     for (int i=index_fp16; i < len; ++i) {
-    //         result_vec[i] = result_vec_fp16[i];
-    //     }
-
-    // } else if (index_fp16 < index_fp8) {
-    //     log_info("index_fp16 < index_fp8");
-
-    //     int len_fp16 = (index_fp8 - index_fp16);
-    //     for (int i=index_fp16; i < len_fp16; ++i) {
-    //         result_vec[i] = result_vec_fp16[i];
-    //     }
-    //     for (int i=0; i < index_fp8; ++i) {
-    //         result_vec[i] = result_vec_fp8[i];
-    //     }
-    //     for (int i=index_fp8; i < len; ++i) {
-    //         result_vec[i] = result_vec_fp8[i];
-    //     }
-
-    // } else {
-    //     log_info("index_fp16 = index_fp8");
-
-    //     if (num_mixed_df_layers % 2 == 0) { // end layer is fp8
-    //         log_info("last layer is fp8");
-    //         for (int i=0; i < len; ++i) {
-    //             result_vec[i] = result_vec_fp8[i];
-    //         }
-    //     } else {
-    //         log_info("last layer is fp16");
-    //         for (int i=0; i < len; ++i) {
-    //             result_vec[i] = result_vec_fp16[i];
-    //         }
-    //     }
-    // }
-
-    // for (uint32_t i=0; i < golden_vec.size(); ++i ) {
+    // For debug purpose
+    // for (int i = 0; i < golden_vec.size(); ++i) {
     //     std::cout << golden_vec[i] << " ";
-
-    //     if ((i+1) %32 == 0) {
+    //     if ((i+1) % 32 == 0) {
+    //         std::cout << std::endl;
+    //     }
+    // }
+    // std::cout << std::endl;
+    // std::cout << std::endl;
+    // for (int i = 0; i < result_vec_fp16.size(); ++i) {
+    //     std::cout << result_vec_fp16[i] << " ";
+    //     if ((i+1) % 32 == 0) {
     //         std::cout << std::endl;
     //     }
     // }
 
-    // std::cout << std::endl;
-    // std::cout << std::endl;
+    pass &= pcc(golden_vec, result_vec_fp16) == 1.0;
 
-    // for (uint32_t i=0; i < result_vec.size(); ++i ) {
-    //     std::cout << result_vec[i] << " ";
-
-    //     if ((i+1) %32 == 0) {
-    //         std::cout << std::endl;
-    //     }
-    // }
-
-    // std::cout << std::endl;
-    // std::cout << std::endl;
-
-    for (uint32_t i=0; i < result_vec_fp16.size(); ++i ) {
-        std::cout << result_vec_fp16[i] << " ";
-
-        if ((i+1) %32 == 0) {
-            std::cout << std::endl;
-        }
-    }
-
-    // std::cout << std::endl;
-    // std::cout << std::endl;
-
-    // for (uint32_t i=0; i < result_vec_fp8.size(); ++i ) {
-    //     std::cout << result_vec_fp8[i] << " ";
-
-    //     if ((i+1) %32 == 0) {
-    //         std::cout << std::endl;
-    //     }
-    // }
-
-    pass &= pcc(golden_vec, result_vec) >= 0.9999;
     if (!pass) {
         log_error(LogTest, "validation single core failed");
     }
@@ -731,6 +649,7 @@ int main(int argc, char **argv) {
         log_info("num_mixed_df_layers: {} ", num_mixed_df_layers);
         log_info("num_receivers: {} ", num_receivers);
 
+        TT_FATAL(num_mixed_df_layers % 2 == 1, "currently only support odd number of layers testing, due to issue with validatoin");
         if (num_mixed_df_layers > 1) {
             TT_FATAL(df == 1, "must start with bfloat16 format for mix_df test");
         }
@@ -838,6 +757,10 @@ int main(int argc, char **argv) {
             output_buffer = create_and_transfer_data_sharded_cb(device, outputs, kt / num_blocks * cb_num_blocks, nt, tt_metal::BufferType::L1, tt::DataFormat::Float16_b, l1_receiver_core, num_receivers);
         }
 
+        for (uint32_t i=0; i < num_mixed_df_layers; ++i) {
+            log_info("input_buffers addr: {}", input_buffers[i]->address());
+        }
+
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
@@ -888,7 +811,8 @@ int main(int argc, char **argv) {
                     kt,
                     nt,
                     output_buffer,
-                    num_mixed_df_layers);
+                    num_mixed_df_layers,
+                    num_receivers);
         }
 
         pass &= tt_metal::CloseDevice(device);
