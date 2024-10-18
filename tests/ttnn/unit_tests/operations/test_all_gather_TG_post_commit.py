@@ -249,7 +249,8 @@ def test_line_all_gather_on_TG_rows_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
-        # (8, 4, [1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT), # Rightmost column of tiles per input not copied to final output
+        (8, 4, [1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT),  # Rightmost column of tiles per input not copied to final output
+        (8, 4, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),  # Rightmost column of tiles per input not copied to final output
         (8, 4, [1, 1, 32, 2048], 1, ttnn.TILE_LAYOUT),  # passes
         (8, 4, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),  # passes
         (8, 4, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),  # passes
