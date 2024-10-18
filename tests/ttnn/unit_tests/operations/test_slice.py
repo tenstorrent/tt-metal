@@ -599,3 +599,44 @@ def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layou
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends",
+    (
+        ((1, 1, 1, 1, 256), (0, 0, 0, 0, 0), (1, 1, 1, 1, 255)),
+        ((1, 1, 32, 32, 32), (0, 0, 0, 0, 0), (1, 1, 32, 32, 1)),
+        ((1, 1, 32, 32, 64), (0, 0, 0, 0, 0), (1, 1, 32, 1, 32)),
+        ((1, 1, 1, 64, 64), (0, 0, 0, 0, 0), (1, 1, 1, 1, 1)),
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_config, device):
+    if layout == ttnn.TILE_LAYOUT:
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    else:
+        if (input_ends[-1] - input_start[-1]) % 2:
+            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
+        torch_input = torch.randn(input_shape, dtype=torch.float32)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.float32, layout=layout)
+
+    torch_output = torch_input[
+        input_start[0] : input_ends[0],
+        input_start[1] : input_ends[1],
+        input_start[2] : input_ends[2],
+        input_start[3] : input_ends[3],
+        input_start[4] : input_ends[4],
+    ]
+
+    ttnn_output = ttnn.slice(ttnn_input, input_start, input_ends, (1, 1, 1, 1, 1), memory_config=memory_config)
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
