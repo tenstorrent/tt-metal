@@ -11,10 +11,11 @@ from tests.ttnn.unit_tests.operations.test_reduce_scatter_post_commit import (
     is_unsupported_case,
     run_reduce_scatter_test,
 )
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 import itertools
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -93,6 +94,7 @@ def test_reduce_scatter_nightly(
     )
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
