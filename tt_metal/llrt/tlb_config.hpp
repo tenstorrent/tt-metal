@@ -14,6 +14,4 @@ namespace ll_api {
 
 void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor &sdesc, tt_device &device_driver);
 
-std::unordered_map<std::string, std::int32_t> get_dynamic_tlb_config(tt::ARCH arch);
-
 }  // namespace ll_api
