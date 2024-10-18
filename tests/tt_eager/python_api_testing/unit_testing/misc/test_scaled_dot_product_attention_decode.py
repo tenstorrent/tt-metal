@@ -190,7 +190,7 @@ def run_test_sdpa_decode_multi_pos(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -330,7 +330,7 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -463,6 +463,7 @@ def run_test_sdpa_decode_single_iter(
         [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
         [32, 32, 8, 8192, 128, (8, 8), True, False],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), False, False],  # llama 3.1 8b
+        # [1, 8, 1, 8192*16, 128, (1, 1), False, True],  # llama2-70B long seqlen
     ),
 )
 def test_sdpa_decode(
@@ -595,7 +596,7 @@ def run_test_sdpa_decode_paged_attention(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if kv_dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if kv_dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,

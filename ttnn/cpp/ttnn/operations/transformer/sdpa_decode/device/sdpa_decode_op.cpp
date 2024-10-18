@@ -113,18 +113,6 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         uint32_t num_heads_per_kv = q_shape_unpadded[2]/k_shape[1];
         TT_FATAL(q_shape_unpadded[2]%k_shape[1] == 0, "GQA expects Q to have a multiple of K heads, but got {} and {}", q_shape_unpadded[2], k_shape[1]);
     }
-
-    // Check compute kernel config
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(
-                    compute_kernel_config.fp32_dest_acc_en == false,
-                    "FP32 dest acc disabled due to nd pcc and unpacker hang issue.");
-            }
-        },
-        this->compute_kernel_config);
 }
 
 std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionDecode::compute_output_shapes(
