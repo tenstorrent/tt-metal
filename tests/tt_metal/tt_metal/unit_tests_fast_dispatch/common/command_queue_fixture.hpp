@@ -12,6 +12,7 @@
 #include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
+#include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
@@ -163,7 +164,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
      static const uint32_t MIN_NUM_SEMS = 0;
      static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
      static const uint32_t SEM_VAL = 1;
-     static const uint32_t NUM_PROGRAMS = 5;
+     static const uint32_t NUM_PROGRAMS = 75;
 
      Device *device_;
 
@@ -172,7 +173,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
          this->device_ = this->devices_[0];
 
-         this->seed_ = tt::parse_env("TT_METAL_SEED", 0);
+         this->seed_ = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
          log_info(tt::LogTest, "Using seed: {}", this->seed_);
          srand(this->seed_);
      }
@@ -218,7 +219,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
      vector<uint32_t> generate_semaphores(
          Program &program,
-         const std::variant<CoreRange, CoreRangeSet> &cores,
+         const CoreRangeSet &cores,
          const CoreType core_type = CoreType::WORKER,
          const uint32_t min = MIN_NUM_SEMS,
          const uint32_t max = MAX_NUM_SEMS) {
@@ -251,9 +252,12 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          return {unique_rt_args, common_rt_args};
      }
 
+    private:
+     uint32_t seed_;
+
      KernelHandle create_kernel(
          Program &program,
-         const std::variant<CoreCoord, CoreRange, CoreRangeSet> &cores,
+         const CoreRangeSet &cores,
          const bool create_eth_config,
          const uint32_t num_sems,
          const uint32_t num_unique_rt_args,
@@ -272,9 +276,9 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
          uint32_t divisible_by;
          if (create_eth_config) {
-            divisible_by = 4;
+             divisible_by = 4;
          } else {
-            divisible_by = 1;
+             divisible_by = 1;
          }
 
          const uint32_t kernel_size_bytes =
@@ -292,7 +296,8 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              config = EthernetConfig{.compile_args = compile_args, .defines = defines};
          } else {
              compile_args.push_back(ProgrammableCoreType::TENSIX);
-             config = DataMovementConfig{.compile_args = compile_args, .defines = defines}; //randomize processor that we run on
+             DataMovementProcessor processor = this->get_processor();
+             config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
          }
 
          KernelHandle kernel_id = CreateKernel(
@@ -304,13 +309,21 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          return kernel_id;
      }
 
-    private:
-     uint32_t seed_;
-
      // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
      uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
         TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
         return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
+     }
+
+     DataMovementProcessor get_processor() {
+        const uint32_t num = this->generate_random_num(0, 1);
+        DataMovementProcessor processor;
+        if (num == 0) {
+            processor = DataMovementProcessor::RISCV_0;
+        } else {
+            processor = DataMovementProcessor::RISCV_1;
+        }
+        return processor;
      }
 
      CoreRangeSet get_cores(const CoreType core_type) {
