@@ -26,12 +26,10 @@ from models.utility_functions import (
 from models.utility_functions import (
     nearest_32,
 )
-from models.demos.llama3.tt.llama_class_embedding import (
+from models.demos.llama3.tt.multimodal.llama_class_embedding import (
     TtLlamaClassEmbedding,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
-
-import importlib
 
 
 ##### Torch op #####
@@ -90,8 +88,14 @@ def test_llama_class_embedding_inference(
     dtype = ttnn.bfloat16
     pcc = 0.9999
 
-    devices = mesh_device.get_devices()
-    num_devices = len(devices)
+    mesh_device.enable_async(True)
+
+    model_args = TtModelArgs(mesh_device)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    first_layer_prefix = "vision_model.vision_encoder."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
 
     (
         bsz,
@@ -106,7 +110,7 @@ def test_llama_class_embedding_inference(
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
     tt_input_tensor = ttnn.as_tensor(
-        input_tensor,
+        input_tensor.view(1, bsz * num_concurrent_media * num_chunks, ntok, dim),
         dtype=dtype,
         layout=layout,
         device=mesh_device,
@@ -119,13 +123,17 @@ def test_llama_class_embedding_inference(
     reference_model = ClassEmbedding(
         width=dim,
     )
+    reference_model.load_state_dict(partial_state_dict, strict=False)
     reference_output = reference_model(input_tensor)
 
     ##### Perform the TT ops #####
     tt_model = TtLlamaClassEmbedding(
         mesh_device,
-        class_embedding=reference_model.class_embedding,
-        dtype=dtype,
+        state_dict,
+        first_layer_prefix,
+        None,
+        dtype,
+        model_args,
     )
     tt_output = tt_model(tt_input_tensor)
 
@@ -135,7 +143,7 @@ def test_llama_class_embedding_inference(
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     # Only select output from one device
-    tt_output_torch = tt_output_torch[..., :dim]
+    tt_output_torch = tt_output_torch[..., :dim].view(reference_output.shape)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

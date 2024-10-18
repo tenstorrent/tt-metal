@@ -12,10 +12,17 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_conv2d_patch import TtLlamaConv2dPatch
-from models.demos.llama3.tt.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
-from models.demos.llama3.tt.llama_layernorm import TtLayerNorm
-from models.demos.llama3.tt.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.llama3.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
+from models.demos.llama3.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
+from models.demos.llama3.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.demos.llama3.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.llama3.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
+from models.demos.llama3.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
+
+
+from models.demos.falcon7b_common.tests.test_utils import (
+    synchronize_devices,
+)
 
 import importlib
 
@@ -31,21 +38,22 @@ def to_2tuple(x):
 
 
 def pad_seq_one_tile(x, mesh_device):
-    num_pad_tokens = 32
+    num_pad_tokens = 32 - (x.shape[2] % 32)
 
     pad_tensor = ttnn.as_tensor(
         torch.zeros(x.shape[0], x.shape[1], num_pad_tokens, x.shape[-1]),
         dtype=ttnn.bfloat16,
         device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    return (
-        ttnn.concat([x, pad_tensor], dim=2),
-        num_pad_tokens,
-    )
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.concat([x, pad_tensor], dim=2)
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    return x, num_pad_tokens
 
 
 def mask_tile_padding(attn_mask, ntok, npad, num_chunks):
@@ -104,15 +112,23 @@ class TtLlamaVisionEncoder(LightweightModule):
             bias=False,
         )
 
-        # TODO: Add back in all of the embeddings after Ammar is done :)
-        # self.class_embedding = ttnn.as_tensor(
-        #     state_dict[f"{state_dict_prefix}class_embedding"],
-        #     dtype=dtype,
-        #     device=mesh_device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        # )
+        self.class_embedding = TtLlamaClassEmbedding(
+            mesh_device,
+            state_dict,
+            state_dict_prefix,
+            None,
+            dtype,
+            configuration,
+        )
+
+        self.positional_embedding = TtLlamaPositionalEmbedding(
+            mesh_device,
+            state_dict,
+            state_dict_prefix,
+            None,
+            dtype,
+            configuration,
+        )
 
         self.ln_post = TtLayerNorm(
             device=mesh_device,
@@ -180,7 +196,7 @@ class TtLlamaVisionEncoder(LightweightModule):
         assert isinstance(
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
-        SKIP_EMBED = True
+        SKIP_EMBED = False
         if images.ndim == 5:
             num_concurrent_media = 1
             bsz, num_chunks, nch, w, h = images.shape
@@ -204,29 +220,30 @@ class TtLlamaVisionEncoder(LightweightModule):
 
         # apply cls token
         if not SKIP_EMBED:
-            x = self.apply_class_embedding(x)
+            x = self.class_embedding(x)
             ntok += 1
 
         # apply position embeddings
+        # NOTE! After class embedding, x is padded tilized tensor. Reshapes fail for padded tilized tensors, so do the reshape in row-major
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         if not SKIP_EMBED:
-            x = self.apply_positional_embedding(x, ar)
+            x = self.positional_embedding(x, ar)
 
         # BUG: layernorm takes 4d tensor -> 3d??
         x = self.ln_pre(x)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))  # BUG: required for above note
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         npad, attn_mask = 0, None
 
         # NOTE: We need to do this padding because it creates a funky attention mask
-        # return x
-        logger.info(f"TT VisionEncoder: before tile padding x.shape: {x.shape}")
         x, npad = pad_seq_one_tile(x, self.mesh_device)
-        logger.info(f"TT VisionEncoder: after tile padding x.shape: {x.shape}")
+
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
         attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
-        attn_mask = mask_tile_padding(attn_mask, ntok, 32, num_chunks)
-        logger.info(f"TT VisionEncoder: attn_mask.shape: {attn_mask.shape}")
-        torch.save(attn_mask, "vision_encoder_attn_mask.pt")
+        attn_mask = mask_tile_padding(attn_mask, ntok, npad, num_chunks)
         attn_mask = ttnn.as_tensor(
             attn_mask,
             dtype=ttnn.bfloat16,
@@ -235,26 +252,28 @@ class TtLlamaVisionEncoder(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media, -1, dim))
-        logger.info(f"TT VisionEncoder: input to self.transformer x.shape: {x.shape}")
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
         x, int_x = self.transformer(x, return_intermediate=self.return_intermediate, mask=attn_mask)
 
-        # # DEBUG transformer output
-        # x = x.reshape(bsz * num_concurrent_media, num_chunks, ntok + 32, dim)
-        # x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
-
         x = self.ln_post(x)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.post_tile_pos_embed(x, ar)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media, num_chunks * (ntok + npad), dim))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.global_transformer(x, mask=attn_mask)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok + npad, dim))
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = ttnn.slice(x, (0, 0, 0, 0), (bsz * num_concurrent_media, num_chunks, ntok, dim))
 
         # adding back intermediate layer outputs
         # NOTE: We cannot do 5-dim tensors. It should be find to send back 4-dim as long as calling code knows.
-        x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
-
         # NOTE: I can't correctly stack and reshape int_x because of ttnn page size limitations.
         # NOTE: this means I will have to modify calling code to know that int_x is not shuffled
 

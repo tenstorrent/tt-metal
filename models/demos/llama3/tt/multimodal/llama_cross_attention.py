@@ -131,8 +131,9 @@ class TtLlamaCrossAttention(LightweightModule):
 
     def compute_xattn_kv_cache(self, xattn_tokens):
         bsz, seqlen_y = xattn_tokens.shape[1], xattn_tokens.shape[2]
-        if seqlen_y > 1024:
-            xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // 1024, 1024, -1])
+        MAX_MM_SEQ_LEN = 1056
+        if seqlen_y > MAX_MM_SEQ_LEN:
+            xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         xk = ttnn.linear(
             xattn_tokens,
@@ -140,7 +141,7 @@ class TtLlamaCrossAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y),
+            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
 
         xv = ttnn.linear(
@@ -149,9 +150,9 @@ class TtLlamaCrossAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y),
+            program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
-        if seqlen_y > 1024:
+        if seqlen_y > MAX_MM_SEQ_LEN:
             xk = ttnn.reshape(xk, [1, bsz, seqlen_y, -1])
             xv = ttnn.reshape(xv, [1, bsz, seqlen_y, -1])
 
@@ -168,13 +169,11 @@ class TtLlamaCrossAttention(LightweightModule):
         ### EVERYTHING BELOW IS BROKEN OMG
         # BEWARNED! TMs are dangerous!
         # WORKAROUND
-        # breakpoint()
         xk = ttnn.to_layout(xk, layout=ttnn.ROW_MAJOR_LAYOUT)
         xv = ttnn.to_layout(xv, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         xk = xk.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
         xv = xv.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
-        # breakpoint()
         # xk = ttnn.to_memory_config(xk, ttnn.L1_MEMORY_CONFIG)
         # xk = ttnn.to_memory_config(xk, ttnn.DRAM_MEMORY_CONFIG)
         return xk
@@ -191,8 +190,99 @@ class TtLlamaCrossAttention(LightweightModule):
         # xk, xv = [ttnn.transpose(tensor, 1, 2) for tensor in (xk, xv)] # HANG!
         return [xk, xv]
 
-    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode):
+    def forward_decode(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
+        # batch = x_11SH.shape[-2]
+        batch = xattn_cache[0].shape[0]
+        # assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        # 1, B, D
+
+        xq = ttnn.linear(
+            x_11SH,
+            self.wq,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self.model_config["VISION_XATTN_Q_PROGCFG"](batch),
+        )
+
+        # Below is how we want to reshape. It results in poor PCC
+        # 1, B, D -> B, 1, NH, DH -> B, NH, 1, DH
+        # xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # xq = ttnn.reshape(xq, (batch, 1, self.n_local_heads, self.head_dim))
+        # xq = ttnn.transpose(xq, 1, 2)
+        # xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
+
+        xq, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
+        )
+        xq = ttnn.transpose(xq, 0, 2)
+        xq = ttnn.slice(xq, (0, 0, 0, 0), (batch, self.n_local_heads, 1, self.head_dim))
+        xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
+
+        xq = self.q_norm(xq)
+
+        xk, xv = xattn_cache
+        cache_seq_len = xk.shape[-2]
+
+        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
+
+        scores = ttnn.matmul(
+            xq,
+            ttnn.transpose(xk, -1, -2),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self.model_config["VISION_XATTN_SCORE_PROGCFG"](batch, cache_seq_len),
+        )
+
+        scores = ttnn.multiply(scores, self.scale)
+        # WARNING: This add is buggy if xattn_mask has to be broadcasted to n_local_heads. Workaround is to broadcast on host side
+        # Host side must explicitly create this tensor with same padding as input tensor
+        scores = ttnn.add(scores, xattn_mask)
+        scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+
+        output = ttnn.matmul(
+            scores,
+            xv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=self.model_config["VISION_XATTN_OUTPUT_PROGCFG"](batch, cache_seq_len),
+        )
+
+        # WARNING: this broadcast is also broken, must broadcast on host
+        output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
+
+        output = ttnn.transpose(output, 0, 2)  # B, NH, 1, DH -> 1, NH, B, DH
+        output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
+        output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+        # B, NH, S, DH -> B, S, D
+        # B, NH, 1, DH -> 1, 1, B, D
+        output = ttnn.experimental.nlp_concat_heads(output)  # 1, NH, B, DH -> 1, 1, B, D
+
+        output = ttnn.matmul(
+            output,
+            self.wo,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.model_config["VISION_XATTN_DENSE_PROGCFG"](batch),
+        )
+
+        # All reduce
+        if self.num_devices > 1:
+            dense_out_gathered = ttnn.all_gather(output, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
+                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+            )
+            return dense_out_reduced
+        else:
+            return output
+
+    def forward_prefill(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
         seq_len = x_11SH.shape[-2]
+        # B, S, D
         # assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
         if seq_len > 1024:
@@ -280,3 +370,9 @@ class TtLlamaCrossAttention(LightweightModule):
             return dense_out_reduced
         else:
             return output
+
+    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode):
+        if mode == "prefill":
+            return self.forward_prefill(x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache)
+        else:
+            return self.forward_decode(x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache)
