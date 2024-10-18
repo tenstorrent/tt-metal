@@ -59,7 +59,6 @@ void py_bind_all_reduce(pybind11::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
-            dim (int): Dimension to perform operation
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
@@ -75,7 +74,6 @@ void py_bind_all_reduce(pybind11::module& module) {
 
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> num_devices = 8
-            >>> dim = 3
             >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
             >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
@@ -84,7 +82,7 @@ void py_bind_all_reduce(pybind11::module& module) {
                     tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
             >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-            >>> output = ttnn.all_reduce(input_tensor_mesh, dim=0, topology=ttnn.Topology.Linear)
+            >>> output = ttnn.experimental.all_reduce(input_tensor_mesh, topology=ttnn.Topology.Linear)
 
         )doc");
 }
