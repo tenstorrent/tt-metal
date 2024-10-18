@@ -610,6 +610,7 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
     assert device.num_program_cache_entries() == 3
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [
