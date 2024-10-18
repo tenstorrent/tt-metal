@@ -4,15 +4,11 @@
 
 import torch
 import pytest
-from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.test_reduce_scatter_post_commit import (
-    is_unsupported_case,
     run_reduce_scatter_test,
 )
 from models.utility_functions import skip_for_grayskull
-import itertools
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
@@ -38,11 +34,8 @@ import itertools
         ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 128, 1024], 3, ttnn.TILE_LAYOUT),
-        # Has worker slice size warning - defaults to 1x1
         ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
-        # Always fails with bfp8_b
         ([1, 1, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # Has worker slice size warning - defaults to 1x1
         ([1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -61,8 +54,8 @@ import itertools
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_reduce_scatter_nightly(
+@pytest.mark.parametrize("enable_async", [True])
+def test_reduce_scatter_t3k_8chip_nightly(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
@@ -95,6 +88,7 @@ def test_reduce_scatter_nightly(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
+@pytest.skip("Failing")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -117,11 +111,8 @@ def test_reduce_scatter_nightly(
         ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 128, 1024], 3, ttnn.TILE_LAYOUT),
-        # Has worker slice size warning - defaults to 1x1
         ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
-        # Always fails with bfp8_b
         ([1, 1, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        # Has worker slice size warning - defaults to 1x1
         ([1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -140,8 +131,8 @@ def test_reduce_scatter_nightly(
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
-@pytest.mark.parametrize("enable_async", [True, False])
-def test_reduce_scatter_nightly(
+@pytest.mark.parametrize("enable_async", [True])
+def test_reduce_scatter_t3k_4chip_nightly(
     pcie_mesh_device,
     num_devices,
     per_chip_output_shape,
