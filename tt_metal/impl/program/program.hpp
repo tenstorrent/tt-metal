@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 
+#include "tt_metal/third_party/json/json.hpp"
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
@@ -165,6 +166,8 @@ class Program {
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
     const std::vector<SubDeviceId> &determine_sub_device_ids(const Device *device);
+    
+    void dump_circular_buffer_info(std::string opath);
 
    private:
     std::unique_ptr<detail::Program_> pimpl_;

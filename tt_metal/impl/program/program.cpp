@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bitset>
+
 #include "tt_metal/impl/program/program.hpp"
 
 #include <range/v3/view/filter.hpp>
@@ -1878,4 +1880,44 @@ void v1::UpdateDynamicCircularBufferAddress(
     v0::UpdateDynamicCircularBufferAddress(program, static_cast<v0::CBHandle>(cb_handle), *buffer);
 }
 
+void Program::dump_circular_buffer_info(std::string opath) {
+    nlohmann::json cb_log;
+    for (const auto& cb : circular_buffers_) {// TODO: may move it to circular buffer
+        nlohmann::json cb_info;
+        // core range
+        // nlohmann::json cb_core_ranges;
+        // for (const auto& core_range : cb->core_ranges().ranges()) {
+        //     nlohmann::json cb_core_range;
+        //     cb_core_range["start x"] = core_range.start_coord.x;
+        //     cb_core_range["start y"] = core_range.start_coord.y;
+        //     cb_core_range["end x"] = core_range.end_coord.x;
+        //     cb_core_range["end y"] = core_range.end_coord.y;
+        //     cb_core_ranges.push_back(cb_core_range);
+        // }
+        cb_info["core ranges"] = stl::json::to_json(cb->core_ranges());
+        // starting address
+        cb_info["address"] = cb->address(); // TODO: may be converted to 0x...
+        // size
+        cb_info["total bytes"] = cb->config().total_size(); // noted in code comments
+        // ids
+        std::bitset<NUM_CIRCULAR_BUFFERS> cb_ids{0};
+        for (const auto& id : cb->config().buffer_indices()) {
+            cb_ids[id] = 1;
+        }
+        cb_info["user cb ids"] = cb_ids.to_ulong();
+        // data format
+        // tile
+        // pages
+        cb_log[fmt::format("{}", cb->id())] = cb_info;
+    }
+    std::ofstream out(opath + "/cbs_info.json");
+    if (out.fail()) {
+        throw std::runtime_error("output file open failure");
+    }
+    std::string summaries = cb_log.dump(2);
+    out << summaries << std::endl;
+    out.close();
+}
+
+Program::~Program() {}
 }  // namespace tt::tt_metal

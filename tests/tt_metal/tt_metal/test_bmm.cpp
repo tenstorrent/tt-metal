@@ -139,6 +139,8 @@ int main(int argc, char** argv) {
 
         tt_metal::detail::LaunchProgram(device, program);
 
+        program.dump_circular_buffer_info("/tmp");
+
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
