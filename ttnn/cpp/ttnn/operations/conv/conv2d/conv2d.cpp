@@ -1011,10 +1011,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         conv_config,
         memory_config);
 
-    return std::make_tuple(conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device);
+    return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
-
-// return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 
 template<typename T>
 ttnn::Tensor conv2d(
