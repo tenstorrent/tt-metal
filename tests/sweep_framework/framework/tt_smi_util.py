@@ -5,7 +5,7 @@
 import os
 import shutil
 import subprocess
-from sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 GRAYSKULL_ARGS = ["-tr", "all"]
 WORMHOLE_ARGS = ["-wr", "all"]

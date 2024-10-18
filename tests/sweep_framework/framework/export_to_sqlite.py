@@ -8,7 +8,7 @@ import pathlib
 import os
 import sqlite3
 import sys
-from elastic_config import *
+from tests.sweep_framework.framework.elastic_config import *
 
 
 def log(string):
