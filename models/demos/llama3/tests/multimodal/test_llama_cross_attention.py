@@ -100,13 +100,19 @@ def test_llama_cross_attention_inference(
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
     pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+        # x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+        x.view(batch, n_heads, vision_seq_len, head_dim)
+        for x in pt_xattn_cache
     ]
 
     tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_xattn_tokens)
     tt_xattn_cache_torch = [
         ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
-            batch, n_kv_heads, vision_seq_len, head_dim
+            # batch, n_kv_heads, vision_seq_len, head_dim
+            batch,
+            n_heads,
+            vision_seq_len,
+            head_dim,
         )
         for x in tt_xattn_cache
     ]
