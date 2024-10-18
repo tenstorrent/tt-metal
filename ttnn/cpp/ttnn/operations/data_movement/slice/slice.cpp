@@ -31,7 +31,6 @@ ttnn::Tensor slice_nd(
     const std::vector<T> &step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
-
     // Ensure start and end vectors have matching sizes and correct tensor rank
     uint32_t input_rank = input_tensor.get_shape().rank();
     const auto &input_shape = input_tensor.get_shape();
@@ -65,7 +64,7 @@ ttnn::Tensor slice_nd(
     // Create modified vectors with wrapped indices
     std::vector<uint32_t> modified_begins;
     std::vector<uint32_t> modified_ends;
-    const std::vector<T> &modified_step = step;
+    std::vector<uint32_t> modified_step;
 
     // Insert values for start, step and end, wrapping indices using detail::wrap_index
     // should be able to skip wrap_index if T is uint32_t
@@ -73,16 +72,20 @@ ttnn::Tensor slice_nd(
     if constexpr (std::is_signed_v<T>) {
         modified_begins.reserve(begins.size());
         modified_ends.reserve(ends.size());
+        modified_step.reserve(ends.size());
         for (size_t i = 0; i < begins.size(); ++i) {
             modified_begins.push_back(detail::wrap_index(begins[i], input_tensor.get_shape()[i]));
             modified_ends.push_back(detail::wrap_index(ends[i], input_tensor.get_shape()[i]));
+            modified_step.push_back((uint32_t) step[i]);
         }
     } else if (std::is_same_v<T, uint32_t>) {
         modified_begins = begins;
         modified_ends = ends;
+        modified_step = step;
     } else {
         TT_FATAL(false, "Type {} is not supported for slice operation", typeid(T).name());
     }
+
 
     auto output_dim_i = [&modified_begins, &modified_step] (size_t i, const std::vector<uint32_t> &modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
@@ -90,8 +93,8 @@ ttnn::Tensor slice_nd(
 
     std::vector<uint32_t> padded_ends = modified_ends;
     if (input.layout() == Layout::TILE) {
-        padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[-2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
-        padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[-1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
+        padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[input_rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
+        padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
     }
     std::vector<uint32_t> actual_shape, padded_shape;
     actual_shape.reserve(input_rank);
@@ -471,9 +474,9 @@ template ttnn::Tensor slice_nd<int>(
 template ttnn::Tensor slice_nd<uint32_t>(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const std::vector<int> &begins,
-    const std::vector<int> &ends,
-    const std::vector<int> &step,
+    const std::vector<uint32_t> &begins,
+    const std::vector<uint32_t> &ends,
+    const std::vector<uint32_t> &step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor);
 

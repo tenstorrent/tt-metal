@@ -64,18 +64,13 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         if len(slices) > input_rank:
             raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
 
-    if input_rank <= 4:
-        slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
-        slice_end = [
-            _slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)
-        ]
-        slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
+    slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
+    slice_end = [_slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)]
+    slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
 
-        output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
+    output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
 
-        return output
-
-    raise NotImplementedError
+    return output
 
 
 def _preprocess_shape(input_shape, shape):
