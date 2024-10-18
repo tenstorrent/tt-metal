@@ -14,15 +14,16 @@ class MatmulTestBase:
     def __init__(
         self,
         mesh_device,
-        seq_len,
-        inner_dim,
-        weights_n,
+        in0_shape,
+        in1_shape,
         in0_mem_config,
         in1_mem_config,
         out_mem_config,
         in0_dtype,
         in1_dtype,
         out_dtype,
+        in0_layout,
+        in1_layout,
         program_config,
         compute_config,
         loop_count=1000,
@@ -45,18 +46,22 @@ class MatmulTestBase:
         self.in0_mem_config = in0_mem_config
         self.in1_mem_config = in1_mem_config
         self.out_mem_config = out_mem_config
+        self.in0_shape = in0_shape
+        self.in1_shape = in1_shape
         self.in0_dtype = in0_dtype
         self.in1_dtype = in1_dtype
         self.out_dtype = out_dtype
-        self.seq_len = seq_len
-        self.inner_dim = inner_dim
-        self.weights_n = weights_n
+        self.in0_layout = in0_layout
+        self.in1_layout = in1_layout
         self.program_config = program_config
         self.compute_config = compute_config
-
         self.loop_count = loop_count
         self.determinism_check_enabled = determinism_check_enabled
         self.determinism_check_iterations = determinism_check_iterations
+
+        # Weights and activations tensors are needed for subclasses to run the operation
+        self.activations = None
+        self.weights = None
 
     def get_device(self, device_idx):
         if isinstance(self.mesh_device, ttnn.MeshDevice):
@@ -77,14 +82,43 @@ class MatmulTestBase:
     def generate_weights(self, shape):
         return torch.randn(shape)
 
+    def generate_tt_activations_from_torch(self, torch_tensor):
+        return ttnn.from_torch(
+            torch_tensor,
+            dtype=self.in0_dtype,
+            layout=self.in0_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.mesh_device,
+            mesh_mapper=self.from_torch_mesh_mapper,
+        )
+
+    def generate_tt_weights_from_torch(self, torch_tensor):
+        return ttnn.from_torch(
+            torch_tensor,
+            dtype=self.in1_dtype,
+            layout=self.in1_layout,
+            memory_config=self.in1_mem_config,
+            device=self.mesh_device,
+            mesh_mapper=self.from_torch_mesh_mapper,
+        )
+
+    def convert_activations_to_memory_config(self, activations):
+        return ttnn.to_memory_config(activations, self.in0_mem_config)
+
+    def run_device_operation(self):
+        assert False, "run_device_operation() must be overridden in the sub-class"
+
+    def deallocate_activations(self):
+        self.activations.deallocate(True)
+
     def run_matmul(self):
         num_devices = len(self.device_ids)
         self.set_seed()
 
         logger.info(f"Running on {num_devices} devices")
 
-        a_shape = [1, 1, self.seq_len, self.inner_dim]
-        b_shape = [1, 1, self.inner_dim, self.weights_n]
+        a_shape = self.in0_shape
+        b_shape = self.in1_shape
 
         num_activation_tensors = 1
         if self.determinism_check_enabled:
@@ -102,25 +136,19 @@ class MatmulTestBase:
         a_t = []
         for act in range(num_activation_tensors):
             a_t.append(
-                ttnn.from_torch(
-                    A[act],
-                    dtype=self.in0_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
-                    mesh_mapper=self.from_torch_mesh_mapper,
-                )
+                self.generate_tt_activations_from_torch(A[act])
+                # ttnn.from_torch(
+                #     A[act],
+                #     dtype=self.in0_dtype,
+                #     layout=self.in0_layout,
+                #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                #     device=self.mesh_device,
+                #     mesh_mapper=self.from_torch_mesh_mapper,
+                # )
             )
 
         logger.info("Pushing weights to devices...")
-        b_t = ttnn.from_torch(
-            B,
-            dtype=self.in1_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.in1_mem_config,
-            device=self.mesh_device,
-            mesh_mapper=self.from_torch_mesh_mapper,
-        )
+        self.weights = self.generate_tt_weights_from_torch(B)
 
         logger.info("Activations and weights pushed to devices!")
 
@@ -131,35 +159,23 @@ class MatmulTestBase:
 
             for act in range(num_activation_tensors):
                 # First, load activations from DRAM to required memory config
-                a_act = ttnn.to_memory_config(a_t[act], self.in0_mem_config)
-                output = ttnn.matmul(
-                    a_act,
-                    b_t,
-                    program_config=self.program_config,
-                    memory_config=self.out_mem_config,
-                    dtype=self.out_dtype,
-                    compute_kernel_config=self.compute_config,
-                )
+                self.activations = self.convert_activations_to_memory_config(a_t[act])
+                output = self.run_device_operation()
                 reference_out[act] = ttnn.to_torch(output, mesh_composer=self.to_torch_mesh_mapper)
                 output.deallocate(True)
-                a_act.deallocate(True)
+                self.deallocate_activations()
+                # self.activations.deallocate(True)
 
         current_act_tensor = 0
-        activations_per_device = [None] * num_devices
+        self.activations = [None] * num_devices
         out = [None] * num_devices
 
-        activations_per_device = ttnn.to_memory_config(a_t[current_act_tensor], self.in0_mem_config)
+        self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+        # self.activations = ttnn.to_memory_config(a_t[current_act_tensor], self.in0_mem_config)
 
         logger.info("Starting iterations")
         for i in range(self.loop_count):
-            out = ttnn.matmul(
-                activations_per_device,
-                b_t,
-                program_config=self.program_config,
-                memory_config=self.out_mem_config,
-                dtype=self.out_dtype,
-                compute_kernel_config=self.compute_config,
-            )
+            out = self.run_device_operation()
 
             # Synchronize devices in mesh in order (this ensures we sync with closer devices first -
             # - eg. if the chip is remote, we first sync its local pair);
@@ -187,13 +203,15 @@ class MatmulTestBase:
 
                 current_act_tensor = (current_act_tensor + 1) % num_activation_tensors
                 logger.info("Switching activation tensor for new determinism iterations...")
-                activations_per_device.deallocate(True)
+                self.deallocate_activations()
+                # self.activations.deallocate(True)
 
                 # Load next round of activations from DRAM to required memory config
-                activations_per_device = ttnn.to_memory_config(
-                    a_t[current_act_tensor],
-                    self.in0_mem_config,
-                )
+                self.activations = self.convert_activations_to_memory_config(a_t[current_act_tensor])
+                # self.activations = ttnn.to_memory_config(
+                #     a_t[current_act_tensor],
+                #     self.in0_mem_config,
+                # )
 
             out.deallocate(True)
 

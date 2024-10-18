@@ -10,6 +10,57 @@ from tests.didt.matmul_test_base import MatmulTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 
+
+class FF1Test(MatmulTestBase):
+    def __init__(
+        self,
+        mesh_device,
+        in0_shape,
+        in1_shape,
+        in0_mem_config,
+        in1_mem_config,
+        out_mem_config,
+        in0_dtype,
+        in1_dtype,
+        out_dtype,
+        in0_layout,
+        in1_layout,
+        program_config,
+        compute_config,
+        loop_count=1000,
+        determinism_check_enabled=False,
+        determinism_check_iterations=False,
+    ):
+        super().__init__(
+            mesh_device,
+            in0_shape,
+            in1_shape,
+            in0_mem_config,
+            in1_mem_config,
+            out_mem_config,
+            in0_dtype,
+            in1_dtype,
+            out_dtype,
+            in0_layout,
+            in1_layout,
+            program_config,
+            compute_config,
+            loop_count,
+            determinism_check_enabled,
+            determinism_check_iterations,
+        )
+
+    def run_device_operation(self):
+        return ttnn.matmul(
+            self.activations,
+            self.weights,
+            program_config=self.program_config,
+            memory_config=self.out_mem_config,
+            dtype=self.out_dtype,
+            compute_kernel_config=self.compute_config,
+        )
+
+
 GELU_FIDELITY_PARAMETRIZATION = ((False, ttnn.MathFidelity.LoFi), (True, ttnn.MathFidelity.HiFi2))
 GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
 
@@ -87,17 +138,21 @@ def test_ff1_matmul(
         packer_l1_acc=True,
     )
 
-    ff1_test = MatmulTestBase(
+    in0_shape = [1, 1, 128 * compute_grid.y, 576 * compute_grid.x]
+    in1_shape = [1, 1, 576 * compute_grid.x, 72 * 32 * compute_grid.x]
+
+    ff1_test = FF1Test(
         mesh_device,
-        seq_len=128 * compute_grid.y,
-        inner_dim=576 * compute_grid.x,
-        weights_n=(72 * 32) * compute_grid.x,
+        in0_shape=in0_shape,
+        in1_shape=in1_shape,
         in0_mem_config=in0_mem_config,
         in1_mem_config=in1_mem_config,
         out_mem_config=out_mem_config,
         in0_dtype=ttnn.DataType.BFLOAT16,
         in1_dtype=ttnn.DataType.BFLOAT8_B,
         out_dtype=ttnn.DataType.BFLOAT16,
+        in0_layout=ttnn.TILE_LAYOUT,
+        in1_layout=ttnn.TILE_LAYOUT,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=iterations,
