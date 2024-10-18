@@ -308,18 +308,18 @@ void bind_unary_operation_with_float_parameter(
     const std::string& note=" ") {
     auto doc = fmt::format(
         R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
+        Applies {0} to :attr:`input_tensor` element-wise with {2}.
 
         {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            {2} (float): {3}.
 
         Keyword Args:
-            {2} (float): {3}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -1593,7 +1593,21 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor", "This will create a tensor of same shape as input reference tensor with fill_value. Support provided for bfloat16, int, float32 dtypes in Wormhole_B0; Support provided for bfloat16 in Grayskull.");
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor", "This will create a tensor of same shape as input reference tensor with fill_value. Support provided for bfloat16, float32 dtypes in Wormhole_B0; Support provided for bfloat16 in Grayskull.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |     Arch          |
+           +----------------------------+---------------------------------+-------------------+-------------------+
+           |    BFLOAT16, FLOAT32       |          TILE                   |      2, 3, 4      |   Wormhole        |
+           +----------------------------+---------------------------------+-------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |   Grayskull       |
+           +----------------------------+---------------------------------+-------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
+
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0",
         R"doc(Supported dtypes, layouts, and ranks:
 
