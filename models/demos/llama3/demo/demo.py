@@ -234,6 +234,7 @@ def run_llama3_demo(
             instruct_mode,
             max_generated_tokens,
         )
+        # Prefill embeddings are on host since we need to mask out the tokens after the prefill length after embeddings are computed
         pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(batch_size)]
 
         # set kv cache to zeros if not first batch, to avoid context leaking
@@ -299,7 +300,6 @@ def run_llama3_demo(
         pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
         tt_out_tok = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
-            # pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.uint32,
