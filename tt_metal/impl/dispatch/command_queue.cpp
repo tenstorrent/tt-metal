@@ -545,13 +545,14 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
+        uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg.total_rta_size != 0) {
                 // Reserve 2x for unique rtas as we pontentially split the cmds due to not fitting in one prefetch cmd
                 command_count += 2;
             }
         }
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             uint32_t common_size = program.get_program_config(programmable_core_type_index).crta_sizes[dispatch_class];
             if (common_size != 0) {
                 command_count++;
@@ -568,6 +569,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
 
         for (auto& kg : program.get_kernel_groups(index)) {
             if (kg.total_rta_size != 0) {
@@ -578,7 +580,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                                 auto& optional_id = kg.kernel_ids[dispatch_class];
                                 if (optional_id) {
                                     auto kernel = detail::GetKernel(program, optional_id.value());
@@ -626,7 +628,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
             }
         }
 
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);

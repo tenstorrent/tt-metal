@@ -9,10 +9,14 @@
 
 #if defined (ARCH_GRAYSKULL)
 
+#include "hw/inc/grayskull/core_config.h"
 #include "hw/inc/grayskull/dev_mem_map.h"
 #include "hw/inc/grayskull/eth_l1_address_map.h" // TODO remove when commonruntimeaddressmap is gone
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "hw/inc/dev_msgs.h"
+
+#include <magic_enum.hpp>
+#include <numeric>
 
 #endif
 
@@ -32,7 +36,6 @@ void Hal::initialize_gs() {
 
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
 
-    constexpr uint32_t num_proc_per_tensix_core = 5;
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
     std::vector<DeviceAddr> mem_map_bases;
 
@@ -60,7 +63,11 @@ void Hal::initialize_gs() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes, true});
+    uint8_t dm_processor_type = magic_enum::enum_integer(HalProcessorClassType::DM);
+    uint8_t compute_processor_type = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
+    std::array<uint8_t, NumTensixDispatchClasses> processor_classes{dm_processor_type, dm_processor_type, compute_processor_type};
+
+    this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, processor_classes, mem_map_bases, mem_map_sizes, true});
 
     this->dram_bases_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(utils::underlying_type<HalDramMemAddrType>(HalDramMemAddrType::COUNT));
