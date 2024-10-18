@@ -98,10 +98,10 @@ void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceComma
 
 void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord translated_core_coords =
+        this->buffer.device()->translated_coords_from_logical_coords(this->core, this->buffer.core_type());
     command.add_prefetch_relay_linear(
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_translated_noc_unicast_encoding(translated_core_coords),
         padded_page_size * this->pages_to_read,
         this->bank_base_address);
 }
@@ -225,13 +225,13 @@ void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand
 
 void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
     uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord physical_core =
-        this->buffer.device()->physical_core_from_logical_core(this->core, this->buffer.core_type());
+    const CoreCoord translated_core_coords =
+        this->buffer.device()->translated_coords_from_logical_coords(this->core, this->buffer.core_type());
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_linear(
         flush_prefetch,
         0,
-        this->device->get_noc_unicast_encoding(this->noc_index, physical_core),
+        this->device->get_translated_noc_unicast_encoding(translated_core_coords),
         this->bank_base_address,
         data_size_bytes);
 }
@@ -595,10 +595,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                     }
                                 }
                             }
-
-                            CoreCoord physical_core = device->physical_core_from_logical_core(core_coord, core_type);
+                            CoreCoord translated_core_coords = device->translated_coords_from_logical_coords(core_coord, core_type);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_translated_noc_unicast_encoding(translated_core_coords)});
                         }
                     }
                 }
@@ -656,9 +655,9 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                         unicast_sub_cmd.reserve(kernel->logical_cores().size());
                         for (auto& core_coord : kernel->logical_cores()) {
                             // can make a vector of unicast encodings here
-                            CoreCoord physical_core = device->ethernet_core_from_logical_core(core_coord);
+                            CoreCoord translated_core_coords = device->translated_coords_from_logical_coords(core_coord, CoreType::ETH);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
+                                .noc_xy_addr = this->device->get_translated_noc_unicast_encoding(translated_core_coords)});
                         }
                     } else {
                         vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
@@ -818,9 +817,8 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
         uint32_t i = 0;
         uint32_t max_overall_base_index = 0;
         for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
-            const CoreCoord physical_start = device->worker_core_from_logical_core(core_range.start_coord);
-            const CoreCoord physical_end = device->worker_core_from_logical_core(core_range.end_coord);
-
+            const CoreCoord translated_start = device->translated_coords_from_logical_coords(core_range.start_coord, CoreType::WORKER);
+            const CoreCoord translated_end = device->translated_coords_from_logical_coords(core_range.end_coord, CoreType::WORKER);
             const uint32_t num_receivers = core_range.size();
             auto& cb_config_payload = cb_config_payloads[i];
             uint32_t max_base_index = 0;
@@ -844,8 +842,8 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                 }
             }
             multicast_cb_config_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                .noc_xy_addr = this->device->get_translated_noc_multicast_encoding(
+                    this->noc_index, CoreRange(translated_start, translated_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_cb_config_data.emplace_back(
                 cb_config_payload.data(),
@@ -1010,14 +1008,12 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
         kernel_group.launch_msg.kernel_config.host_assigned_id = program.get_runtime_id();
         const void* launch_message_data = (const void*)(&kernel_group.launch_msg);
         for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
-            CoreCoord physical_start =
-                device->physical_core_from_logical_core(core_range.start_coord, kernel_group.get_core_type());
-            CoreCoord physical_end =
-                device->physical_core_from_logical_core(core_range.end_coord, kernel_group.get_core_type());
+            CoreCoord translated_start = device->translated_coords_from_logical_coords(core_range.start_coord, kernel_group.get_core_type());
+            CoreCoord translated_end = device->translated_coords_from_logical_coords(core_range.end_coord, kernel_group.get_core_type());
 
             multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                .noc_xy_addr = this->device->get_noc_multicast_encoding(
-                    this->noc_index, CoreRange(physical_start, physical_end)),
+                .noc_xy_addr = this->device->get_translated_noc_multicast_encoding(
+                    this->noc_index, CoreRange(translated_start, translated_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             multicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
         }
@@ -1044,11 +1040,11 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             for (const CoreRange& core_range : kernel_group.core_ranges.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord physical_coord = device->physical_core_from_logical_core(
+                        CoreCoord translated_coord = device->translated_coords_from_logical_coords(
                             CoreCoord({x, y}), kernel_group.get_core_type());
                         unicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                             .noc_xy_addr =
-                                this->device->get_noc_unicast_encoding(this->noc_index, physical_coord)});
+                                this->device->get_translated_noc_unicast_encoding(translated_coord)});
                         unicast_go_signal_data.emplace_back(launch_message_data, go_signal_sizeB);
                     }
                 }
@@ -1595,9 +1591,9 @@ void EnqueueRecordEventCommand::process() {
             dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(this->device->id(), channel, cq_id);
         }
 
-        CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_location, core_type);
+        CoreCoord dispatch_translated_coords = device->translated_coords_from_logical_coords(dispatch_location, core_type);
         unicast_sub_cmds[cq_id] = CQDispatchWritePackedUnicastSubCmd{
-            .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, dispatch_physical_core)};
+            .noc_xy_addr = this->device->get_translated_noc_unicast_encoding(dispatch_translated_coords)};
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
@@ -1817,7 +1813,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
         }
     }
     this->physical_enqueue_program_dispatch_core =
-        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
+        device->translated_coords_from_logical_coords(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
