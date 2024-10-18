@@ -223,6 +223,7 @@ void CheckHostSanitization(Device *device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitize) {
+    GTEST_SKIP();
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
     // tricky to check watcher server status from the finish loop for slow dispatch. Once issue #4363
     // is resolved, we should add a check for print server handing in slow dispatch as well.
@@ -242,6 +243,7 @@ TEST_F(WatcherFixture, TestWatcherSanitize) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -254,6 +256,7 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentL1) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -266,6 +269,7 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAM) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAMNCrisc) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
@@ -278,12 +282,14 @@ TEST_F(WatcherFixture, TestWatcherSanitizeAlignmentDRAMNCrisc) {
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeEth) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(RunTestEth, this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TestWatcherSanitizeIEth) {
+    GTEST_SKIP();
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

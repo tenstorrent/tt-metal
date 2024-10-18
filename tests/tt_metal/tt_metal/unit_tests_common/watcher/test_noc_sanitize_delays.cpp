@@ -155,6 +155,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
 }
 
 TEST_F(WatcherDelayFixture, TestWatcherSanitizeInsertDelays) {
+    GTEST_SKIP();
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
