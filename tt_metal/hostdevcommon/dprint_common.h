@@ -215,10 +215,10 @@ static inline constexpr bool is_supported_format(const CommonDataFormat& format)
     switch (format) {
         case CommonDataFormat::Bfp2:
         case CommonDataFormat::Bfp2_b:
-        case CommonDataFormat::Bfp4:
-        case CommonDataFormat::Bfp4_b:
-        case CommonDataFormat::Bfp8:
-        case CommonDataFormat::Bfp8_b: return false;
+        case CommonDataFormat::Bfp4: return false;
+        case CommonDataFormat::Bfp4_b: return true;
+        case CommonDataFormat::Bfp8: return false;
+        case CommonDataFormat::Bfp8_b: return true;
         case CommonDataFormat::Float16: return false;
         case CommonDataFormat::Float16_b: return true;
         case CommonDataFormat::Float32: return true;
