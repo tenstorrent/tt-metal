@@ -1567,6 +1567,7 @@ void py_module(py::module& module) {
 
     detail::bind_unary_operation_with_float_parameter(module, ttnn::heaviside, "value", "The value parameter for the Heaviside function", "",
         R"doc(Supported dtypes, layouts, and ranks:
+
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
@@ -1575,7 +1576,17 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "");
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::leaky_relu, "negative_slope", "The slope parameter for the Leaky ReLU function", "",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
+
     detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor", "This will create a tensor of same shape as input reference tensor with fill_value. Support provided for bfloat16, int, float32 dtypes in Wormhole_B0; Support provided for bfloat16 in Grayskull.");
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0",
         R"doc(Supported dtypes, layouts, and ranks:
