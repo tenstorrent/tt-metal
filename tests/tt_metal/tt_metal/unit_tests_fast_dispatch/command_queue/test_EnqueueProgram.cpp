@@ -1389,7 +1389,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
     Finish(this->device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
@@ -1400,7 +1400,7 @@ TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnEth) {
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
@@ -1415,7 +1415,7 @@ TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
+TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
@@ -1439,7 +1439,7 @@ TEST_F(RandomProgramFixture, TestSimpleRandomizedProgramsOnTensixAndEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
@@ -1450,7 +1450,7 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestRandomizedProgramsOnEth) {
+TEST_F(RandomProgramFixture, TestProgramsOnEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
@@ -1474,7 +1474,7 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
+TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
     if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
     }
