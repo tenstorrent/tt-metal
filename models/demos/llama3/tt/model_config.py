@@ -13,7 +13,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Trans
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
-    num_to_corerange_set,
+    num_to_core_range_set,
     calculate_hidden_dim,
 )
 from typing import Tuple
@@ -255,6 +255,26 @@ class TtModelArgs:
                 k=self.dim // self.num_devices,
                 n=self.dim,
                 grid_size=(grid_size_x, grid_size_y),
+            )
+
+            dense_out_core_grid_size = (8, 2)  # TODO: revisit num cores - use same num cores as rest of attention??
+            self.model_config[
+                "ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"
+            ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=dense_out_core_grid_size,
+                in0_block_w=self.dim
+                // self.tile_size
+                // 8,  # [32 x 8k] x [8k x 1k] = [32 x 1k] # TODO: why is this 8 and not dense_out_core_grid_size[0] * dense_out_core_grid_size[1] = 16??
+                out_subblock_h=1,
+                out_subblock_w=2,  # Max out_subblock_w = 4, needs to be divisible by per_core_N (2)
+                per_core_M=self.tile_padded_batch_rows // self.tile_size,
+                per_core_N=self.dim
+                // self.num_devices
+                // self.tile_size
+                // (dense_out_core_grid_size[0] * dense_out_core_grid_size[1]),  # 2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = self.matmul_config(
@@ -561,6 +581,28 @@ class TtModelArgs:
                 block_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
                 inplace=False,
             )
+
+            # All gather matmuls currently only supported on T3K
+            # We need it sharded on num_cores = num_devices
+            self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    num_to_core_range_set(self.num_devices),
+                    [
+                        self.tile_padded_batch_rows,
+                        self.dim // self.num_devices,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
+                ),
+            )
+
+            # self.model_config["ATTN_ALL_GATHER_MATMUL_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            #     ttnn.BufferType.L1,
+            #     ttnn.ShardSpec(num_to_core_range_set(self.max_batch_size), (32, self.head_dim), ttnn.ShardOrientation.ROW_MAJOR, False),  # padded local heads
+            # )
 
             self.is_2d_fracturing = all([dim > 1 for dim in self.mesh_device.shape]) if self.mesh_device else False
             self.is_multichip = self.num_devices > 1
