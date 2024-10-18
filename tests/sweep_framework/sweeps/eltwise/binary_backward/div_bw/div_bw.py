@@ -26,9 +26,24 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 2)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 2),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "round_mode": ["None"],
+        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "round_mode": ["None"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -43,7 +58,7 @@ parameters = {
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Inputs to eltwise binary must be tilized"
+        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b
         or test_vector["input_a_dtype"] == ttnn.bfloat8_b
@@ -59,6 +74,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    round_mode,
     grad_dtype,
     input_a_dtype,
     input_b_dtype,
@@ -79,17 +95,24 @@ def run(
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
     )(input_shape)
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
+
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
+    signs_b = torch.randint(0, 2, input_shape) * 2 - 1
+    torch_input_tensor_b *= signs_b
+
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_b.requires_grad = True
 
-    golden_function = ttnn.get_golden_function(ttnn.add_bw)
-    torch_output_tensors = golden_function(torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b)
+    golden_function = ttnn.get_golden_function(ttnn.div_bw)
+    torch_output_tensors = golden_function(
+        torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b, round_mode if round_mode != "None" else None
+    )
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
@@ -116,7 +139,9 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.add_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensors = ttnn.div_bw(
+        grad_tensor, input_tensor_a, input_tensor_b, round_mode=round_mode, memory_config=output_memory_config
+    )
 
     passed = []
     output_string = ""
@@ -134,4 +159,30 @@ def run(
     output_string = output_string[:-2]
     e2e_perf = stop_measuring_time(start_time)
 
-    return [(passed, output_string), e2e_perf]
+    info_string = f"Round_mode: {round_mode}, Grad_dtype: {grad_dtype}, Input_a_dtype: {input_a_dtype}, Input_b_dtype: {input_b_dtype}"
+
+    return [(passed, output_string), e2e_perf, info_string]
+
+
+from tests.sweep_framework.permutations import *
+
+for suite in parameters.keys():
+    if suite != "nightly":
+        continue
+    device_id = 0
+    device = ttnn.open_device(device_id=device_id)
+    suite_vectors = list(permutations(parameters[suite]))
+    print(len(suite_vectors))
+    for vector in suite_vectors:
+        if invalidate_vector(vector)[0]:
+            continue
+        try:
+            passed, _, info_string = run(**vector, device=device)
+            if passed[0] != True:
+                pass
+                print(passed)
+                print(info_string)
+        except Exception as exc:
+            print(info_string)
+
+    ttnn.close_device(device)

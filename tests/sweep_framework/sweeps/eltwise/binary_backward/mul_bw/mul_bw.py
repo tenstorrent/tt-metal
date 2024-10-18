@@ -88,7 +88,7 @@ def run(
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_b.requires_grad = True
 
-    golden_function = ttnn.get_golden_function(ttnn.add_bw)
+    golden_function = ttnn.get_golden_function(ttnn.mul_bw)
     torch_output_tensors = golden_function(torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b)
 
     grad_tensor = ttnn.from_torch(
@@ -116,7 +116,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.add_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensors = ttnn.mul_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
 
     passed = []
     output_string = ""
