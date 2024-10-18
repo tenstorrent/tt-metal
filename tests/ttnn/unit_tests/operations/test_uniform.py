@@ -13,8 +13,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_cpu,
-    to_npu,
+    get_lib_dtype,
 )
 from models.utility_functions import skip_for_grayskull
 from enum import Enum
@@ -55,7 +54,7 @@ def benchmark_uniform(cpu_input, npu_input, rand_from, rand_to):
 
 def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel_config):
     ttnn.uniform(npu_input, rand_from, rand_to, compute_kernel_config=compute_kernel_config)
-    tt_input = to_cpu(npu_input, shape)
+    tt_input = ttnn.to_torch(npu_input).reshape(shape)
     elem_cnt = Counter(tt_input.flatten().tolist())
 
     expected_mean, expected_var = (rand_from + rand_to) / 2, pow(rand_to - rand_from, 2) / 12
@@ -80,20 +79,11 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 
 
-def get_lib_dtype(lib, dtype):
-    """Maps dtype to corresponding library dtype."""
-    dtype_map = {
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-    }
-    return dtype_map.get(dtype, None)
-
-
 def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     rand_from, rand_to = rand_range[0], rand_range[1]
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
-    npu_input = to_npu(cpu_input, device, npu_dtype=get_lib_dtype(ttnn, dtype))
+    npu_input = ttnn.from_torch(cpu_input, device=device, dtype=get_lib_dtype(ttnn, dtype), layout=ttnn.TILE_LAYOUT)
 
     if mode == TestMode.BENCHMARK:
         benchmark_uniform(cpu_input=cpu_input, npu_input=npu_input, rand_from=rand_from, rand_to=rand_to)
