@@ -112,7 +112,9 @@ ParallelConfig determine_parallel_config(
             }
             return result;
         } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, device_grid_size[0]);
+            uint32_t total_cores_for_nhw =
+                block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[0] : device_grid_size[1];
+            return find_closest_largest_divisor_with_num_padding(conv_out_2d_matrix_height_ntiles, total_cores_for_nhw);
         } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return 1u;
         }
