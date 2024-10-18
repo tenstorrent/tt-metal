@@ -12,7 +12,6 @@
 #include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "impl/device/device.hpp"
-#include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
@@ -224,7 +223,6 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          const uint32_t min = MIN_NUM_SEMS,
          const uint32_t max = MAX_NUM_SEMS) {
          const uint32_t num_sems = this->generate_random_num(min, max);
-         tt::log_info(tt::LogTest, "Creating {} semaphores", num_sems);
          vector<uint32_t> sem_ids;
          for (uint32_t i = 0; i < num_sems; i++) {
              const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL, core_type);
@@ -328,7 +326,6 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
                 core_ranges.emplace(eth_core);
             }
             all_cores = CoreRangeSet(core_ranges);
-            std::cout << all_cores.str() << std::endl;
         }
         CoreRangeSet empty_crs({});
         all_cores = empty_crs.merge(all_cores);
