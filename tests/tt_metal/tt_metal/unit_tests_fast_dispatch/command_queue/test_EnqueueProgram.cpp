@@ -1508,9 +1508,6 @@ TEST_F(RandomProgramFixture, TestRandomizedProgramsOnTensixAndEth) {
 }
 
 TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
-    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
@@ -1563,9 +1560,6 @@ TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
 }
 
 TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
-    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
@@ -1618,9 +1612,6 @@ TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
 }
 
 TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix) {
-    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
-    CoreRange cores = {{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}};
-
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         log_info(tt::LogTest, "Creating Program {}", i);
         Program program = CreateProgram();
