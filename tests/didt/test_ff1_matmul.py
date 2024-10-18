@@ -29,7 +29,6 @@ GELU_FIDELITY_PARAMETRIZATION_IDS = ["without_gelu", "with_gelu"]
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("simulate_bh_harvesting", [False, True], ids=["bh-unharvested", "sim-bh-2col-harvested"])
 def test_ff1_matmul(
     mesh_device,
     gelu,
@@ -41,6 +40,8 @@ def test_ff1_matmul(
 ):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
+    if simulate_bh_harvesting and is_blackhole() == False:
+        pytest.skip("Blackhole harvesting simulation is only supported for Blackhole devices")
 
     # Initialize input configurations
     compute_grid = get_blackhole_grid_size(simulate_bh_harvesting) if is_blackhole() else ttnn.CoreCoord(8, 8)
