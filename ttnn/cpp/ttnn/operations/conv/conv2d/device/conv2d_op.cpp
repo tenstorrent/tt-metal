@@ -4,7 +4,7 @@
 
 #include <array>
 #include <cstdint>
-#include "optimized_conv_op.hpp"
+#include "conv2d_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

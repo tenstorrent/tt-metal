@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
