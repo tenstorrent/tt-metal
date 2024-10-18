@@ -102,10 +102,6 @@ class Cluster {
         return device->get_tlb_data_from_target(virtual_chip_coord);
     }
 
-    uint32_t get_m_dma_buf_size(chip_id_t chip_id) const {
-        return 0;
-    }
-
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
@@ -252,8 +248,7 @@ class Cluster {
     ARCH arch_;
     TargetDevice target_type_;
 
-    // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device
-    // driver
+    // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt_device> driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
