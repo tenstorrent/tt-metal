@@ -455,19 +455,19 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     float t_nan = input.device()->sfpu_nan();
     float t_inf = input.device()->sfpu_inf();
     Tensor cond_result = ttnn::logical_or(
-        ttnn::lt(input, ttnn::full_like(input, -1.0f), std::nullopt, output_mem_config),
-        ttnn::gt(input, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
+        ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_a = ttnn::where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
-    cond_result = ttnn::logical_or(
-        ttnn::eq(input, ttnn::full_like(input, -1.0f), std::nullopt, output_mem_config),
-        ttnn::eq(input, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
+    grad_a = ttnn::where( ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
+    cond_result = ttnn::logical_and(
+        ttnn::gt(input, -1.0f, std::nullopt, output_mem_config),
+        ttnn::lt(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = ttnn::where(
-        ttnn::eq(cond_result, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
-        t_inf,
+        ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config),
+        t_nan,
         grad_a,
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
