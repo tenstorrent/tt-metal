@@ -88,7 +88,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.skip("Failing")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -102,11 +101,6 @@ def test_reduce_scatter_t3k_8chip_nightly(
         ([1, 8, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 4, 2048, 1024], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 64], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 128], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 512], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
@@ -114,6 +108,13 @@ def test_reduce_scatter_t3k_8chip_nightly(
         ([1, 1, 128, 8192], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 2048, 1024], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 2048, 8192], 3, ttnn.TILE_LAYOUT),
+        # These shapes result in some workers with no work, which is currently
+        # not functional due to hang. Issue tracked at: https://github.com/tenstorrent/tt-metal/issues/14004
+        # ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 64], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 128], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
