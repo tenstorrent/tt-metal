@@ -154,6 +154,7 @@ on:
           - eltwise.unary.prelu.prelu
           - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.unary.hardtanh.hardtanh_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
