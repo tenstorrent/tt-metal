@@ -455,8 +455,8 @@ struct ExecuteUnaryBackwardClamp {
     static std::vector<Tensor> invoke(
         const Tensor &grad_tensor_arg,
         const Tensor &input_tensor_arg,
-        std::optional<float> parameter_a,
-        std::optional<float> parameter_b,
+        std::optional<float> min = std::nullopt,
+        std::optional<float> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
