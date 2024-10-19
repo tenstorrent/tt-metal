@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
         tt_metal::Device* device = tt_metal::CreateDevice(device_id);
 
         // Application setup
-        auto buffer = tt_metal::Buffer(
+        auto buffer = tt_metal::Buffer::create(
             device, transfer_size, page_size, buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
             // Execute application
             if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueWriteBuffer(device->command_queue(), buffer, src_vec, false);
+                EnqueueWriteBuffer(device->command_queue(), *buffer, src_vec, false);
                 Finish(device->command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
 
             if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueReadBuffer(device->command_queue(), buffer, result_vec, true);
+                EnqueueReadBuffer(device->command_queue(), *buffer, result_vec, true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 d2h_bandwidth.push_back((transfer_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

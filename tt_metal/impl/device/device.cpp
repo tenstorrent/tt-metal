@@ -3268,6 +3268,10 @@ CommandQueue &Device::command_queue(size_t cq_id) {
     return *sw_command_queues_[cq_id];
 }
 
+std::thread::id Device::get_worker_thread_id() const {
+    return this->work_executor.get_worker_thread_id();
+}
+
 void Device::push_work(std::function<void()>&& work, bool blocking) {
     this->work_executor.push_work(work, blocking);
 }

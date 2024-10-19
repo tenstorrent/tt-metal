@@ -1095,12 +1095,12 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,

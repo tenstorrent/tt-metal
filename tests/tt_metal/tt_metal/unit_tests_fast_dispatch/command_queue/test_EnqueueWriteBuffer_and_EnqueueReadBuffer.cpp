@@ -114,14 +114,14 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device *device, CommandQueue 
                 continue;
             }
             size_t buf_size = config.num_pages * config.page_size;
-            Buffer bufa(device, buf_size, config.page_size, config.buftype);
+            auto bufa = Buffer::create(device, buf_size, config.page_size, config.buftype);
 
-            vector<uint32_t> src = generate_arange_vector(bufa.size());
+            vector<uint32_t> src = generate_arange_vector(bufa->size());
 
             if (cq_write) {
-                EnqueueWriteBuffer(cq, bufa, src.data(), false);
+                EnqueueWriteBuffer(cq, *bufa, src.data(), false);
             } else {
-                ::detail::WriteToBuffer(bufa, src);
+                ::detail::WriteToBuffer(*bufa, src);
                 if (config.buftype == BufferType::DRAM) {
                     tt::Cluster::instance().dram_barrier(device->id());
                 } else {
@@ -137,9 +137,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(Device *device, CommandQueue 
             }
 
             if (cq_read) {
-                EnqueueReadBuffer(cq, bufa, result.data(), true);
+                EnqueueReadBuffer(cq, *bufa, result.data(), true);
             } else {
-                ::detail::ReadFromBuffer(bufa, result);
+                ::detail::ReadFromBuffer(*bufa, result);
             }
 
             EXPECT_EQ(src, result);
@@ -154,7 +154,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     bool pass = true;
     uint32_t num_pages_left = config.num_pages_total;
 
-    std::vector<std::unique_ptr<Buffer>> buffers;
+    std::vector<std::shared_ptr<Buffer>> buffers;
     std::vector<std::vector<uint32_t>> srcs;
     std::vector<std::vector<uint32_t>> dsts;
     while (num_pages_left) {
@@ -173,9 +173,9 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buftype = BufferType::L1;
         }
 
-        std::unique_ptr<Buffer> buf;
+        std::shared_ptr<Buffer> buf;
         try {
-            buf = std::make_unique<Buffer>(device, buf_size, config.page_size, buftype);
+            buf = Buffer::create(device, buf_size, config.page_size, buftype);
         } catch (...) {
             Finish(cq);
             size_t i = 0;
@@ -185,7 +185,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             srcs.clear();
             dsts.clear();
             buffers.clear();
-            buf = std::make_unique<Buffer>(device, buf_size, config.page_size, buftype);
+            buf = Buffer::create(device, buf_size, config.page_size, buftype);
         }
         EnqueueWriteBuffer(cq, *buf, src, false);
         vector<uint32_t> dst;
@@ -238,12 +238,12 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     src.at(i) = i;
                 }
 
-                Buffer buf(device, buf_size, config.page_size(), buftype, config.mem_config, shard_spec);
+                auto buf = Buffer::create(device, buf_size, config.page_size(), buftype, config.mem_config, shard_spec);
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
-                    EnqueueWriteBuffer(cq, buf, src2.data(), false);
+                    EnqueueWriteBuffer(cq, *buf, src2.data(), false);
                 } else {
-                    ::detail::WriteToBuffer(buf, src);
+                    ::detail::WriteToBuffer(*buf, src);
                     if (buftype == BufferType::DRAM) {
                         tt::Cluster::instance().dram_barrier(device->id());
                     } else {
@@ -258,9 +258,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 vector<uint32_t> res;
                 res.resize(buf_size / sizeof(uint32_t));
                 if (cq_read) {
-                    EnqueueReadBuffer(cq, buf, res.data(), true);
+                    EnqueueReadBuffer(cq, *buf, res.data(), true);
                 } else {
-                    ::detail::ReadFromBuffer(buf, res);
+                    ::detail::ReadFromBuffer(*buf, res);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -477,25 +477,25 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
         // leave only small_page_size * 2 B of space in the completion queue
         uint32_t num_pages_second_buffer = (space_after_first_buffer / small_page_size) - 2;
 
-        Buffer buff_1(device, first_buffer_size, large_page_size, BufferType::DRAM);
-        auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
-        EnqueueWriteBuffer(device->command_queue(), buff_1, src_1, false);
+        auto buff_1 = Buffer::create(device, first_buffer_size, large_page_size, BufferType::DRAM);
+        auto src_1 = local_test_functions::generate_arange_vector(buff_1->size());
+        EnqueueWriteBuffer(device->command_queue(), *buff_1, src_1, false);
         vector<uint32_t> result_1;
-        EnqueueReadBuffer(device->command_queue(), buff_1, result_1, true);
+        EnqueueReadBuffer(device->command_queue(), *buff_1, result_1, true);
         EXPECT_EQ(src_1, result_1);
 
-        Buffer buff_2(device, num_pages_second_buffer * small_page_size, small_page_size, BufferType::DRAM);
-        auto src_2 = local_test_functions::generate_arange_vector(buff_2.size());
-        EnqueueWriteBuffer(device->command_queue(), buff_2, src_2, false);
+        auto buff_2 = Buffer::create(device, num_pages_second_buffer * small_page_size, small_page_size, BufferType::DRAM);
+        auto src_2 = local_test_functions::generate_arange_vector(buff_2->size());
+        EnqueueWriteBuffer(device->command_queue(), *buff_2, src_2, false);
         vector<uint32_t> result_2;
-        EnqueueReadBuffer(device->command_queue(), buff_2, result_2, true);
+        EnqueueReadBuffer(device->command_queue(), *buff_2, result_2, true);
         EXPECT_EQ(src_2, result_2);
 
-        Buffer buff_3(device, 32 * large_page_size, large_page_size, BufferType::DRAM);
-        auto src_3 = local_test_functions::generate_arange_vector(buff_3.size());
-        EnqueueWriteBuffer(device->command_queue(), buff_3, src_3, false);
+        auto buff_3 = Buffer::create(device, 32 * large_page_size, large_page_size, BufferType::DRAM);
+        auto src_3 = local_test_functions::generate_arange_vector(buff_3->size());
+        EnqueueWriteBuffer(device->command_queue(), *buff_3, src_3, false);
         vector<uint32_t> result_3;
-        EnqueueReadBuffer(device->command_queue(), buff_3, result_3, true);
+        EnqueueReadBuffer(device->command_queue(), *buff_3, result_3, true);
         EXPECT_EQ(src_3, result_3);
     }
 }
@@ -510,25 +510,25 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace2) {
 
         uint32_t num_pages_buff_1 = 9;
         uint32_t page_size_buff_1 = 2048;
-        Buffer buff_1(device, num_pages_buff_1 * page_size_buff_1, page_size_buff_1, BufferType::DRAM);
-        uint32_t space_after_buff_1 = command_completion_region_size - buff_1.size();
+        auto buff_1 = Buffer::create(device, num_pages_buff_1 * page_size_buff_1, page_size_buff_1, BufferType::DRAM);
+        uint32_t space_after_buff_1 = command_completion_region_size - buff_1->size();
 
         uint32_t page_size = 8192;
         uint32_t desired_remaining_space_before_wrap = 6144;
         uint32_t avail_space_for_wrapping_buffer = space_after_buff_1 - desired_remaining_space_before_wrap;
         uint32_t num_pages_for_wrapping_buffer = (avail_space_for_wrapping_buffer / page_size) + 4;
 
-        auto src_1 = local_test_functions::generate_arange_vector(buff_1.size());
-        EnqueueWriteBuffer(device->command_queue(), buff_1, src_1, false);
+        auto src_1 = local_test_functions::generate_arange_vector(buff_1->size());
+        EnqueueWriteBuffer(device->command_queue(), *buff_1, src_1, false);
         vector<uint32_t> result_1;
-        EnqueueReadBuffer(device->command_queue(), buff_1, result_1, true);
+        EnqueueReadBuffer(device->command_queue(), *buff_1, result_1, true);
         EXPECT_EQ(src_1, result_1);
 
-        Buffer wrap_buff(device, num_pages_for_wrapping_buffer * page_size, page_size, BufferType::DRAM);
-        auto src_2 = local_test_functions::generate_arange_vector(wrap_buff.size());
-        EnqueueWriteBuffer(device->command_queue(), wrap_buff, src_2, false);
+        auto wrap_buff = Buffer::create(device, num_pages_for_wrapping_buffer * page_size, page_size, BufferType::DRAM);
+        auto src_2 = local_test_functions::generate_arange_vector(wrap_buff->size());
+        EnqueueWriteBuffer(device->command_queue(), *wrap_buff, src_2, false);
         vector<uint32_t> result_2;
-        EnqueueReadBuffer(device->command_queue(), wrap_buff, result_2, true);
+        EnqueueReadBuffer(device->command_queue(), *wrap_buff, result_2, true);
         EXPECT_EQ(src_2, result_2);
     }
 }
@@ -585,19 +585,19 @@ TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (Device *device : devices_) {
-        Buffer bufa(device, 125000, 100, buff_type);
-        auto src_a = local_test_functions::generate_arange_vector(bufa.size());
-        EnqueueWriteBuffer(device->command_queue(), bufa, src_a, false);
+        auto bufa = Buffer::create(device, 125000, 100, buff_type);
+        auto src_a = local_test_functions::generate_arange_vector(bufa->size());
+        EnqueueWriteBuffer(device->command_queue(), *bufa, src_a, false);
 
-        Buffer bufb(device, 152000, 152, buff_type);
-        auto src_b = local_test_functions::generate_arange_vector(bufb.size());
-        EnqueueWriteBuffer(device->command_queue(), bufb, src_b, false);
+        auto bufb = Buffer::create(device, 152000, 152, buff_type);
+        auto src_b = local_test_functions::generate_arange_vector(bufb->size());
+        EnqueueWriteBuffer(device->command_queue(), *bufb, src_b, false);
 
         vector<uint32_t> result_a;
-        EnqueueReadBuffer(device->command_queue(), bufa, result_a, true);
+        EnqueueReadBuffer(device->command_queue(), *bufa, result_a, true);
 
         vector<uint32_t> result_b;
-        EnqueueReadBuffer(device->command_queue(), bufb, result_b, true);
+        EnqueueReadBuffer(device->command_queue(), *bufb, result_b, true);
 
         EXPECT_EQ(src_a, result_a);
         EXPECT_EQ(src_b, result_b);
@@ -621,19 +621,19 @@ TEST_F(CommandQueueSingleCardFixture, TestNonblockingReads) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (auto device : devices_) {
-        Buffer bufa(device, 2048, 2048, buff_type);
-        auto src_a = local_test_functions::generate_arange_vector(bufa.size());
-        EnqueueWriteBuffer(device->command_queue(), bufa, src_a, false);
+        auto bufa = Buffer::create(device, 2048, 2048, buff_type);
+        auto src_a = local_test_functions::generate_arange_vector(bufa->size());
+        EnqueueWriteBuffer(device->command_queue(), *bufa, src_a, false);
 
-        Buffer bufb(device, 2048, 2048, buff_type);
-        auto src_b = local_test_functions::generate_arange_vector(bufb.size());
-        EnqueueWriteBuffer(device->command_queue(), bufb, src_b, false);
+        auto bufb = Buffer::create(device, 2048, 2048, buff_type);
+        auto src_b = local_test_functions::generate_arange_vector(bufb->size());
+        EnqueueWriteBuffer(device->command_queue(), *bufb, src_b, false);
 
         vector<uint32_t> result_a;
-        EnqueueReadBuffer(device->command_queue(), bufa, result_a, false);
+        EnqueueReadBuffer(device->command_queue(), *bufa, result_a, false);
 
         vector<uint32_t> result_b;
-        EnqueueReadBuffer(device->command_queue(), bufb, result_b, false);
+        EnqueueReadBuffer(device->command_queue(), *bufb, result_b, false);
         Finish(device->command_queue());
 
         EXPECT_EQ(src_a, result_a);

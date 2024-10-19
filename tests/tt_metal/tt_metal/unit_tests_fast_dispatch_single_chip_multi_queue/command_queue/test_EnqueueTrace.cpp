@@ -77,14 +77,14 @@ namespace basic_tests {
 
 TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
     Setup(2048, 2);
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
-    Program simple_program = create_simple_unary_program(input, output);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    Program simple_program = create_simple_unary_program(*input, *output);
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -93,7 +93,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
     vector<uint32_t> eager_output_data;
     eager_output_data.resize(input_data.size());
 
-    EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
+    EnqueueWriteBuffer(data_movement_queue, *input, input_data.data(), true);
     EnqueueProgram(command_queue, simple_program, true);
     EnqueueReadBuffer(data_movement_queue, output, eager_output_data.data(), true);
 
@@ -101,14 +101,14 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
     vector<uint32_t> trace_output_data;
     trace_output_data.resize(input_data.size());
 
-    EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
+    EnqueueWriteBuffer(data_movement_queue, *input, input_data.data(), true);
 
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
 
     EnqueueTrace(command_queue, tid, true);
-    EnqueueReadBuffer(data_movement_queue, output, trace_output_data.data(), true);
+    EnqueueReadBuffer(data_movement_queue, *output, trace_output_data.data(), true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
@@ -118,14 +118,14 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
 
 TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
     Setup(4096, 2);
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
 
-    Program simple_program = create_simple_unary_program(input, output);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    Program simple_program = create_simple_unary_program(*input, *output);
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -146,7 +146,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
     uint32_t trace_id = 0;
     bool trace_captured = false;
     for (auto i = 0; i < num_loops; i++) {
-        EnqueueWriteBuffer(data_movement_queue, input, input_data.data(), true);
+        EnqueueWriteBuffer(data_movement_queue, *input, input_data.data(), true);
 
         if (not trace_captured) {
             trace_id = BeginTraceCapture(this->device_, command_queue.id());
@@ -156,7 +156,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
         }
 
         EnqueueTrace(command_queue, trace_id, false);
-        EnqueueReadBuffer(data_movement_queue, output, trace_outputs[i].data(), true);
+        EnqueueReadBuffer(data_movement_queue, *output, trace_outputs[i].data(), true);
 
         // Expect same output across all loops
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
@@ -169,8 +169,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
 
 TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
     Setup(6144, 2);
-    Buffer input(this->device_, 2048, 2048, BufferType::DRAM);
-    Buffer output(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     constexpr bool kBlocking = true;
     constexpr bool kNonBlocking = false;
@@ -180,8 +180,8 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
     // Keep this queue in passthrough mode for now
     CommandQueue& command_queue = this->device_->command_queue(0);
 
-    auto simple_program = create_simple_unary_program(input, output);
-    vector<uint32_t> input_data(input.size() / sizeof(uint32_t), 0);
+    auto simple_program = create_simple_unary_program(*input, *output);
+    vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
@@ -202,18 +202,18 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
     eager_output_data.resize(input_data.size());
 
     // Warm up and use the eager blocking run as the expected output
-    EnqueueWriteBuffer(command_queue, input, input_data.data(), kBlocking);
+    EnqueueWriteBuffer(command_queue, *input, input_data.data(), kBlocking);
     EnqueueProgram(command_queue, simple_program, kBlocking);
-    EnqueueReadBuffer(command_queue, output, expected_output_data.data(), kBlocking);
+    EnqueueReadBuffer(command_queue, *output, expected_output_data.data(), kBlocking);
     Finish(command_queue);
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
         for (auto i = 0; i < num_loops; i++) {
             tt::ScopedTimer timer(mode + " loop " + std::to_string(i));
-            EnqueueWriteBuffer(command_queue, input, input_data.data(), blocking);
+            EnqueueWriteBuffer(command_queue, *input, input_data.data(), blocking);
             EnqueueProgram(command_queue, simple_program, blocking);
-            EnqueueReadBuffer(command_queue, output, eager_output_data.data(), blocking);
+            EnqueueReadBuffer(command_queue, *output, eager_output_data.data(), blocking);
         }
         if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
@@ -230,9 +230,9 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
-        EnqueueWriteBuffer(command_queue, input, input_data.data(), kNonBlocking);
+        EnqueueWriteBuffer(command_queue, *input, input_data.data(), kNonBlocking);
         EnqueueTrace(command_queue, tid, kNonBlocking);
-        EnqueueReadBuffer(command_queue, output, trace_outputs[i].data(), kNonBlocking);
+        EnqueueReadBuffer(command_queue, *output, trace_outputs[i].data(), kNonBlocking);
     }
     Finish(command_queue);
 

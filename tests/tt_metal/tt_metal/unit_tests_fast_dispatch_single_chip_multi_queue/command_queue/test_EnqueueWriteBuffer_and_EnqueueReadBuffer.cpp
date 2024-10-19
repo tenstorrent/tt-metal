@@ -21,10 +21,10 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(Device* device, v
     for (const bool use_void_star_api: {true, false}) {
 
         size_t buf_size = config.num_pages * config.page_size;
-        std::vector<std::unique_ptr<Buffer>> buffers;
+        std::vector<std::shared_ptr<Buffer>> buffers;
         std::vector<std::vector<uint32_t>> srcs;
         for (uint i = 0; i < cqs.size(); i++) {
-            buffers.push_back(std::make_unique<Buffer>(device, buf_size, config.page_size, config.buftype));
+            buffers.push_back(Buffer::create(device, buf_size, config.page_size, config.buftype));
             srcs.push_back(generate_arange_vector(buffers[i]->size()));
             if (use_void_star_api) {
                 EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i].data(), false);

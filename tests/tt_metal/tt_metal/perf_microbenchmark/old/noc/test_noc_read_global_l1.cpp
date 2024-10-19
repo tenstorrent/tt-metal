@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
             activations_addr,
             activations_addr / 1024,
             Nt);
-        std::vector<tt_metal::Buffer> l1_buffers;
+        std::vector<std::shared_ptr<tt_metal::Buffer>> l1_buffers;
 
         int l1_buffers_size = 1;
         if (!(single_read || one_buffer_share)) {
@@ -199,8 +199,8 @@ int main(int argc, char **argv) {
         l1_buffers.reserve(l1_buffers_size);
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                l1_buffers.emplace_back(device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1);
-                tt_metal::detail::WriteToBuffer(l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
+                l1_buffers.push_back(tt_metal::Buffer::create(device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
+                tt_metal::detail::WriteToBuffer(*l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
 
                 if (single_read || one_buffer_share)
                     break;
@@ -213,7 +213,7 @@ int main(int argc, char **argv) {
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
                 std::vector<uint32_t> result_vec;
-                tt_metal::detail::ReadFromBuffer(l1_buffers[r * num_cores_c + c], result_vec);
+                tt_metal::detail::ReadFromBuffer(*l1_buffers[r * num_cores_c + c], result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                 if (print_tensor) {
@@ -260,7 +260,7 @@ int main(int argc, char **argv) {
                 CoreCoord core = {(size_t)c, (size_t)r};
 
                 int l1_buffers_idx = (single_read || one_buffer_share) ? (0) : (r * num_cores_c + c);
-                auto l1_buffer_addr = l1_buffers[l1_buffers_idx].address();
+                auto l1_buffer_addr = l1_buffers[l1_buffers_idx]->address();
 
                 uint32_t l1_buffer_offset = (one_buffer_share) ? ((r * num_cores_c + c) * Nt) : (0);
 
