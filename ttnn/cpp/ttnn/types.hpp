@@ -60,40 +60,11 @@ struct CoreGrid {
     }
 };
 
-// Keep track of live buffers and the device addresses they were assigned.
-// When a buffer is created, it is provided a buffer_id using get_buf_id().
-// The address for this buffer is assigned to buffer_id when the buffer is asynchronously allocated.
-// When the buffer destructor is called, or the buffer is asynchronously deallocated, the worker thread
-// will look up the address for buffer_id to free memory on device.
-class buffer_address_map {
-    public:
-        void insert(uint32_t buf_id, uint32_t buf_addr) {
-            std::scoped_lock<std::mutex> lock(this->map_mutex);
-            this->buf_id_to_address_map.insert({buf_id, buf_addr});
-        }
-        void erase(uint32_t buf_id) {
-            std::scoped_lock<std::mutex> lock(this->map_mutex);
-            this->buf_id_to_address_map.erase(buf_id);
-        }
-        uint32_t buffer_address(uint32_t buf_id) {
-            std::scoped_lock<std::mutex> lock(this->map_mutex);
-            return this->buf_id_to_address_map.at(buf_id);
-        }
-        uint32_t get_buf_id() {
-            return buf_id++;
-        }
-
-    private:
-    std::atomic<uint32_t> buf_id = 0;
-    std::mutex map_mutex;
-    std::unordered_map<uint32_t, uint32_t> buf_id_to_address_map = {};
-};
-
-inline buffer_address_map GLOBAL_BUFFER_ADDRESS_MAP;
+using Buffer = tt::tt_metal::Buffer;
 
 // This buffer class is compatible with multithreaded runtime (which lives in tt_eager)
 // It is derived from the tt_metal::Buffer class, but defines its own asynchronous allocation functions
-class Buffer : public tt::tt_metal::Buffer {
+/*class Buffer : public tt::tt_metal::Buffer {
     public:
         Buffer(Device *device, uint64_t size, uint64_t page_size, const BufferType buffer_type,
                 const TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
@@ -130,7 +101,7 @@ class Buffer : public tt::tt_metal::Buffer {
                 GLOBAL_BUFFER_ADDRESS_MAP.erase(id);
             });
         }
-};
+};*/
 
 static std::ostream &operator<<(std::ostream &os, const CoreGrid &core_grid) {
     os << "ttnn.CoreGrid(x=" <<core_grid.x<<", y="<<core_grid.y<<")";

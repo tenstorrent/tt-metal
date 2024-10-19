@@ -28,7 +28,10 @@ void validate_buffer_size_and_page_size(
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
-    TT_FATAL(size != 0 and page_size != 0, "Buffer size and page size should be larger than 0 bytes!");
+    if (size == 0)
+        return;
+
+    TT_FATAL(page_size != 0, "Buffer page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
     TT_FATAL(
         valid_page_size,
@@ -113,6 +116,23 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
     return {ret_vec, ret_shard_shape};
 }
 
+std::shared_ptr<Buffer> Buffer::create(
+    Device *device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
+    bool allocate) {
+    auto bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, Private());
+    auto buffer = std::shared_ptr<Buffer>(bufferPtr, deallocateAndDelete);
+    if (allocate) {
+        buffer->allocate();
+    }
+    return buffer;
+}
+
 Buffer::Buffer(
     Device *device,
     DeviceAddr size,
@@ -121,7 +141,7 @@ Buffer::Buffer(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
-    bool allocate) :
+    Private) :
     device_(device),
     size_(size),
     page_size_(page_size),
@@ -129,21 +149,29 @@ Buffer::Buffer(
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
     bottom_up_(bottom_up),
-    buffer_page_mapping_(nullptr),
-    allocate_(allocate) {
+    buffer_page_mapping_(nullptr) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
-    validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
-    if (allocate) {
-        this->allocate();
+
+    if (size == 0) {
+        allocation_status_ = AllocationStatus::ALLOCATED;
+        return;
     }
+
+    validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
 }
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     BufferPageMapping buffer_page_mapping;
-    bool row_major = buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR;
+
+    if (buffer.size() == 0) {
+        return buffer_page_mapping;
+    }
+    auto shard_spec = buffer.shard_spec();
+
+    bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
     uint32_t num_cores = buffer.num_cores();
 
-    buffer_page_mapping.all_cores_ = corerange_to_cores(buffer.shard_spec().grid(), num_cores, row_major);
+    buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
     TT_ASSERT(num_cores == buffer_page_mapping.all_cores_.size());
     uint32_t core_id = 0;
     for (const auto &core : buffer_page_mapping.all_cores_) {
@@ -154,12 +182,12 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     uint32_t num_dev_pages = buffer.num_dev_pages();
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(
         num_dev_pages,
-        buffer.shard_spec().size(),
+        shard_spec.size(),
         num_cores,
         buffer.buffer_layout(),
-        buffer.shard_spec().page_shape,
-        buffer.shard_spec().shape(),
-        buffer.shard_spec().tensor2d_shape);
+        shard_spec.page_shape,
+        shard_spec.shape(),
+        shard_spec.tensor2d_shape);
 
     buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<uint32_t>>(num_cores);
 
@@ -172,10 +200,10 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     buffer_page_mapping.core_shard_shape_ = std::move(shard_shape);
     uint32_t dev_page_index = 0;
 
-    auto shape_in_pages = buffer.shard_spec().shape_in_pages();
+    auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
-        buffer_page_mapping.core_host_page_indices_[core_index].reserve(buffer.shard_spec().size());
+        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.size());
         uint32_t shard_page_id = 0;
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
@@ -198,80 +226,111 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     return buffer_page_mapping;
 }
 
-Buffer::Buffer(const Buffer &other) :
-    device_(other.device_),
-    size_(other.size_),
-    page_size_(other.page_size_),
-    buffer_type_(other.buffer_type_),
-    buffer_layout_(other.buffer_layout_),
-    shard_parameters_(other.shard_parameters_),
-    bottom_up_(other.bottom_up_),
-    buffer_page_mapping_(other.buffer_page_mapping_),
-    allocate_(other.allocate_) {
-    if (this->allocate_) {
-        this->allocate();
-    }
-}
-
-Buffer &Buffer::operator=(const Buffer &other) {
-    if (this != &other) {
-        this->device_ = other.device_;
-        this->size_ = other.size_;
-        this->page_size_ = other.page_size_;
-        this->buffer_type_ = other.buffer_type_;
-        this->buffer_layout_ = other.buffer_layout_;
-        this->shard_parameters_ = other.shard_parameters_;
-        this->bottom_up_ = other.bottom_up_;
-        this->buffer_page_mapping_ = other.buffer_page_mapping_;
-        this->allocate_ = other.allocate_;
-        if (this->allocate_) {
-            this->allocate();
-        }
-    }
-    return *this;
-}
-
-Buffer::Buffer(Buffer &&other) :
-    device_(other.device_),
-    size_(other.size_),
-    address_(other.address_),
-    page_size_(other.page_size_),
-    buffer_type_(other.buffer_type_),
-    buffer_layout_(other.buffer_layout_),
-    shard_parameters_(std::move(other.shard_parameters_)),
-    bottom_up_(other.bottom_up_),
-    buffer_page_mapping_(std::move(other.buffer_page_mapping_)),
-    allocate_(other.allocate_) {
-    // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
-    // transferred to `this`
-    other.device_ = nullptr;
-}
-
-Buffer &Buffer::operator=(Buffer &&other) {
-    if (this != &other) {
-        this->device_ = other.device_;
-        this->size_ = other.size_;
-        this->address_ = other.address_;
-        this->page_size_ = other.page_size_;
-        this->buffer_type_ = other.buffer_type_;
-        this->buffer_layout_ = other.buffer_layout_;
-        this->shard_parameters_ = std::move(other.shard_parameters_);
-        this->bottom_up_ = other.bottom_up_;
-        this->buffer_page_mapping_ = std::move(other.buffer_page_mapping_);
-        this->allocate_ = other.allocate_;
-        // Set `other.device_` to be nullptr so destroying other does not deallocate reserved address space that is
-        // transferred to `this`
-        other.device_ = nullptr;
-    }
-    return *this;
-}
-
 void Buffer::allocate() {
-    TT_ASSERT(this->device_ != nullptr);
-    // L1 and Trace buffers (which live in DRAM) are allocated top down!
-    bool bottom_up = this->bottom_up_.value_or(this->is_dram());
-    detail::AllocateBuffer(this, bottom_up);
-    detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
+    if (allocation_status_ != AllocationStatus::NOT_ALLOCATED) {
+        return;
+    }
+
+    TT_FATAL(device_ != nullptr, "Can't allocate buffer: device not specified");
+
+    allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    device_->push_work([self = shared_from_this()] {
+        bool bottom_up = self->bottom_up_.value_or(self->is_dram());
+        detail::AllocateBuffer(self.get(), bottom_up);
+        detail::BUFFER_MAP.insert({self->device_->id(), self->address_}, self.get());
+
+        self->allocation_status_ = AllocationStatus::ALLOCATED;
+    });
+}
+
+void Buffer::deallocate() {
+    TT_FATAL(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+
+    device_->push_work([self = shared_from_this()] {
+        if (self->allocation_status_ == AllocationStatus::NOT_ALLOCATED) {
+            return;
+        }
+
+        if (self->device_ == nullptr || !self->device_->initialized_ || self->size_ == 0) {
+            return;
+        }
+        detail::BUFFER_MAP.erase({self->device()->id(), self->address()});
+        detail::DeallocateBuffer(self.get());
+        self->allocation_status_ = AllocationStatus::NOT_ALLOCATED;
+    });
+}
+
+void Buffer::deallocateAndDelete(Buffer* buffer) {
+    TT_FATAL(buffer->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+
+    buffer->device_->push_work([buffer] {
+        if (buffer->allocation_status_ != AllocationStatus::NOT_ALLOCATED && buffer->size_ != 0) {
+            detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
+            detail::DeallocateBuffer(buffer);
+        }
+
+        delete buffer;
+    });
+}
+
+uint32_t Buffer::address() const {
+    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id() , "Buffer::address must be called in device worker thread");
+    return address_;
+}
+
+void Buffer::set_address(uint64_t addr) {
+    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id() , "Buffer::address must be called in device worker thread");
+    address_ = addr;
+}
+
+Buffer::AllocationStatus Buffer::allocation_status() const {
+    return allocation_status_;
+}
+
+DeviceAddr Buffer::page_size() const {
+    std::unique_lock lock(config_mutex_);
+    return page_size_;
+}
+
+void Buffer::set_page_size(DeviceAddr page_size) {
+    std::unique_lock lock(config_mutex_);
+    TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
+    page_size_ = page_size;
+    this->buffer_page_mapping_ = nullptr;
+}
+
+uint32_t Buffer::num_pages() const {
+    return this->size() / this->page_size();
+}
+
+uint32_t Buffer::num_dev_pages() const {
+    if (!is_sharded(this->buffer_layout_)) {
+        return this->num_pages();
+    }
+
+    return this->shard_spec().size() * this->num_cores();
+}
+
+CoreType Buffer::core_type() const {
+    switch (this->buffer_type_) {
+        case BufferType::DRAM:
+            return CoreType::DRAM;
+        case BufferType::L1:
+        case BufferType::L1_SMALL:
+            return CoreType::WORKER;
+        default:
+            TT_THROW("Unknown CoreType for buffer");
+    }
+}
+
+bool Buffer::is_l1() const {
+    return buffer_type() == BufferType::L1 or buffer_type() == BufferType::L1_SMALL;
+}
+bool Buffer::is_dram() const {
+    return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE;
+}
+bool Buffer::is_trace() const {
+    return buffer_type() == BufferType::TRACE;
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -306,6 +365,8 @@ CoreCoord Buffer::noc_coordinates(uint32_t bank_id) const {
 CoreCoord Buffer::noc_coordinates() const { return this->noc_coordinates(0); }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
+    std::unique_lock lock(config_mutex_);
+
     auto num_banks = this->device_->num_banks(this->buffer_type_);
     TT_ASSERT(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
@@ -313,13 +374,43 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
     return translate_page_address(offset, bank_id);
 }
 
-uint32_t Buffer::alignment() const { return this->device_->get_allocator_alignment(); }
+uint32_t Buffer::alignment() const {
+    return this->device_->get_allocator_alignment();
+}
+DeviceAddr Buffer::aligned_page_size() const {
+    std::unique_lock lock(config_mutex_);
+    return align(page_size_, this->alignment());
+}
+DeviceAddr Buffer::aligned_size() const {
+    return this->num_dev_pages() * this->aligned_page_size();
+}
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
+    std::unique_lock lock(config_mutex_);
     TT_ASSERT(is_sharded(this->buffer_layout()));
     int pages_offset_within_bank = page_index % shard_spec().size();
     auto offset = (round_up(this->page_size_, this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
+}
+
+ShardSpecBuffer Buffer::shard_spec() const {
+    std::unique_lock lock(config_mutex_);
+    TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
+    TT_ASSERT(shard_parameters_.has_value());
+    return this->shard_parameters_.value();
+}
+
+void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
+    std::unique_lock lock(config_mutex_);
+    this->shard_parameters_ = shard_spec;
+    this->buffer_page_mapping_ = nullptr;
+}
+
+uint32_t Buffer::num_cores() const {
+    if (!is_sharded(this->buffer_layout_))
+        return 1;
+
+    return this->shard_spec().tensor_shard_spec.grid.num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
@@ -328,6 +419,7 @@ DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) con
 }
 
 const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
+    std::unique_lock lock(config_mutex_);
     TT_ASSERT(is_sharded(this->buffer_layout_), "Buffer not sharded");
     if (!this->buffer_page_mapping_) {
         this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
@@ -335,37 +427,19 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping(
     return this->buffer_page_mapping_;
 }
 
-void Buffer::deallocate() {
+bool ShardSpec::operator==(const ShardSpec&) const = default;
+bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
-    if (this->device_ == nullptr or not this->device_->initialized_ or this->size_ == 0 or not this->allocate_) {
-        return;
-    }
-    // Mark as deallocated
-    this->size_ = 0;
-    TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
-    detail::DeallocateBuffer(this);
+std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
+    auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
+    auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
+    return {width_in_pages, height_in_pages};
 }
 
-Buffer::~Buffer() { this->deallocate(); }
-
-bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b) {
-    if (spec_a.grid != spec_b.grid) {
-        return false;
-    }
-    if (spec_a.shape != spec_b.shape) {
-        return false;
-    }
-    if (spec_a.orientation != spec_b.orientation) {
-        return false;
-    }
-    if (spec_a.halo != spec_b.halo) {
-        return false;
-    }
-    return true;
+DeviceAddr ShardSpecBuffer::size() const {
+    auto shape_in_pages_ = this->shape_in_pages();
+    return shape_in_pages_[0] * shape_in_pages_[1];
 }
-
-bool operator!=(const ShardSpec &spec_a, const ShardSpec &spec_b) { return not(spec_a == spec_b); }
 
 namespace detail {
 buffer_map_t BUFFER_MAP = {};
@@ -373,3 +447,13 @@ buffer_map_t BUFFER_MAP = {};
 
 }  // namespace tt_metal
 }  // namespace tt
+
+namespace tt::stl::json {
+tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json &json_object) const {
+    return tt_metal::ShardSpec{
+        from_json<CoreRangeSet>(json_object.at("grid")),
+        from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
+        from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
+        from_json<bool>(json_object.at("halo"))};
+}
+}

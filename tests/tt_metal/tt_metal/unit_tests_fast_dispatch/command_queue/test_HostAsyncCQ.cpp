@@ -220,13 +220,14 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     command_queue.set_mode(current_mode);
 }
 
+/*
 TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program; /* Dummy program that helps keep track of buffers */
-    std::vector<Buffer> buffer_objects;
+    Program program;
+    std::vector<std::shared_ptr<Buffer>> buffer_objects;
     for (int j = 0; j < 10; j++) {
         // Asynchronously initialize a buffer on device
         uint32_t first_buf_value = j + 1;
@@ -234,15 +235,14 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         uint32_t first_buf_size = 4096;
         uint32_t second_buf_size = 2048;
         // Asynchronously allocate buffer on device
-        std::shared_ptr<Buffer> buffer = std::make_shared<Buffer>(this->device_, first_buf_size, first_buf_size, BufferType::DRAM);
+        std::shared_ptr<Buffer> buffer = Buffer::create(this->device_, first_buf_size, first_buf_size, BufferType::DRAM);
         // Copy the host side buffer structure to an object (i.e. reallocate on device). After reallocation the addresses should not match
-        buffer_objects.push_back(*buffer);
+        buffer_objects.push_back(buffer);
         // Confirm that the addresses do not match after copy/reallocation. Send async calls to get addrs, which will return post dealloc addr
         std::shared_ptr<uint32_t> allocated_buffer_address = std::make_shared<uint32_t>();
         EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address.get(), buffer.get(), true);
         std::shared_ptr<uint32_t> allocated_buffer_address_2 = std::make_shared<uint32_t>();
         EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address_2.get(), &(buffer_objects.back()), true);
-        EXPECT_NE(*allocated_buffer_address_2, *allocated_buffer_address);
         // Ensure returned addrs are correct
         EXPECT_EQ((*allocated_buffer_address), buffer->address());
         EXPECT_EQ((*allocated_buffer_address_2), buffer_objects.back().address());
@@ -261,7 +261,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         // Simulate what tt-eager does: Share buffer ownership with program
         AssignGlobalBufferToProgram(buffer, program);
         // Reallocate buffer (this is safe, since the program also owns the existing buffer, which will not be deallocated)
-        buffer = std::make_shared<Buffer>(this->device_, second_buf_size, second_buf_size, BufferType::DRAM);
+        buffer = Buffer::create(this->device_, second_buf_size, second_buf_size, BufferType::DRAM);
         // Write second vector to second buffer
         EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
         // Have main thread give up ownership immediately after writing
@@ -277,7 +277,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         }
     }
     command_queue.set_mode(current_mode);
-}
+}*/
 
 TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
@@ -335,7 +335,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
         "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    auto src0 = std::make_shared<Buffer>(this->device_, buf_size, page_size, BufferType::DRAM);
+    auto src0 = Buffer::create(this->device_, buf_size, page_size, BufferType::DRAM);
     std::vector<uint32_t> runtime_args = {src0->address()};
     try {
         SetRuntimeArgs(program, dummy_kernel, core, runtime_args);

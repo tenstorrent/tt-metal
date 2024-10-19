@@ -430,17 +430,17 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
     auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
-    auto activation_buffer = std::make_shared<Buffer>(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto activation_buffer = Buffer::create(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, activations, M, K, activation_buffer);
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
     auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
-    auto weight_buffer = std::make_shared<Buffer>(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
+    auto weight_buffer = Buffer::create(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
     pass &= move_tiles_to_dram(device, weights, K, N, weight_buffer);
     log_debug(LogTest, "Copying inputs to dram complete");
 
-    auto out_buffer = std::make_shared<Buffer>(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
+    auto out_buffer = Buffer::create(device, M * N * sizeof(uint32_t) * 32 * 32, 1024 * 2, BufferType::DRAM);
     uint32_t out_dram_addr = out_buffer->address();
 
     log_debug(LogTest, "Writing kernel runtime args to device");

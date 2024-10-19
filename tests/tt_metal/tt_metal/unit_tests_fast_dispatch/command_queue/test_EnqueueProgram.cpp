@@ -481,14 +481,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     This just ensures we don't hang on the subsequent EnqueueWriteBuffer
     */
     size_t buf_size = config.num_pages * config.page_size;
-    Buffer buffer(device, buf_size, config.page_size, config.buftype);
+    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
 
     vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
 
     for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = i;
     }
-    EnqueueWriteBuffer(cq, buffer, src, false);
+    EnqueueWriteBuffer(cq, *buffer, src, false);
     Finish(cq);
 
     return true;
