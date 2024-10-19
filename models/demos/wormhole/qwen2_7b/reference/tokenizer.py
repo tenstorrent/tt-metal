@@ -22,41 +22,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from sentencepiece import SentencePieceProcessor
+from transformers import AutoTokenizer
 from pathlib import Path
 from typing import List
 import torch
 from torch import nn
 
-from models.demos.wormhole.mistral7b.reference.model import Transformer
+from models.demos.wormhole.qwen2_7b.reference.model import Transformer
 
 
 class Tokenizer:
     def __init__(self, model_path: str):
         assert Path(model_path).exists(), model_path
-        self._model = SentencePieceProcessor(model_file=model_path)
-        assert self._model.vocab_size() == self._model.get_piece_size()
+        self._model = AutoTokenizer.from_pretrained(model_path)
 
     @property
     def n_words(self) -> int:
-        return self._model.vocab_size()
+        return self._model.vocab_size
 
     @property
     def bos_id(self) -> int:
-        return self._model.bos_id()
+        return self._model.bos_token_id
 
     @property
     def eos_id(self) -> int:
-        return self._model.eos_id()
+        return self._model.eos_token_id
 
     @property
     def pad_id(self) -> int:
-        return self._model.pad_id()
+        return self._model.pad_token_id
 
-    def encode(self, s: str, bos: bool = True) -> List[int]:
+    def encode(self, s: str, bos: bool = False) -> List[int]:
         assert isinstance(s, str)
         t = self._model.encode(s)
         if bos:
+            assert self.bos_id() != None, "Impossible to insert BOS since this tokenizer does not define it."
             t = [self.bos_id, *t]
         return t
 

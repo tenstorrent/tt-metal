@@ -8,7 +8,6 @@ from time import time
 from datetime import datetime
 from loguru import logger
 import os
-import ttnn
 import pytest
 from models.demos.wormhole.qwen2_7b.tt.qwen2_common import (
     prepare_inputs_ttnn,
@@ -18,10 +17,8 @@ from models.demos.wormhole.qwen2_7b.tt.qwen2_common import (
     cache_attention,
     load_safetensor_weights,
 )
-from models.demos.wormhole.qwen2_7b.tt.qwen2_model import TtTransformer
-from models.demos.wormhole.qwen2_7b.tt.qwen2_embedding import TtQwen2Embedding
 from models.demos.wormhole.qwen2_7b.reference.tokenizer import Tokenizer
-from models.demos.wormhole.qwen2_7b.reference.model import Emb
+from models.demos.wormhole.qwen2_7b.reference.model import Transformer, Emb
 
 
 # load from json, return as a list
@@ -36,7 +33,7 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
-def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruct, device):
+def preprocess_inputs(input_prompts, tokenizer, model_args, embd, instruct):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
@@ -64,19 +61,7 @@ def preprocess_inputs(input_prompts, tokenizer, model_args, dtype, embd, instruc
     pt_tokenized_inputs = torch.tensor(input_tokens)
     emb_inputs = embd(pt_tokenized_inputs[:, 0]).view(pt_tokenized_inputs.shape[0], seqlen, -1)
 
-    # Return the rotational embedding matrix on device
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
-    rot_emb_matrix = freqs_to_rotation_matrix(cos, sin)
-
-    rot_emb_matrix_list = []
-    for i in range(rot_emb_matrix.shape[0]):
-        rot_emb_matrix_list.append(
-            ttnn.from_torch(
-                rot_emb_matrix[i, :, :].unsqueeze(0).unsqueeze(0), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
-            )
-        )  # ttnn.bfloat16
-
-    return emb_inputs, pt_tokenized_inputs, input_mask, rot_emb_matrix_list
+    return emb_inputs, pt_tokenized_inputs, input_mask
 
 
 def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file):
@@ -93,9 +78,6 @@ def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
 
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.qwen2_7b.tt.model_config import TtModelArgs
-
-    embed_on_device = False
-    dtype = ttnn.bfloat8_b
 
     # Load model args, weights, and tokenizer
     model_args = TtModelArgs(device, instruct=instruct_mode)
@@ -125,56 +107,29 @@ def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     }
     logger.info("Loading weights finished!")
 
+    reference_model = Transformer(args=model_args)
+
+    partial_state_dict = {k[len("model.") :]: v for k, v in state_dict.items() if "layers." in k}
+    partial_state_dict["norm.weight"] = state_dict["model.norm.weight"]
+    partial_state_dict["lm_head.weight"] = state_dict["lm_head.weight"]
+    reference_model.load_state_dict(partial_state_dict)
+
     # TODO Should we keep initial embedding on host?
     embd = Emb(model_args.vocab_size, model_args.dim, tokenizer.pad_id)
     embd.load_state_dict({"emb.weight": state_dict["model.embed_tokens.weight"]})
 
+    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
+    freqs_cis = torch.complex(cos, sin)
+
     generation_start_pos = 0
-    max_generated_tokens = 50
+    max_generated_tokens = 20
     users_decoding = True
-
-    # generate rot_emb_matrix_list
-    _, _, _, rot_emb_matrix_list = preprocess_inputs(
-        input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
-    )
-    logger.info("Caching attention ops...")
-    cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, max_generated_tokens)
-
-    # Load TTNN qwen2 model
-    logger.info("Loading weights to device...")
-    tt_model = TtTransformer(
-        args=model_args,
-        device=device,
-        dtype=dtype,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        layers=list(range(model_args.n_layers)),
-        rot_mat=rot_emb_matrix_list,
-        start_pos=generation_start_pos,
-    )
-    if embed_on_device:
-        tt_embd = TtQwen2Embedding(
-            device=device,
-            args=model_args,
-            weight_cache_path=model_args.weight_cache_path(dtype),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        )
-    logger.info("Finished loading weights to device. Starting inference...")
 
     for batch_idx, input_prompts in enumerate(batch_prompts):
         # Preprocess initial prompt inputs
-        tt_decode_input, pt_encoded_input, input_mask, rot_emb_matrix_list = preprocess_inputs(
-            input_prompts, tokenizer, model_args, dtype, embd, instruct_mode, device
+        tt_decode_input, pt_encoded_input, input_mask = preprocess_inputs(
+            input_prompts, tokenizer, model_args, embd, instruct_mode
         )
-
-        # set kv cache to zeros if not first batch, to avoid context leaking
-        if batch_idx != 0:
-            for layer in tt_model.layers:
-                k_cache, v_cache = layer.attention.layer_past_list[0]
-                k_cache = k_cache * 0
-                v_cache = v_cache * 0
-                layer.attention.layer_past_list[0] = [k_cache, v_cache]
 
         # Keep track of generated outputs to print out every iteration
         all_outputs = [[] for _ in range(batch_size)]
@@ -185,26 +140,16 @@ def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
         # Keep running inference as long as there is a user in the batch still decoding or max tokens per user are decoded
         while users_decoding:
             iteration_time_start = time()
-            curr_pos = generation_start_pos + iteration
-
-            # Prepare inputs for decode mode (rotary embeddings, attention mask, padding)
-            # TODO Move the attn mask to device
-            decode_input, current_pos = prepare_inputs_ttnn(
-                tt_decode_input,
-                curr_pos,
-                model_args.dim,
-                model_args.sliding_window,
-                tt_model.device,
-            )
+            current_pos = generation_start_pos + iteration
 
             # Run ttnn qwen2 model
-            tt_out = tt_model(decode_input, current_pos)
-            tt_output_torch = (
-                ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
-            )  # [batch, seq, hidden_dim]
+            freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
+            positions = torch.tensor([current_pos])
+            # mask = ttnn.to_torch(attn_mask[0])
+            ref_output = reference_model(tt_decode_input, freqs_cis_i, positions)
 
             # If temperature is 0, does greedy decoding (top-1)
-            tt_out_tok = sample(tt_output_torch, temperature=0, top_p=0.8)
+            tt_out_tok = sample(ref_output, temperature=0, top_p=0.8)
 
             # TODO argmax on device
             # tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
@@ -239,12 +184,7 @@ def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
                             users_decoding = False
-
-            if embed_on_device:
-                tt_out_tok = ttnn.from_torch(tt_out_tok, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                tt_decode_input = tt_embd(tt_out_tok)
-            else:
-                tt_decode_input = embd(tt_out_tok)
+            tt_decode_input = embd(tt_out_tok)
 
             # Print out generated outputs for each user at the end of every iteration
             iteration_time = time() - iteration_time_start
@@ -296,28 +236,30 @@ def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num
     [
         # Combinations for general weights
         ("models/demos/wormhole/qwen2_7b/demo/input_data.json", False, 1),
-        ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 2),
-        ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 3),
-        ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 4),
-        ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 5),
+        # FIXME(cthsieh): Will enable when ready.
+        # ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 2),
+        # ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 3),
+        # ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 4),
+        # ("models/demos/wormhole/mistral7b/demo/input_data.json", False, 5),
         # Combinations for instruct weights
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 1),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 2),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 3),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 4),
-        ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 5),
+        # ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 1),
+        # ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 2),
+        # ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 3),
+        # ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 4),
+        # ("models/demos/wormhole/mistral7b/demo/input_data_questions.json", True, 5),
     ],
     ids=[
         "general_weights-1_batch",
-        "general_weights-2_batch",
-        "general_weights-3_batch",
-        "general_weights-4_batch",
-        "general_weights-5_batch",
-        "instruct_weights-1_batch",
-        "instruct_weights-2_batch",
-        "instruct_weights-3_batch",
-        "instruct_weights-4_batch",
-        "instruct_weights-5_batch",
+        # FIXME(cthsieh): Will enable when ready.
+        # "general_weights-2_batch",
+        # "general_weights-3_batch",
+        # "general_weights-4_batch",
+        # "general_weights-5_batch",
+        # "instruct_weights-1_batch",
+        # "instruct_weights-2_batch",
+        # "instruct_weights-3_batch",
+        # "instruct_weights-4_batch",
+        # "instruct_weights-5_batch",
     ],
 )
 def test_qwen2_7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):

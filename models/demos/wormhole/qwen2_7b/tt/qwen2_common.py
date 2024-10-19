@@ -5,6 +5,8 @@
 import torch
 import ttnn
 from models.utility_functions import nearest_32
+from safetensors.torch import load_file as safetensors_load_file
+import json
 
 
 def generate_cos_sin_cache_ttnn(
@@ -52,18 +54,20 @@ def generate_cos_sin_cache_ttnn(
     return tt_cos_cached, tt_sin_cached
 
 
-def precompute_freqs(dim: int, end: int, theta: float = 10000.0):
+def precompute_freqs(dim: int, end: int, theta: float = 1000000.0):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
     Args:
         dim (int): Dimension of the frequency tensor.
         end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 10000.0.
+        theta (float, optional): Scaling factor for frequency computation. Defaults to 1000000.0.
 
     Returns:
         Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
     """
+    # The default theta is sourced from the official config file: https://huggingface.co/Qwen/Qwen2-7B/blob/main/config.json, where `rope_theta` is referred.
+
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
 
     t = torch.arange(end)
@@ -77,13 +81,31 @@ def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     """
     emb_size, emb_dim = cos_freqs.shape
     dhead = emb_dim * 2
-    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
 
-    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
+    """
+    The cosine and sine frequency values are arranged into the rotating matrix `rot_emb_matrix` as follows.
+    The arrangment sources from Qwen2 codes in the Transformer library: https://github.com/huggingface/transformers/blob/1bd604d11c405dfb8b78bda4062d88fc75c17de0/src/transformers/models/qwen2/modeling_qwen2.py#L182.
+    For Qwen2-7B, the head dimension `dhead` is 128, whereas 64 cosine and 64 sine frequency values are needed. Let's shorten `cos_freqs` as `cos` and `sin_freqs` as `sin`. The rotating matrix looks as
+
+    cos[0]     0      0       0  sin[0]     0      0       0
+        0  cos[1]                       sin[1]
+        0         ......
+        0                cos[63]                      sin[63]
+    -sin[0]                      cos[0]
+        0  -sin[1]                      cos[1]
+        0         ......                       ......
+        0                -sin[63]                     cos[63]
+
+    , which is a 128x128 matrix.
+
+    For a head vector of length 128, it should be viewed as 64 distinct 2D vectors, with each 2D vector to be rotated by a unique designated frequency. Assume the head vector is named `head`. Then, (head[0], head[64]) forms the first 2D vector, (head[1], head[65]) forms the second, and so on. All 2D vectors are rotated simultaneously using the above rotation matrix. As a result, the output vector `output` will have its first 2D vector rotated to (output[0], output[64]) = (head[0] * cos[0] - head[64] * sin[0], head[0] * sin[0] + head[64] * cos[0]).
+    """
+    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, emb_dim), torch.arange(0, emb_dim)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(emb_dim, dhead), torch.arange(emb_dim, dhead)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(emb_dim, dhead), torch.arange(0, emb_dim)] = -sin_freqs.clone()
+    rot_emb_matrix[..., torch.arange(0, emb_dim), torch.arange(emb_dim, dhead)] = sin_freqs.clone()
+
     return rot_emb_matrix
 
 
@@ -179,18 +201,18 @@ def sample(logits: torch.Tensor, temperature: float, top_p: float):
     return next_token
 
 
-from models.demos.wormhole.qwen2_7b.tt.qwen2_attention import TtMistralAttention
+from models.demos.wormhole.qwen2_7b.tt.qwen2_attention import TtQwen2Attention
 
 
 def cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, iterations):
     attention_input = ttnn.from_torch(
-        torch.randn(1, 1, 32, 4096),
+        torch.randn(1, 1, 32, model_args.dim),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    tt_model = TtMistralAttention(
+    tt_model = TtQwen2Attention(
         [device],
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -295,3 +317,23 @@ def prepare_inputs_ttnn_prefill(x_bsh, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return xs_1BSH, attn_mask, attn_mask_torch
+
+
+def load_safetensor_weights(weights_path):
+    # Read the index file which contains the file names of the weight files.
+    index_path = weights_path + "/model.safetensors.index.json"
+    with open(index_path, "r") as f:
+        index_data = json.load(f)
+
+    # Retrieve the weight file names from the index JSON
+    weight_map = index_data["weight_map"]
+    safetensor_files = set(weight_map.values())
+
+    # Read each safetensors file mentioned in the index
+    loaded_weights = {}
+    for file in safetensor_files:
+        safetensor_path = weights_path + "/" + file
+        weights = safetensors_load_file(safetensor_path)
+        loaded_weights.update(weights)  # Merge weights into a single dictionary
+
+    return loaded_weights

@@ -12,7 +12,7 @@ from models.utility_functions import (
 )
 
 
-class TtMistralAttention(nn.Module):
+class TtQwen2Attention(nn.Module):
     def __init__(
         self,
         devices,
@@ -52,19 +52,24 @@ class TtMistralAttention(nn.Module):
 
         self.rot_mat = rot_mat  # Rotational matrix in the form of a list of 8K tensors [1,1,head_dim,head_dim] for positional embedding on device
 
-        layer_name = f"layers.{layer_num}.attention"
+        layer_name = f"model.layers.{layer_num}.self_attn"
         cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq.weight"
-        wk_str = f"{layer_name}.wk.weight"
-        wv_str = f"{layer_name}.wv.weight"
-        wo_str = f"{layer_name}.wo.weight"
+        wq_str = f"{layer_name}.q_proj.weight"
+        wk_str = f"{layer_name}.k_proj.weight"
+        wv_str = f"{layer_name}.v_proj.weight"
+        wo_str = f"{layer_name}.o_proj.weight"
+
+        bias_q_str = f"{layer_name}.q_proj.bias"
+        bias_k_str = f"{layer_name}.k_proj.bias"
+        bias_v_str = f"{layer_name}.v_proj.bias"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices == 0
         assert self.n_kv_heads % self.num_devices == 0
 
         self.wqkv_list = []
+        self.bias_qkv_list = []
         self.wo_list = []
         self.layer_past_list = []
 
@@ -95,6 +100,22 @@ class TtMistralAttention(nn.Module):
                 memory_config=self.model_config["ATTN_WEIGHTS_MEMCFG"],
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 cache_file_name=cache_name("wqkv"),
+            )
+
+            bias_qkv = ttnn.as_tensor(
+                torch.concat(
+                    [
+                        torch.chunk(self.state_dict[bias_q_str], self.num_devices)[i],
+                        torch.chunk(self.state_dict[bias_k_str], self.num_devices)[i],
+                        torch.chunk(self.state_dict[bias_v_str], self.num_devices)[i],
+                    ],
+                    dim=-1,
+                ).unsqueeze(0),
+                device=self.devices[i],
+                dtype=self.dtype,
+                memory_config=self.model_config["ATTN_BIAS_WEIGHTS_MEMCFG"],
+                layout=self.model_config["ATTN_B_LAYOUT_TILE"],
+                cache_file_name=cache_name("bias_qkv"),
             )
 
             wo = ttnn.as_tensor(
@@ -136,6 +157,7 @@ class TtMistralAttention(nn.Module):
 
             # add to the list
             self.wqkv_list.append(wqkv)
+            self.bias_qkv_list.append(bias_qkv)
             self.wo_list.append(wo)
             self.layer_past_list.append(layer_past)
 
@@ -267,6 +289,7 @@ class TtMistralAttention(nn.Module):
                 attn_mask = None
             device = self.devices[i]
             wqkv = self.wqkv_list[i]
+            bias_qkv = self.bias_qkv_list[i]
             wo = self.wo_list[i]
             layer_past = self.layer_past_list[i]
             head_dim = self.head_dims[i]
@@ -280,6 +303,7 @@ class TtMistralAttention(nn.Module):
             xqkv_fused = ttnn.linear(
                 x,
                 wqkv,
+                bias=bias_qkv,
                 memory_config=self.model_config["XQKV_MM_OUTPUT_MEMCFG"],
                 compute_kernel_config=self.compute_kernel_config,
                 dtype=self.dtype,
@@ -367,7 +391,9 @@ class TtMistralAttention(nn.Module):
                 # Reshape such that true unpadded batch is tracked in shape
                 if self.max_batch_size < 32:
                     keys_sliced_T_shape = keys_sliced_T.shape
-                    keys_sliced_T = ttnn.reshape(keys_sliced_T, ttnn.Shape([32, 8, 128, keys_sliced_T_shape[3]]))
+                    keys_sliced_T = ttnn.reshape(
+                        keys_sliced_T, ttnn.Shape([32, self.n_kv_heads, self.head_dim, keys_sliced_T_shape[3]])
+                    )
 
                 attn = ttnn.experimental.group_attn_matmul(
                     q_heads,
@@ -384,12 +410,15 @@ class TtMistralAttention(nn.Module):
                 attn_sliced = ttnn.softmax(
                     attn_sliced,
                     dim=-1,
+                    numeric_stable=True,
                 )
 
                 # Reshape such that true unpadded batch is tracked in shape
                 if self.max_batch_size < 32:
                     values_sliced_shape = values.shape
-                    values = ttnn.reshape(values, ttnn.Shape([32, 8, values_sliced_shape[2], 128]))
+                    values = ttnn.reshape(
+                        values, ttnn.Shape([32, self.n_kv_heads, values_sliced_shape[2], self.head_dim])
+                    )
                 values_sliced = values[:, :, :layer_slice, :]
                 attn_output = ttnn.experimental.group_attn_matmul(
                     attn_sliced,
@@ -461,7 +490,7 @@ class TtMistralAttention(nn.Module):
 
                 # scores softmax
                 attn_1BQP_presoftmax = attn_1BQP[:, :, :, :layer_slice]
-                attn_1BQP = ttnn.softmax(attn_1BQP_presoftmax, dim=-1)
+                attn_1BQP = ttnn.softmax(attn_1BQP_presoftmax, dim=-1, numeric_stable=True)
                 attn_1BQP = ttnn.pad(attn_1BQP, ((0, 0), (0, 0), (0, 0), (0, 0)), value=0.0)
 
                 # attention matmul
@@ -520,6 +549,7 @@ class TtMistralAttention(nn.Module):
         seq_len = xs_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         wqkv = self.wqkv_list[0]
+        bias_qkv = self.bias_qkv_list[0]
         wo = self.wo_list[0]
         self.layer_past = self.layer_past_list[0]
         ###
@@ -532,6 +562,7 @@ class TtMistralAttention(nn.Module):
         xqkv_fused = ttnn.linear(
             xs_11SH,
             wqkv,
+            bias=bias_qkv,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,

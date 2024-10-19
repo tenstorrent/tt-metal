@@ -6,7 +6,7 @@ import torch
 import ttnn
 
 
-class TtMistralEmbedding(torch.nn.Module):
+class TtQwen2Embedding(torch.nn.Module):
     def __init__(
         self,
         device,

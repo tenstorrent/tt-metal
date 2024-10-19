@@ -19,23 +19,15 @@ from models.demos.wormhole.qwen2_7b.tt.qwen2_common import (
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
+    load_safetensor_weights,
 )
 from models.demos.wormhole.qwen2_7b.tt.qwen2_model import TtTransformer
-from models.demos.wormhole.qwen2_7b.tt.qwen2_embedding import TtMistralEmbedding
+from models.demos.wormhole.qwen2_7b.tt.qwen2_embedding import TtQwen2Embedding
 from models.demos.wormhole.qwen2_7b.reference.tokenizer import Tokenizer
+from models.demos.wormhole.qwen2_7b.reference.model import Emb
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-import pdb
-
-
-class Emb(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.emb = torch.nn.Embedding(32000, 4096)
-
-    def forward(self, x):
-        return self.emb(x)
 
 
 # load from json, return as a list
@@ -99,11 +91,12 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
 
     # Select the first token from the prompts for initial decoding
     pt_tokenized_inputs_decode = torch.tensor(input_tokens_decode)
-    # FIXME(cthsieh): Should not assume `batch_size` = 1. `view(1, ...)` -> `view(batch_size, ...)`.
-    emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(1, 1, -1)
+    emb_inputs_decode = embd(pt_tokenized_inputs_decode[:, 0]).view(pt_tokenized_inputs_decode.shape[0], 1, -1)
     if prefill_seq_len > 0:
-        # FIXME(cthsieh): Should not assume `batch_size` = 1. `for b in range(1)` -> `for b in range(batch_size)`.
-        emb_prefill_inputs = [embd(pt_tokenized_inputs_prefill[b, :]).view(1, prefill_seq_len, -1) for b in range(1)]
+        emb_prefill_inputs = [
+            embd(pt_tokenized_inputs_prefill[b, :]).view(1, prefill_seq_len, -1)
+            for b in range(pt_tokenized_inputs_prefill.shape[0])
+        ]
     else:
         emb_prefill_inputs = None
 
@@ -130,7 +123,7 @@ def preprocess_inputs_prefill(input_prompts, tokenizer, model_args, dtype, embd,
     )
 
 
-def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file, is_n300):
+def run_qwen2_demo(user_input, batch_size, device, instruct_mode, is_ci_env, num_batches, print_to_file, is_n300):
     # Create batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/wormhole/qwen2_7b/demo/output"
@@ -138,11 +131,11 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    # Set Mistral flags for CI
+    # Set Qwen2 flags for CI
     if is_ci_env and instruct_mode:  # Update paths for instruct mode, otherwise use default paths for general weights
-        os.environ["MISTRAL_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
-        os.environ["MISTRAL_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
-        os.environ["MISTRAL_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/mistral-7B-v0.1/instruct/"
+        os.environ["QWEN2_CKPT_DIR"] = "/mnt/MLPerf/tt_dnn-models/Qwen2/qwen2-7B-v0.1/instruct/"
+        os.environ["QWEN2_TOKENIZER_PATH"] = "/mnt/MLPerf/tt_dnn-models/Qwen2/qwen2-7B-v0.1/instruct/"
+        os.environ["QWEN2_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Qwen2/qwen2-7B-v0.1/instruct/"
     # This module requires the env paths above for CI runs
     from models.demos.wormhole.qwen2_7b.tt.model_config import TtModelArgs
 
@@ -174,28 +167,27 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     model_args = TtModelArgs(device, instruct=instruct_mode)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
-    model_args.n_layers = 32
+    model_args.n_layers = 28
 
-    # pdb.set_trace()
     logger.info("Loading weights...")
     profiler.start("weight_loading")
-    state_dict = torch.load(model_args.consolidated_weights_path)
+    state_dict = load_safetensor_weights(model_args.consolidated_weights_path)
     state_dict = {
         k: v
         for k, v in state_dict.items()
         if (
             any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+            or k in ["model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"]
         )
     }
     profiler.end("weight_loading")
     logger.info("Loading weights finished!")
 
     # TODO Should we keep initial embedding on host?
-    embd = Emb()
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd = Emb(model_args.vocab_size, model_args.dim, tokenizer.pad_id)
+    embd.load_state_dict({"emb.weight": state_dict["model.embed_tokens.weight"]})
 
-    max_generated_tokens = 120
+    max_generated_tokens = 50
     users_decoding = True
 
     profiler.start("preprocess_prefill_inputs")
@@ -216,10 +208,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     cache_attention(device, state_dict, model_args, rot_emb_matrix_list, dtype, prefill_seq_len + max_generated_tokens)
     profiler.end("cache_attention")
 
-    if instruct_mode:
-        tokenizer._model.pad_id = tokenizer._model.eos_id
-
-    # Load TTNN mistral model
+    # Load TTNN qwen2 model
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -232,19 +221,17 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
         rot_mat=rot_emb_matrix_list,
         start_pos=generation_start_pos,
     )
-    tt_embd = TtMistralEmbedding(
-        device=device,
-        args=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        state_dict=state_dict,
-        dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-    )
+    if embed_on_device:
+        tt_embd = TtQwen2Embedding(
+            device=device,
+            args=model_args,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            state_dict=state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device. Starting inference...")
-    """
 
-    # FIXME(cthsieh): Uncomment the below.
-    """
     num_tokens_generated_decode = []
     for batch_idx, input_prompts in enumerate(batch_prompts):
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
@@ -349,7 +336,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             profiler.end(f"prepare_input_decode", iteration=batch_idx)
 
             profiler.start(f"decode_and_argmax", iteration=batch_idx)
-            # Run ttnn mistral model
+            # Run ttnn qwen2 model
             tt_out = tt_model(decode_input, current_pos)
             tt_output_torch = (
                 ttnn.to_torch(tt_out).permute(2, 1, 0, 3).squeeze(1)[:batch_size, :, :]
@@ -380,9 +367,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             for user in range(batch_size):
                 user_tok = tt_out_tok[user].tolist()
                 if (
-                    # FIXME(cthsieh): What is the EOS token id in Qwen2?
-                    user_tok[0] != 28803
-                    and user_done[user] == False
+                    user_tok[0] != tokenizer.eos_id and user_done[user] == False
                 ):  # Stop saving the ouput after hitting the EOS token
                     all_outputs[user].append(user_tok[0])
                 else:
@@ -467,8 +452,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     # Finish profiling at the end of all batches
     profiler.end("run")
 
-    # FIXME(cthsieh): Uncomment below.
-    """
     # Benchmark metrics for batch 0
     compile_prefill_time = profiler.get_duration("compile_prefill")
     compile_decode_time = profiler.get_duration("compile_decode")
@@ -552,7 +535,6 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
             # config_params=,
             # precision=,
         )
-   """
 
 
 @pytest.mark.parametrize(
@@ -560,31 +542,31 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     [
         # Combinations for general weights
         ("models/demos/wormhole/qwen2_7b/demo/input_data_prefill_128.json", False, 1),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 2),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 3),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 4),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_prefill_128.json", False, 5),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_prefill_128.json", False, 2),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_prefill_128.json", False, 3),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_prefill_128.json", False, 4),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_prefill_128.json", False, 5),
         # Combinations for instruct weights
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 1),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 2),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 3),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 4),
-        #        ("models/demos/wormhole/mistral7b/demo/input_data_questions_prefill_128.json", True, 5),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_questions_prefill_128.json", True, 1),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_questions_prefill_128.json", True, 2),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_questions_prefill_128.json", True, 4),
+        ("models/demos/wormhole/qwen2_7b/demo/input_data_questions_prefill_128.json", True, 5),
     ],
     ids=[
         "general_weights-1_batch",
-        #        "general_weights-2_batch",
-        #        "general_weights-3_batch",
-        #        "general_weights-4_batch",
-        #        "general_weights-5_batch",
-        #        "instruct_weights-1_batch",
-        #        "instruct_weights-2_batch",
-        #        "instruct_weights-3_batch",
-        #        "instruct_weights-4_batch",
-        #        "instruct_weights-5_batch",
+        "general_weights-2_batch",
+        "general_weights-3_batch",
+        "general_weights-4_batch",
+        "general_weights-5_batch",
+        "instruct_weights-1_batch",
+        "instruct_weights-2_batch",
+        "instruct_weights-3_batch",
+        "instruct_weights-4_batch",
+        "instruct_weights-5_batch",
     ],
 )
-def test_mistral7B_demo(
+def test_qwen2_7B_demo(
     device, use_program_cache, input_prompts, instruct_weights, is_ci_env, is_single_card_n300, num_batches
 ):
     if (is_ci_env and instruct_weights == False) or (is_ci_env and not (num_batches == 1 or num_batches == 3)):
@@ -592,9 +574,9 @@ def test_mistral7B_demo(
             "CI demo test only runs instruct weights (1 and 3 batches) to reduce CI pipeline load (both are supported)"
         )
 
-    return run_mistral_demo(
+    return run_qwen2_demo(
         user_input=input_prompts,
-        batch_size=1,
+        batch_size=8,
         device=device,
         instruct_mode=instruct_weights,
         is_ci_env=is_ci_env,

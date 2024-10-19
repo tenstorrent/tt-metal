@@ -24,6 +24,7 @@ class RMSNorm(LightweightModule):
         dim: Input dimension (e.g. model hidden dimension size).
         layer_num: The layer number to determine the weight key in the state dictionary.
         weight_key: The key for retrieving the weight from the state dictionary.
+        weight_name: The "full" key name for retrieving the weight from the state dictionary.
         weight_cache_path: Optional path for caching the tilized weights.
         weight_memory_config: Configuration for the weight memory, default is DRAM_MEMORY_CONFIG.
         weight_dtype: The data type for the tensors, bfp8_b hits >0.999 PCC in the models we tested.

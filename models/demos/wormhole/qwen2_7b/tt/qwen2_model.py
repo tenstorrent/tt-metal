@@ -53,16 +53,17 @@ class TtTransformer(nn.Module):
             layer_num=None,
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
-            weight_key="norm",
+            weight_key=None,
+            weight_name="model.norm.weight",
         )
 
         self.output_weight = ttnn.as_tensor(
-            state_dict["output.weight"].permute(1, 0),
+            state_dict["lm_head.weight"].permute(1, 0),
             device=device,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "output.weight",
+            cache_file_name=weight_cache_path / "lm_head.weight",
         )
 
     def forward(

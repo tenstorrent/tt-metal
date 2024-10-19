@@ -4,8 +4,8 @@
 import torch
 import ttnn
 from typing import Optional
-from models.demos.wormhole.qwen2_7b.tt.qwen2_attention import TtMistralAttention
-from models.demos.wormhole.qwen2_7b.tt.qwen2_mlp import TtMistralMLP
+from models.demos.wormhole.qwen2_7b.tt.qwen2_attention import TtQwen2Attention
+from models.demos.wormhole.qwen2_7b.tt.qwen2_mlp import TtQwen2MLP
 from models.common.rmsnorm import RMSNorm
 
 
@@ -33,7 +33,7 @@ class TtTransformerBlock(torch.nn.Module):
         self.n_local_heads = self.n_heads // self.num_devices
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices
 
-        self.attention = TtMistralAttention(
+        self.attention = TtQwen2Attention(
             devices=[device],
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -43,7 +43,7 @@ class TtTransformerBlock(torch.nn.Module):
             rot_mat=rot_mat,
             start_pos=start_pos,
         )
-        self.feed_forward = TtMistralMLP(
+        self.feed_forward = TtQwen2MLP(
             device=device,
             args=args,
             state_dict=state_dict,
@@ -59,7 +59,8 @@ class TtTransformerBlock(torch.nn.Module):
             layer_num=layer_num,
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
-            weight_key="attention_norm",
+            weight_key=None,
+            weight_name=f"model.layers.{layer_num}.input_layernorm.weight",
         )
         self.ffn_norm = RMSNorm(
             device=device,
@@ -68,7 +69,8 @@ class TtTransformerBlock(torch.nn.Module):
             layer_num=layer_num,
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
-            weight_key="ffn_norm",
+            weight_key=None,
+            weight_name=f"model.layers.{layer_num}.post_attention_layernorm.weight",
         )
 
     def forward(
