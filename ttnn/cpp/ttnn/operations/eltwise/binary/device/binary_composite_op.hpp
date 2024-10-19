@@ -20,7 +20,6 @@ enum class BinaryCompositeOpType {
     SUBALPHA,
     NEXTAFTER,
     ISCLOSE,
-    MINIMUM,
     ATAN2,
     LOGICAL_XOR,
     DIV_NO_NAN,
@@ -33,7 +32,6 @@ enum class BinaryCompositeOpType {
 
 Tensor _hypot(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _xlogy(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _minimum(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atan2(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _logical_xor(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _nextafter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -72,13 +70,6 @@ template <>
 struct OpHandler<BinaryCompositeOpType::NEXTAFTER> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
         return _nextafter(t1, t2, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<BinaryCompositeOpType::MINIMUM> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _minimum(t1, t2, mem_cfg);
     }
 };
 
