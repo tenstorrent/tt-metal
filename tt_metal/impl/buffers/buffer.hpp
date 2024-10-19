@@ -209,6 +209,7 @@ class Buffer final {
     uint32_t num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+    BufferPageMapping generate_buffer_page_mapping() const;
 
     // Private
     Buffer(
@@ -229,6 +230,18 @@ class Buffer final {
 
     friend void DeallocateBuffer(Buffer &buffer);
     friend void tt_metal::EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
+
+    ShardSpecBuffer shard_spec_locked() const;
+    DeviceAddr page_size_locked() const;
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping_locked();
+    DeviceAddr aligned_page_size_locked() const;
+    DeviceAddr aligned_size_locked() const;
+    DeviceAddr sharded_page_address_locked(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address_locked(uint32_t bank_id, uint32_t page_index) const;
+    uint32_t num_pages_locked() const;
+    uint32_t num_dev_pages_locked() const;
+    uint32_t num_cores_locked() const;
+    BufferPageMapping generate_buffer_page_mapping_locked() const;
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
