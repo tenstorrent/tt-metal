@@ -127,6 +127,29 @@ def test_binary_minimum_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+@pytest.mark.parametrize(
+    "scalar",
+    {-82.5, -45.7, 0.0, 12.5, 66.4, 96, 8},
+)
+def test_binary_minimum_scalar_ttnn(input_shapes, scalar, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+
+    output_tensor = ttnn.minimum(input_tensor1, scalar)
+    golden_function = ttnn.get_golden_function(ttnn.minimum)
+    golden_tensor = golden_function(in_data1, torch.full(input_shapes, scalar))
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
 def test_binary_maximum_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
@@ -149,14 +172,14 @@ def test_binary_maximum_ttnn(input_shapes, device):
 )
 @pytest.mark.parametrize(
     "scalar",
-    {random.randint(-100, 100) + 0.5 for _ in range(5)},
+    {-82.5, -45.7, 0.0, 12.5, 66.4, 96, 8},
 )
 def test_binary_maximum_scalar_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
     output_tensor = ttnn.maximum(input_tensor1, scalar)
     golden_function = ttnn.get_golden_function(ttnn.maximum)
-    golden_tensor = golden_function(in_data1, torch.tensor(scalar))
+    golden_tensor = golden_function(in_data1, torch.full(input_shapes, scalar))
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

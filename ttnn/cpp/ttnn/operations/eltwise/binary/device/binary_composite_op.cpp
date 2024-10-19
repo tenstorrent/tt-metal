@@ -106,9 +106,15 @@ Tensor _isclose(
 }
 
 // minimum(a,b) = a - (a - b > 0 )*(a-b)
-Tensor _minimum(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_diff = ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, input_b, input_a);
+    return result;
+}
+
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_diff = ttnn::subtract(input_a, value, std::nullopt, output_mem_config);
+    Tensor result = ttnn::where(t_diff, value, input_a);
     return result;
 }
 

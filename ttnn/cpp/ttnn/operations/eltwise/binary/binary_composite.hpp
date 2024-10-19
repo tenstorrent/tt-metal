@@ -229,6 +229,20 @@ struct ExecuteMaximum
 
 };
 
+struct ExecuteMinimum
+{
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float scalar,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+};
+
 } // namespace binary
 }  // namespace operations
 
@@ -240,7 +254,7 @@ constexpr auto xlogy = ttnn::register_operation_with_auto_launch_op<
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
 constexpr auto minimum = ttnn::register_operation_with_auto_launch_op<
     "ttnn::minimum",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MINIMUM>>();
+    operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation_with_auto_launch_op<
     "ttnn::maximum",
     operations::binary::ExecuteMaximum>();
