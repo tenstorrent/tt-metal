@@ -24,7 +24,7 @@ def report_mismatches(golden, actual, max_printable=None):
                     if print_it:
                         printed += 1
                         logger.error(
-                            f"output mismatch for tensor at [{w}, {z}, {y}, {x}]: expected {int(golden[w, z, y, x])} != actual {int(actual[w, z, y, x])}"
+                            f"output mismatch for tensor at [{w}, {z}, {y}, {x}]: expected {golden[w, z, y, x]} != actual {actual[w, z, y, x]}"
                         )
 
 
@@ -40,7 +40,7 @@ def print_tile_corners_of_tensor(t):
                 for x in range(0, t.shape[3], 32):
                     yy = 0
                     xx = 0
-                    str_vals += f"{int(t[w, z, y + yy, x + xx]):<5} "[:5]
+                    str_vals += f"{t[w, z, y + yy, x + xx]:<5} "[:5]
                 print(f"{str_vals}")
 
 
@@ -195,7 +195,6 @@ def run_line_all_gather_sharded_on_TG_with_mesh_tensor_along_rows(
     num_links,
     input_dtype,
     layout,
-    mem_config,
     use_program_cache,
     function_level_defaults,
     enable_async,
@@ -437,7 +436,7 @@ def test_line_all_gather_on_TG_rows_post_commit(
         # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_cols_post_commit(
@@ -470,184 +469,4 @@ def test_line_all_gather_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
         cluster_axis=0,
-    )
-
-
-# Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "num_devices, num_links",
-    [(4, 3), (4, 2)],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-    ],
-)
-@pytest.mark.parametrize(
-    "tensor_mem_layout",
-    [
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ],
-)
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "input_shape, dim, input_shard_shape,shard_grid,layout",
-    (
-        # LLama
-        (
-            (1, 1, 32, 1024),
-            3,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            (1, 1, 32, 1280),
-            0,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-    ),
-)
-@pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_line_all_gather_on_TG_rows_post_commit(
-    mesh_device,
-    num_devices,
-    input_shape,
-    input_shard_shape,
-    shard_grid,
-    shard_grid_orientation,
-    tensor_mem_layout,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    mem_config,
-    use_program_cache,
-    function_level_defaults,
-    enable_async,
-    replication_factor,
-    num_iters=1,
-):
-    run_line_all_gather_sharded_on_TG_with_mesh_tensor_along_rows(
-        mesh_device,
-        num_devices,
-        input_shape,
-        input_shard_shape,
-        shard_grid,
-        shard_grid_orientation,
-        tensor_mem_layout,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        mem_config,
-        use_program_cache,
-        function_level_defaults,
-        enable_async=enable_async,
-        num_iters=num_iters,
-        num_all_gather_instances=replication_factor,
-        cluster_axis=1,
-    )
-
-
-# Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "num_devices, num_links",
-    [(8, 4), (8, 2)],
-)
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-    ],
-)
-@pytest.mark.parametrize(
-    "tensor_mem_layout",
-    [
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ],
-)
-@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "input_shape, dim, input_shard_shape,shard_grid,layout",
-    (
-        (
-            (1, 1, 32, 2048),
-            0,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-    ),
-)
-@pytest.mark.parametrize("replication_factor", [4])  # 1, 8])
-@pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_line_all_gather_on_TG_cols_post_commit(
-    mesh_device,
-    num_devices,
-    input_shape,
-    input_shard_shape,
-    shard_grid,
-    shard_grid_orientation,
-    tensor_mem_layout,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    mem_config,
-    use_program_cache,
-    function_level_defaults,
-    enable_async,
-    replication_factor,
-    num_iters=1,
-):
-    run_line_all_gather_sharded_on_TG_with_mesh_tensor_along_rows(
-        mesh_device,
-        num_devices,
-        input_shape,
-        input_shard_shape,
-        shard_grid,
-        shard_grid_orientation,
-        tensor_mem_layout,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        mem_config,
-        use_program_cache,
-        function_level_defaults,
-        enable_async=enable_async,
-        num_iters=num_iters,
-        num_all_gather_instances=replication_factor,
-        cluster_axis=1,
     )
