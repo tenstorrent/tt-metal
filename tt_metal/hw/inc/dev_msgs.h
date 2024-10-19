@@ -90,14 +90,14 @@ struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
-    volatile uint16_t host_assigned_id;
-
     // Ring buffer of kernel configuration data
     volatile uint32_t kernel_config_base[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t sem_offset[static_cast<int>(ProgrammableCoreType::COUNT)];
     volatile uint16_t cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
+
+    volatile uint16_t host_assigned_id;
 
     volatile uint8_t mode;                   // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
