@@ -257,7 +257,7 @@ class Device {
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
-    std::thread::id get_worker_thread_id() const;
+    bool use_passthrough_scheduling() const;
     void push_work(std::function<void()>&& work, bool blocking = false);
     void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
     void synchronize();

@@ -127,6 +127,7 @@ std::shared_ptr<Buffer> Buffer::create(
     bool allocate) {
     auto bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, Private());
     auto buffer = std::shared_ptr<Buffer>(bufferPtr, deallocateAndDelete);
+    buffer->weak_self = buffer;
     if (allocate) {
         buffer->allocate();
     }
@@ -234,7 +235,7 @@ void Buffer::allocate() {
     TT_FATAL(device_ != nullptr, "Can't allocate buffer: device not specified");
 
     allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
-    device_->push_work([self = shared_from_this()] {
+    device_->push_work([self = weak_self.lock()] {
         bool bottom_up = self->bottom_up_.value_or(self->is_dram());
         detail::AllocateBuffer(self.get(), bottom_up);
         detail::BUFFER_MAP.insert({self->device_->id(), self->address_}, self.get());
@@ -246,7 +247,7 @@ void Buffer::allocate() {
 void Buffer::deallocate() {
     TT_FATAL(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
 
-    device_->push_work([self = shared_from_this()] {
+    device_->push_work([self = weak_self.lock()] {
         if (self->allocation_status_ == AllocationStatus::NOT_ALLOCATED) {
             return;
         }
@@ -274,12 +275,12 @@ void Buffer::deallocateAndDelete(Buffer* buffer) {
 }
 
 uint32_t Buffer::address() const {
-    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id() , "Buffer::address must be called in device worker thread");
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
     return address_;
 }
 
 void Buffer::set_address(uint64_t addr) {
-    TT_FATAL(std::this_thread::get_id() == device_->get_worker_thread_id() , "Buffer::address must be called in device worker thread");
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
     address_ = addr;
 }
 

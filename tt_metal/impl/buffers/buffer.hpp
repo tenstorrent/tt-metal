@@ -143,7 +143,7 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
 
 inline namespace v0 {
 
-class Buffer final : public std::enable_shared_from_this<Buffer> {
+class Buffer final {
     struct Private { explicit Private() = default; };
 
    public:
@@ -243,7 +243,7 @@ class Buffer final : public std::enable_shared_from_this<Buffer> {
 
     Device * const device_;
     const DeviceAddr size_; // Size in bytes
-    DeviceAddr address_;    // Address of buffer
+    DeviceAddr address_ = 0;    // Address of buffer
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const std::optional<bool> bottom_up_;
@@ -260,6 +260,8 @@ class Buffer final : public std::enable_shared_from_this<Buffer> {
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::NOT_ALLOCATED;
     mutable std::mutex allocation_mutex_;
     std::condition_variable allocation_cv_;
+
+    std::weak_ptr<Buffer> weak_self;
 };
 
 }  // namespace v0

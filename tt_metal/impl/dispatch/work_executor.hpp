@@ -138,10 +138,14 @@ class WorkExecutor {
         }
     }
 
+    inline bool use_passthrough() const {
+        return std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() ||
+            this->worker_state != WorkerState::RUNNING;
+    }
+
     inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
-            not(this->worker_state == WorkerState::RUNNING)) {
+        if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
             work_executor();
@@ -161,8 +165,7 @@ class WorkExecutor {
     inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
         // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
         ZoneScopedN("PushWork");
-        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
-            not(this->worker_state == WorkerState::RUNNING)) {
+        if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
             (*work_executor)();
