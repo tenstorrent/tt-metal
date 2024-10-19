@@ -119,25 +119,20 @@ class CMakeBuild(build_ext):
             else CMakeBuild.get_working_dir()
         )
         assert source_dir.is_dir(), f"Source dir {source_dir} seems to not exist"
-        build_dir = source_dir / "build"
 
         if metal_build_config.from_precompiled_dir:
+            build_dir = source_dir / "build"
             assert (build_dir / "lib").exists() and (
                 source_dir / "runtime"
             ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
         else:
-            # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does two things:
-            # - Set the right rpath ($ORIGIN) for our Python bindings so it can find the extra libraries it needs at runtime
+            # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
-            cmake_args = ["-DBUILD_SHARED_LIBS=OFF"]
+            build_script_args = ["--build-static-libs"]
 
-            nproc = subprocess.check_output(["nproc"]).decode().strip()
-            build_args = [f"-j{nproc}"]
-
-            subprocess.check_call(["cmake", "-G", "Ninja", source_dir, *cmake_args], cwd=build_dir, env=build_env)
             subprocess.check_call(
-                ["cmake", "--build", ".", "--target", "install", *build_args], cwd=build_dir, env=build_env
+                ["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env
             )
 
         # Some verbose sanity logging to see what files exist in the outputs
