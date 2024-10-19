@@ -154,7 +154,7 @@ Buffer::Buffer(
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
 
     if (size == 0) {
-        allocation_status_ = AllocationStatus::ALLOCATED;
+        is_allocated_ = true;
         return;
     }
 
@@ -228,44 +228,46 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
 }
 
 void Buffer::allocate() {
-    if (allocation_status_ != AllocationStatus::NOT_ALLOCATED) {
-        return;
-    }
-
     TT_FATAL(device_ != nullptr, "Can't allocate buffer: device not specified");
 
-    allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     device_->push_work([self = weak_self.lock()] {
+        if (self->is_allocated_) {
+            return;
+        }
+
         bool bottom_up = self->bottom_up_.value_or(self->is_dram());
         detail::AllocateBuffer(self.get(), bottom_up);
         detail::BUFFER_MAP.insert({self->device_->id(), self->address_}, self.get());
 
-        self->allocation_status_ = AllocationStatus::ALLOCATED;
+        self->is_allocated_ = true;
     });
 }
 
 void Buffer::deallocate() {
-    TT_FATAL(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+    if (device_ == nullptr) {
+        return;
+    }
 
     device_->push_work([self = weak_self.lock()] {
-        if (self->allocation_status_ == AllocationStatus::NOT_ALLOCATED) {
+        if (!self->is_allocated_ || !self->device_->initialized_ || self->size_ == 0) {
             return;
         }
 
-        if (self->device_ == nullptr || !self->device_->initialized_ || self->size_ == 0) {
-            return;
-        }
+        TT_FATAL(self->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
         detail::BUFFER_MAP.erase({self->device()->id(), self->address()});
         detail::DeallocateBuffer(self.get());
-        self->allocation_status_ = AllocationStatus::NOT_ALLOCATED;
+        self->is_allocated_ = false;
     });
 }
 
 void Buffer::deallocateAndDelete(Buffer* buffer) {
-    TT_FATAL(buffer->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
+    if (buffer->device_ == nullptr) {
+        return;
+    }
 
     buffer->device_->push_work([buffer] {
-        if (buffer->allocation_status_ != AllocationStatus::NOT_ALLOCATED && buffer->size_ != 0) {
+        if (buffer->is_allocated_ && buffer->device_->initialized_ && buffer->size_ != 0) {
+            TT_FATAL(buffer->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
             detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
             detail::DeallocateBuffer(buffer);
         }
@@ -282,10 +284,6 @@ uint32_t Buffer::address() const {
 void Buffer::set_address(uint64_t addr) {
     TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
     address_ = addr;
-}
-
-Buffer::AllocationStatus Buffer::allocation_status() const {
-    return allocation_status_;
 }
 
 DeviceAddr Buffer::page_size() const {
