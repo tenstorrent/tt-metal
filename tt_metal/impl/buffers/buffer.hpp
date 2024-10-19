@@ -162,15 +162,6 @@ class Buffer final {
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
 
-    enum class AllocationStatus: uint8_t {
-        NOT_ALLOCATED,
-        ALLOCATION_REQUESTED,
-        ALLOCATED,
-        DEALLOCATION_REQUESTED,
-    };
-
-    AllocationStatus allocation_status() const;
-
     Device *device() const { return device_; }
     DeviceAddr size() const { return size_; }
 
@@ -248,18 +239,12 @@ class Buffer final {
     const TensorMemoryLayout buffer_layout_;
     const std::optional<bool> bottom_up_;
 
+    bool is_allocated_ = false;
+
     mutable std::mutex config_mutex_;
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
-
-    // It is possible to create a Buffer with allocate=false and then allocate it later.
-    // There is no guarantee that allocation and access happen in the same thread
-    // We track the status here to enforce access to buffer address from main thread only
-    // This is an intermediate solution till async is moved to metal
-    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::NOT_ALLOCATED;
-    mutable std::mutex allocation_mutex_;
-    std::condition_variable allocation_cv_;
 
     std::weak_ptr<Buffer> weak_self;
 };
