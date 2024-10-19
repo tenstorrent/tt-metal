@@ -958,9 +958,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
         }
     }
-
-    //uint32_t output_rows_h = output.shard_spec().value().shape[0];
-
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
     uint32_t writer_output_block_num_tiles = out_block_h_ntiles_padded * weight_block_w_ntiles;
     uint32_t output_block_num_tiles = enable_subblock_padding ? (act_block_h_ntiles_padded * weight_block_w_ntiles) : writer_output_block_num_tiles;

@@ -47,7 +47,6 @@ struct Conv2dConfig {
     bool enable_act_double_buffer = false;
     bool enable_split_reader = false;
     bool enable_subblock_padding = false;
-    //bool use_non_tile_height = false;
     static constexpr auto attribute_names = std::make_tuple(
         "math_fidelity",
         "dtype",
@@ -69,8 +68,7 @@ struct Conv2dConfig {
         "output_layout",
         "enable_act_double_buffer",
         "enable_split_reader",
-        "enable_subblock_padding"/*,
-        "use_non_tile_height"*/);
+        "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->math_fidelity),
@@ -93,8 +91,7 @@ struct Conv2dConfig {
             std::cref(this->output_layout),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_split_reader),
-            std::cref(this->enable_subblock_padding)/*,
-            std::cref(this->use_non_tile_height)*/);
+            std::cref(this->enable_subblock_padding));
     }
 };
 

@@ -55,13 +55,14 @@ inline void reblock_and_untilize(
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
     constexpr bool is_non_tile_height_= is_non_tile_height;
-    uint32_t TILE_SIZE = is_non_tile_height ? 32 : out_subblock_w;
+    uint32_t TILE_SIZE = is_non_tile_height_ ? 32 : out_subblock_w;
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
         uint32_t out_sub_block_rows_h = output_rows_h <= TILE_SIZE ? output_rows_h : TILE_SIZE;
+        uint32_t rows_to_copy = is_non_tile_height_ ? out_sub_block_rows_h : 16;
         cb_reserve_back(out_cb_id, out_sub_block_rows_h);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
@@ -71,7 +72,7 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
+            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n, rows_to_copy);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
