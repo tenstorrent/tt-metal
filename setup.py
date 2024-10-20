@@ -127,23 +127,22 @@ class CMakeBuild(build_ext):
             ).exists(), "The precompiled option is selected via `TT_FROM_PRECOMPILED` \
             env var. Please place files into `build/lib` and `runtime` folders."
         else:
+            build_dir = source_dir / "build_Release"
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
-            build_script_args = ["--build-static-libs"]
+            build_script_args = ["--build-static-libs", "--release"]
 
-            subprocess.check_call(
-                ["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env
-            )
+            subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
 
         # Some verbose sanity logging to see what files exist in the outputs
         subprocess.check_call(["ls", "-hal"], cwd=source_dir, env=build_env)
-        subprocess.check_call(["ls", "-hal", "build/lib"], cwd=source_dir, env=build_env)
+        subprocess.check_call(["ls", "-hal", str(build_dir / "lib")], cwd=source_dir, env=build_env)
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         dest_ttnn_build_dir = self.build_lib + "/ttnn/build"
         os.makedirs(dest_ttnn_build_dir, exist_ok=True)
-        self.copy_tree(source_dir / "build/lib", dest_ttnn_build_dir + "/lib")
+        self.copy_tree(build_dir / "lib", dest_ttnn_build_dir + "/lib")
         self.copy_tree(source_dir / "runtime", self.build_lib + "/runtime")
 
         # Encode ARCH_NAME into package for later use so user doesn't have to provide
