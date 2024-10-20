@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 void kernel_main() {
     uint32_t arg_idx = 0;
     volatile uint32_t* sem0 = reinterpret_cast<volatile uint32_t*>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
