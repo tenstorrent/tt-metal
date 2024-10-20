@@ -7,7 +7,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <condition_variable>
 
 #include "common/bfloat16.hpp"
 #include "common/core_coord.hpp"
@@ -144,8 +143,6 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
 inline namespace v0 {
 
 class Buffer final {
-    struct Private { explicit Private() = default; };
-
    public:
     static std::shared_ptr<Buffer> create(
         Device *device,
@@ -164,9 +161,11 @@ class Buffer final {
 
     Device *device() const { return device_; }
     DeviceAddr size() const { return size_; }
+    bool is_allocated() const { return is_allocated_; }
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
+    void set_address(uint64_t addr);
 
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
@@ -209,9 +208,8 @@ class Buffer final {
     uint32_t num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
-    BufferPageMapping generate_buffer_page_mapping() const;
 
-    // Private
+   private:
     Buffer(
         Device *device,
         DeviceAddr size,
@@ -219,43 +217,26 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
-        std::optional<bool> bottom_up,
-        Private);
+        std::optional<bool> bottom_up);
 
-   private:
     void allocate();
     void deallocate();
     static void deallocateAndDelete(Buffer* buffer);
-    void set_address(uint64_t addr);
 
     friend void DeallocateBuffer(Buffer &buffer);
-    friend void tt_metal::EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
-
-    ShardSpecBuffer shard_spec_locked() const;
-    DeviceAddr page_size_locked() const;
-    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping_locked();
-    DeviceAddr aligned_page_size_locked() const;
-    DeviceAddr aligned_size_locked() const;
-    DeviceAddr sharded_page_address_locked(uint32_t bank_id, uint32_t page_index) const;
-    DeviceAddr page_address_locked(uint32_t bank_id, uint32_t page_index) const;
-    uint32_t num_pages_locked() const;
-    uint32_t num_dev_pages_locked() const;
-    uint32_t num_cores_locked() const;
-    BufferPageMapping generate_buffer_page_mapping_locked() const;
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
     Device * const device_;
     const DeviceAddr size_; // Size in bytes
-    DeviceAddr address_ = 0;    // Address of buffer
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const std::optional<bool> bottom_up_;
+    std::atomic<bool> is_allocated_ = false;
 
-    bool is_allocated_ = false;
-
-    mutable std::mutex config_mutex_;
-    DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    // These members must be only accessed on the device worker thread
+    DeviceAddr address_ = 0; // Address of buffer
+    DeviceAddr page_size_; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
