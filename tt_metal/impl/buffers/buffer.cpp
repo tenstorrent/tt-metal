@@ -227,6 +227,7 @@ BufferPageMapping Buffer::generate_buffer_page_mapping_locked() const {
     return buffer_page_mapping;
 }
 BufferPageMapping Buffer::generate_buffer_page_mapping() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::generate_buffer_page_mapping must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return generate_buffer_page_mapping_locked();
 }
@@ -294,6 +295,7 @@ void Buffer::set_address(uint64_t addr) {
 }
 
 DeviceAddr Buffer::page_size() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::page_size must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return page_size_locked();
 }
@@ -303,6 +305,7 @@ DeviceAddr Buffer::page_size_locked() const {
 }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::set_page_size must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
     page_size_ = page_size;
@@ -313,6 +316,7 @@ uint32_t Buffer::num_pages_locked() const {
     return this->size() / this->page_size_locked();
 }
 uint32_t Buffer::num_pages() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::num_pages must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return num_pages_locked();
 }
@@ -325,6 +329,7 @@ uint32_t Buffer::num_dev_pages_locked() const {
     return this->shard_spec_locked().size() * this->num_cores_locked();
 }
 uint32_t Buffer::num_dev_pages() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::num_dev_pages must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return num_dev_pages_locked();
 }
@@ -390,6 +395,7 @@ DeviceAddr Buffer::page_address_locked(uint32_t bank_id, uint32_t page_index) co
     return translate_page_address(offset, bank_id);
 }
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::page_address must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return page_address_locked(bank_id, page_index);
 }
@@ -398,6 +404,7 @@ uint32_t Buffer::alignment() const {
     return this->device_->get_allocator_alignment();
 }
 DeviceAddr Buffer::aligned_page_size() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::aligned_page_size must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return aligned_page_size_locked();
 }
@@ -408,11 +415,13 @@ DeviceAddr Buffer::aligned_size_locked() const {
     return this->num_dev_pages_locked() * this->aligned_page_size_locked();
 }
 DeviceAddr Buffer::aligned_size() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::aligned_size must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return aligned_size_locked();
 }
 
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::sharded_page_address must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return sharded_page_address_locked(bank_id, page_index);
 }
@@ -432,11 +441,13 @@ ShardSpecBuffer Buffer::shard_spec_locked() const {
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::shard_spec must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return shard_spec_locked();
 }
 
 void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::set_shard_spec must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     this->shard_parameters_ = shard_spec;
     this->buffer_page_mapping_ = nullptr;
@@ -449,12 +460,13 @@ uint32_t Buffer::num_cores_locked() const {
     return this->shard_spec_locked().tensor_shard_spec.grid.num_cores();
 }
 uint32_t Buffer::num_cores() const {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::num_cores must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return num_cores_locked();
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address_ + this->device_->bank_offset(this->buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + this->device_->bank_offset(this->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
@@ -467,6 +479,7 @@ const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping_
 }
 
 const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
+    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::get_buffer_page_mapping must be called in device worker thread");
     std::unique_lock lock(config_mutex_);
     return get_buffer_page_mapping_locked();
 }
