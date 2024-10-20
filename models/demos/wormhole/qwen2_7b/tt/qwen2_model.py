@@ -53,8 +53,8 @@ class TtTransformer(nn.Module):
             layer_num=None,
             weight_cache_path=weight_cache_path,
             weight_dtype=dtype,
-            weight_key=None,
-            weight_name="model.norm.weight",
+            state_dict_prefix="model.",
+            weight_key="norm",
         )
 
         self.output_weight = ttnn.as_tensor(
