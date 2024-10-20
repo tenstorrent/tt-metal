@@ -220,14 +220,12 @@ TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
     command_queue.set_mode(current_mode);
 }
 
-/*
 TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
     Program program;
-    std::vector<std::shared_ptr<Buffer>> buffer_objects;
     for (int j = 0; j < 10; j++) {
         // Asynchronously initialize a buffer on device
         uint32_t first_buf_value = j + 1;
@@ -236,24 +234,13 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         uint32_t second_buf_size = 2048;
         // Asynchronously allocate buffer on device
         std::shared_ptr<Buffer> buffer = Buffer::create(this->device_, first_buf_size, first_buf_size, BufferType::DRAM);
-        // Copy the host side buffer structure to an object (i.e. reallocate on device). After reallocation the addresses should not match
-        buffer_objects.push_back(buffer);
-        // Confirm that the addresses do not match after copy/reallocation. Send async calls to get addrs, which will return post dealloc addr
         std::shared_ptr<uint32_t> allocated_buffer_address = std::make_shared<uint32_t>();
         EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address.get(), buffer.get(), true);
-        std::shared_ptr<uint32_t> allocated_buffer_address_2 = std::make_shared<uint32_t>();
-        EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address_2.get(), &(buffer_objects.back()), true);
-        // Ensure returned addrs are correct
+        // Ensure returned addr is correct
         EXPECT_EQ((*allocated_buffer_address), buffer->address());
-        EXPECT_EQ((*allocated_buffer_address_2), buffer_objects.back().address());
-        // Deallocate the second device side buffer
-        detail::DeallocateBuffer(&(buffer_objects.back()));
-        // Make the buffer_object address and the buffer address identical with a blocking call. buffer_object and buffer are now the same device side buffer
-        buffer_objects.back().set_address(*allocated_buffer_address);
 
         std::shared_ptr<std::vector<uint32_t>> vec = std::make_shared<std::vector<uint32_t>>(first_buf_size / 4, first_buf_value);
-        std::vector<uint32_t> readback_vec_1 = {};
-        std::vector<uint32_t> readback_vec_2 = {};
+        std::vector<uint32_t> readback_vec = {};
         // Write first vector to existing on device buffer.
         EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
         // Reallocate the vector in the main thread after asynchronously pushing it (ensure that worker still has access to this data)
@@ -267,17 +254,13 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
         // Have main thread give up ownership immediately after writing
         vec.reset();
         // Read both buffer and ensure data is correct
-        EnqueueReadBuffer(this->device_->command_queue(), buffer_objects.back(), readback_vec_1, false);
-        EnqueueReadBuffer(this->device_->command_queue(), buffer, readback_vec_2, true);
-        for (int i = 0; i < readback_vec_1.size(); i++) {
-            EXPECT_EQ(readback_vec_1[i], first_buf_value);
-        }
-        for (int i = 0; i < readback_vec_2.size(); i++) {
-            EXPECT_EQ(readback_vec_2[i], second_buf_value);
+        EnqueueReadBuffer(this->device_->command_queue(), buffer, readback_vec, true);
+        for (int i = 0; i < readback_vec.size(); i++) {
+            EXPECT_EQ(readback_vec[i], second_buf_value);
         }
     }
     command_queue.set_mode(current_mode);
-}*/
+}
 
 TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
