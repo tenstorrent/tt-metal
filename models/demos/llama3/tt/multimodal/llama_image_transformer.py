@@ -10,7 +10,7 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_image_block import TtLlamaImageTransformerBlock
+from models.demos.llama3.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 
 
 class TtLlamaImageTransformer(LightweightModule):

@@ -26,52 +26,16 @@ from models.utility_functions import (
 from models.utility_functions import (
     nearest_32,
 )
-from models.demos.llama3.tt.llama_positional_embedding import (
-    TtLlamaPositionalEmbedding,
+from models.demos.llama3.tt.multimodal.llama_tile_position_embedding import (
+    TtLlamaTilePositionEmbedding,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 
 import importlib
 
-
-##### Torch op #####
-class PositionalEmbedding(nn.Module):
-    def __init__(self, image_size, patch_size, max_num_tiles, width):
-        super().__init__()
-
-        self.grid_size = (
-            image_size[0] // patch_size[0],
-            image_size[1] // patch_size[1],
-        )
-
-        scale = width**-0.5
-        self.positional_embedding = nn.Parameter(scale * torch.randn(self.grid_size[0] * self.grid_size[1] + 1, width))
-
-        self.gated_positional_embedding = nn.Parameter(
-            scale
-            * torch.randn(
-                max_num_tiles,
-                max_num_tiles,
-                self.grid_size[0] * self.grid_size[1] + 1,
-                width,
-            )
-        )
-        self.gated_positional_embedding_gate = nn.Parameter(torch.randn(1))
-
-    def forward(self, x, ar):
-        assert x.shape[2] == (self.grid_size[0] * self.grid_size[1] + 1), "Input tensor shape is not correct!"
-        # apply regular position embedding
-        bsz, num_chunks, num_tokens, dim = x.shape
-        x = x.view(bsz * num_chunks, num_tokens, dim)
-
-        x = x + self.positional_embedding * (1 - self.gated_positional_embedding_gate.tanh())
-        x = x.view(bsz, num_chunks, num_tokens, dim)
-
-        for idx, arx in enumerate(ar):
-            _pos_embed = self.gated_positional_embedding[: arx[0], : arx[1]]
-            _pos_embed = _pos_embed.reshape(arx[0] * arx[1], *_pos_embed.shape[2:])
-            x[idx, : arx[0] * arx[1]] += _pos_embed * self.gated_positional_embedding_gate.tanh()
-        return x
+llama_reference_mod = importlib.import_module(
+    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
+)
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -85,15 +49,20 @@ class PositionalEmbedding(nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "image_size, patch_size",
+    "gated",
     [
-        ((448, 448), (14, 14)),
+        True,
     ],
 )
 @pytest.mark.parametrize(
-    "input_shape, max_num_tiles",
+    "input_shape, dim, max_num_tiles",
     [
-        ((1, 4, 4, 1024 + 1, 1280), 4),
+        ((1, 32, 4, 1032), 1280, 4),
+        ((1, 8, 4, 1032), 1280, 4),
+        ((1, 4, 4, 1032), 1280, 4),
+        ((1, 1, 4, 1032), 1280, 4),
+        ((1, 1, 4, 1024), 1280, 4),
+        # ((1, 32, 16, 1032), 1280, 16), # Large test, takes some time
     ],
 )
 @pytest.mark.parametrize(
@@ -102,32 +71,35 @@ class PositionalEmbedding(nn.Module):
         ttnn.TILE_LAYOUT,
     ],
 )
-def test_llama_positional_embedding_inference(
+def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
     input_shape,
     layout,
-    # Positional Embedding params
-    image_size,
-    patch_size,
+    # Tile Position Embedding params
+    dim,
+    gated,
     max_num_tiles,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
     pcc = 0.9999
 
-    devices = mesh_device.get_devices()
-    num_devices = len(devices)
+    mesh_device.enable_async(True)
 
-    (
-        bsz,
-        num_concurrent_media,
-        num_chunks,
-        ntok,
-        dim,
-    ) = input_shape
+    model_args = TtModelArgs(mesh_device)
+    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = "vision_model.vision_encoder.pre_tile_pos_embed."
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    num_devices = model_args.num_devices
+
+    bsz, num_concurrent_media, num_chunks, ntok = input_shape
 
     ##### Check parms #####
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"
@@ -160,28 +132,30 @@ def test_llama_positional_embedding_inference(
     tt_aspect_ratios = aspect_ratios.tolist()
 
     ##### Perform the torch ops #####
-    reference_model = PositionalEmbedding(
-        image_size=image_size,
-        patch_size=patch_size,
-        max_num_tiles=max_num_tiles,
+    reference_model = llama_reference_mod.TilePositionEmbedding(
+        num_tiles=max_num_tiles,
         width=dim,
+        gated=gated,
     )
+    reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor, aspect_ratios)
 
     ##### Perform the TT ops #####
-    tt_model = TtLlamaPositionalEmbedding(
+    tt_model = TtLlamaTilePositionEmbedding(
         mesh_device,
-        positional_embedding=reference_model.positional_embedding,
-        gated_positional_embedding=reference_model.gated_positional_embedding,
-        gated_positional_embedding_gate=reference_model.gated_positional_embedding_gate,
+        state_dict=state_dict,
+        state_dict_prefix=first_layer_prefix,
         dtype=dtype,
+        num_tiles=max_num_tiles,
+        width=dim,
+        gated=gated,
     )
     tt_output = tt_model(tt_input_tensor, tt_aspect_ratios)
 
     ##### Check the outputs #####
     logger.info("Checking outputs")
     out = ttnn.from_device(tt_output)
-    tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim]
@@ -192,7 +166,7 @@ def test_llama_positional_embedding_inference(
     logger.info(f"PCC: {pcc_message}")
 
     if passing:
-        logger.info(f"Llama_PositionalEmbedding Passed!")
+        logger.info(f"Llama_TilePositionEmbedding Passed!")
     else:
-        logger.warning(f"Llama_PositionalEmbedding Failed!")
+        logger.warning(f"Llama_TilePositionEmbedding Failed!")
         assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

@@ -11,10 +11,11 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.llama3.tt.llama_cross_attention import TtLlamaCrossAttention
+from models.demos.llama3.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
+    prepare_inputs_ttnn,
 )
 from models.utility_functions import (
     comp_pcc,
@@ -26,7 +27,7 @@ from models.utility_functions import skip_for_grayskull
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "vision_seq_len",
-    (5120,),
+    (4224,),
 )
 @pytest.mark.parametrize(
     "text_seq_len",
@@ -129,10 +130,17 @@ def test_llama_cross_attention_inference(
         mode = "prefill" if i == 0 else "decode"
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
-        tt_x = prepare_inputs_ttnn_prefill(
-            tt_x,
-            mesh_device,
-        )
+        if mode == "prefill":
+            tt_x = prepare_inputs_ttnn_prefill(
+                tt_x,
+                mesh_device,
+            )
+        else:
+            tt_x = prepare_inputs_ttnn(
+                tt_x,
+                model_args.dim,
+                mesh_device,
+            )
 
         xattn_mask = torch.bernoulli(
             torch.full(
@@ -156,6 +164,14 @@ def test_llama_cross_attention_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        if mode == "decode":
+            tt_xattn_mask = ttnn.reshape(
+                tt_xattn_mask,
+                shape=ttnn.Shape(
+                    [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
+                    [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
+                ),
+            )
 
         full_text_mask = torch.bernoulli(
             torch.full(
@@ -176,6 +192,14 @@ def test_llama_cross_attention_inference(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        if mode == "decode":
+            tt_full_text_mask = ttnn.reshape(
+                tt_full_text_mask,
+                shape=ttnn.Shape(
+                    [batch, n_heads // model_args.num_devices, seq_len, head_dim],
+                    [batch, n_heads // model_args.num_devices, 32, head_dim],
+                ),
+            )
 
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
@@ -189,11 +213,11 @@ def test_llama_cross_attention_inference(
             mode=mode,
         )
 
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
-            0, ..., :seq_len, :
-        ].view(batch, seq_len, dim)
-        # tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))#.view(batch, text_seq_len, -1)
-
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        if mode == "prefill":
+            tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(batch, seq_len, dim)
+        else:
+            tt_output_torch = tt_output_torch[0, ..., :batch, :].transpose(0, 1).view(batch, seq_len, dim)
         passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc)
         logger.info(comp_allclose(pt_out, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
