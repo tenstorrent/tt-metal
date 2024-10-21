@@ -129,6 +129,35 @@ def device(request, device_params):
 
 
 @pytest.fixture(scope="function")
+def multi_device(request, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() < 2:
+        device_id = request.config.getoption("device_id")
+        request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
+        num_devices = ttnn.GetNumPCIeDevices()
+        assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
+        device = ttnn.CreateDevice(device_id=device_id, dispatch_core_type=get_dispatch_core_type(), **device_params)
+        ttnn.SetDefaultDevice(device)
+        yield device
+        ttnn.DumpDeviceProfiler(device)
+        ttnn.synchronize_device(device)
+        ttnn.close_device(device)
+    else:
+        mesh_device = ttnn.open_mesh_device(
+            ttnn.MeshShape(1, 2),
+            dispatch_core_type=get_dispatch_core_type(),
+            **device_params,
+        )
+        logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+        yield mesh_device
+        for device in mesh_device.get_devices():
+            ttnn.DumpDeviceProfiler(device)
+        ttnn.close_mesh_device(mesh_device)
+        del mesh_device
+
+
+@pytest.fixture(scope="function")
 def pcie_devices(request, device_params):
     import ttnn
 
