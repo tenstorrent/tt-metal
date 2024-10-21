@@ -11,6 +11,10 @@ import os
 import ttnn
 import math
 import pytest
+import requests
+from pathlib import Path
+import hashlib
+
 from models.demos.llama3.tt.llama_common import (
     get_single_rot_mat,
     get_prefill_rot_mat,
@@ -27,6 +31,31 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 
 
+def load_and_cache_context(context_url, cache_dir):
+    cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
+
+    if cache_file.exists():
+        with open(cache_file, "r") as f:
+            context_text = f.read()
+        logger.info(f"Loaded context from cache: {context_url}")
+    else:
+        try:
+            response = requests.get(context_url)
+            if response.status_code == 200:
+                context_text = response.text
+                with open(cache_file, "w") as f:
+                    f.write(context_text)
+                logger.info(f"Downloaded and cached context: {context_url}")
+            else:
+                logger.warning(f"Failed to fetch context from URL: {context_url}. Status code: {response.status_code}")
+                context_text = ""
+        except Exception as e:
+            logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
+            context_text = ""
+
+    return context_text
+
+
 # load from json, return as a list
 def load_inputs(user_input, batch):
     if isinstance(user_input, str):
@@ -34,8 +63,15 @@ def load_inputs(user_input, batch):
             user_input = json.load(f)
     assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
     in_prompt = []
+    cache_dir = Path("models/demos/llama3/demo/context_cache")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
     for i in range(batch):
-        in_prompt.append(user_input[i]["prompt"])
+        prompt = user_input[i]["prompt"]
+        if "context" in user_input[i]:
+            context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
+            prompt = context_text + "\n\n" + prompt
+        in_prompt.append(prompt)
     return in_prompt
 
 
@@ -45,19 +81,22 @@ def preprocess_inputs_prefill(
     model_args,
     instruct,
     max_generated_tokens,
-    max_prefill_len=16 * 1024,
+    max_prefill_len=128 * 1024,
 ):
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
     # The maximum KV-cache len supported is 32k. To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
-    if max_prefill_len == 16 * 1024:
-        max_prefill_len = 16 * 1024 - max_generated_tokens
+    if max_prefill_len == 128 * 1024:
+        max_prefill_len = 128 * 1024 - max_generated_tokens
 
     if instruct:
         encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
     else:
         encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+
+    # Print the length of encoded prompts
+    logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
 
     prompt_lens = [len(x) for x in encoded_prompts]
     min_prompt_len = min(prompt_lens)
@@ -70,7 +109,7 @@ def preprocess_inputs_prefill(
         if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
             encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
             dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
-            encoded_prompts = [tokenizer.encode(prompt) for prompt in dec_prompts]
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in dec_prompts]
         else:
             encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
 
@@ -113,7 +152,7 @@ def preprocess_inputs_prefill(
     )
 
 
-def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_ci_env, num_batches, print_to_file):
+def run_llama3_demo(user_input, batch_size, mesh_device, instruct_mode, is_ci_env, num_batches, print_to_file):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_directory = "models/demos/llama3/demo/output"
@@ -171,7 +210,8 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
     )
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     logger.info("Finished loading weights to device. Starting inference...")
     max_generated_tokens = 100  # Maximum number of tokens to generate per user
@@ -249,7 +289,7 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
             )
             ttnn.deallocate(tt_out)
 
-        logger.info(f"Prefill finished !")
+        logger.info(f"Prefill finished")
 
         # Preparing first decode token
         pt_out_batched = torch.stack(pt_out, dim=-2)
@@ -417,26 +457,31 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
                 users_decoding = False
 
             if not users_decoding:
-                with open(output_filename, "a") as f:
-                    for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                        text = tokenizer.decode(output)
-                        if instruct_mode:
-                            split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
-                        else:
-                            split_text = text.split(prompt, 1)
-                        if len(split_text) > 1:
-                            text_after_prompt = split_text[1]
-                        else:
-                            text_after_prompt = text  # If prompt is not found, use the whole text
-                        if print_to_file:
+                for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
+                    text = tokenizer.decode(output)
+                    if instruct_mode:
+                        split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
+                    else:
+                        split_text = text.split(prompt, 1)
+                    if len(split_text) > 1:
+                        text_after_prompt = split_text[1]
+                    else:
+                        text_after_prompt = text  # If prompt is not found, use the whole text
+                    if print_to_file:
+                        with open(output_filename, "a") as f:
                             f.write(
                                 f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt}\n"
                             )
-                        else:
-                            # Strip leading newlines from output when sent to terminal
-                            logger.info(
-                                f"\nbatch: {batch_idx} user: {i}\nprompt: {prompt} \noutput:\n{text_after_prompt.strip()}\n"
-                            )
+                    else:
+                        # Strip leading newlines from output when sent to terminal
+                        short_prompt = (
+                            (prompt[:100] + "\n<long prompt not printed in full>\n" + prompt[-100:])
+                            if len(prompt) > 200
+                            else prompt
+                        )
+                        logger.info(
+                            f"\nbatch: {batch_idx} user: {i}\nprompt: {short_prompt} \noutput:\n{text_after_prompt.strip()}\n"
+                        )
 
         # Calculate and print average decoding speed (ignoring the first iteration)
         if total_tokens_generated > 0:
@@ -461,12 +506,14 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
         ("models/demos/llama3/demo/input_data_prefill_128.json", False, 3),
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 1),
         ("models/demos/llama3/demo/input_data_questions_prefill_128.json", True, 3),
+        ("models/demos/llama3/demo/input_data_long.json", True, 1),
     ],
     ids=[
         "general_weights-1_batch",
         "general_weights-3_batch",
         "instruct_weights-1_batch",
         "instruct_weights-3_batch",
+        "instruct_weights-long",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 5560320, "num_command_queues": 2}], indirect=True)
@@ -482,10 +529,12 @@ def run_llama_demo_n300(user_input, batch_size, mesh_device, instruct_mode, is_c
 def test_llama_demo(mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
+    if is_ci_env and "long" in input_prompts:
+        pytest.skip("CI demo test does not run the long prompt to reduce CI pipeline load")
 
     mesh_device.enable_async(True)
 
-    return run_llama_demo_n300(
+    return run_llama3_demo(
         user_input=input_prompts,
         batch_size=1,
         mesh_device=mesh_device,

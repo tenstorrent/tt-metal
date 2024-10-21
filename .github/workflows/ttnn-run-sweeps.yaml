@@ -146,6 +146,7 @@ on:
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_different_memory_configs
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
@@ -154,6 +155,8 @@ on:
           - eltwise.unary.prelu.prelu
           - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.unary.hardtanh.hardtanh_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.reglu.reglu
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
@@ -276,14 +279,14 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
+          python tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
+          python tests/sweep_framework/sweeps_parameter_generator.py --elastic cloud --tag ci-main --explicit
 
   ttnn-run-sweeps:
     needs: ttnn-generate-sweeps
@@ -337,11 +340,11 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
+          python tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main --suite-name nightly
+          python tests/sweep_framework/sweeps_runner.py --elastic cloud --tag ci-main --suite-name nightly

@@ -84,6 +84,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
+    bool exp_approx_mode = program_config.has_value() ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true) : true;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
@@ -278,6 +279,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
+    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     uint32_t balanced_q_parallel = (is_causal && (q_per_core * q_parallel_factor == q_num_chunks) && (q_per_core % 2 == 0));
     if (balanced_q_parallel) {
         defines["BALANCED_Q_PARALLEL"] = "1";
@@ -318,7 +320,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                  : tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df = tt::DataFormat::Float16_b; // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
 
     uint32_t q_tile_size = tt::tt_metal::detail::TileSize(q_df);
