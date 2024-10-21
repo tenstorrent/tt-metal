@@ -7,10 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 1
-
-#define dump(a) \
-    do { DPRINT << "Halo:"<< #a "=" << a << ENDL(); } while(false);
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -117,20 +114,6 @@ void kernel_main() {
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
-
-    /*dump(padding_config_cb_id);*/
-    /*dump(local_config_cb_id);*/
-    /*dump(remote_config_cb_id);*/
-    /*dump(src_cb_id);*/
-    /*dump(in_cb_id);*/
-    /*dump(out_cb_id);*/
-    /*dump(pad_core_id);*/
-    /*dump(pad_val_u32);*/
-    /*dump(in_nsticks);*/
-    /*dump(stick_nbytes);*/
-    /*dump(is_block_sharded);*/
-    /*dump(remote_read);*/
-    /*dump(is_width_sharded);*/
 
     uint32_t input_aligned_page_size = get_arg_val<uint32_t>(0);
 

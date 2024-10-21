@@ -18,7 +18,6 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace std;
 using namespace tt;
 namespace ttnn {
 namespace operations::conv {

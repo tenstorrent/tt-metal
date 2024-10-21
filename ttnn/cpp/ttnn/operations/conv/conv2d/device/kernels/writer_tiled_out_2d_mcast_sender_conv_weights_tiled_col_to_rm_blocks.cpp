@@ -4,12 +4,10 @@
 
 #include "dataflow_api.h"
 
-
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
-
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -203,18 +201,19 @@ void kernel_main() {
                         weights_mcast_dest_noc_end_y,
                         weights_start_address);
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, false, false);
+                    noc_async_write_multicast(weights_start_address, weights_multicast_data_addr, weights_block_size_bytes, weights_mcast_num_cores, true, true);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same cmd_buf
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                     // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
-
+#ifdef ARCH_BLACKHOLE
+                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
+                    noc_async_writes_flushed();
+#endif
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores, false, false);
+                    noc_semaphore_set_multicast(weights_mcast_receiver_semaphore_addr, weights_mcast_receiver_semaphore_noc_addr, weights_mcast_num_cores);
                 #endif
-                /*DPRINT << "Going to push back weight block = " << weight_block_num_tiles << ENDL();*/
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
-                /*DPRINT << "Pushed back weight block = " << weight_block_num_tiles << ENDL();*/
             } // for weight_block_height_num_outer
 
 

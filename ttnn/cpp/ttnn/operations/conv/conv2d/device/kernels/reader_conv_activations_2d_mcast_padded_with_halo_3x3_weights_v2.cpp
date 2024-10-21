@@ -10,7 +10,6 @@
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 
-
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
     for (uint32_t page = 0; page < npages; ++ page) {
@@ -117,6 +116,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
     act_mcast_sender_semaphore_valid_addr_ptr[0] = 1; // Load const 1 to be used as semaphore valid value sent from sender to receivers
     uint32_t act_mcast_sender_semaphore_valid_addr = reinterpret_cast<uint32_t>(&l1_array[0]);
+
     // Set up remote VALID value
     volatile tt_l1_ptr uint32_t* act_mcast_receiver_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_receiver_semaphore_addr);
     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, VALID);
@@ -170,7 +170,6 @@ void kernel_main() {
         }
         // incrementing num issued in one shot is actually slower
         // noc_async_read_inc_num_issued(num_issued_reads_per_block); // "false" on read
-        /*DPRINT << act_block_w_extra_align_bytes;*/
         noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
