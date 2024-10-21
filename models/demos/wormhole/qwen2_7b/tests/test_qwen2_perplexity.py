@@ -60,13 +60,20 @@ def calculate_perplexity(compute_logits_fn: Callable, dataloader, vocab_size) ->
         (8, 64, 64)
     ],
 )
-def test_qwen2_reference_perplexity(batch_size: int, max_seq_len: int, num_samples: int):
+def test_qwen2_reference_perplexity(device, batch_size: int, max_seq_len: int, num_samples: int, is_ci_env):
+    if is_ci_env:
+        pytest.skip(
+            "This test is used to generate the perplexity of the reference Qwen2-7B model and serves as the comparison goal for our TT implementation of the model. It should be run only once and not part of the CI."
+        )
+
     torch.manual_seed(0)
+
+    expected_perplexity = 19.4
 
     logger.info("Preparing dataset")
     dataset = prepare_textgen_dataset("wikitext", "wikitext-2-raw-v1", "test")
 
-    model_args = TtModelArgs("")
+    model_args = TtModelArgs(device)
 
     tokenizer = Tokenizer(model_args.tokenizer_path)
     encodings = torch.tensor(tokenizer.encode(dataset))
@@ -123,6 +130,13 @@ def test_qwen2_reference_perplexity(batch_size: int, max_seq_len: int, num_sampl
     logger.info(f"Top-1 accuracy: {top1_acc:.4f}")
     logger.info(f"Top-5 accuracy: {top5_acc:.4f}")
 
+    if ppl < expected_perplexity:
+        logger.info("Perplexity of Qwen2 reference model Passed!")
+    else:
+        assert (
+            False
+        ), f"Qwen2 reference model has the perplexity {ppl} exceeding the expected value {expected_perplexity}."
+
 
 @pytest.mark.parametrize(
     "batch_size, max_seq_len, num_samples",
@@ -131,8 +145,10 @@ def test_qwen2_reference_perplexity(batch_size: int, max_seq_len: int, num_sampl
         (8, 64, 64)
     ],
 )
-def test_qwen2_perplexity(device: str, batch_size: int, max_seq_len: int, num_samples: int):
+def test_qwen2_perplexity(device, batch_size: int, max_seq_len: int, num_samples: int):
     torch.manual_seed(0)
+
+    expected_perplexity = 26.3
 
     logger.info("Preparing dataset")
     dataset = prepare_textgen_dataset("wikitext", "wikitext-2-raw-v1", "test")
@@ -220,3 +236,8 @@ def test_qwen2_perplexity(device: str, batch_size: int, max_seq_len: int, num_sa
     logger.info(f"Perplexity: {ppl:.4f}")
     logger.info(f"Top-1 accuracy: {top1_acc:.4f}")
     logger.info(f"Top-5 accuracy: {top5_acc:.4f}")
+
+    if ppl < expected_perplexity:
+        logger.info("Perplexity of Qwen2 TT model Passed!")
+    else:
+        assert False, f"Qwen2 TT model has the perplexity {ppl} exceeding the expected value {expected_perplexity}."
