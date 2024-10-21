@@ -32,7 +32,7 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 

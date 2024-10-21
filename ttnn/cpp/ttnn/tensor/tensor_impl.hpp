@@ -254,6 +254,16 @@ void validate_sharded_buffer_allocation(
 
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile = std::nullopt);
 
+DeviceBuffer allocate_buffer_on_device(
+    size_t buffer_size_bytes,
+    Device* device,
+    const ttnn::SimpleShape& shape,
+    DataType data_type,
+    Layout layout,
+    const MemoryConfig& memory_config,
+    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt,
+    const std::optional<Tile>& tile = std::nullopt);
+
 template <typename T>
 inline void read_data_from_device_buffer(
     CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {

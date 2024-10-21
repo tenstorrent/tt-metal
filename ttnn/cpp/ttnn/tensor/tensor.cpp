@@ -680,7 +680,7 @@ Tensor create_device_tensor(
         ShardSpecBuffer shard_spec_buffer(shard_spec, page_shape, tensor2d_size);
         size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = ttnn::allocate_buffer_on_device(
+        auto device_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, shard_spec_buffer, tile);
 
         auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
@@ -690,7 +690,7 @@ Tensor create_device_tensor(
     } else {
         size_t packed_size_in_bytes =
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
-        auto device_buffer = ttnn::allocate_buffer_on_device(
+        auto device_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, std::nullopt, tile);
         auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
         output = tt::tt_metal::set_tensor_id(output);

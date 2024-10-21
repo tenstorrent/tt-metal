@@ -59,7 +59,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -110,7 +110,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -161,7 +161,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 for (int j = 0; j < buf_size_datums; j++) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, device, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
 
