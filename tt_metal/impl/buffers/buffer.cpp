@@ -172,7 +172,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     uint32_t num_cores = buffer.num_cores();
 
     buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
-    TT_FATAL(num_cores == buffer_page_mapping.all_cores_.size(), "Mismatch in number of cores");
+    TT_FATAL(num_cores == buffer_page_mapping.all_cores_.size(), "Buffer has {} cores, but page mapping expects {} cores", num_cores, buffer_page_mapping.all_cores_.size());
     uint32_t core_id = 0;
     for (const auto &core : buffer_page_mapping.all_cores_) {
         buffer_page_mapping.core_to_core_id_.insert({core, core_id});
@@ -272,12 +272,12 @@ void Buffer::deallocateAndDelete(Buffer* buffer) {
 }
 
 uint32_t Buffer::address() const {
-    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
+    TT_FATAL(device_->can_use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
     return address_;
 }
 
 void Buffer::set_address(uint64_t addr) {
-    TT_FATAL(device_->use_passthrough_scheduling() , "Buffer::set_address must be called in device worker thread");
+    TT_FATAL(device_->can_use_passthrough_scheduling() , "Buffer::set_address must be called in device worker thread");
     address_ = addr;
 }
 
