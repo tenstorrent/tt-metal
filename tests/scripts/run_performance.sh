@@ -33,6 +33,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/convnet_mnist/tests -m $test_marker
 
+    env pytest -n auto models/demos/lenet/tests/test_perf_lenet.py -m $test_marker
+
     ## Merge all the generated reports
     env python models/perf/merge_perf_results.py
 }
@@ -94,6 +96,8 @@ run_device_perf_models() {
     env pytest models/demos/vgg/tests/ -m $test_marker
 
     env pytest models/demos/convnet_mnist/tests/ -m $test_marker
+
+    env pytest -n auto models/demos/lenet/tests -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
