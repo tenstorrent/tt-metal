@@ -157,6 +157,10 @@ on:
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.unary.reglu.reglu
+          - eltwise.unary_complex.polar.polar
+          - eltwise.unary_complex.angle.angle
+          - eltwise.unary_complex.polar_bw.polar_bw
+          - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
