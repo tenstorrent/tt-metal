@@ -55,7 +55,6 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
 
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
-    this->objcopy_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy ";
 
     // Flags
     string common_flags;
