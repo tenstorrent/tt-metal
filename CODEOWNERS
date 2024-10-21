@@ -37,6 +37,7 @@ tests/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt @afuller-TT
 # Testing scripts and infra
 
 conftest.py @tt-rkim
+/conftest.py @tt-rkim @cfjchu @SeanNijjar
 
 tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
