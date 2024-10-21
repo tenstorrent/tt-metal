@@ -8,7 +8,6 @@
 
 
 void kernel_main() {
-
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
     constexpr uint32_t core_in_channels_ntiles = get_compile_time_arg_val(1);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
@@ -106,7 +105,7 @@ void kernel_main() {
                 weight_current_block_start_tile_id += weight_next_channel_stride_h;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_id_weight,weight_block_num_tiles);
+            // cb_push_back(cb_id_weight,weight_block_num_tiles);
             weight_block_start_tile_id += weight_next_block_other_core_stride_h;
         }
         weight_start_tile_id +=weight_next_block_this_core_stride_h;

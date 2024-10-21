@@ -6,7 +6,9 @@
 #include <sys/types.h>
 #include <cstdint>
 
+#include "common/core_coord.h"
 #include "impl/buffers/buffer_constants.hpp"
+#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
@@ -223,6 +225,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    log_debug("Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -741,13 +744,24 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         }
         conv_config.deallocate_activation = true;
     }
+    auto output_parallel_config = parallel_config;
+    if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED)
+    {
+        output_parallel_config = {
+            .grid = num_cores_to_corerange_set( tt::div_up(out_channels, tt::constants::TILE_WIDTH), device->compute_with_storage_grid_size(), true),
+            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+            .shard_orientation = parallel_config.shard_orientation
+        };
+        log_debug(tt::LogOp, "Changing width sharded output grid to  {}",output_parallel_config.grid);
+
+    }
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
-        parallel_config,
-        32);
+        output_parallel_config, 32);
+    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
-        get_num_cores_channels_from_parallel_config(parallel_config));
+        conv_out_memory_config, get_num_cores_nhw_from_parallel_config(largest_parallel_config),
+        get_num_cores_channels_from_parallel_config(largest_parallel_config));
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "common/core_coord.h"
 #include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -147,12 +148,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
+    auto input_num_cores = a.shard_spec().value().grid.num_cores();
 
     // parallelization config
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    uint32_t total_num_cores = p_config.num_cores_c;
+    uint32_t output_num_cores = p_config.num_cores_c;
     TT_FATAL(num_cores_x < 13, "Error");
     TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
@@ -161,7 +163,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     // uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t input_channels_padded = shard_shape[1] * total_num_cores;
+    uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     // TT_FATAL(conv_act_c_blocks == p_config.num_cores_c, "Error");
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -259,8 +261,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
-    TT_FATAL(num_blocks_act_w%total_num_cores==0, "{} {}", num_blocks_act_w, total_num_cores);
-    uint32_t per_core_num_blocks_act_w = num_blocks_act_w/total_num_cores;
+    TT_FATAL(num_blocks_act_w%input_num_cores==0, "{} {}", num_blocks_act_w, input_num_cores);
+    uint32_t per_core_num_blocks_act_w = num_blocks_act_w/input_num_cores;
 
 
     // act block info
@@ -307,9 +309,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
-    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32*total_num_cores*per_core_num_blocks_act_w);
-    TT_FATAL(input_channels_padded>=(TILE_HEIGHT*total_num_cores), "Error");
-    TT_FATAL(input_channels_padded%(TILE_HEIGHT*total_num_cores)==0, "Error");
+    uint32_t weight_block_in_channels_ntiles = input_channels_padded/(32 * input_num_cores * per_core_num_blocks_act_w);
+    TT_FATAL(input_channels_padded>=(TILE_HEIGHT * input_num_cores), "Error");
+    TT_FATAL(input_channels_padded%(TILE_HEIGHT * input_num_cores)==0, "Error");
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
@@ -398,10 +400,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
 
     //Number of bytes to be read from the channel dimension in one block.
-    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (total_num_cores*per_core_num_blocks_act_w);
+    uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
-    //Compute only on cores that have an input shard.
-    CoreRangeSet all_cores = a.memory_config().shard_spec.value().grid;
+    //Choose the largest shard spec to determine all cores.
+    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    if(input_cores.num_cores()>output_cores.num_cores()){
+        all_cores = a.memory_config().shard_spec.value().grid;
+    }
 
 
     // log info for debugging opts
@@ -511,7 +518,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)filter_w, //Input filter window width
         (uint32_t)act_block_h_datums,
         (uint32_t)act_block_num_tiles,
-        (uint32_t)total_num_cores,
+        (uint32_t)input_num_cores,
         (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
@@ -520,7 +527,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)act_mcast_end.x,
         (uint32_t)act_mcast_end.y,
         (uint32_t)act_block_num_tiles*tt_metal::detail::TileSize(tilized_act_df),
-        (uint32_t)total_num_cores
+        (uint32_t)output_num_cores
     };
     weights_kernel_compile_args = {
         weight_cb,                                                  //cb_id_weight
@@ -533,7 +540,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_this_core_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
                                          per_core_num_blocks_act_w,
-        total_num_cores,                                            //other_core_weight_height_blocks
+        output_num_cores,                                            //other_core_weight_height_blocks
         per_core_num_blocks_act_w,                                  //this_core_weight_height_blocks
         bias_cb,
         bias_in_dram
@@ -554,7 +561,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         writer_defines["SHARDED_OUT"] = "1";
         writer_mcast_sender_defines["SHARDED_OUT"] = "1";
     }
-    if (total_num_cores == 1) {
+    if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
@@ -602,7 +609,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
         bias_ntiles_per_core,
 
-        total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
+        input_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
     bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
@@ -757,7 +764,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     {
         bias_base_address = bias.value().buffer()->address();
     }
-
+    auto total_num_cores = std::max(input_num_cores, output_num_cores);
     for(uint32_t core_index = 0; core_index < total_num_cores; core_index++) {
         uint32_t core_x = core_index % full_core_grid.x;
         uint32_t core_y = core_index / full_core_grid.x;
