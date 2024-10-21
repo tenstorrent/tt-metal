@@ -29,7 +29,7 @@ SECTIONS
   {
     KEEP (*(SORT_NONE(.init)))
   } > REGION_APP_CODE
-  PROVIDE (__ecode_l1 = .);
+/*  PROVIDE (__ecode_l1 = .);*/
   /* TODO: add back when using iram code loading
   .text :
 
