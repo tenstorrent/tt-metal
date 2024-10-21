@@ -7,11 +7,11 @@ import os
 import pathlib
 import pprint
 from elasticsearch import Elasticsearch, NotFoundError
-from tests.sweep_framework.statuses import TestStatus
+from tests.sweep_framework.framework.statuses import TestStatus
 from beautifultable import BeautifulTable, STYLE_COMPACT
 from termcolor import colored
-from elastic_config import *
-from sweeps_logger import sweeps_logger as logger
+from framework.elastic_config import *
+from framework.sweeps_logger import sweeps_logger as logger
 
 
 @click.group()

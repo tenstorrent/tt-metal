@@ -60,7 +60,7 @@ jobs:
       - name: Check sweeps workflow option count against sweep file count
         run: |
           pip install pyyaml
-          python tests/sweep_framework/sweeps_workflow_verification.py
+          python tests/sweep_framework/framework/sweeps_workflow_verification.py
   clang-tidy:
     runs-on: ubuntu-latest
     container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
