@@ -199,6 +199,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                 .set_page_size(out0_cb, output_shard_shape[1] * num_bytes_for_df);
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
             cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            log_debug(LogOp, "output CB: {}, npages: {}, pagesize: {}", out0_cb, output_shard_shape[0] * output_shard_shape[1], output_shard_shape[1] * num_bytes_for_df);
         } else {
             CircularBufferConfig cb_output_config =
                 CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{out0_cb, out_df}})
