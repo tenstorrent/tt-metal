@@ -56,12 +56,41 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> Reduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+//std::vector<ttnn::SimpleShape> Reduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+//    const auto& input_tensor = input_tensors.at(0);
+//
+//    auto output_shape = input_tensor.get_legacy_shape();
+//    std::cout << "------------" << std::endl;
+//    std::cout << "computing output shapes for reduce: " << output_shape << std::endl;
+//    auto padding = output_shape.padding();
+//    switch (this->dim) {
+//        case ReduceOpDim::H:
+//            output_shape[2] = TILE_HEIGHT;
+//            padding[2] = Padding::PadDimension{0, 31};
+//            break;
+//        case ReduceOpDim::W:
+//            output_shape[3] = TILE_WIDTH;
+//            padding[3] = Padding::PadDimension{0, 31};
+//            break;
+//        case ReduceOpDim::HW:
+//            output_shape[2] = TILE_HEIGHT;
+//            output_shape[3] = TILE_WIDTH;
+//            padding[2] = Padding::PadDimension{0, 31};
+//            padding[3] = Padding::PadDimension{0, 31};
+//            break;
+//    }
+//    auto output2 = tt::tt_metal::LegacyShape(output_shape, padding);
+//    std::cout << output2 << std::endl;
+//    std::cout << output2.logical_shape() << std::endl;
+//    return {tt::tt_metal::LegacyShape(output_shape, padding).logical_shape()};
+//}
+
+std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensor.get_legacy_shape();
     std::cout << "------------" << std::endl;
-    std::cout << "computing output shapes for reduce: " << output_shape << std::endl;
+    std::cout << "computing output specs for reduce: " << output_shape << std::endl;
     auto padding = output_shape.padding();
     switch (this->dim) {
         case ReduceOpDim::H:
@@ -79,14 +108,8 @@ std::vector<ttnn::SimpleShape> Reduce::compute_output_shapes(const std::vector<T
             padding[3] = Padding::PadDimension{0, 31};
             break;
     }
-    auto output2 = tt::tt_metal::LegacyShape(output_shape, padding);
-    std::cout << output2 << std::endl;
-    std::cout << output2.logical_shape() << std::endl;
-    return {tt::tt_metal::LegacyShape(output_shape, padding).logical_shape()};
-}
-
-std::vector<TensorLayout> Reduce::compute_output_layouts(const std::vector<Tensor>& input_tensors) const {
-    return {TensorLayout::fromLegacyPaddedShape(this->output_dtype, PageConfig(Layout::TILE), this->output_mem_config, input_tensors.at(0).get_padded_shape())};
+    auto output_shape_with_padding = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padding));
+    return {std::pair(output_shape_with_padding.logical_shape(), TensorLayout::fromLegacyPaddedShape(this->output_dtype, PageConfig(Layout::TILE), this->output_mem_config, output_shape_with_padding.padded_shape()))};
 }
 
 //std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
