@@ -6,12 +6,12 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import MatmulTestBase, get_blackhole_grid_size
+from tests.didt.matmul_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 
 
-class LMHeadTest(MatmulTestBase):
+class LMHeadTest(OpTestBase):
     def __init__(
         self,
         mesh_device,
@@ -50,18 +50,8 @@ class LMHeadTest(MatmulTestBase):
             determinism_check_iterations,
         )
 
-    def generate_weights(self, shape):
+    def generate_torch_weights(self, shape):
         return torch.randn(shape) - 0.95
-
-    def run_device_operation(self):
-        return ttnn.matmul(
-            self.activations,
-            self.weights,
-            program_config=self.program_config,
-            memory_config=self.out_mem_config,
-            dtype=self.out_dtype,
-            compute_kernel_config=self.compute_config,
-        )
 
 
 @pytest.mark.parametrize(
@@ -139,7 +129,7 @@ def test_lm_head_matmul(
     )
 
     # Run test
-    lm_head_test.run_matmul()
+    lm_head_test.run_op_test()
 
 
 @skip_for_blackhole("Multi-chip Blackhole has not been tested")
