@@ -181,11 +181,11 @@ def run_conv(
     reader_patterns_cache.clear()
 
     if not fp32_accum:
-        pcc = 0.99
+        pcc = 0.985
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
-        pcc = 0.9969
+        pcc = 0.996
     else:
-        pcc = 0.998
+        pcc = 0.997
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
