@@ -663,7 +663,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                 .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                         }
                     } else {
-                        vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                        vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                             device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                                 kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(

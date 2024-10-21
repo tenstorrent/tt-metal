@@ -336,8 +336,10 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
 
     TT_ASSERT(num_edm_channels % 2 == 0, "For line topologies, we expect a multiple of 2 number of channels for the algorithm and worker kernels to work.");
     const std::size_t workers_per_direction = num_edm_channels / num_directions_per_line;
-    auto const& lower_half_of_cores = CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1))});
-    auto const& upper_half_of_cores = CoreRangeSet({CoreRange(CoreCoord(workers_per_direction, 0), CoreCoord(num_edm_channels - 1, num_links - 1))});
+    auto const& lower_half_of_cores =
+        CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1)));
+    auto const& upper_half_of_cores = CoreRangeSet(
+        CoreRange(CoreCoord(workers_per_direction, 0), CoreCoord(num_edm_channels - 1, num_links - 1)));
     if (topology_config.ring_index == 0) {
         log_trace(tt::LogOp, "Start of line, putting CCL send cores in lower half");
         return {upper_half_of_cores, lower_half_of_cores};
@@ -348,7 +350,9 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
         return {lower_half_of_cores, upper_half_of_cores};
     } else {
         log_trace(tt::LogOp, "Middle of line - no CCL kernel");
-        return {CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))}), std::nullopt};
+        return {
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))),
+            std::nullopt};
     }
 }
 
@@ -376,9 +380,11 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores(
         }
 
         case ttnn::ccl::Topology::Ring:
-            return {CoreRangeSet({CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))}), std::nullopt};
+            return {
+                CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_edm_channels - 1, num_links - 1))),
+                std::nullopt};
 
-        default: TT_ASSERT(false, "Unsupported topology"); return {CoreRangeSet({}), std::nullopt};
+        default: TT_ASSERT(false, "Unsupported topology"); return {CoreRangeSet(), std::nullopt};
     };
 }
 
