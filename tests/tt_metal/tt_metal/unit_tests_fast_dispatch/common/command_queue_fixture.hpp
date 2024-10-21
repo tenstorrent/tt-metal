@@ -10,7 +10,9 @@
 #include "common/core_coord.h"
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
+#include "impl/buffers/circular_buffer_types.hpp"
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
@@ -164,6 +166,8 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
      static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
      static const uint32_t MIN_NUM_SEMS = 0;
      static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+     static const uint32_t MIN_NUM_CBS = 0;
+     static const uint32_t MAX_NUM_CBS = NUM_CIRCULAR_BUFFERS;
      static const uint32_t SEM_VAL = 1;
      static const uint32_t NUM_PROGRAMS = 75;
 
@@ -185,6 +189,8 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          const bool simple_kernel = false,
          const uint32_t min_num_sems = MIN_NUM_SEMS,
          const uint32_t max_num_sems = MAX_NUM_SEMS,
+         const uint32_t min_num_cbs = MIN_NUM_CBS,
+         const uint32_t max_num_cbs = MAX_NUM_CBS,
          const uint32_t min_num_rt_args = MIN_NUM_RUNTIME_ARGS,
          const uint32_t max_num_rt_args = MAX_NUM_RUNTIME_ARGS,
          const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
@@ -199,14 +205,22 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          } else {
              const vector<uint32_t> sem_ids =
                  this->generate_semaphores(program, cores, kernel_core_type, min_num_sems, max_num_sems);
+
+             vector<uint32_t> cb_indices;
+            if (!create_eth_config) {
+                cb_indices = this->generate_circular_buffers(program, cores, min_num_cbs, max_num_cbs);
+            }
+
              const auto [unique_rt_args, common_rt_args] =
-                 this->generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
-             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+                 this->generate_runtime_args(sem_ids, cb_indices, min_num_rt_args, max_num_rt_args);
+             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - cb_indices.size();
+
              KernelHandle kernel_id = this->create_kernel(
                  program,
                  cores,
                  create_eth_config,
                  sem_ids.size(),
+                 cb_indices.size(),
                  num_unique_rt_args,
                  common_rt_args.size(),
                  min_kernel_size_bytes,
@@ -233,13 +247,34 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          return sem_ids;
      }
 
+     vector<uint32_t> generate_circular_buffers(
+         Program &program,
+         const CoreRangeSet &cores,
+         const uint32_t min = MIN_NUM_CBS,
+         const uint32_t max = MAX_NUM_CBS) {
+         const uint32_t num_cbs = this->generate_random_num(min, max);
+         vector<uint32_t> cb_indices;
+         for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
+            CircularBufferConfig config(1024, {{cb_idx, tt::DataFormat::Float16_b}});
+            config.set_page_size(cb_idx, 16);
+            CreateCircularBuffer(program, cores, config);
+            cb_indices.push_back(cb_idx);
+         }
+         return cb_indices;
+     }
+
      pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
          const vector<uint32_t> &sem_ids,
+         const vector<uint32_t> &cb_indices,
          const uint32_t min = MIN_NUM_RUNTIME_ARGS,
          const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
          const uint32_t num_sems = sem_ids.size();
-         TT_FATAL(max >= num_sems, "Max number of runtime args to generate must be >= number of semaphores created");
-         const uint32_t max_num_unique_rt_args = max - num_sems;
+         const uint32_t num_cbs = cb_indices.size();
+         TT_FATAL(
+             max >= num_sems + num_cbs,
+             "Max number of runtime args to generate must be >= number of semaphores + number of circular buffers "
+             "created");
+         const uint32_t max_num_unique_rt_args = max - num_sems - num_cbs;
          const uint32_t num_unique_rt_args = this->generate_random_num(min, max_num_unique_rt_args);
 
          const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
@@ -249,6 +284,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              num_unique_rt_args, num_common_rt_args, UNIQUE_RUNTIME_ARGS_VAL_OFFSET, COMMON_RUNTIME_ARGS_VAL_OFFSET);
 
          unique_rt_args.insert(unique_rt_args.end(), sem_ids.begin(), sem_ids.end());
+         unique_rt_args.insert(unique_rt_args.end(), cb_indices.begin(), cb_indices.end());
 
          return {unique_rt_args, common_rt_args};
      }
@@ -261,6 +297,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          const CoreRangeSet &cores,
          const bool create_eth_config,
          const uint32_t num_sems,
+         const uint32_t num_cbs,
          const uint32_t num_unique_rt_args,
          const uint32_t num_common_rt_args,
          const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
@@ -273,7 +310,8 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              UNIQUE_RUNTIME_ARGS_VAL_OFFSET,
              COMMON_RUNTIME_ARGS_VAL_OFFSET,
              num_sems,
-             SEM_VAL};
+             SEM_VAL,
+             num_cbs};
 
          uint32_t divisible_by;
          if (create_eth_config) {

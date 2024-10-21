@@ -14,7 +14,8 @@ constexpr uint32_t unique_rt_args_vals_offset = get_compile_time_arg_val(2);
 constexpr uint32_t common_rt_args_vals_offset = get_compile_time_arg_val(3);
 constexpr uint32_t num_sems = get_compile_time_arg_val(4);
 constexpr uint32_t expected_sem_val = get_compile_time_arg_val(5);
-constexpr ProgrammableCoreType sem_core_type = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(6));
+constexpr uint32_t num_cbs = get_compile_time_arg_val(6);
+constexpr ProgrammableCoreType sem_core_type = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(7));
 
 #if KERNEL_SIZE_BYTES > 16
 constexpr uint32_t empty_kernel_bytes = 16;
