@@ -64,6 +64,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
+    profiler_buffer_usage_enabled = false;
 #if defined(TRACY_ENABLE)
     const char *profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -76,6 +77,10 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_enabled && profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
             profiler_sync_enabled = true;
         }
+    }
+    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+    if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
+        profiler_buffer_usage_enabled = true;
     }
 #endif
     TT_FATAL(
