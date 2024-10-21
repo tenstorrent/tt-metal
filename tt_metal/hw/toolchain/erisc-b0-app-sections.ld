@@ -25,11 +25,13 @@ SECTIONS
   {
     *(code_l1)
   } > REGION_APP_CODE
-  .init :
+  .init.fini :
   {
-    KEEP (*(SORT_NONE(.init)))
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init))
+    KEEP (*(.fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_APP_CODE
-/*  PROVIDE (__ecode_l1 = .);*/
   /* TODO: add back when using iram code loading
   .text :
 
