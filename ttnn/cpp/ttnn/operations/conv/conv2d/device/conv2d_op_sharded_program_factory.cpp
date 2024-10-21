@@ -529,9 +529,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
-    /*uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];*/
+    uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
     // TODO: Align for height sharding
-    uint32_t act_matrix_width = round_up((input_channels_padded / conv_act_c_blocks) * filter_h * filter_w, TILE_WIDTH) * conv_act_c_blocks;
+    if(block_sharded)
+        act_matrix_width = round_up((input_channels_padded / conv_act_c_blocks) * filter_w, TILE_WIDTH) * conv_act_c_blocks * filter_h;
     uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
 
@@ -586,7 +587,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
-    uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;
+    /*uint32_t num_blocks_act_w = act_matrix_width_ntiles / act_block_w_ntiles;*/
+    uint32_t num_blocks_act_w = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ? 1 : filter_h;
     uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
@@ -932,6 +934,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles / conv_act_c_blocks;
     bool fully_buffer_weights = false;
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
+
+    if(block_sharded) {
+        num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
+        num_weight_cb_tiles = weight_block_h_ntiles * weight_block_w_ntiles;
+    }
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
     if (a.memory_config().is_sharded() and ((filter_h == 3 and filter_w == 3 and
@@ -940,8 +947,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
-        num_weight_cb_tiles *= filter_h * filter_w;
-        num_act_cb_tiles *= filter_h * filter_w;
+        if(!block_sharded) {
+            num_weight_cb_tiles *= filter_h * filter_w;
+            num_act_cb_tiles *= filter_h * filter_w;
+        }
     } else if (num_blocks_act_h_per_core > 1) {
         fully_buffer_weights = true;
     }
@@ -995,9 +1004,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
 
-    if(block_sharded) {
-        num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles;
-    }
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
@@ -1242,14 +1248,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         compute_defines["PACKER_L1_ACC"] = "1";
     }
 
-    uint32_t num_blocks_weight_h = 1;
+    if(block_sharded)
+        num_blocks_act_w = 1;
     writer_compile_time_args = {
         (uint32_t)(dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0),
         out0_cb,
         weight_cb,
         bias_cb,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
-        num_blocks_weight_h,  // = number of blocks of weight in height dim
+        num_blocks_act_w,  // = number of blocks of weight in height dim
         in1_block_num_tiles,
         conv_act_c_blocks,
         weight_block_h_ntiles,
@@ -1499,7 +1506,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             out_start_tile_id_h,
             out_start_tile_id_w,
 
-            num_blocks_weight_h,  // = number of blocks of weight in height dim
+            num_blocks_act_w,  // = number of blocks of weight in height dim
             in1_block_num_tiles,
             conv_act_c_blocks,
             weight_block_h_ntiles / conv_act_c_blocks,
