@@ -5,11 +5,6 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "common/math.hpp"
 #include "fmt/base.h"
-#include "ttnn/operations/data_movement/split/split.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/sharding_utilities.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -19,7 +14,6 @@
 
 using namespace tt::constants;
 
-using namespace std;
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -533,7 +527,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
     // TODO: Align for height sharding
     if(block_sharded)
-        act_matrix_width = round_up((input_channels_padded / conv_act_c_blocks) * filter_w, TILE_WIDTH) * conv_act_c_blocks * filter_h;
+        act_matrix_width = round_up((input_channels_padded / conv_act_c_blocks) * filter_w * filter_h, TILE_WIDTH) * conv_act_c_blocks;
     uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
 
@@ -1144,9 +1138,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
                     "writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
             }
         }
-        cout << "reader kernel = " << reader_kernel << endl;
-        cout << "writer mcast sender = " << writer_mcast_sender_kernel << endl;
-        cout << "writer mcast  receiver = " << writer_mcast_receiver_kernel << endl;
 
         // Local L1 to store array for reader indices
         // All convs use packed uint16 indices, so each entry can be 2B (not 4)

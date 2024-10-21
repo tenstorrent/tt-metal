@@ -5,13 +5,11 @@
 #include "dataflow_api.h"
 
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 
-#define dump(a) \
-    do { DPRINT << "S:"<< #a "=" << a << ENDL(); } while(false)
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -69,38 +67,6 @@ void kernel_main() {
     constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(34);
     constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(35);
     #endif
-    /*dump(cb_id_out0);*/
-    /*dump(cb_id_weight);*/
-    /**/
-    /*dump(num_blocks_weight_h);*/
-    /*dump(weight_block_num_tiles);*/
-    /*dump(weight_block_height_num_outer);*/
-    /*dump(weight_block_height_ntiles);*/
-    /*dump(weight_block_width_ntiles);*/
-    /*dump(weight_stride_h);*/
-    /*dump(weight_next_block_stride_h);*/
-    /*dump(weight_next_block_stride_w);*/
-    /**/
-    /*dump(bias_ntiles);*/
-    /**/
-    /*dump(out_next_tile_stride_h);*/
-    /*dump(out_next_tile_stride_w);*/
-    /*dump(out_next_subblock_stride_h);*/
-    /*dump(out_next_subblock_stride_w);*/
-    /*dump(out_next_block_stride_h);*/
-    /*dump(out_next_block_stride_w);*/
-    /*dump(out_subblock_h);*/
-    /*dump(out_subblock_w);*/
-    /*dump(out_subblock_tile_count);*/
-    /*dump(out_num_subblocks_h);*/
-    /*dump(out_num_subblocks_w);*/
-    /*dump(out_num_blocks_h);*/
-    /*dump(out_num_blocks_w);*/
-    /*dump(out_block_height_num_tiles);*/
-    /*dump(out_height_num_tiles);*/
-    /*dump(out_width_num_tiles);*/
-    /**/
-    /*dump(out_addr);*/
 
 
     uint32_t i = 0;

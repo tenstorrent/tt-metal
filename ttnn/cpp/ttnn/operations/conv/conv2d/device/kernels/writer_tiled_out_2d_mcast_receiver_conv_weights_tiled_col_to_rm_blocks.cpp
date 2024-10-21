@@ -5,13 +5,11 @@
 #include "dataflow_api.h"
 
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 
-#define dump(a) \
-    do { DPRINT << "R:"<< #a "=" << a << ENDL(); } while(false);
 
 inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
@@ -69,38 +67,6 @@ void kernel_main() {
     constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(34);
     constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(35);
     #endif
-    /*dump(cb_id_out0);*/
-    /*dump(cb_id_weight);*/
-    /**/
-    /*dump(num_blocks_weight_h);*/
-    /*dump(weight_block_num_tiles);*/
-    /*dump(weight_block_height_num_outer);*/
-    /*dump(weight_block_height_ntiles);*/
-    /*dump(weight_block_width_ntiles);*/
-    /*dump(weight_stride_h);*/
-    /*dump(weight_next_block_stride_h);*/
-    /*dump(weight_next_block_stride_w);*/
-    /**/
-    /*dump(bias_ntiles);*/
-    /**/
-    /*dump(out_next_tile_stride_h);*/
-    /*dump(out_next_tile_stride_w);*/
-    /*dump(out_next_subblock_stride_h);*/
-    /*dump(out_next_subblock_stride_w);*/
-    /*dump(out_next_block_stride_h);*/
-    /*dump(out_next_block_stride_w);*/
-    /*dump(out_subblock_h);*/
-    /*dump(out_subblock_w);*/
-    /*dump(out_subblock_tile_count);*/
-    /*dump(out_num_subblocks_h);*/
-    /*dump(out_num_subblocks_w);*/
-    /*dump(out_num_blocks_h);*/
-    /*dump(out_num_blocks_w);*/
-    /*dump(out_block_height_num_tiles);*/
-    /*dump(out_height_num_tiles);*/
-    /*dump(out_width_num_tiles);*/
-    /**/
-    /*dump(out_addr);*/
 
 
     uint32_t i = 0;
@@ -151,7 +117,6 @@ void kernel_main() {
             // read weight blocks inner dim
             // read weight slice - 1 block of weights in width dim and full weight matrix height
             // read slice only once for all activation blocks
-            DPRINT << "receive:receive weights" << ENDL();
             for(uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer; weight_tile_h_outer_i++) {
                 cb_reserve_back(cb_id_weight, weight_block_num_tiles);
                 // Set weights semaphore value to INVALID
@@ -165,7 +130,6 @@ void kernel_main() {
 
                 cb_push_back(cb_id_weight, weight_block_num_tiles);
             } // for weight_block_height_num_outer
-            DPRINT << "receive:receive weights done" << ENDL();
 
             #ifdef FUSE_BIAS
             if (load_bias) {
@@ -237,15 +201,15 @@ void kernel_main() {
     #ifdef SHARDED_OUT
     #ifdef UNPAD_UNTILIZE_OUT
     uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
-    DPRINT << "dst_cb_addr: " << dst_cb_addr << ENDL();
-    DPRINT << "out_num_blocks_w: " << out_num_blocks_w << ENDL();
-    DPRINT << "out_num_blocks_h: " << out_num_blocks_h << ENDL();
-    DPRINT << "out_block_width_ntiles: " << out_block_width_ntiles << ENDL();
-    DPRINT << "out_block_height_ntiles: " << out_block_height_num_tiles << ENDL();
-    DPRINT << "out_blwidth_padded_bytes: " << out_block_width_padded_bytes << ENDL();
-    DPRINT << "out_block_width_bytes: " << out_block_width_bytes << ENDL();
-    DPRINT << "out_blt_num_tiles = " << out_block_height_num_tiles << ENDL();
-    print_pages(get_read_ptr(untilized_padded_out_cb), out_block_width_padded_bytes/2, 32*4);
+    /*DPRINT << "dst_cb_addr: " << dst_cb_addr << ENDL();*/
+    /*DPRINT << "out_num_blocks_w: " << out_num_blocks_w << ENDL();*/
+    /*DPRINT << "out_num_blocks_h: " << out_num_blocks_h << ENDL();*/
+    /*DPRINT << "out_block_width_ntiles: " << out_block_width_ntiles << ENDL();*/
+    /*DPRINT << "out_block_height_ntiles: " << out_block_height_num_tiles << ENDL();*/
+    /*DPRINT << "out_blwidth_padded_bytes: " << out_block_width_padded_bytes << ENDL();*/
+    /*DPRINT << "out_block_width_bytes: " << out_block_width_bytes << ENDL();*/
+    /*DPRINT << "out_blt_num_tiles = " << out_block_height_num_tiles << ENDL();*/
+    /*print_pages(get_read_ptr(untilized_padded_out_cb), out_block_width_padded_bytes/2, 32*4);*/
 
     uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
     for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
