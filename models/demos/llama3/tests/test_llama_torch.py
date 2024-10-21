@@ -28,7 +28,8 @@ def test_llama_torch_inference(ensure_gc):
 
     # Embedding on host
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0
     generation_length = iterations

@@ -38,7 +38,11 @@ def test_llama_embedding(mesh_device, use_program_cache, reset_seeds, ensure_gc)
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     reference_emb = HostEmbedding(model_args)
-    reference_emb.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    if model_args.is_vision():
+        layer_name = "text_model.tok_embeddings.weight"
+    else:
+        layer_name = "tok_embeddings.weight"
+    reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})
 
     tt_emb = TtLlamaEmbedding(
         mesh_device=mesh_device,

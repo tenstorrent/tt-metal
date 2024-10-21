@@ -54,7 +54,7 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        compute_kernel_config_hifi2 = self.model_config["MLP_KERNEL_CONFIG_HIFI2"]
+
         if mode == "decode":  # Sharded config
             pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
             pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
@@ -78,7 +78,7 @@ class TtLlamaMLP(LightweightModule):
         w1_out = ttnn.linear(
             x_in,
             self.w1,
-            compute_kernel_config=compute_kernel_config_hifi2,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_1,
@@ -87,7 +87,7 @@ class TtLlamaMLP(LightweightModule):
         w3_out = ttnn.linear(
             x_in,
             self.w3,
-            compute_kernel_config=compute_kernel_config_hifi2,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
@@ -111,7 +111,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=compute_kernel_config_hifi2,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_2,

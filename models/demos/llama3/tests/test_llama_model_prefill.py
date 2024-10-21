@@ -205,7 +205,7 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
 
     if run_ref_pt:
         if all_tests_pass:
-            logger.info(f"All  Llama decode iterations Passed!")
+            logger.info(f"All Llama decode iterations Passed!")
         else:
             logger.warning("One or more iterations of Llama decode had bad PCC")
             assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

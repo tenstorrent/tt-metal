@@ -51,21 +51,33 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
         expected_inference_time = 0.065
     elif "3.1-8B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.07
+    elif "3.2-11B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.07
     else:
-        assert f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B]"
+        assert False, f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B]"
 
     # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
     profiler.clear()
 
     profiler.start("weight_loading")
+    if model_args.is_vision():
+        state_dict_prefix = "text_model."
+    else:
+        state_dict_prefix = ""
+
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
     state_dict = {
         k: v
         for k, v in state_dict.items()
         if (
             any([f"layers.{i}." in k for i in range(model_args.n_layers)])
-            or k in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+            or k
+            in [
+                state_dict_prefix + "tok_embeddings.weight",
+                state_dict_prefix + "norm.weight",
+                state_dict_prefix + "output.weight",
+            ]
         )
     }
     profiler.end("weight_loading")
@@ -75,7 +87,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     # Embedding on host
     embd = HostEmbedding(model_args)
-    embd.load_state_dict({"emb.weight": state_dict["tok_embeddings.weight"]})
+    embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = kv_cache_len
     generation_length = 1

@@ -12,7 +12,7 @@ import importlib
 llama_reference_mod = importlib.import_module(
     "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
 )
-from models.demos.llama3.tt.llama_image_mlp import TtLlamaImageFeedForward
+from models.demos.llama3.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
@@ -24,13 +24,7 @@ from models.utility_functions import skip_for_grayskull
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "seq_len",
-    (
-        # 64 * 1024,
-        # 32 * 1024,
-        # 5120,
-        # 32,
-        4224,
-    ),
+    (4224,),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -51,7 +45,6 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.31.mlp."
-    # TODO: regex match for this / filter dict keys
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
@@ -111,7 +104,6 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         act_layer=act_layer,
     )
     reference_model.load_state_dict(partial_state_dict)
-    reference_model.bfloat16()
 
     tt_model = TtLlamaImageFeedForward(
         mesh_device=mesh_device,
