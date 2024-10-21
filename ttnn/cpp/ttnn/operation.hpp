@@ -378,6 +378,27 @@ constexpr bool implements_get_parallelization_strategy() {
     return std::experimental::is_detected_v<has_get_parallelization_strategy_t, T, const Tensors&>;
 }
 
+template <typename ConcreteOperation>
+auto default_create_output_tensors(
+    const ConcreteOperation& operation,
+    const Tensors& input_tensors) -> ProgramOutputTensors<ConcreteOperation> {
+    const auto& device = input_tensors.at(0).device();
+    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
+    const auto& output_layouts = operation.compute_output_layouts(input_tensors);
+
+    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
+    OutputTensors output_tensors;
+    output_tensors.reserve(output_shapes.size());
+    for (size_t i = 0; i < output_shapes.size(); i++) {
+        std::cout << "default create: " << output_shapes[i] << std::endl;
+        output_tensors.emplace_back(create_device_tensor(
+            output_shapes[i],
+            output_layouts[i],
+            device));
+    }
+    return output_tensors;
+}
+
 }  // namespace detail
 
 template <class OutputTensorsT = Tensors>
@@ -508,7 +529,7 @@ struct DeviceOperation final {
                     not detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
-                        "Operation doesn't implement create_output_tensors with ant optional output tensors argument "
+                        "Operation doesn't implement create_output_tensors with an optional output tensors argument "
                         "when using validate_with_output_tensors");
                 } else if constexpr (detail::implements_validate<T>() and not detail::implements_create_program<T>()) {
                     static_assert(
@@ -556,8 +577,10 @@ struct DeviceOperation final {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
                     return operation.create_output_tensors(input_tensors, output_tensors);
-                } else {
+                } else if constexpr (detail::implements_create_output_tensors<T>()) {
                     return operation.create_output_tensors(input_tensors);
+                } else {
+                    return detail::default_create_output_tensors(operation, input_tensors);
                 }
             }},
         create_program_impl_{
