@@ -35,6 +35,7 @@ run_profiling_test() {
   if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
     pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_single_core_sharded -k $ARCH_NAME
     pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_12_core -k $ARCH_NAME
+    pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_remote_cb_sync -k $ARCH_NAME
   fi
   # bypass wh_b0 for now until we can move FD cores to last col
   if [[ "$ARCH_NAME" != "wormhole_b0" ]]; then
