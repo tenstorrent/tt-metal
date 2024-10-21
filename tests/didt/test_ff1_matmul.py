@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 

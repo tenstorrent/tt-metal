@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
-from tests.didt.matmul_test_base import OpTestBase, get_blackhole_grid_size
+from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
 from models.utility_functions import skip_for_blackhole, is_blackhole
 
@@ -255,5 +255,6 @@ def test_specific_chip_resnet_conv(
     ids=[f"board_id_{i}" for i in range(4)],
     indirect=["board_mesh_device"],
 )
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_specific_board_resnet_conv(board_mesh_device, iterations, determinism_check_iterations, use_program_cache):
     test_resnet_conv(board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)
