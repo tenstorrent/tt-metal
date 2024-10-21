@@ -806,7 +806,7 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "") {
+void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "", const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -820,6 +820,9 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {4}
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor)
@@ -827,7 +830,8 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        range);
+        range,
+        note);
 
     bind_registered_operation(
         module,
@@ -1679,7 +1683,17 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]");
     detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`, not supported for grayskull.)doc");
-    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]");
+    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
+
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
