@@ -16,6 +16,83 @@ namespace tt {
 
 namespace tt_metal {
 
+#if defined(TRACY_ENABLE)
+//TODO: Because of how tracy mem pool only accepts char const *, we need generate all the literals
+// Need to come up with a compile time trick to generate literals for max number of device
+constexpr int MAX_MEM_DEVICE_SUPPORTED = 4;
+
+static char const *get_memory_pool_type(BufferType buffer_type) {
+    switch (buffer_type) {
+        case BufferType::DRAM: return "DRAM";
+        case BufferType::L1: return "L1";
+        case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY";
+        default: return "UNKNOWN";
+    }
+}
+// Manually generate upto 8 device memory pool literals
+static char const *get_memory_pool_name(BufferType buffer_type, int device_id) {
+    switch (device_id) {
+        case 0:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 0";
+                case BufferType::L1: return "L1 0";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 0";
+                default: return "UNKNOWN";
+            }
+        case 1:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 1";
+                case BufferType::L1: return "L1 1";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 1";
+                default: return "UNKNOWN";
+            }
+        case 2:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 2";
+                case BufferType::L1: return "L1 2";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 2";
+                default: return "UNKNOWN";
+            }
+        case 3:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 3";
+                case BufferType::L1: return "L1 3";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 3";
+                default: return "UNKNOWN";
+            }
+        case 4:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 4";
+                case BufferType::L1: return "L1 4";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 4";
+                default: return "UNKNOWN";
+            }
+        case 5:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 5";
+                case BufferType::L1: return "L1 5";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 5";
+                default: return "UNKNOWN";
+            }
+        case 6:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 6";
+                case BufferType::L1: return "L1 6";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 6";
+                default: return "UNKNOWN";
+            }
+        case 7:
+            switch (buffer_type) {
+                case BufferType::DRAM: return "DRAM 7";
+                case BufferType::L1: return "L1 7";
+                case BufferType::SYSTEM_MEMORY: return "SYSTEM_MEMORY 7";
+                default: return "UNKNOWN";
+            }
+        default: return "UNKNOWN";
+    }
+}
+#endif
+
 bool is_sharded(const TensorMemoryLayout &layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -272,6 +349,13 @@ void Buffer::allocate() {
     bool bottom_up = this->bottom_up_.value_or(this->is_dram());
     detail::AllocateBuffer(this, bottom_up);
     detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
+
+#if defined(TRACY_ENABLE)
+    if (this->device_->id() < MAX_MEM_DEVICE_SUPPORTED){
+        TracyAllocN(reinterpret_cast<void const *>(this->address_), this->size_, get_memory_pool_name(this->buffer_type(), this->device_->id()));
+    }
+
+#endif
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -345,6 +429,11 @@ void Buffer::deallocate() {
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
     detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
     detail::DeallocateBuffer(this);
+#if defined(TRACY_ENABLE)
+    if (this->device_->id() < MAX_MEM_DEVICE_SUPPORTED){
+        TracyFreeN(reinterpret_cast<void const *>(this->address_), get_memory_pool_name(this->buffer_type(), this->device_->id()));
+    }
+#endif
 }
 
 Buffer::~Buffer() { this->deallocate(); }
