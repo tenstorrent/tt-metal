@@ -3218,7 +3218,7 @@ float Device::sfpu_inf() const{
     return std::numeric_limits<float>::infinity();
 }
 
-pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
+std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
     TT_ASSERT(programmable_core < this->build_state_indices_.size(),
         "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
     TT_ASSERT(processor_class < this->build_state_indices_[programmable_core].size(),
@@ -3236,7 +3236,7 @@ const JitBuildState& Device::build_kernel_state(uint32_t programmable_core, uint
 }
 
 const JitBuildStateSubset Device::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
+    std::pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
     JitBuildStateSubset subset = {
         &this->kernel_build_states_[bptti.first],
         bptti.second

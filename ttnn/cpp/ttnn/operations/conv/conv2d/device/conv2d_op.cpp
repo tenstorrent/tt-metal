@@ -24,7 +24,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
+std::pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
@@ -190,7 +190,8 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             log_debug(tt::LogOp, "Parallelization config grid size: {}", this->parallelization_config.grid_size.str());
             uint32_t num_cores_x = this->parallelization_config.grid_size.x;
             uint32_t num_cores_y = this->parallelization_config.grid_size.y;
-            CoreRangeSet shard_grid = CoreRangeSet({{{0, 0}, {num_cores_x - 1, num_cores_y - 1}}});
+            CoreRangeSet shard_grid =
+                CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
             log_debug(tt::LogOp, "Calculated shard_grid: {}", shard_grid.str());
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};

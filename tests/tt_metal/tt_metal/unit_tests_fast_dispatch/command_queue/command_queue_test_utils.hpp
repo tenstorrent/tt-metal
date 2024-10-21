@@ -12,7 +12,7 @@ struct TestBufferConfig {
     tt::tt_metal::BufferType buftype;
 };
 
-inline pair<tt::tt_metal::Buffer, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
+inline std::pair<tt::tt_metal::Buffer, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;

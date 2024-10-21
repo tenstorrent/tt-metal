@@ -64,7 +64,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     bool row_major;
     uint32_t num_cores, num_rows_per_core_group_1, num_rows_per_core_group_2;
 
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     bool in_sharded = input.shard_spec().has_value();
     bool out_sharded = output.shard_spec().has_value();
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
         num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_rows_per_core_group_2 = 0;
         num_input_tiles =

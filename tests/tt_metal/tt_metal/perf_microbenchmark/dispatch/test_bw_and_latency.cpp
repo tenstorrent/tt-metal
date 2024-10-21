@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
             {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}
         };
         if (!page_size_as_runtime_arg_g) {
-            defines.insert(pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
+            defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
 
         tt_metal::CircularBufferConfig cb_config = tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})

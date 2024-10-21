@@ -39,7 +39,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     auto src_buffer_b = b.buffer();
     auto dst_buffer = output.buffer();
 
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     std::optional<TensorMemoryLayout> sharded_layout = std::nullopt;
@@ -83,7 +83,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
         num_tiles_per_core_group_1 = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
         num_tiles_per_core_group_2 = 0;
         block_size_per_core_group_1 = find_max_block_size(num_tiles_per_core_group_1);

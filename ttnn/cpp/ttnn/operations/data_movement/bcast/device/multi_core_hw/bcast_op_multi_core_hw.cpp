@@ -81,7 +81,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
         num_tiles_per_core_group_2 = 0;
         all_cores = shard_spec.value().grid;
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
     }
 
     uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
@@ -270,7 +270,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(const Tensor &a, const Tenso
             num_tiles_per_core_group_2 = 0;
             all_cores = shard_spec.value().grid;
             core_group_1 = all_cores;
-            core_group_2 = CoreRangeSet({});
+            core_group_2 = CoreRangeSet();
         }
 
         auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);

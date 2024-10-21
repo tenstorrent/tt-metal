@@ -132,7 +132,7 @@ TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
 
     CoreRange core_range({1, 0}, {3, 0});
     CoreRangeSet core_range_set({core_range});
-    CoreRangeSet core_range_set2 = core_range_set.merge({core1});
+    CoreRangeSet core_range_set2 = core_range_set.merge(std::set<CoreRange>{core1});
     std::set<CoreRange> set_of_cores({CoreRange({2,0}, {2,0}), CoreRange({3,0}, {3,0}), CoreRange({5,0}, {5,0})});
     CoreRangeSet core_range_set3(set_of_cores);
     CoreRangeSet core_range_set4({CoreRange({5,0}, {6,0})});

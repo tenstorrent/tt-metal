@@ -88,7 +88,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet({});
+    auto core_range_cliff = CoreRangeSet();
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];

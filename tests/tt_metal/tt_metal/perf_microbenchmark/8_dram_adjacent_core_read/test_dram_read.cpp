@@ -632,7 +632,7 @@ int main(int argc, char **argv) {
         uint32_t num_cores = num_banks; // number of DRAM banks
         // uint32_t num_banks_all = 12;
 
-        CoreRangeSet all_cores = CoreRangeSet{{}};
+        CoreRangeSet all_cores;
         std::vector<CoreCoord> all_cores_list;
         if (device->arch() == tt::ARCH::WORMHOLE_B0) {
             get_dram_reader_core_coords_wormhole_b0(device, all_cores, all_cores_list);
