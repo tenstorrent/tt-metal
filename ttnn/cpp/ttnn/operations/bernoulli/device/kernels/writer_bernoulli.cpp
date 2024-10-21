@@ -22,7 +22,7 @@ void kernel_main() {
         .page_size = get_tile_size(intermed1_cb_id),
         .data_format = get_dataformat(intermed1_cb_id)};
 
-    uint32_t max_int = 2147483647;
+    uint32_t max_uint = 4294967295;
 
     cb_reserve_back(intermed1_cb_id, 1);
     uint32_t intermed1_cb_write_ptr = get_write_ptr(intermed1_cb_id);
@@ -41,11 +41,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 uint32_t rand_uint32 = *intermed_cb_addr;
-                //  hardware PRNG is not uniformly distribute.
-                // Generated rand_floats in range [0, max_int] has higher ratio compared to (max_uint,
-                // max_uint32), which makes the output tensor contains more 1 value than 0. I divide rand_float with
-                // max_int instead of max_uint to balance the number of 1 and 0 value in output tensor.
-                float rand_float = static_cast<float>(rand_uint32) / max_int;
+                float rand_float = static_cast<float>(rand_uint32) / max_uint;
 
                 float input = 0;
 #ifdef INPUT_DTYPE_FLOAT32

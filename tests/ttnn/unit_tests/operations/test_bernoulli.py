@@ -12,8 +12,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
 from collections import Counter
+from loguru import logger
 
 
 def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, compute_kernel_options=None):
@@ -55,7 +55,6 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
 
 
 # fmt: off
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
         [2003],
@@ -87,7 +86,6 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc):
     run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -99,18 +97,17 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc):
 @pytest.mark.parametrize("is_out_alloc", [True, False])
 def test_bernoulli_callback(shape, in_dtype, out_dtype, device, is_out_alloc, use_program_cache):
     torch.manual_seed(0)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 4, 70, 40]],
