@@ -515,9 +515,9 @@ static void generate_math_approx_mode_descriptor(JitBuildOptions& options) {
 }
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options) {
-    ZoneScoped;
-    const std::string tracyPrefix = "generate_descriptors_";
-    ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    //ZoneScoped;
+    //const std::string tracyPrefix = "generate_descriptors_";
+    //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
     fs::create_directories(options.path);
     try {
         std::thread td( [&]() { generate_data_format_descriptors(options, env.get_arch()); } );
