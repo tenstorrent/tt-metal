@@ -2,12 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cstdint>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+#include "common/core_coord.h"
+#include "common/env_lib.hpp"
 #include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "impl/device/device.hpp"
+#include "impl/kernels/data_types.hpp"
+#include "impl/kernels/kernel_types.hpp"
+#include "llrt/hal.hpp"
+#include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
+#include "tt_soc_descriptor.h"
 
 class CommandQueueFixture : public ::testing::Test {
    protected:
@@ -134,4 +150,233 @@ protected:
         }
     }
 
+};
+
+class RandomProgramFixture : public CommandQueueSingleCardFixture {
+    protected:
+     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
+     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
+     static const uint32_t MIN_KERNEL_RUNTIME_MICROSECONDS = 100;
+     static const uint32_t MAX_KERNEL_RUNTIME_MICROSECONDS = 20000;
+     static const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
+     static const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
+     static const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
+     static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
+     static const uint32_t MIN_NUM_SEMS = 0;
+     static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+     static const uint32_t SEM_VAL = 1;
+     static const uint32_t NUM_PROGRAMS = 75;
+
+     Device *device_;
+
+     void SetUp() override {
+         CommandQueueSingleCardFixture::SetUp();
+
+         this->device_ = this->devices_[0];
+
+         this->seed_ = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
+         log_info(tt::LogTest, "Using seed: {}", this->seed_);
+         srand(this->seed_);
+     }
+
+     void create_kernel(
+         Program &program,
+         const CoreType kernel_core_type,
+         const bool simple_kernel = false,
+         const uint32_t min_num_sems = MIN_NUM_SEMS,
+         const uint32_t max_num_sems = MAX_NUM_SEMS,
+         const uint32_t min_num_rt_args = MIN_NUM_RUNTIME_ARGS,
+         const uint32_t max_num_rt_args = MAX_NUM_RUNTIME_ARGS,
+         const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
+         const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
+         const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
+         const uint32_t max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS) {
+         CoreRangeSet cores = this->get_cores(kernel_core_type);
+         const bool create_eth_config = kernel_core_type == CoreType::ETH;
+
+         if (simple_kernel) {
+             this->create_kernel(program, cores, create_eth_config, 0, 0, 0, 0);
+         } else {
+             const vector<uint32_t> sem_ids =
+                 this->generate_semaphores(program, cores, kernel_core_type, min_num_sems, max_num_sems);
+             const auto [unique_rt_args, common_rt_args] =
+                 this->generate_runtime_args(sem_ids, min_num_rt_args, max_num_rt_args);
+             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size();
+             KernelHandle kernel_id = this->create_kernel(
+                 program,
+                 cores,
+                 create_eth_config,
+                 sem_ids.size(),
+                 num_unique_rt_args,
+                 common_rt_args.size(),
+                 min_kernel_size_bytes,
+                 max_kernel_size_bytes,
+                 min_kernel_runtime_microseconds,
+                 max_kernel_runtime_microseconds);
+             SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
+             SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
+         }
+     }
+
+     vector<uint32_t> generate_semaphores(
+         Program &program,
+         const CoreRangeSet &cores,
+         const CoreType core_type = CoreType::WORKER,
+         const uint32_t min = MIN_NUM_SEMS,
+         const uint32_t max = MAX_NUM_SEMS) {
+         const uint32_t num_sems = this->generate_random_num(min, max);
+         vector<uint32_t> sem_ids;
+         for (uint32_t i = 0; i < num_sems; i++) {
+             const uint32_t sem_id = CreateSemaphore(program, cores, SEM_VAL, core_type);
+             sem_ids.push_back(sem_id);
+         }
+         return sem_ids;
+     }
+
+     pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
+         const vector<uint32_t> &sem_ids,
+         const uint32_t min = MIN_NUM_RUNTIME_ARGS,
+         const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
+         const uint32_t num_sems = sem_ids.size();
+         TT_FATAL(max >= num_sems, "Max number of runtime args to generate must be >= number of semaphores created");
+         const uint32_t max_num_unique_rt_args = max - num_sems;
+         const uint32_t num_unique_rt_args = this->generate_random_num(min, max_num_unique_rt_args);
+
+         const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
+         const uint32_t num_common_rt_args = this->generate_random_num(0, max_num_common_rt_args);
+
+         auto [unique_rt_args, common_rt_args] = create_runtime_args(
+             num_unique_rt_args, num_common_rt_args, UNIQUE_RUNTIME_ARGS_VAL_OFFSET, COMMON_RUNTIME_ARGS_VAL_OFFSET);
+
+         unique_rt_args.insert(unique_rt_args.end(), sem_ids.begin(), sem_ids.end());
+
+         return {unique_rt_args, common_rt_args};
+     }
+
+    private:
+     uint32_t seed_;
+
+     KernelHandle create_kernel(
+         Program &program,
+         const CoreRangeSet &cores,
+         const bool create_eth_config,
+         const uint32_t num_sems,
+         const uint32_t num_unique_rt_args,
+         const uint32_t num_common_rt_args,
+         const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
+         const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
+         const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
+         const uint32_t max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS) {
+         std::vector<uint32_t> compile_args = {
+             num_unique_rt_args,
+             num_common_rt_args,
+             UNIQUE_RUNTIME_ARGS_VAL_OFFSET,
+             COMMON_RUNTIME_ARGS_VAL_OFFSET,
+             num_sems,
+             SEM_VAL};
+
+         uint32_t divisible_by;
+         if (create_eth_config) {
+             divisible_by = 4;
+         } else {
+             divisible_by = 1;
+         }
+
+         const uint32_t kernel_size_bytes =
+             this->generate_random_num(min_kernel_size_bytes, max_kernel_size_bytes, divisible_by);
+         const uint32_t kernel_runtime_microseconds =
+             this->generate_random_num(min_kernel_runtime_microseconds, max_kernel_runtime_microseconds);
+
+         const std::map<string, string> defines = {
+             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
+             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
+
+         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
+         if (create_eth_config) {
+             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
+             config = EthernetConfig{.compile_args = compile_args, .defines = defines};
+         } else {
+             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+             DataMovementProcessor processor = this->get_processor();
+             config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
+         }
+
+         KernelHandle kernel_id = CreateKernel(
+             program,
+             "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/"
+             "dispatcher_kernel_size_and_runtime.cpp",
+             cores,
+             config);
+         return kernel_id;
+     }
+
+     // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
+     uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
+        TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
+        return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
+     }
+
+     DataMovementProcessor get_processor() {
+        const uint32_t num = this->generate_random_num(0, 1);
+        DataMovementProcessor processor;
+        if (num == 0) {
+            processor = DataMovementProcessor::RISCV_0;
+        } else {
+            processor = DataMovementProcessor::RISCV_1;
+        }
+        return processor;
+     }
+
+     CoreRangeSet get_cores(const CoreType core_type) {
+        CoreRangeSet all_cores({});
+        if (core_type == CoreType::WORKER) {
+            CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
+            all_cores = CoreRangeSet({{{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}}});
+        }
+        else {
+            TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
+            std::set<CoreRange> core_ranges;
+            const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
+            for (CoreCoord eth_core : active_eth_cores) {
+                core_ranges.emplace(eth_core);
+            }
+            all_cores = CoreRangeSet(core_ranges);
+        }
+        CoreRangeSet empty_crs({});
+        all_cores = empty_crs.merge(all_cores);
+
+        CoreRangeSet cores({});
+        const uint32_t num = this->generate_random_num(0, 2);
+        switch (num) {
+            case 0: cores = all_cores; break;
+            case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
+            case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
+        }
+
+        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
+        return cores;
+     }
+
+     CoreRangeSet generate_subset_of_cores(const CoreRangeSet& cores, const uint32_t resulting_ratio_of_cores) {
+        std::set<CoreRange> cores_subset;
+        const uint32_t num_cores = cores.num_cores();
+        const uint32_t num_cores_to_include_in_subset = std::max(static_cast<uint32_t>(1), num_cores / resulting_ratio_of_cores);
+        uint32_t num_cores_added = 0;
+        while (num_cores_added != num_cores_to_include_in_subset) {
+            for (CoreRange cr : cores.ranges()) {
+                for (CoreCoord core : cr) {
+                    const uint32_t random_num = this->generate_random_num(1, resulting_ratio_of_cores);
+                    if (random_num == 1 && num_cores_added != num_cores_to_include_in_subset) {
+                        cores_subset.emplace(core);
+                        num_cores_added += 1;
+                    }
+                }
+            }
+        }
+
+        CoreRangeSet empty_crs({});
+        CoreRangeSet resulting_cores = empty_crs.merge(cores_subset);
+        return resulting_cores;
+     }
 };
