@@ -23,8 +23,8 @@ def report_mismatches(golden, actual, max_printable=None):
                     ]
                     if print_it:
                         printed += 1
-                        logger.error(
-                            f"output mismatch for tensor at [{w}, {z}, {y}, {x}]: expected {int(golden[w, z, y, x])} != actual {int(actual[w, z, y, x])}"
+                        print(
+                            f"output mismatch for tensor at [{w}, {z}, {y}, {x}]: expected {golden[w, z, y, x]} != actual {actual[w, z, y, x]}"
                         )
 
 
@@ -40,92 +40,79 @@ def print_tile_corners_of_tensor(t):
                 for x in range(0, t.shape[3], 32):
                     yy = 0
                     xx = 0
-                    str_vals += f"{int(t[w, z, y + yy, x + xx]):<5} "[:5]
+                    val = int(t[w, z, y + yy, x + xx].item())
+                    str_vals += f"{val:<5} "[:5]
                 print(f"{str_vals}")
 
 
 def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     mesh_device,
     num_devices_per_line,
-    input_shape_per_all_gather,
+    per_chip_output_shape,
+    tensor_memory_layout,
     dim,
     num_links,
     input_dtype,
     layout,
-    mem_config,
+    buffer_type: ttnn.BufferType,
     use_program_cache,
     function_level_defaults,
     enable_async,
-    num_all_gather_instances=1,
-    num_iters=1,
-    cluster_axis=0,
+    input_shard_spec: ttnn.ShardSpec = None,
+    num_all_gather_instances: int = 1,
+    num_iters: int = 1,
+    cluster_axis: int = 0,
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
     mesh_device.enable_async(enable_async)
 
-    input_shape_per_chip = list(input_shape_per_all_gather)
-    input_shape_per_chip[2 if cluster_axis == 0 else 3] //= num_devices_per_line
-    tensor_height_per_all_gather = input_shape_per_all_gather[-2]
+    input_shape_per_chip = list(per_chip_output_shape)
+    input_shape_per_chip[dim] //= num_devices_per_line
+    tensor_height_per_all_gather = per_chip_output_shape[-2]
 
-    full_mesh_input_shape = list(input_shape_per_all_gather)
-    full_mesh_input_shape[-2] *= num_all_gather_instances
-    logger.info(f"tensor_height_per_all_gather: {tensor_height_per_all_gather}")
-    logger.info(f"input_shape_per_all_gather: {input_shape_per_all_gather}")
-    logger.info(f"input_shape_per_chip: {input_shape_per_chip}")
-    logger.info(f"full_mesh_input_shape: {full_mesh_input_shape}")
-    logger.info(f"input_shape_per_all_gather: {input_shape_per_all_gather}")
+    full_mesh_input_shape = list(per_chip_output_shape)
+    ## The `all_gather_instances_concat_dim` is the dimension we will split the cluster spanning tensor along in order to split it
+    ## off into per-all-gather tensors
+    all_gather_instances_concat_dim = 1 if dim == 0 else 0
+    full_mesh_input_shape[all_gather_instances_concat_dim] *= num_all_gather_instances
+    logger.info(
+        f"per_chip_output_shape: {full_mesh_input_shape}, dim: {dim}, all_gather_instances_concat_dim: {all_gather_instances_concat_dim}, num_devices_per_line: {num_devices_per_line}"
+    )
 
-    full_tensor = torch.zeros(full_mesh_input_shape, dtype=torch.bfloat16)
+    all_gather_instances_goldens = []
+    full_input_tensor_unfractured = torch.rand(full_mesh_input_shape, dtype=torch.bfloat16)
 
-    for i in range(num_all_gather_instances):
-        full_tensor[0, 0, i * tensor_height_per_all_gather : (i + 1) * tensor_height_per_all_gather, :] = torch.rand(
-            input_shape_per_all_gather
-        ).bfloat16()
+    input_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=input_shard_spec)
+    shard_dims = (dim, all_gather_instances_concat_dim) if cluster_axis == 0 else (all_gather_instances_concat_dim, dim)
+    concat_dims = shard_dims
 
-    logger.info(f"full_tensor.shape: {full_tensor.shape}")
-    debug = False
-    if debug:
-        tile_id = 0
-        for w in range(full_tensor.shape[0]):
-            for z in range(full_tensor.shape[1]):
-                for y in range(0, full_tensor.shape[2], 32):
-                    for x in range(0, full_tensor.shape[3], 32):
-                        yy_max = 32 if y + 32 < full_tensor.shape[2] else full_tensor.shape[2] - y
-                        xx_max = 32 if x + 32 < full_tensor.shape[3] else full_tensor.shape[3] - x
-                        full_tensor[w, z, y : y + yy_max, x : x + xx_max] = tile_id
-                        tile_id += 1
-
-    #
-    # assemble the golden output tensor
-    #
-    inner_dim_concat_axis = 2
-    outer_dim_concat_axis = 3
-    full_tensor_chunks_per_allgather = torch.chunk(full_tensor, num_all_gather_instances, dim=inner_dim_concat_axis)
-    output_chunks_per_allgather = []
-    for i, chunk in enumerate(full_tensor_chunks_per_allgather):
-        width_chunks = torch.chunk(chunk, num_devices_per_line, dim=outer_dim_concat_axis)
-        output_chunk = torch.cat(width_chunks, dim=dim)
-        output_chunks_per_allgather.append(output_chunk)
-    full_mesh_output_golden_per_chip = torch.cat(output_chunks_per_allgather, dim=inner_dim_concat_axis)
-    logger.info(f"full_mesh_output_golden_per_chip.shape: {full_mesh_output_golden_per_chip.shape}")
-    non_replicated_output_golden_tensors = [full_mesh_output_golden_per_chip] * num_devices_per_line
-    full_mesh_output_golden = torch.cat(non_replicated_output_golden_tensors, dim=outer_dim_concat_axis)
-    logger.info(f"full_mesh_output_golden.shape: {full_mesh_output_golden.shape}")
-
-    shard_dims = (-1, -2) if cluster_axis == 0 else (-2, -1)
     mesh_shape = (
         (num_devices_per_line, num_all_gather_instances)
         if cluster_axis == 0
         else (num_all_gather_instances, num_devices_per_line)
     )
-    logger.info(f"mesh_shape: {mesh_shape}")
+
+    output_shard_spec = None
+    if input_shard_spec is not None:
+        output_shard_shape = list(input_shard_spec.shape)
+        if dim == 3:
+            output_shard_shape[1] *= num_devices_per_line
+        else:
+            output_shard_shape[0] *= num_devices_per_line
+        output_shard_spec = ttnn.ShardSpec(
+            input_shard_spec.grid,
+            output_shard_shape,
+            input_shard_spec.orientation,
+            False,
+        )
+    output_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
     ttnn_tensor = ttnn.from_torch(
-        full_tensor,
+        full_input_tensor_unfractured,
         dtype=input_dtype,
         device=mesh_device,
         layout=layout,
-        memory_config=mem_config,
+        memory_config=input_mem_config,
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
@@ -138,61 +125,48 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             num_links=num_links,
+            memory_config=output_mem_config,
             topology=ttnn.Topology.Linear,
         )
 
-    concat_dims = (3, 2) if cluster_axis == 0 else (2, 3)
-    if debug:
-        readback_input_tensor = ttnn.to_torch(
-            ttnn_tensor, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
-        )
-        print(f"readback_input_tensor")
-        print_tile_corners_of_tensor(readback_input_tensor)
-
-    if debug:
-        for i, t in enumerate(ttnn.get_device_tensors(ttnn_tensor)):
-            print(f"readback_input_tensor {i}")
-            print_tile_corners_of_tensor(t)
-
-    if debug:
-        for i, t in enumerate(ttnn.get_device_tensors(ttnn_tensor_out)):
-            t = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-            print(f"OUTPUT TENSOR {i}")
-            print_tile_corners_of_tensor(t)
-
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
-    logger.info(f"concat_dims: {concat_dims}")
     tt_output_tensor = ttnn.to_torch(
         ttnn_tensor_out, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=concat_dims)
     )
-    logger.info(f"tt_output_tensor.shape: {tt_output_tensor.shape}")
+    output_tensors_list = torch.chunk(tt_output_tensor, num_all_gather_instances, dim=all_gather_instances_concat_dim)
+    output_golden = torch.zeros(tt_output_tensor.shape)
 
-    if debug:
-        print(f"tt_output_tensor")
-        print_tile_corners_of_tensor(tt_output_tensor)
+    # Repeat the input tensor to represent the fact that the full concatenated input tensor lives across every
+    # device in the line
+    repeat_factor = [1] * len(output_golden.shape)
+    repeat_factor[dim] = num_devices_per_line
+    output_golden[:, :, :, :] = full_input_tensor_unfractured.repeat(repeat_factor)
 
-    ## This full_tensor will only be 1/num_devices_per_line of the tt_output_tensor. We should just be able to concatenate it along the
+    eq = True
     if input_dtype == ttnn.bfloat16:
-        eq, output = comp_equal(tt_output_tensor, full_mesh_output_golden)
-        if not eq and debug:
-            report_mismatches(full_mesh_output_golden, tt_output_tensor)
+        eq, output = comp_equal(tt_output_tensor, output_golden)
+        if not eq and debug is True:
+            logger.error(f"found mismatches")
+            report_mismatches(tt_output_tensor, output_golden, 100)
+            print_tile_corners_of_tensor(output_tensor)
     else:
-        eq, output = comp_pcc(tt_output_tensor, full_mesh_output_golden)
+        eq, output = comp_pcc(tt_output_tensor, output_golden)
     if not eq:
-        logger.error(f"output mismatch for tensor")
+        logger.error(f"output mismatch for tensor: {output}")
+
     assert eq, f"FAILED: {output}"
 
 
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, input_shape, dim, layout",
+    "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
-        (4, 3, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),
-        (4, 3, [1, 1, 32, 6656], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [4, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 16384 * 4], 3, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 4, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 4, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 4, 32, 6656], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -203,10 +177,10 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config",
+    "buffer_type",
     [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ttnn.BufferType.DRAM,
+        ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
@@ -215,12 +189,12 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 def test_line_all_gather_on_TG_rows_post_commit(
     mesh_device,
     num_devices,
-    input_shape,
+    per_chip_output_shape,
     dim,
     num_links,
     input_dtype,
     layout,
-    mem_config,
+    buffer_type,
     use_program_cache,
     function_level_defaults,
     enable_async,
@@ -230,12 +204,13 @@ def test_line_all_gather_on_TG_rows_post_commit(
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,
-        input_shape,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
         dim,
         num_links,
         input_dtype,
         layout,
-        mem_config,
+        buffer_type,
         use_program_cache,
         function_level_defaults,
         enable_async=enable_async,
@@ -247,40 +222,39 @@ def test_line_all_gather_on_TG_rows_post_commit(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, num_links, input_shape, dim, layout",
+    "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
-        # (8, 4, [1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT), # Rightmost column of tiles per input not copied to final output
-        (8, 4, [1, 1, 32, 2048], 1, ttnn.TILE_LAYOUT),  # passes
-        (8, 4, [1, 1, 32, 2304], 1, ttnn.TILE_LAYOUT),  # passes
-        (8, 4, [1, 1, 32, 4096], 1, ttnn.TILE_LAYOUT),  # passes
+        (8, 4, [1, 8, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (8, 4, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 4, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
+        (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        (8, 4, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config",
+    "buffer_type",
     [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ttnn.BufferType.DRAM,
     ],
 )
-@pytest.mark.parametrize("enable_async", [False])
-@pytest.mark.parametrize("replication_factor", [4])  # 1, 4])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_line_all_gather_on_TG_cols_post_commit(
     mesh_device,
     num_devices,
-    input_shape,
+    per_chip_output_shape,
     dim,
     num_links,
     input_dtype,
     layout,
-    mem_config,
+    buffer_type,
     use_program_cache,
     function_level_defaults,
     enable_async,
@@ -290,12 +264,13 @@ def test_line_all_gather_on_TG_cols_post_commit(
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,
-        input_shape,
+        per_chip_output_shape,
+        ttnn.TensorMemoryLayout.INTERLEAVED,
         dim,
         num_links,
         input_dtype,
         layout,
-        mem_config,
+        buffer_type,
         use_program_cache,
         function_level_defaults,
         enable_async=enable_async,
