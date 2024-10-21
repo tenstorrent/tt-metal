@@ -267,7 +267,7 @@ class ElfFile::Impl::Weakener {
    public:
     Weakener(Elf32_Shdr const &shdr, std::span<Elf32_Sym> symbols) :
         shdr_(shdr), syms_in_(symbols.subspan(shdr.sh_info)) {
-        unsigned reserve = syms_in_.size() - shdr_.sh_info;
+        unsigned reserve = syms_in_.size();
         remap_.reserve(reserve);
         std::ranges::for_each(syms_out_, [=](std::vector<Elf32_Sym> &syms) { syms.reserve(reserve); });
     }
