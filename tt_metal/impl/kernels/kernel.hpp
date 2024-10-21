@@ -95,7 +95,7 @@ class Kernel : public JitBuildSettings {
     std::map<std::string, std::string> defines() const { return defines_; }
 
     virtual RISCV processor() const = 0;
-    dispatch_core_processor_classes dispatch_class() { return this->dispatch_class_; }
+    uint8_t dispatch_class() { return this->dispatch_class_; }
 
     virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
 
@@ -134,7 +134,7 @@ class Kernel : public JitBuildSettings {
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
     std::unordered_map<chip_id_t, std::vector<ll_api::memory>> binaries_;
-    dispatch_core_processor_classes dispatch_class_;
+    uint8_t dispatch_class_;
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
@@ -159,8 +159,7 @@ class DataMovementKernel : public Kernel {
    public:
     DataMovementKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const DataMovementConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = (config.processor == DataMovementProcessor::RISCV_0) ? DISPATCH_CLASS_TENSIX_DM0
-                                                                                     : DISPATCH_CLASS_TENSIX_DM1;
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
     ~DataMovementKernel() {}
@@ -189,7 +188,7 @@ class EthernetKernel : public Kernel {
    public:
     EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_ETH_DM0;
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM);
     }
 
     ~EthernetKernel() {}
@@ -218,7 +217,8 @@ class ComputeKernel : public Kernel {
    public:
     ComputeKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const ComputeConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = DISPATCH_CLASS_TENSIX_COMPUTE;
+        // is this weird?
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE) * magic_enum::enum_count<DataMovementProcessor>();
     }
 
     ~ComputeKernel() {}

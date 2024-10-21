@@ -10,6 +10,7 @@
 //
 
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <memory>
 #include "tt_metal/common/assert.hpp"
@@ -28,6 +29,11 @@ enum class HalProgrammableCoreType {
     ACTIVE_ETH = 1,
     IDLE_ETH   = 2,
     COUNT      = 3
+};
+
+enum class HalProcessorClassType {
+    DM      = 0,
+    COMPUTE = 1
 };
 
 enum class HalL1MemAddrType : uint8_t {
@@ -60,6 +66,19 @@ using DeviceAddr = std::uint64_t;
 
 class Hal;
 
+/*
+    for (auto core_type : programmable_core_types) {
+        auto dispatch_classes = hal_3d_thing[core_type]
+        for (auto dispatch_class : dispatch_classes) {
+            auto processor_types = dispatch_classes[dispatch_class]
+            for (auto processor_type : processor_types) {
+                // do stuff
+            }
+        }
+    }
+
+*/
+
 // Core information instanced once per core type
 class HalCoreInfoType {
     friend class Hal;
@@ -67,18 +86,20 @@ class HalCoreInfoType {
   private:
     HalProgrammableCoreType programmable_core_type_;
     CoreType core_type_;
-    std::uint32_t proc_count_; // eventually a vector of attributes?
+    // index represents processor class position, value is the specific processor class
+    std::span<uint8_t> processor_classes_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     bool supports_cbs_;
 
   public:
-    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, uint32_t core_proc_count,
+    HalCoreInfoType(HalProgrammableCoreType programmable_core_type, CoreType core_type, const std::span<uint8_t> &processor_classes,
         const std::vector<DeviceAddr>& mem_map_bases, const std::vector<uint32_t>& mem_map_sizes, bool supports_cbs);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
+    uint32_t get_processor_classes_count() const;
 };
 
 template <typename T>
@@ -92,6 +113,10 @@ inline uint32_t HalCoreInfoType::get_dev_size(HalL1MemAddrType addr_type) const 
     uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_sizes_.size());
     return this->mem_map_sizes_[index];
+}
+
+inline uint32_t HalCoreInfoType::get_processor_classes_count() const {
+    return this->processor_classes_.size();
 }
 
 class Hal {
@@ -116,8 +141,7 @@ class Hal {
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
-
-    uint32_t get_processor_count(uint32_t core_type_index) const;
+    uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -137,6 +161,22 @@ class Hal {
 
 inline uint32_t Hal::get_programmable_core_type_count() const {
     return core_info_.size();
+}
+
+inline uint32_t Hal::get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
+    return std::visit(
+        [&](auto &&core_type_specifier) -> uint32_t {
+            using T = std::decay_t<decltype(core_type_specifier)>;
+            uint32_t index = this->core_info_.size();
+            if constexpr (std::is_same_v<T, HalProgrammableCoreType>) {
+                index = utils::underlying_type<HalProgrammableCoreType>(core_type_specifier);
+            } else if constexpr (std::is_same_v<T, uint32_t>) {
+                index = core_type_specifier;
+            }
+            TT_ASSERT(index < this->core_info_.size());
+            return this->core_info_[index].get_processor_classes_count();
+        },
+    programmable_core_type);
 }
 
 inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_type_index) const {
