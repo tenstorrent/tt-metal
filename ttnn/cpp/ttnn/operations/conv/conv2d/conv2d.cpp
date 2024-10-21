@@ -145,12 +145,12 @@ ParallelConfig determine_parallel_config(
             uint32_t cores_y =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
             CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
-            CoreRangeSet grid = CoreRangeSet({core_range});
+            CoreRangeSet grid = CoreRangeSet(std::vector{core_range});
             return grid;
 
         } else {
            TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
-            return CoreRangeSet({});
+           return CoreRangeSet();
         }
     };
 

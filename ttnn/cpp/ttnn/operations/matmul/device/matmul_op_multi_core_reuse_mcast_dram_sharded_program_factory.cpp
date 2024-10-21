@@ -459,7 +459,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     tt_metal::Program program{};
 
     // get the dram readers
-    CoreRangeSet all_worker_cores = CoreRangeSet{{}};
+    CoreRangeSet all_worker_cores;
     std::vector<CoreCoord> all_worker_cores_ordered;
 
     if (device->arch() == tt::ARCH::WORMHOLE_B0) {
@@ -1031,7 +1031,8 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     for (uint32_t i = 0; i < all_cores_in_rect_grid_vec.size(); ++i) {
         auto core = all_cores_in_rect_grid_vec[i];
 
-        if (all_worker_cores.ranges().find(core) == all_worker_cores.ranges().end()) {  // not worker
+        if (std::find(all_worker_cores.ranges().begin(), all_worker_cores.ranges().end(), core) ==
+            all_worker_cores.ranges().end()) {  // not worker
             // in1 reader rt args
             bool is_worker_core = false;
             std::vector<uint32_t> mm_in1_sender_writer_args;

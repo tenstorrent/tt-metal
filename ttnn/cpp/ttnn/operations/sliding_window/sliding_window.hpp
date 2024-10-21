@@ -13,7 +13,7 @@
 namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
-    CoreRangeSet grid = {{}};
+    CoreRangeSet grid = {};
     TensorMemoryLayout shard_scheme;
     ShardOrientation shard_orientation;
 
@@ -45,7 +45,7 @@ struct SlidingWindowConfig {
 
     // parallel configuration
     uint32_t num_cores_nhw = 1;        // num cores along collapsed height nhw
-    CoreRangeSet core_range_set = std::set{CoreRange({0, 0}, {0, 0})};   // active cores
+    CoreRangeSet core_range_set = CoreRangeSet(CoreRange({0, 0}, {0, 0}));  // active cores
 
     bool snap_to_tile = false;
     bool is_bilinear = false;

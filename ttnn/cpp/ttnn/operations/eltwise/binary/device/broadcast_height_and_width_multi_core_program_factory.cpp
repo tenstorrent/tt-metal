@@ -111,7 +111,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         num_tiles_per_core_group_2 = 0;
         all_cores = shard_spec.value().grid;
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
     }
 
     uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
@@ -319,7 +319,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         num_tiles_per_core_group_2 = 0;
         all_cores = shard_spec.value().grid;
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
     }
 
     auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);

@@ -10,12 +10,14 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "third_party/json/json.hpp"
 #include "third_party/umd/device/tt_xy_pair.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 using std::pair;
 
@@ -240,30 +242,19 @@ struct hash<CoreRange> {
 
 class CoreRangeSet {
    public:
-    CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
+    CoreRangeSet(const std::vector<CoreRange> &core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
         ZoneScoped;
-        for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
-            for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
-                if (outer_it == inner_it) {
-                    continue;
-                }
-                CoreRange first_core_range = *outer_it;
-                CoreRange second_core_range = *inner_it;
-                bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
-                bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
-                bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
-                bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
-                auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
-                                  first_core_below_second;
-                if (not no_overlap) {
-                    TT_THROW(
-                        "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
-                        first_core_range.str(),
-                        second_core_range.str());
-                }
-            }
-        }
+        this->validate_no_overlap(this->ranges_);
     }
+
+    CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
+        ZoneScoped;
+        this->validate_no_overlap(this->ranges_);
+    }
+
+    CoreRangeSet(const CoreRange &core_range) : ranges_{core_range} {}
+
+    CoreRangeSet() = default;
 
     friend void swap(CoreRangeSet& first, CoreRangeSet& second) {
         std::scoped_lock lock(first.ranges_guard, second.ranges_guard);
@@ -294,7 +285,7 @@ class CoreRangeSet {
     CoreRangeSet merge(const std::set<CoreRange> &other) const {
         size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0, min_y = std::numeric_limits<size_t>::max(),
                max_y = 0;
-        std::set<CoreRange> crs = this->ranges_;
+        std::set<CoreRange> crs(this->ranges_.begin(), this->ranges_.end());
         crs.insert(other.begin(), other.end());
 
         for (const auto &cr : crs) {
@@ -349,13 +340,12 @@ class CoreRangeSet {
             crs.swap(tmp);
             crs.insert(new_crs.begin(), new_crs.end());
         }
-        // for ( const auto & cr : crs ){
-        //   std::cout << " final merged CR:" << cr.str() << std::endl;
-        // }
         return CoreRangeSet(crs);
     }
 
-    CoreRangeSet merge(const CoreRangeSet &s) const { return this->merge(s.ranges()); }
+    CoreRangeSet merge(const CoreRangeSet &s) const {
+        return this->merge(std::set<CoreRange>(s.ranges().begin(), s.ranges().end()));
+    }
 
     inline bool core_coord_in_core_ranges(const CoreCoord &core_coord) const {
         ZoneScoped;
@@ -374,7 +364,7 @@ class CoreRangeSet {
         return false;
     }
 
-    const std::set<CoreRange> &ranges() const { return this->ranges_; }
+    const std::vector<CoreRange> &ranges() const { return this->ranges_; }
 
     std::string str() const {
         if (this->ranges().size() > 0) {
@@ -410,9 +400,33 @@ class CoreRangeSet {
         return {{min_x, min_y}, {max_x, max_y}};
     }
 
-    private:
-     mutable std::mutex ranges_guard;
-     std::set<CoreRange> ranges_;
+   private:
+    void validate_no_overlap(const tt::stl::Span<CoreRange> ranges) {
+        for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
+            for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
+                if (outer_it == inner_it) {
+                    continue;
+                }
+                CoreRange first_core_range = *outer_it;
+                CoreRange second_core_range = *inner_it;
+                bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
+                bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
+                bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
+                bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
+                auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
+                                  first_core_below_second;
+                if (not no_overlap) {
+                    TT_THROW(
+                        "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+                        first_core_range.str(),
+                        second_core_range.str());
+                }
+            }
+        }
+    }
+
+    mutable std::mutex ranges_guard;
+    std::vector<CoreRange> ranges_;
 };
 
 const inline bool operator==(const CoreRangeSet &a, const CoreRangeSet &b) {
@@ -629,7 +643,7 @@ struct to_json_t<CoreRangeSet> {
 template <>
 struct from_json_t<CoreRangeSet> {
     CoreRangeSet operator()(const nlohmann::json &json) noexcept {
-        return CoreRangeSet(from_json<std::set<CoreRange>>(json));
+        return CoreRangeSet(from_json<std::vector<CoreRange>>(json));
     }
 };
 

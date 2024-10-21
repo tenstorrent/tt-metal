@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(const Tensor &a, Ten
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[2] / TILE_HEIGHT;
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-    CoreRangeSet all_cores = CoreRangeSet({}), core_group_1 = CoreRangeSet({}), core_group_2 = CoreRangeSet({});
+    CoreRangeSet all_cores = CoreRangeSet(), core_group_1 = CoreRangeSet(), core_group_2 = CoreRangeSet();
     bool row_major = false;
     if (in_sharded) {
         all_cores = a.shard_spec().value().grid;

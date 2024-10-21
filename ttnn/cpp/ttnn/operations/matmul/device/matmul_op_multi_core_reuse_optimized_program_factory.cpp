@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks create_program(
     }
 
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().grid;

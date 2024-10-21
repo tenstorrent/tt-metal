@@ -980,7 +980,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultipleCoreR
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1001,7 +1001,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMul
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1023,7 +1023,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange cr1({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet core_ranges({cr0, cr1});
+        CoreRangeSet core_ranges(std::vector{cr0, cr1});
 
         DummyProgramMultiCBConfig config = {.cr_set = core_ranges, .cb_config_vector = cb_config_vector};
 
@@ -1036,7 +1036,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
@@ -1052,7 +1052,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
         CoreRange second_cr({worker_grid_size.x - 2, worker_grid_size.y - 2}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
 
-        CoreRangeSet cr_set({first_cr, second_cr});
+        CoreRangeSet cr_set(std::vector{first_cr, second_cr});
 
         Program program;
         DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
@@ -1089,7 +1089,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 13, 17, 19, 1));
@@ -1101,7 +1101,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore_2
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(device, device->command_queue(), dummy_program_config, 255, 255, 255, 1));
@@ -1114,7 +1114,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 4}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1129,7 +1129,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCore
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1143,7 +1143,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
         CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr0, cr1});
+        CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
@@ -1155,7 +1155,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
@@ -1166,7 +1166,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
@@ -1177,7 +1177,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
@@ -1188,7 +1188,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
@@ -1199,7 +1199,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMov
 TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
-    CoreRangeSet cr_set({cr0, cr1});
+    CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (Device *device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
@@ -1219,7 +1219,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-        CoreRangeSet cr_set({cr});
+        CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
 
@@ -1240,7 +1240,7 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
     CoreCoord worker_grid_size = this->device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-    CoreRangeSet cr_set({cr});
+    CoreRangeSet cr_set(cr);
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 

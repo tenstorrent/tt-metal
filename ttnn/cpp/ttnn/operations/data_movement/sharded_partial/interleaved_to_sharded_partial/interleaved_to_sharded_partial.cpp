@@ -29,7 +29,7 @@ ttnn::Tensor InterleavedToShardedPartialOperation::invoke(
 
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
-    CoreRangeSet grid_set({});
+    CoreRangeSet grid_set;
     std::visit(
         [&](const auto &grid) {
             using GridType = std::decay_t<decltype(grid)>;
