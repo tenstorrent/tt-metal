@@ -134,15 +134,15 @@ def test_uniform(shape, rand_range, dtype, device):
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
     torch.manual_seed(0)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_uniform(shape, rand_range, dtype, device)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
