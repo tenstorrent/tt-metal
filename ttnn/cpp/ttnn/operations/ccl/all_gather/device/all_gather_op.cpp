@@ -143,7 +143,7 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
 
 
 void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error");
+    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1");
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -155,9 +155,9 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     // TODO: Validate ring
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
-    TT_FATAL(this->num_links > 0, "Error");
+    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0");
     TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
-    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error");
+    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error, Either receiver or sender device needs to have some value");
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -203,7 +203,7 @@ namespace ccl {
 Tensor all_gather(
     const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology) {
 
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
+    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
     ttnn::ccl::Topology ccl_topology = topology;
