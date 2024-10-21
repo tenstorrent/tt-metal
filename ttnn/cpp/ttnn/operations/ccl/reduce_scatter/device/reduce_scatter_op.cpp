@@ -110,7 +110,7 @@ Tensor reduce_scatter(
                     break;
                 }
             }
-            TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error in reduce scatter op setup, Either receiver or sender device needs to have some value");
+            TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be incorrect");
 
             return operation::run(
                 ttnn::ReduceScatter{
