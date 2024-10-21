@@ -899,10 +899,34 @@ ttnn::Tensor conv2d(
     const std::optional<const MemoryConfig> memory_config) {
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    if (conv_config.act_block_h_override == 0 && !input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+        // This is a path for auto_sharding, set act_block_h_override to min value to
+        // be conservative with L1 memory usage.
+        if (conv_config.input_channels_alignment == (constants::TILE_WIDTH / 2)) {
+            // shallow conv, requires at least two tiles
+            conv_config.act_block_h_override = constants::TILE_HEIGHT * 2;
+        } else {
+            conv_config.act_block_h_override = constants::TILE_HEIGHT;
+        }
+    }
     uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
-        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride, padding, dilation, kernel_size[1], input_width, groups);
+        device,
+        input_tensor,
+        conv_config,
+        batch_size,
+        output_height,
+        output_width,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        weight_tensor.get_shape()[3],
+        input_width,
+        groups);
     if (tensor_manipulated) {
         if (conv_config.deallocate_activation) {
             ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
