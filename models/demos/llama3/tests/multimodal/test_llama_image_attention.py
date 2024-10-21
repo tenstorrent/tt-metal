@@ -6,14 +6,9 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-encoder_utils = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.encoder_utils"
-)
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
+from models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal import encoder_utils
 from models.demos.llama3.tt.multimodal.llama_image_attention import TtLlamaImageAttention
 from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.model_config import TtModelArgs

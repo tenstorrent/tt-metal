@@ -15,16 +15,8 @@ from PIL import Image as PIL_Image
 
 from torch import nn, Tensor
 
-BFLOAT = False
-
-import importlib
-
-llama_reference_model = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-llama_reference_image_transforms = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.image_transform"
-)
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_model
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 
 import ttnn
 from models.demos.llama3.tt.multimodal.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
@@ -225,8 +217,12 @@ class CrossAttentionTransformer(torch.nn.Module):
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             # Back to torch
             vision_tokens = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            chunk_seq_len = (self.configuration.vision_chunk_size // self.configuration.vision_patch_size) ** 2 + 1
+            # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = (
-                vision_tokens[0].reshape(bsz, max_num_images, self.max_num_chunks, -1, self.model_dim).float()
+                vision_tokens[0, :, :chunk_seq_len]
+                .reshape(bsz, max_num_images, self.max_num_chunks, -1, self.model_dim)
+                .float()
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)

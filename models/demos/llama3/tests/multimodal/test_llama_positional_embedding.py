@@ -31,8 +31,6 @@ from models.demos.llama3.tt.multimodal.llama_positional_embedding import (
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 
-import importlib
-
 
 ##### Torch op #####
 class PositionalEmbedding(nn.Module):
