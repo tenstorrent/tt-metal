@@ -34,16 +34,13 @@ def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *arg
 
 
 def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, alpha=None, *args, **kwargs):
+    if alpha is not None:
+        kwargs["alpha"] = alpha
     if torch_op == "leaky_relu":
         if alpha != None:
             pyt_y = torch.nn.functional.leaky_relu(input_tensor, negative_slope=alpha)
         else:
             pyt_y = torch.nn.functional.leaky_relu(input_tensor)
-    elif torch_op == "softshrink":
-        if alpha != None:
-            pyt_y = torch.nn.functional.softshrink(input_tensor, lambd=alpha)
-        else:
-            pyt_y = torch.nn.functional.softshrink(input_tensor)
     elif torch_op == "elu":
         if alpha != None:
             pyt_y = torch.nn.functional.elu(input_tensor, alpha=alpha)
@@ -56,9 +53,9 @@ def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tens
             pyt_y = torch.nn.functional.celu(input_tensor)
     else:
         if alpha != None:
-            pyt_y = torch_op(input_tensor, alpha)
-        else:
             pyt_y = torch_op(input_tensor)
+        else:
+            pyt_y = torch_op(input_tensor, *args, **kwargs)
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
@@ -178,7 +175,7 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.softshrink_bw,
     golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "softshrink", grad, input, alpha, *args, **kwargs
+        torch.nn.functional.softshrink, grad, input, alpha, *args, **kwargs
     ),
 )
 
