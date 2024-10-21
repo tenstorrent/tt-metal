@@ -10,12 +10,12 @@ import datetime
 import os
 import hashlib
 
-from permutations import *
-from serialize import serialize
+from framework.permutations import *
+from framework.serialize import serialize
 from elasticsearch import Elasticsearch, NotFoundError
-from statuses import VectorValidity, VectorStatus
-from elastic_config import *
-from sweeps_logger import sweeps_logger as logger
+from framework.statuses import VectorValidity, VectorStatus
+from framework.elastic_config import *
+from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
 SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
