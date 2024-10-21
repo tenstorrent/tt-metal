@@ -6,11 +6,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
@@ -93,14 +90,15 @@ def test_llama_cross_attention_transformer_block_inference(
     """
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
-    pt_xattn_cache_chunks = [
-        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
-    ]
+    pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache]
 
     tt_xattn_cache = tt_model.compute_xattn_kv_cache(tt_xattn_tokens)
     tt_xattn_cache_torch = [
         ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
-            batch, n_kv_heads, vision_seq_len, head_dim
+            batch,
+            n_heads,
+            vision_seq_len,
+            head_dim,
         )
         for x in tt_xattn_cache
     ]
