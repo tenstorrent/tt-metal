@@ -242,10 +242,6 @@ void Buffer::allocate() {
 }
 
 void Buffer::deallocate() {
-    if (device_ == nullptr) {
-        return;
-    }
-
     device_->push_work([self = weak_self.lock()] {
         if (!self->is_allocated_ || !self->device_->initialized_ || self->size_ == 0) {
             return;
@@ -258,10 +254,6 @@ void Buffer::deallocate() {
 }
 
 void Buffer::deallocateAndDelete(Buffer* buffer) {
-    if (buffer->device_ == nullptr) {
-        return;
-    }
-
     buffer->device_->push_work([buffer] {
         if (buffer->is_allocated_ && buffer->device_->initialized_ && buffer->size_ != 0) {
             detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
@@ -312,7 +304,7 @@ CoreType Buffer::core_type() const {
         case BufferType::L1_SMALL:
             return CoreType::WORKER;
         default:
-            TT_THROW("Unknown CoreType for buffer");
+            TT_THROW("Unknown CoreType {} for buffer", this->buffer_type_);
     }
 }
 
@@ -378,7 +370,7 @@ DeviceAddr Buffer::aligned_size() const {
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
     auto shard_spec = this->shard_spec();
-    int pages_offset_within_bank = page_index % shard_spec.size();
+    uint32_t pages_offset_within_bank = page_index % shard_spec.size();
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }

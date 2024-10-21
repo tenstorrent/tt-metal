@@ -137,9 +137,6 @@ struct BufferPageMapping {
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
 };
 
-struct AllocBufferMetadata;
-void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md);
-
 inline namespace v0 {
 
 class Buffer final {
