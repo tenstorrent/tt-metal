@@ -39,24 +39,9 @@ inline void relu_max(uint uint_threshold) {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_lrelu(uint slope) {
-    // SFPU microcode
-    Converter c_slope;
-    c_slope.u = slope;
-    vFloat s = c_slope.f;
-
-#pragma GCC unroll 0
-    for (int d = 0; d < 8; d++) {
-        vFloat v = dst_reg[0];
-
-        v_if(v < 0.0f) { v *= s; }
-        v_endif;
-
-        dst_reg[0] = v;
-
-        dst_reg++;
-    }
+    _calculate_lrelu_<APPROXIMATION_MODE>(iterations, slope);
 }
 
 }  // namespace sfpu

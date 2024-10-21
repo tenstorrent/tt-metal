@@ -53,10 +53,10 @@ inline void relu_max(uint uint_threshold)
     }
 }
 
-template <bool APPROXIMATION_MODE>
-inline void calculate_lrelu(const uint slope, const int iterations)
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_lrelu(const uint slope)
 {
-    _calculate_lrelu_<APPROXIMATION_MODE>(iterations, slope);
+    _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
 }
 
 }  // namespace sfpu
