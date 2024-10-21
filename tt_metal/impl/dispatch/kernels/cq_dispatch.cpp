@@ -1087,7 +1087,7 @@ void kernel_main() {
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
-        DeviceZoneScopedND("CQ-DISPATCH" );
+        DeviceZoneScopedN("CQ-DISPATCH" );
         if (cmd_ptr == cb_fence) {
             get_cb_page_and_release_pages<
                 dispatch_cb_base,

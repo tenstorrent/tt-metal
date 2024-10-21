@@ -46,6 +46,15 @@ namespace kernel_profiler{
         PROFILER_DONE,
     };
 
+    enum PacketTypes
+    {
+        ZONE_START,
+        ZONE_END,
+        ZONE_TOTAL,
+        TS_DATA,
+        TS_EVENT
+    };
+
     // TODO: use data types in profile_msg_t rather than addresses/sizes
     constexpr static std::uint32_t PROFILER_L1_CONTROL_VECTOR_SIZE = 32;
     constexpr static std::uint32_t PROFILER_L1_CONTROL_BUFFER_SIZE = PROFILER_L1_CONTROL_VECTOR_SIZE * sizeof(uint32_t);

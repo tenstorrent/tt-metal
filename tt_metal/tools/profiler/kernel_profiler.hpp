@@ -113,14 +113,29 @@ namespace kernel_profiler{
 #endif
     }
 
-    constexpr uint32_t get_end_timer_id (uint32_t timer_id)
+    constexpr uint32_t get_const_id (uint32_t id, PacketTypes type)
     {
-        return ((timer_id & 0xFFFF) | ((1<<16) & 0x7FFFF));
+        return ((id & 0xFFFF) | ((type<<16) & 0x7FFFF));
     }
 
-    inline __attribute__((always_inline)) uint32_t get_sum_id (uint32_t sum_id)
+    inline __attribute__((always_inline)) uint32_t get_id (uint32_t id, PacketTypes type)
     {
-        return ((sum_id & 0xFFFF) | ((1<<17) & 0x7FFFF));
+        return ((id & 0xFFFF) | ((type<<16) & 0x7FFFF));
+    }
+
+    template<bool dispatch=false>
+    inline __attribute__((always_inline)) bool bufferHasRoom ()
+    {
+        bool bufferHasRoom = false;
+        if constexpr (dispatch)
+        {
+            bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE));
+        }
+        else
+        {
+            bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize);
+        }
+        return bufferHasRoom;
     }
 
     inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id)
@@ -166,7 +181,7 @@ namespace kernel_profiler{
             {
                 if (wIndex < PROFILER_L1_VECTOR_SIZE)
                 {
-                    profiler_data_buffer[myRiscID][wIndex] = 0x80000000 | ((get_sum_id(sumIDs[i]) & 0x7FFFF) << 12);
+                    profiler_data_buffer[myRiscID][wIndex] = 0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
                     profiler_data_buffer[myRiscID][wIndex + 1] = sums[i];
                     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
                 }
@@ -284,7 +299,7 @@ namespace kernel_profiler{
 
         uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-        mark_time_at_index_inlined(wIndex, get_end_timer_id(hash));
+        mark_time_at_index_inlined(wIndex, get_const_id(hash,ZONE_END));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
         uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
@@ -316,17 +331,7 @@ namespace kernel_profiler{
         bool start_marked = false;
         inline __attribute__((always_inline)) profileScope ()
         {
-            bool bufferHasRoom = false;
-            if constexpr (dispatch)
-            {
-                bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE));
-            }
-            else
-            {
-                bufferHasRoom = wIndex < (PROFILER_L1_VECTOR_SIZE - stackSize);
-            }
-
-            if (bufferHasRoom)
+            if (bufferHasRoom<dispatch>())
             {
                 stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
                 start_marked = true;
@@ -339,7 +344,7 @@ namespace kernel_profiler{
         {
             if (start_marked)
             {
-                mark_time_at_index_inlined(wIndex, get_end_timer_id(timer_id));
+                mark_time_at_index_inlined(wIndex, get_const_id(timer_id,ZONE_END));
                 wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
                 start_marked = false;
                 stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
@@ -373,7 +378,7 @@ namespace kernel_profiler{
         }
         inline __attribute__((always_inline))  ~profileScopeGuaranteed ()
         {
-            mark_time_at_index_inlined(end_index, get_end_timer_id(timer_id));
+            mark_time_at_index_inlined(end_index, get_const_id(timer_id,ZONE_END));
             if constexpr  (index == 0)
             {
                 finish_profiler();
@@ -397,19 +402,56 @@ namespace kernel_profiler{
             sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
         }
     };
+
+    template<uint32_t data_id, bool dispatch=false>
+    inline __attribute__((always_inline)) void timeStampedData(uint64_t data)
+    {
+        if (bufferHasRoom<dispatch>())
+        {
+            mark_time_at_index_inlined(wIndex, get_const_id(data_id, TS_DATA));
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+            profiler_data_buffer[myRiscID][wIndex++] = data >> 32;
+            profiler_data_buffer[myRiscID][wIndex++] = (data << 32) >> 32;
+        }
+    }
+
+    template<bool dispatch=false>
+    inline __attribute__((always_inline)) void recordEvent(uint16_t event_id)
+    {
+        if (bufferHasRoom<dispatch>())
+        {
+            mark_time_at_index_inlined(wIndex, get_id(event_id, TS_EVENT));
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+    }
 }
 
-
+// Not dispatch
+#if (!defined(DISPATCH_KERNEL) || !defined(COMPILE_FOR_NCRISC))
 
 #define DeviceZoneScopedN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#if (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+#define DeviceTimestampedData( data_id, data ) kernel_profiler::timeStampedData<data_id>(data);
 
-#define DeviceZoneScopedND( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>();
+#define DeviceRecordEvent( event_id ) kernel_profiler::recordEvent(event_id);
 
+// Dispatch and enabled
+#elif (defined(DISPATCH_KERNEL) && defined(COMPILE_FOR_NCRISC) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+
+#define DeviceZoneScopedN( name ) DO_PRAGMA(message(PROFILER_MSG_NAME(name))); auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); kernel_profiler::profileScope<hash,true> zone = kernel_profiler::profileScope<hash,true>();
+
+#define DeviceTimestampedData( data_id, data ) kernel_profiler::timeStampedData<data_id,true>(data);
+
+#define DeviceRecordEvent( event_id ) kernel_profiler::recordEvent<true>(event_id);
+
+// Dispatch but disabled
 #else
 
-#define DeviceZoneScopedND( name )
+#define DeviceZoneScopedN( name )
+
+#define DeviceTimestampedData( data_id, data )
+
+#define DeviceRecordEvent( event_id )
 
 #endif
 
@@ -438,8 +480,6 @@ namespace kernel_profiler{
 #define DeviceZoneScopedSumN1( name )
 
 #define DeviceZoneScopedSumN2( name )
-
-#define DeviceZoneScopedND( name )
 
 #define DeviceZoneSetCounter( counter )
 
