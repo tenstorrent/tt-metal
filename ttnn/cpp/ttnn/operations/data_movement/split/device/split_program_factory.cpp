@@ -52,7 +52,7 @@ void setup_runtime(
                     uint32_t reader_core_id = id_c * per_core_tiles_y;
                     reader_core_id += id_r_reader;
 
-                    std::vector<uint32_t> reader_runtime_args = {
+                    const std::array reader_runtime_args = {
                         (std::uint32_t)reader_core_id,
                         (std::uint32_t)(in0_buffer->address()),  // in0_tensor_addr
                         (std::uint32_t)0                         // split on last dim
@@ -66,7 +66,7 @@ void setup_runtime(
 
                     uint32_t writer_core_id = id_c_inner * per_core_tiles_y + (id_r_writer);
 
-                    std::vector<uint32_t> writer_runtime_args = {
+                    const std::array writer_runtime_args = {
                         writer_core_id,
                         (std::uint32_t)out0_buffer->address(),  // first base addr
                         (std::uint32_t)out1_buffer->address(),  // second base addr
