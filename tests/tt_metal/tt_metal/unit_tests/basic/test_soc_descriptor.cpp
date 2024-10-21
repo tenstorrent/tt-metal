@@ -47,7 +47,7 @@ namespace unit_tests::basic::soc_desc {
 TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
-    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     for (int device_id = 0; device_id < num_devices; device_id++) {
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);

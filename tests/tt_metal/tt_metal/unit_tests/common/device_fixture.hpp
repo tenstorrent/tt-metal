@@ -19,7 +19,7 @@ class DeviceFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
@@ -61,7 +61,7 @@ class DeviceSingleCardFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const chip_id_t mmio_device_id = 0;
         reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
@@ -83,7 +83,7 @@ class GalaxyFixture : public ::testing::Test {
    protected:
     void SkipTestSuiteIfNotGalaxyMotherboard()
     {
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (!(arch == tt::ARCH::WORMHOLE_B0 && num_devices >= 32))
         {
