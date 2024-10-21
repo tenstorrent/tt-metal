@@ -23,6 +23,21 @@ def test_sub_scalar(device, s, h, w):
     output_tensor = input_tensor - s
     output_tensor = ttnn.to_torch(output_tensor)
 
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("s", [3])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sub_scalar_float(device, s, h, w):
+    torch_input_tensor = torch.rand((h, w), dtype=torch.float)
+    torch_output_tensor = torch_input_tensor - s
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = input_tensor - s
+    output_tensor = ttnn.to_torch(output_tensor)
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
@@ -31,6 +46,23 @@ def test_sub_scalar(device, s, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_rsub_scalar(device, s, h, w):
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = s - torch_input_tensor
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # TODO : add Tensor.__rsub__ eventually
+    output_tensor = ttnn.mul(input_tensor, -1.0)
+    output_tensor = ttnn.add(output_tensor, s)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("s", [3])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_rsub_scalar_float(device, s, h, w):
+    torch_input_tensor = torch.rand((h, w), dtype=torch.float)
     torch_output_tensor = s - torch_input_tensor
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
