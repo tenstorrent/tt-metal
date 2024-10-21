@@ -76,6 +76,13 @@ jobs:
       - build
       - in-service
     steps:
+      - name: Verify NFS mount
+        shell: bash
+        run: |
+          if [ ! -d "/mnt/MLPerf/ccache" ]; then
+            echo "::error::NFS drive is not mounted; build machine not perperly provisioned."
+            exit 1
+          fi
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
@@ -104,15 +111,20 @@ jobs:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
             --rm
+            --tmpfs /tmp
             -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
             -v ${{ github.workspace }}:${{ github.workspace }}
             -v /etc/passwd:/etc/passwd:ro
             -v /etc/shadow:/etc/shadow:ro
             -v /etc/bashrc:/etc/bashrc:ro
+            -v /mnt/MLPerf/ccache:/home/ubuntu/.ccache
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples --enable-ccache"
+            ccache -s
+            ccache -p
+            cmake --version
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"

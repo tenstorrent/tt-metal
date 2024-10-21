@@ -4,6 +4,7 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG UBUNTU_VERSION=22.04
 ENV DOXYGEN_VERSION=1.9.6
+ENV CCACHE_TEMPDIR=/tmp/ccache
 
 RUN apt update -y && apt install software-properties-common gpg-agent -y
 
