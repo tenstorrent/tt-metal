@@ -110,7 +110,7 @@ ParallelConfig determine_parallel_config(
         grid = CoreRangeSet({core_range});
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         num_cores_nhw = 1;
-        uint32_t num_cores_c = find_closest_common_largest_divisor(out_c_ntiles, std::ceil((float)input_channels / effective_tile_width), max_num_cores);
+        uint32_t num_cores_c = find_closest_largest_divisor(std::ceil((float)input_channels / effective_tile_width), max_num_cores);
         grid = num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
@@ -195,6 +195,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
+    log_debug("Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -266,10 +267,14 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
-    if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED && act_block_h_override > 0 ) {
-        log_debug(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
-        act_block_h_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+    if(act_block_h_override > 0) {
+        if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+            log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
+        } else {
+            act_block_h_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+        }
     }
+
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
                                ? round_up(padded_in_channels * window_w, 32)
                                : padded_in_channels;
@@ -838,14 +843,29 @@ Result conv2d(
         }
         conv_config.deallocate_activation = true;
     }
+
+    auto output_parallel_config = parallel_config;
+    if(!conv_config.shard_layout.has_value()) {
+        conv_config.shard_layout = parallel_config.shard_scheme;
+    }
+
+    if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+        output_parallel_config = {
+            .grid = num_cores_to_corerange_set( tt::div_up(out_channels, tt::constants::TILE_WIDTH), device->compute_with_storage_grid_size(), true),
+            .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
+            .shard_orientation = parallel_config.shard_orientation
+        };
+        log_debug(tt::LogOp, "Changing width sharded output grid to  {}",output_parallel_config.grid);
+    }
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         parallel_config, round_up_size);
-    auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
-        get_num_cores_channels_from_parallel_config(parallel_config));
+    auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
 
+    auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
+        conv_out_memory_config, get_num_cores_nhw_from_parallel_config(largest_parallel_config),
+        get_num_cores_channels_from_parallel_config(largest_parallel_config));
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -988,8 +1008,8 @@ Result conv2d(
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
-
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+
     } else {
         // run conv as matmul
         uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
