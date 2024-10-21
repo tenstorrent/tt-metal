@@ -54,6 +54,22 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     }
 }
 
+std::string_view Hal::get_name(HalProgrammableCoreType core_type) const {
+    switch (core_type) {
+    case HalProgrammableCoreType::TENSIX:
+        return "tensix";
+    case HalProgrammableCoreType::ACTIVE_ETH:
+        return "active ethernet";
+    case HalProgrammableCoreType::IDLE_ETH:
+        return "idle ethernet";
+    case HalProgrammableCoreType::COUNT:
+        TT_ASSERT(0);
+        return "";
+    }
+    TT_ASSERT(0);
+    return "";
+}
+
 HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
                                  CoreType core_type,
                                  uint32_t core_proc_count,
