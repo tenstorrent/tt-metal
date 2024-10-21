@@ -123,7 +123,7 @@ public:
 
 private:
     map<uint64_t, vector<DispatchData>> program_id_to_dispatch_data;
-    map<uint64_t, map<CoreType, vector<pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
+    map<uint64_t, map<CoreType, vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
     map<uint64_t, int> program_id_to_call_count;
 };
 
@@ -202,7 +202,7 @@ void DataCollector::DumpData() {
         // Dump kernel ids for each kernel group in this program
         for (auto &core_type_and_kernel_groups : program_id_to_kernel_groups[program_id]) {
             CoreType core_type = core_type_and_kernel_groups.first;
-            vector<pair<kernel_id_array_t, CoreRangeSet>> &kernel_groups = core_type_and_kernel_groups.second;
+            vector<std::pair<kernel_id_array_t, CoreRangeSet>> &kernel_groups = core_type_and_kernel_groups.second;
             outfile << fmt::format("\t{} Kernel Groups: {}\n", core_type, kernel_groups.size());
             for (auto &ids_and_ranges : kernel_groups) {
                 // Dump kernel ids in this group

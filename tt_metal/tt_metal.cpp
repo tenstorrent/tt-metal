@@ -40,10 +40,10 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
         {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                return CoreRangeSet(CoreRange(core_spec, core_spec));
             }
             else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet({core_spec});
+                return CoreRangeSet(core_spec);
             }
             else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 return core_spec;
@@ -1060,9 +1060,9 @@ uint32_t CreateSemaphore(
     return std::visit(
         [&](auto &&c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs({});
+            CoreRangeSet crs;
             if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet({c});
+                crs = CoreRangeSet(c);
             } else {
                 crs = c;
             }

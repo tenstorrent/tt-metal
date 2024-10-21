@@ -223,7 +223,7 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range_one({0, 0}, {1, 1});
         CoreRange core_range_two({2, 2}, {3, 3});
-        CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});
+        CoreRangeSet core_ranges = CoreRangeSet(std::vector{core_range_one, core_range_two});
 
         pass &= test_program_specified_with_core_range_set(device, program, core_ranges);
 

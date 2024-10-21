@@ -1,5 +1,6 @@
 
 set(COMMON_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp

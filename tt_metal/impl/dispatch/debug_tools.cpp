@@ -23,7 +23,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     host_dispatch_dump_file.open(host_file);
     device_dispatch_dump_file.open(device_file);
 
-    vector<pair<string, vector<string>>> host_map;
+    vector<std::pair<string, vector<string>>> host_map;
 
 
     string line;
