@@ -23,7 +23,7 @@ def run_max_pool(
     device,
     dtype,
     memory_config=None,
-    shard_scheme=ttnn.TensorMemoryLayout.INTERLEAVED,
+    shard_scheme=None,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size

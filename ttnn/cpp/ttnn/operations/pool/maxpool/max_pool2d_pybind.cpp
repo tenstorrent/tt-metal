@@ -49,8 +49,8 @@ void bind_max_pool2d_operation(py::module& module) {
                 std::array<uint32_t, 2> stride,
                 std::array<uint32_t, 2> padding,
                 std::array<uint32_t, 2> dilation,
-                const std::optional<const MemoryConfig>& memory_config,
-                ttnn::TensorMemoryLayout applied_shard_scheme,
+                const std::optional<const MemoryConfig> memory_config,
+                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                 const uint8_t& queue_id)
                 -> ttnn::Tensor { return self(queue_id,
                                               input_tensor,
@@ -75,7 +75,7 @@ void bind_max_pool2d_operation(py::module& module) {
                 py::arg("dilation"),
                 py::kw_only(),
                 py::arg("memory_config") = std::nullopt,
-                py::arg("applied_shard_scheme") = ttnn::TensorMemoryLayout::INTERLEAVED,
+                py::arg("applied_shard_scheme") = std::nullopt,
                 py::arg("queue_id") = 0});
 }
 
