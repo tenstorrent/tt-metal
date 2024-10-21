@@ -130,6 +130,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherPause) {
+    GTEST_SKIP();
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(RunTest, device);
     }

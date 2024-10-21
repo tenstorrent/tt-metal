@@ -177,6 +177,9 @@ class Cluster {
     // Converts logical ethernet core coord to physical ethernet core coord
     CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
 
+    CoreCoord get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const;
+    CoreCoord get_translated_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord, const CoreType& core_type) const;
+
     // Bookkeeping for mmio device tunnels
     uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
     uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;

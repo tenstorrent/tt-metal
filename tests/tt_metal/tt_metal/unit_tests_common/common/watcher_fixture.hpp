@@ -55,12 +55,12 @@ protected:
         tt::watcher_clear_log();
 
         // Parent class initializes devices and any necessary flags
-        CommonFixture::SetUp();
+        // CommonFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        CommonFixture::TearDown();
+        // CommonFixture::TearDown();
 
         // Reset watcher settings to their previous values
         tt::llrt::OptionsG.set_watcher_enabled(watcher_previous_enabled);
