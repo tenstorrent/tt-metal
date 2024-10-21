@@ -500,9 +500,7 @@ class TtModelArgs:
             self.model_config["CROSS_TRANSFORMER_TEXT_OUTPUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
                 k=self.dim,
-                n=self.vocab_size
-                // 4
-                // self.num_devices,  # TODO: Remove magic number 8 from cross attention transformer text
+                n=self.vocab_size // 8,  # Magic number. LM Head always contains 8 splits
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= max_seq,

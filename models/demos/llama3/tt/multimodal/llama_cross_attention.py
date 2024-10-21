@@ -156,12 +156,26 @@ class TtLlamaCrossAttention(LightweightModule):
             xk = ttnn.reshape(xk, [1, bsz, seqlen_y, -1])
             xv = ttnn.reshape(xv, [1, bsz, seqlen_y, -1])
 
-        xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            xk, xk, num_heads=self.n_local_kv_heads, num_kv_heads=self.n_local_kv_heads // 2, transpose_k_heads=False
-        )
-        xv, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            xv, xv, num_heads=self.n_local_kv_heads, num_kv_heads=self.n_local_kv_heads // 2, transpose_k_heads=False
-        )
+        if self.n_local_kv_heads == 1:
+            # Only a simple reshape required, no need to split
+            xk = ttnn.reshape(xk, [bsz, 1, seqlen_y, -1])
+            xv = ttnn.reshape(xv, [bsz, 1, seqlen_y, -1])
+        else:
+            # 1, B, S, D -> B, NH, S, DH?
+            xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                xk,
+                xk,
+                num_heads=self.n_local_kv_heads,
+                num_kv_heads=self.n_local_kv_heads // 2,
+                transpose_k_heads=False,
+            )
+            xv, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                xv,
+                xv,
+                num_heads=self.n_local_kv_heads,
+                num_kv_heads=self.n_local_kv_heads // 2,
+                transpose_k_heads=False,
+            )
 
         xk = self.k_norm(xk)
 

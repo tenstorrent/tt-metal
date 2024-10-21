@@ -23,12 +23,12 @@ from models.utility_functions import skip_for_grayskull
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
 def test_llama_vision_transformer_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
-    pcc = 0.79
+    pcc_required = 0.79
 
     model_args = TtModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
@@ -44,8 +44,6 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
 
     reference_model = llama_reference_mod.CrossAttentionTransformerVision(model_args)
     reference_model.load_state_dict(partial_state_dict, strict=True)
-
-    all_tests_pass = True
 
     tt_model = TtLlamaCrossAttentionTransformerVision(
         mesh_device,
@@ -72,19 +70,8 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
         logger.info(f"Reference output shape: {reference_output.shape}")
         logger.info(f"TT output shape: {tt_output_torch.shape}")
 
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(pcc_message)
-
-        if passing:
-            logger.info(f"Llama_Attention Passed!")
-        else:
-            logger.warning(f"Llama_Attention Failed!")
-            all_tests_pass = False
-
-        if all_tests_pass:
-            logger.info("Llama Attention output Passed!")
-        else:
-            logger.warning("Llama Attention output Failed!")
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+        logger.info(f"PCC: {pcc_message}")
+        assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

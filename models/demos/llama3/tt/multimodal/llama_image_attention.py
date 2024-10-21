@@ -273,9 +273,7 @@ class TtLlamaImageAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
         # sdpa_cfg = self.model_config["SDPA_PROGCFG"](seq_len)
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=128,
-            k_chunk_size=128,
+            compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
         )
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,

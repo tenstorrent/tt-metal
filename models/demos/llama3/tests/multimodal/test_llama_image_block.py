@@ -33,12 +33,12 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
 def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
-    pcc = 0.99
+    pcc_required = 0.99
 
     mesh_device.enable_async(True)
 
@@ -60,8 +60,6 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
         d_model=dim, n_head=heads, mlp_ratio=model_args.vision_mlp_ratio, gated=gated
     )
     reference_model.load_state_dict(partial_state_dict)
-
-    all_tests_pass = True
 
     tt_model = TtLlamaImageTransformerBlock(
         mesh_device,
@@ -94,6 +92,7 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
         attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+    tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
     attention_input = attention_input.reshape(1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
@@ -114,18 +113,8 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
     reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
     reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-    if passing:
-        logger.info(f"Llama_Attention Passed!")
-    else:
-        logger.warning(f"Llama_Attention Failed!")
-        all_tests_pass = False
-
-    if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
-    else:
-        logger.warning("Llama Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

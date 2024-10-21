@@ -53,8 +53,8 @@ def test_llama_cross_attention_transformer_text_inference(
     reset_seeds,
 ):
     dtype = ttnn.bfloat8_b
-    prefill_pcc = 0.98
-    decode_pcc = 0.73
+    prefill_pcc_required = 0.98
+    decode_pcc_required = 0.73
 
     mesh_device.enable_async(True)
 
@@ -129,10 +129,10 @@ def test_llama_cross_attention_transformer_text_inference(
         ]
 
         for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
-            passing, pcc_message = comp_pcc(pt, tt, prefill_pcc)
+            passing, pcc_message = comp_pcc(pt, tt, prefill_pcc_required)
 
             logger.info(comp_allclose(pt, tt))
-            logger.info(pcc_message)
+            logger.info(f"PCC: {pcc_message}")
 
             if passing:
                 logger.info(f"compute_xattn_kv_cache Passed!")
@@ -310,12 +310,12 @@ def test_llama_cross_attention_transformer_text_inference(
             tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
             if mode == "prefill":
                 tt_out = tt_out[0].reshape(logits.shape)
-                pcc = prefill_pcc
+                pcc_required = prefill_pcc_required
             else:
                 tt_out = tt_out[0, ..., :batch, :].transpose(0, 1).view(logits.shape)
-                pcc = decode_pcc
-            passing, pcc_message = comp_pcc(logits, tt_out, pcc)
+                pcc_required = decode_pcc_required
+            passing, pcc_message = comp_pcc(logits, tt_out, pcc_required)
             logger.info(comp_allclose(logits, tt_out))
-            logger.info(pcc_message)
+            logger.info(f"PCC: {pcc_message}")
             prev_pos = cur_pos
-            assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+            assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

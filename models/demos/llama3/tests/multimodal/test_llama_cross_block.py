@@ -43,7 +43,7 @@ def test_llama_cross_attention_transformer_block_inference(
     vision_seq_len, text_seq_len, mesh_device, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.99
+    pcc_required = 0.99
 
     mesh_device.enable_async(True)
 
@@ -104,7 +104,7 @@ def test_llama_cross_attention_transformer_block_inference(
     ]
 
     for pt, tt in zip(pt_xattn_cache_chunks, tt_xattn_cache_torch):
-        passing, pcc_message = comp_pcc(pt, tt, pcc)
+        passing, pcc_message = comp_pcc(pt, tt, pcc_required)
 
         logger.info(comp_allclose(pt, tt))
         logger.info(f"PCC: {pcc_message}")
@@ -113,6 +113,8 @@ def test_llama_cross_attention_transformer_block_inference(
         else:
             logger.warning(f"compute_xattn_kv_cache Failed!")
             all_tests_pass = False
+
+    assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
 
     """
     Test forward, prefill and decode!
@@ -230,13 +232,9 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(batch, seq_len, dim)
         else:
             tt_output_torch = tt_output_torch[0, ..., :batch, :].transpose(0, 1).view(batch, seq_len, dim)
-        passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc)
+        passing, pcc_message = comp_pcc(pt_out, tt_output_torch, pcc_required)
         logger.info(comp_allclose(pt_out, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
 
-    if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
-    else:
-        logger.warning("Llama Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

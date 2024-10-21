@@ -48,48 +48,6 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
     model_args.WEIGHTS_DTYPE = dtype
 
-    """
-            self.patch_size = 14
-            self.vision_encoder = VisionEncoder(
-            max_num_tiles=4,
-            image_size=args.vision_chunk_size,
-            patch_size=self.patch_size,
-            n_global_layers=8,
-            global_model=True,
-            return_intermediate=return_intermediate,
-        )
-
-        class VisionEncoder(nn.Module):
-            def __init__(
-                self,
-                max_num_tiles: int,
-                ckpt_path: str = None,
-                image_size: int = 224,
-                patch_size: int = 14,
-                width: int = 1280,
-                layers: int = 32,
-                heads: int = 16,
-                mlp_ratio: float = 4.0,
-                act_layer: Callable = nn.GELU,
-                in_channels: int = 3,
-                load_ckpt: bool = False,
-                n_global_layers: int = 2,
-                global_model: bool = False,
-                return_intermediate=None,
-                ...
-
-                self.global_transformer = ImageTransformer(
-                    width, n_global_layers, heads, mlp_ratio, act_layer=act_layer, gated=True
-
-            self.mlp = ImageFeedForward(
-                dim=d_model,
-                hidden_dim=int(mlp_ratio * d_model),
-                dropout=0.0,
-                act_layer=act_layer,
-            )
-        )
-    """
-
     dim = 1280
     mlp_ratio = 4.0
     act_layer = torch.nn.GELU
@@ -133,9 +91,4 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 
-    if passing:
-        logger.info("Llama_MLP Passed!")
-    else:
-        logger.warning("Llama_MLP Failed!")
-
-    assert passing, f"Llama_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

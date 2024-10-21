@@ -96,9 +96,4 @@ def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
         logger.info(comp_allclose(reference_output, tt_output))
         logger.info(f"PCC: {pcc_message}")
-        if passing:
-            logger.info("LayerNorm on device {idx} Passed!")
-        else:
-            logger.warning("LayerNorm {idx} Failed!")
-
-        assert passing, f"LayerNorm output does not meet PCC requirement {pcc_required}: {pcc_message}."
+        assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

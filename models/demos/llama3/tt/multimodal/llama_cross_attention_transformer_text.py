@@ -95,7 +95,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         # )
 
         lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
-        num_splits = 4  # arbitrary, reasonable number
+        total_splits = 8  # Arbitrary value which allows whole-tile splits in LM Head
+        num_splits = total_splits // self.mesh_device.num_devices
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)
 
         cache_name = lambda name, suffix, split: weight_cache_path / (state_dict_prefix + f"{name}{suffix}{split}")

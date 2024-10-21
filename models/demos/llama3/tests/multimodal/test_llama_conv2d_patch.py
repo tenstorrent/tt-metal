@@ -63,7 +63,7 @@ def test_llama_conv2d_inference(
     bias,
     ensure_gc,
 ):
-    pcc = 0.9999
+    pcc_required = 0.9999
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -128,8 +128,4 @@ def test_llama_conv2d_inference(
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-    if passing:
-        logger.info(f"Llama_Conv2dPatch Passed!")
-    else:
-        logger.warning(f"Llama_Conv2dPatch Failed!")
-        assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

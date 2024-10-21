@@ -38,7 +38,7 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
-    pcc = 0.99
+    pcc_required = 0.99
 
     mesh_device.enable_async(True)
 
@@ -55,8 +55,6 @@ def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_pro
     heads = 16
     reference_model = llama_reference_mod.ImageAttention(dim=dim, head_dim=dim // heads, n_heads=heads)
     reference_model.load_state_dict(partial_state_dict)
-
-    all_tests_pass = True
 
     tt_model = TtLlamaImageAttention(
         mesh_device,
@@ -89,8 +87,8 @@ def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_pro
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
     # Make striped attention mask to mask out our padding between 8 and 32
-    # Striped mask doesn't affect PCC
-    # tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
+    # Striped mask doesn't affect PCC on first layer but is necessary for later layers
+    tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
 
     attention_input = attention_input.reshape(1, batch, -1, dim)
 
@@ -114,18 +112,9 @@ def test_llama_attention_inference(batch, num_chunks, ntok, mesh_device, use_pro
     reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
     reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-    if passing:
-        logger.info(f"Llama_Attention Passed!")
-    else:
-        logger.warning(f"Llama_Attention Failed!")
-        all_tests_pass = False
 
-    if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
-    else:
-        logger.warning("Llama Attention output Failed!")
-        assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
