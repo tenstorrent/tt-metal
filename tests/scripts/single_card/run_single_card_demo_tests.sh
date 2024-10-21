@@ -61,6 +61,9 @@ run_common_func_tests() {
   #RoBERTa
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
 
+  # Yolov7
+  pytest --disable-warnings models/experimental/functional_yolov7/demo/yolov7_demo.py --timeout 600; fail+=$?
+
   return $fail
 }
 
