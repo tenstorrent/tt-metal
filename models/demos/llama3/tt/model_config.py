@@ -476,7 +476,7 @@ class TtModelArgs:
                 k=cache_seq_len,
                 n=self.head_dim,
                 grid_size=(8, 8),
-                in0_block_w=1,
+                # in0_block_w=1, # TODO: Remove this when we get non-causal FlashDecode
                 fuse_batch=False,
             )
             self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
