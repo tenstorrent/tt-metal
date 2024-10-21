@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_set>
 #include <variant>
@@ -333,8 +334,10 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
             all_cores = CoreRangeSet({{{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}}});
         }
         else {
+            TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
             const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);
             }
@@ -351,17 +354,14 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
         }
 
+        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
         return cores;
      }
 
      CoreRangeSet generate_subset_of_cores(const CoreRangeSet& cores, const uint32_t resulting_ratio_of_cores) {
-        uint32_t num_cores = 0;
-        for (CoreRange cr : cores.ranges()) {
-            num_cores += cr.size();
-        }
-
         std::set<CoreRange> cores_subset;
-        const uint32_t num_cores_to_include_in_subset = num_cores / resulting_ratio_of_cores;
+        const uint32_t num_cores = cores.num_cores();
+        const uint32_t num_cores_to_include_in_subset = std::max(static_cast<uint32_t>(1), num_cores / resulting_ratio_of_cores);
         uint32_t num_cores_added = 0;
         while (num_cores_added != num_cores_to_include_in_subset) {
             for (CoreRange cr : cores.ranges()) {
