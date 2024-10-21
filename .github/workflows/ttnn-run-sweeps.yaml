@@ -142,6 +142,9 @@ on:
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_complex.conj
+          - eltwise.unary_complex.reciprocal
+          - eltwise.unary_complex.reciprocal_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
