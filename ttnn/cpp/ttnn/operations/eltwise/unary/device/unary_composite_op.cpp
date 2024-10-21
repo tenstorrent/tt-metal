@@ -464,16 +464,8 @@ Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::opti
 // Function Clip
 // use clip y = min( max( x, min_value), max_value) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
-Tensor _clip(const Tensor& a, float low, float high, const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    const Tensor h_const = full_like(a, high);
-    Tensor a_max = ttnn::minimum(a, h_const, output_memory_config);
-    if (low == 0.0f) {
-        return ttnn::relu(a_max, output_memory_config);
-    } else {
-        const Tensor l_const = full_like(a, low);
-        return ttnn::maximum(a_max, l_const, output_memory_config);
-    }
+Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
 }
 
 // clamp
@@ -501,7 +493,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> 
 Tensor _hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const std::optional<MemoryConfig>& output_mem_config) {
         auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    return _clip(a, low, high, output_memory_config);
+    return ExecuteUnaryCompositeClamp::invoke(a, low, high, output_memory_config);
 }
 
 // Theano defines this differently...
@@ -791,7 +783,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
 
     // format to HW
     Tensor y_hw = ttnn::reshape_on_device(
-        y, 1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]);
+        y, ttnn::SimpleShape{1, 1, y.get_legacy_shape()[2], y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]});
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
@@ -800,7 +792,7 @@ Tensor _make_global_from_hw_impl(HWFunctionT fn, const Tensor& y,  const std::op
 
     // reformat
     Tensor z_1 = ttnn::reshape_on_device(
-        z_0, y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]);
+        z_0, ttnn::SimpleShape{y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]});
     z_0.deallocate();
 
     return z_1;

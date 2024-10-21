@@ -256,7 +256,7 @@ bool write_runtime_args_to_device(
             auto core_start_physical = device->worker_core_from_logical_core(core_start);
             auto core_end_physical = device->worker_core_from_logical_core(core_end);
 
-            std::vector<uint32_t> mm_reader_args = {
+            const std::array mm_reader_args = {
                 (std::uint32_t) in0_dram_addr, // in0_tensor_addr
                 (std::uint32_t)  K * per_core_M * core_idx_y, // in0_tensor_start_tile_id
                 (std::uint32_t)  1, // in0_tensor_stride_w
@@ -290,7 +290,7 @@ bool write_runtime_args_to_device(
                 in0_mcast_receiver_semaphore_addr
             };
 
-            std::vector<uint32_t> writer_args = {
+            const std::array writer_args = {
                 (std::uint32_t) out_dram_addr, // out_tensor_addr
                 (std::uint32_t) core_idx_x * per_core_N + core_idx_y * per_core_M * N, // out_tensor_start_tile_id
                 (std::uint32_t) 1, // out_tensor_stride_w

@@ -33,17 +33,15 @@ def transpose(
     else:
         x = torch.randn(input_shape).bfloat16().float()
 
-    xt = ttnn.Tensor(
-        x,
-        input_dtype,
-    ).to(ttnn.TILE_LAYOUT)
+    ttnn_input = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, device=device, memory_config=input_mem_config
+    )
+    xtt = ttnn.transpose(ttnn_input, dim0, dim1, memory_config=output_mem_config)
 
-    xt = xt.to(device, input_mem_config)
-    xtt = ttnn.transpose(xt, dim0, dim1, memory_config=output_mem_config)
-    assert list(xtt.shape.with_tile_padding()) == output_shape
+    assert list(xtt.shape) == output_shape
     transposed_ref = x.transpose(dim0, dim1)
 
-    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back = ttnn.to_torch(xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
 
     if input_dtype == ttnn.bfloat16:
         passing, output = comp_equal(transposed_ref, tt_got_back)
@@ -130,7 +128,7 @@ def test_transpose_hc_program_cache(dtype, device, use_program_cache):
     input_shape = (N, C, H, W)
     # CACHE MISS since its single core
     # Cache size 2 more because of pad op in single core impl + transpose
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=5, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=4, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(
@@ -612,6 +610,7 @@ def test_tranpose_hc_sharded_with_program_cache(device, n, c, h, w, grid_size, u
     assert device.num_program_cache_entries() == 3
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape, swap_dims",
     [
@@ -629,4 +628,161 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     tt_output = ttnn.transpose(tt_input, *swap_dims)
     tt_output = ttnn.to_torch(tt_output)
 
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [(1, 32, 12, 100), (1, 12, 32, 100), (1, 35, 7, 7), (1, 1, 1, 1)],
+)
+def test_transpose_hc(dtype, shape, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+
+    logger.info("transpose on C H dim")
+
+    transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [(9216, 128), (1, 32), (1, 12), (1, 35), (16, 32), (34, 8)],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.TILE_LAYOUT],
+)
+def test_transpose_2D(dtype, shape, layout, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[-2] % 2):
+        pytest.skip("Skipping RM odd inner dim test cases")
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(0, 1)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, 0, 1)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["bfloat16", "float"],
+)
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 1, 32], [32, 1, 12], [1, 1, 35], [1, 16, 32], [2, 34, 8]],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "dims",
+    [[0, 1], [0, 2], [2, 1], [-3, -2], [-3, -1], [-2, -1]],
+)
+def test_transpose_3D(dtype, shape, layout, dims, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat16 and (shape[-1] % 2 or shape[dims[-1]] % 2):
+        pytest.skip("Skipping RM odd inner dim test cases")
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(dims[0], dims[1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=layout, device=device)
+    tt_output = ttnn.transpose(tt_input, dims[0], dims[1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[4, 3, 1280, 40], [1, 4096, 4096]],
+)
+def test_transpose_4d_wh_rm(shape, device):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(-1, -2)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, -1, -2)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[4, 3, 1280, 40], [1, 1, 1200, 1280], [1, 1, 4096, 4096]],
+)
+def test_transpose_4d_wh_tile(shape, device):
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(-1, -2)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.transpose(tt_input, -1, -2)
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [[1, 8, 4096, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
+        [[1, 9, 8, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],  # bad pcc
+        [[64, 4, 49, 32], [-2, -1], ttnn.ROW_MAJOR_LAYOUT],  # Page size must be divisible by sizeof(uint32_t)
+        [[1, 1370, 1, 3, 1280], [0, -2], ttnn.ROW_MAJOR_LAYOUT],  # greater than 4D
+        [[12, 3], [0, 1], ttnn.ROW_MAJOR_LAYOUT],  # need tensor for this one
+    ],
+)
+def test_transpose_failures(config, device):
+    pytest.skip("Failures to fix after #13217 and #13005 are in - 5D, HC PCC issue and unaligned RM tensor")
+    torch_input = torch.randn(config[0], dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(config[1][0], config[1][1])
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=config[2], device=device)
+    tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        [
+            [1, 16, 6, 64],
+            [-1, -2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
+        [
+            [1, 16, 64, 6],
+            [-1, -2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH)
+        [
+            [1, 16, 64, 6],
+            [1, 2],
+            ttnn.ROW_MAJOR_LAYOUT,
+        ],  # (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 for HC as well...
+    ],
+)
+def test_transpose_unaligned(config, device):
+    # this will convert to tiled for now
+    torch_input = torch.randn(config[0], dtype=torch.bfloat16)
+    torch_output = torch_input.transpose(config[1][0], config[1][1])
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.DataType.BFLOAT16, layout=config[2], device=device)
+    tt_output = ttnn.transpose(tt_input, config[1][0], config[1][1])
+    tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

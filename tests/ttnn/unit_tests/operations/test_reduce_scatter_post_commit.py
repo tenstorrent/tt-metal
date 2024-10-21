@@ -348,6 +348,8 @@ def run_reduce_scatter_sharded_test(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(t3k_mesh_device.get_device_ids())}"
         )
 
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, scatter_dim: {scatter_dim}")
+
     debug = False
 
     t3k_mesh_device.enable_async(enable_async)

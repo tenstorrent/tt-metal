@@ -240,7 +240,7 @@ class ResNet50TestInfra:
         is_mesh_device = isinstance(device, ttnn.MeshDevice)
         if is_mesh_device:
             inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-            weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+            weights_mesh_mapper = None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
             output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
         else:
             inputs_mesh_mapper = None

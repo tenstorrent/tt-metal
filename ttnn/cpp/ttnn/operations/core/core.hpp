@@ -20,29 +20,6 @@ namespace ttnn {
 namespace operations {
 namespace core {
 
-template <std::size_t Rank>
-ttnn::Tensor reshape(const ttnn::Tensor& tensor, const std::array<int32_t, Rank>& shape) {
-    std::int64_t new_volume = 1;
-    std::int64_t index_of_negative_1 = -1;
-    for (auto index = 0; index < Rank; ++index) {
-        if (shape[index] == -1) {
-            if (index_of_negative_1 != -1) {
-                TT_THROW("Shape cannot have more than 1 elements that is set to -1!");
-            }
-            index_of_negative_1 = index;
-        }
-        new_volume *= shape[index];
-    }
-
-    std::array<std::uint32_t, Rank> new_shape{};
-    std::copy(shape.begin(), shape.end(), new_shape.begin());
-    if (new_volume < 0) {
-        const auto volume = tensor.volume();
-        new_shape[index_of_negative_1] = volume / (-new_volume);
-    }
-    return ttnn::reshape(tensor, ttnn::Shape(new_shape));
-}
-
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank);

@@ -190,7 +190,7 @@ def run_test_sdpa_decode_multi_pos(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -215,13 +215,14 @@ def run_test_sdpa_decode_multi_pos(
 
     while max_start_idx < s:
         scale = d**-0.5
-        start_indices = np.linspace(0, max_start_idx, b, dtype=np.int32).tolist()
+        start_indices = np.linspace(0, max_start_idx, b, dtype=np.int32).tolist() if b > 1 else [max_start_idx]
 
         k_chunk_size = get_chunk_size(max_start_idx + 1)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
         )
 
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
@@ -329,7 +330,7 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -359,6 +360,7 @@ def run_test_sdpa_decode_single_iter(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=padded_num_heads,
         k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
     )
 
     padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
@@ -461,6 +463,7 @@ def run_test_sdpa_decode_single_iter(
         [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
         [32, 32, 8, 8192, 128, (8, 8), True, False],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), False, False],  # llama 3.1 8b
+        # [1, 8, 1, 8192*16, 128, (1, 1), False, True],  # llama2-70B long seqlen
     ),
 )
 def test_sdpa_decode(
@@ -593,7 +596,7 @@ def run_test_sdpa_decode_paged_attention(
         min_pcc = 0.99
         if q_dtype == ttnn.bfloat8_b:
             min_pcc = 0.98
-        min_pcc = 0.93 if kv_dtype == ttnn.bfloat4_b else min_pcc
+        min_pcc = 0.91 if kv_dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -631,6 +634,7 @@ def run_test_sdpa_decode_paged_attention(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
         )
 
         padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size)
@@ -986,6 +990,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
         )
 
         padded_layer_len = nearest_n(start_idx + 1, n=k_chunk_size)

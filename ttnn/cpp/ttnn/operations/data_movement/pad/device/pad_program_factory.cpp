@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
 
     uint32_t start_src_stick_id = 0;
     uint32_t start_dst_stick_id = 0;
-    vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+    const std::array reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
                                        a.get_legacy_shape()[0],
                                        output_shape[0],
@@ -125,17 +125,17 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
                                        packed_pad_value,
                                        start_src_stick_id,
                                        start_dst_stick_id,
-                                       0,
-                                       0,
-                                       0,
+                                       std::uint32_t{0},
+                                       std::uint32_t{0},
+                                       std::uint32_t{0},
                                        output_shape[2],
                                        a.get_legacy_shape()[2],
                                        unpadded_row_size_nbytes,
                                        padded_row_size_nbytes,
-                                       0,
+                                       std::uint32_t{0},
                                        output.get_legacy_shape()[0]
                                        };
-    vector<uint32_t> writer_rt_args = reader_rt_args;
+    const auto &writer_rt_args = reader_rt_args;
     tt::tt_metal::SetRuntimeArgs(program,
                    reader_kernel_id,
                    cores,
@@ -247,7 +247,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     }
     #endif
 
-    vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+    const std::array reader_rt_args = {src0_buffer->address(),
                                        dst_buffer->address(),
                                        a.get_legacy_shape()[0],
                                        output_shape[0],
@@ -321,7 +321,7 @@ operation::ProgramWithCallbacks pad_rm(const Tensor &a, Tensor &output, const Sh
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
         dst_buffer->address(),
         a.get_legacy_shape()[0],
@@ -445,11 +445,12 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 
     uint32_t num_unpadded_tiles = a.volume() / TILE_HW;
 
-    vector<uint32_t> reader_kernel_args = {
+    const std::array reader_kernel_args = {
         src0_buffer->address(),
-        num_unpadded_tiles, 0
+        num_unpadded_tiles,
+        std::uint32_t{0},
     };
-    vector<uint32_t> writer_kernel_args = {
+    const std::array writer_kernel_args = {
         dst_buffer->address(),
         num_unpadded_W,
         num_padded_Wt,
@@ -785,7 +786,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                     curr_stick_diff_nbytes = dst_nbytes_per_core_w - curr_stick_size_nbytes;
                     rem_src_stick_size_nbytes = 0;
                 }
-                vector<uint32_t> reader_rt_args = {src0_buffer->address(),
+                const std::array reader_rt_args = {src0_buffer->address(),
                                                     dst_buffer->address(),
                                                     a.get_legacy_shape()[0],
                                                     output_shape[0],
@@ -822,7 +823,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
                 //     log_debug("{} :: nbatch_per_core_h: {}", core.y, nbatch_per_core_h);
                 //     log_debug("{} :: ncores_per_batch_h: {}", core.y, ncores_per_batch_h);
                 // }
-                vector<uint32_t> writer_rt_args = reader_rt_args;
+                const auto &writer_rt_args = reader_rt_args;
                 tt::tt_metal::SetRuntimeArgs(program,
                                 reader_kernel_id,
                                 core,

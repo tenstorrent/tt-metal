@@ -26,21 +26,37 @@ def is_watcher_enabled():
     return os.environ.get("TT_METAL_WATCHER") is not None
 
 
-def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+def fa_rand(*shape):
+    normal_1 = torch.randn(shape)
+    normal_2 = torch.randn(shape) * 10
+    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+    return normal_1 + normal_2 * bernoulli
+
+
+def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=False):
     torch.manual_seed(1234)
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
+    if use_high_precision_compute:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
     Q = fa_rand(b, nh, s, d)
     K = fa_rand(b, nkv, s, d)
@@ -59,7 +75,9 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     )
     tt_back = tt_back.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=True)
+    K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
+    V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
@@ -84,6 +102,52 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     ),
 )
 def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
+        pytest.skip("Can cause OOM if profiling is enabled.")
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [256], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    ([1, 8, 1, 8192 * 16, 128],),  # Llama2-70B 128K sequence
+)
+def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
+    if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
+        pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
+    if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
+        pytest.skip("Can cause OOM if profiling is enabled.")
+    ttnn.device.DisablePersistentKernelCache()
+    run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_high_precision_compute=True)
+
+
+@pytest.mark.skip(reason="Skip perf test in CI")
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("q_chunk_size", [256], ids=["q128"])
+@pytest.mark.parametrize("k_chunk_size", [256], ids=["k128"])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d",
+    (
+        [1, 8, 1, 128, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 2048 * 16, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8192, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8192 * 2, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8192 * 4, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8192 * 16, 128],  # Llama2-70B 128K sequence
+    ),
+)
+def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
     if nh == 8 and q_chunk_size == 128 and k_chunk_size == 128:
@@ -126,6 +190,7 @@ def run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dty
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(

@@ -74,6 +74,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
         case UnaryOpType::REMAINDER: defines["SFPU_OP_REMAINDER_INCLUDE"] = "1"; break;
         case UnaryOpType::FMOD: defines["SFPU_OP_FMOD_INCLUDE"] = "1"; break;
         case UnaryOpType::DROPOUT: defines["SFPU_OP_DROPOUT_INCLUDE"] = "1"; break;
+        case UnaryOpType::FILL: defines["SFPU_OP_FILL_INCLUDE"] = "1"; break;
         default: defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1"; break;
     };
 }
@@ -81,9 +82,13 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     UnaryOpType op_type, const std::vector<float>& params, const std::string& idst) {
     std::pair<std::string, std::string> op_init_and_name;
-    TT_FATAL(is_parametrized_type(op_type) && "operator should support at least one parameter", "Error");
+    TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     float param0 = params[0];
     switch (op_type) {
+        case UnaryOpType::FILL:
+            op_init_and_name = {
+                "fill_tile_init();", fmt::format("fill_tile({}, {}u);", idst, Converter::to_hex(param0))};
+            break;
         case UnaryOpType::RELU_MAX:
             op_init_and_name = {
                 "relu_max_tile_init();", fmt::format("relu_max_tile({}, {}u);", idst, Converter::to_hex(param0))};

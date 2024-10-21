@@ -115,6 +115,7 @@ ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 
 # TTNN Distributed
@@ -175,4 +176,4 @@ scripts/docker @ttmchiou @TT-billteng @tt-rkim
 dockerfile @ttmchiou @TT-billteng @tt-rkim
 
 tt_metal/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @blozano-tt
-ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy @blozano-tt
+ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy

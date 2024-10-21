@@ -39,9 +39,9 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 32, 61, 32};
+        ttnn::SimpleShape shape{1, 32, 61, 32};
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::numpy::arange<bfloat16>(0, tt_metal::compute_volume(shape), 1).reshape(shape).to(device);
+        Tensor a = ttnn::numpy::arange<bfloat16>(0, shape.volume(), 1).reshape(shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
         Tensor c =  b.cpu();
         ////////////////////////////////////////////////////////////////////////////

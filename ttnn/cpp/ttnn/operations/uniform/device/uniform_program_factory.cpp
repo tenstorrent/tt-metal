@@ -80,8 +80,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         all_cores,
         ComputeConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en =
-                true,  // must always be true otherwise, generated float number are always in range of [0.4, 0.5]
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
@@ -101,7 +100,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         std::vector<uint32_t> compute_runtime_args = {get_random_seed(), tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        const float eps = 1e-10;
+        const float eps = 1e-6;
         union {
             float f;
             uint32_t u;

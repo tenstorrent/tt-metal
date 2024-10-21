@@ -531,7 +531,6 @@ def not_fit_l1(M, K, N, fp32):
     return (M * K + K * N > 5000000) and (fp32 == True)
 
 
-@pytest.mark.skipif(is_blackhole(), reason="Hanging on Blackhole, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
@@ -605,7 +604,6 @@ def test_bert_linear_batch4(
             logger.warning("L1 cannot fit large tensors in fp32 mode")
 
 
-@pytest.mark.skipif(is_blackhole(), reason="Hangs on BH, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="not tested for GS")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(

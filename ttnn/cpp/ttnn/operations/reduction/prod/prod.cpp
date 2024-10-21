@@ -121,11 +121,6 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
-        if(res_host.storage_type() != StorageType::DEVICE or res_host.storage_type() != StorageType::MULTI_DEVICE) {
-            res_host = res_host.pad_to_tile(0.0f);
-            res_host = res_host.to(Layout::TILE);
-            res_host = res_host.to(input_a.device());
-        }
         return res_host;
     }
 }

@@ -455,10 +455,9 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor_to_address(
   #ifdef INTERLEAVED_MEM_LAYOUT
         uint64_t src_noc_addr = get_noc_addr(curr_page_idx, s);
         noc_async_read(src_noc_addr, local_l1_read_addr, page_size);
-    #elif defined SHARDED_MEM_LAYOUT
+  #elif defined SHARDED_MEM_LAYOUT
         ASSERT(false);  // unimplemented
-    #endif
-    ASSERT(false);  // unimplemented
+  #endif
 #elif defined TILED_LAYOUT
     #ifdef INTERLEAVED_MEM_LAYOUT
         noc_async_read_tile(curr_page_idx, s, local_l1_read_addr);

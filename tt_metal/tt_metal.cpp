@@ -158,7 +158,7 @@ std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange
 }
 
 inline void SetRuntimeArgsImpl(
-    const Program &program, KernelHandle kernel_id, const CoreCoord &c, const std::vector<uint32_t> &runtime_args) {
+    const Program &program, KernelHandle kernel_id, const CoreCoord &c, stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
     }
@@ -168,7 +168,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRange &core_range,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -183,7 +183,7 @@ inline void SetRuntimeArgsImpl(
     const Program &program,
     KernelHandle kernel_id,
     const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
         auto kernel = detail::GetKernel(program, kernel_id);
         for (const auto &core_range : core_range_set.ranges()) {
@@ -302,7 +302,7 @@ std::map<chip_id_t, Device *> CreateDevices(
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
     tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_type);
-    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, Device *> ret_devices;
     //Only include the mmio device in the active devices set returned to the caller if we are not running
     //on a Galaxy cluster.
@@ -329,7 +329,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
         Synchronize(dev); // Synchronize device
     }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    std::map<chip_id_t, Device *> mmio_devices = {};
+    std::map<chip_id_t, v1::DeviceHandle> mmio_devices = {};
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
 
     if (is_galaxy) {
@@ -346,7 +346,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
     } else {
         for (const auto &[device_id, dev] : devices) {
             if(dev->is_mmio_capable()) {
-                mmio_devices.insert({device_id, dev});
+                mmio_devices.insert({device_id, tt::DevicePool::instance().get_handle(dev)});
             }
         }
         for (const auto &[device_id, dev] : mmio_devices) {
@@ -366,7 +366,7 @@ void CloseDevices(std::map<chip_id_t, Device *> devices) {
                     devices[t[ts]]->close();
                     // When a device is closed, its worker thread is joined. Stop tracking this
                     // worker thread.
-                    tt::DevicePool::instance().unregister_worker_thread_for_device(devices[t[ts]]);
+                    tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(devices[t[ts]]));
                 }
             }
         }
@@ -1115,7 +1115,7 @@ void SetRuntimeArgs(
     const Program &program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &runtime_args) {
+    stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
@@ -1166,7 +1166,7 @@ void SetRuntimeArgs(
     SetRuntimeArgsImpl(device->command_queue(), kernel, core_spec, runtime_args, false);
 }
 
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args) {
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     TT_FATAL(
         not CommandQueue::async_mode_set(),
