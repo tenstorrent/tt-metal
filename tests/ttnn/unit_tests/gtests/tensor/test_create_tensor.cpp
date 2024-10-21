@@ -65,6 +65,9 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})}
+        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({2, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})}
     )
 );
