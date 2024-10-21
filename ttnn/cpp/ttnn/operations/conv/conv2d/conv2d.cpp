@@ -670,7 +670,24 @@ std::tuple<OptimizedConvBlockConfig, TensorMemoryLayout> get_opt_conv_op_block_c
 
     uint32_t output_height = ((input_height - window_h - ((window_h - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - window_w - ((window_w - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
-    const TensorMemoryLayout shard_layout = conv_config.shard_layout.value_or(select_shard_layout(batch_size, output_height, output_width, in_channels, kernel_size, stride));
+    ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+    const TensorMemoryLayout shard_layout = conv_config.shard_layout.value_or(select_shard_spec(
+        batch_size,
+        in_channels,
+        out_channels,
+        output_height,
+        output_width,
+        kernel_size[1],
+        input_width,
+        groups,
+        shard_orientation,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        device
+    ));
 
     ParallelConfig parallel_config;
     auto block_shard_orientation =
@@ -885,7 +902,7 @@ ttnn::Tensor conv2d(
     uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
-        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride);
+        device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride, padding, dilation, kernel_size[1], input_width, groups);
     if (tensor_manipulated) {
         if (conv_config.deallocate_activation) {
             ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
@@ -1103,6 +1120,35 @@ template ParallelConfig determine_parallel_config<MeshDevice>(
     MeshDevice * device,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled);
+
+template std::tuple<OptimizedConvBlockConfig, TensorMemoryLayout> get_opt_conv_op_block_config_and_shard_layout<Device>(
+    const uint32_t in_channels,
+    const uint32_t out_channels,
+    const uint32_t batch_size,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const std::array<uint32_t, 2> kernel_size,
+    const std::array<uint32_t, 2> stride,
+    const std::array<uint32_t, 2> padding,
+    const std::array<uint32_t, 2> dilation,
+    const uint32_t groups,
+    const Conv2dConfig conv_config,
+    Device *device);
+
+template std::tuple<OptimizedConvBlockConfig, TensorMemoryLayout> get_opt_conv_op_block_config_and_shard_layout<MeshDevice>(
+    const uint32_t in_channels,
+    const uint32_t out_channels,
+    const uint32_t batch_size,
+    const uint32_t input_height,
+    const uint32_t input_width,
+    const std::array<uint32_t, 2> kernel_size,
+    const std::array<uint32_t, 2> stride,
+    const std::array<uint32_t, 2> padding,
+    const std::array<uint32_t, 2> dilation,
+    const uint32_t groups,
+    const Conv2dConfig conv_config,
+    MeshDevice *device);
+
 
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<Device>(
     Device* device,
