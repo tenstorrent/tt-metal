@@ -7,7 +7,6 @@
 #include "conv2d_op.hpp"
 #include <ostream>
 #include "common/math.hpp"
-#include "optimized_conv_op.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
