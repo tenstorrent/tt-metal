@@ -1,3 +1,6 @@
+
+set(CMAKE_CXX_STANDARD 20)
+
 set(ALL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
