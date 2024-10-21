@@ -276,7 +276,7 @@ inline namespace v0 {
 
         void SetLazyCommandQueueMode(bool lazy);
 
-        DeviceAddr AllocateBuffer(const Buffer* buffer, bool bottom_up);
+        DeviceAddr AllocateBuffer(Buffer* buffer);
 
         void DeallocateBuffer(Buffer *buffer);
     }  // namespace detail

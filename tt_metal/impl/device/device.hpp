@@ -197,6 +197,8 @@ class Device {
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const;
 
+    const std::unordered_set<Buffer *> &get_allocated_buffers() const;
+
     void deallocate_buffers();
 
     // machine epsilon

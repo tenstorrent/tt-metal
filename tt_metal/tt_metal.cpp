@@ -794,33 +794,29 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-DeviceAddr AllocateBuffer(const Buffer *buffer, bool bottom_up) {
-    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
-        GraphTracker::instance().track_allocate(buffer, bottom_up);
+DeviceAddr AllocateBuffer(Buffer *buffer) {
+    if(GraphTracker::instance().hook_allocate(buffer)) {
+        GraphTracker::instance().track_allocate(buffer);
         return 0;
     }
 
-    uint32_t allocated_addr;
+    DeviceAddr allocated_addr;
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
             *(buffer->device()->allocator_),
-            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            bottom_up,
-            buffer->num_cores());
+            buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(),
+            buffer);
     } else {
         allocated_addr = allocator::allocate_buffer(
             *(buffer->device()->allocator_),
             buffer->size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            bottom_up,
-            std::nullopt);
+            buffer);
     }
+    // Assertion here because buffer class returns a u32 when address is queried
+    // Requires updating all use cases of buffer address to accept a u64 to remove
     TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
 
-    GraphTracker::instance().track_allocate(buffer, bottom_up);
+    GraphTracker::instance().track_allocate(buffer);
 
     return allocated_addr;
 }
@@ -831,7 +827,7 @@ void DeallocateBuffer(Buffer *buffer) {
         return;
     }
 
-    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer->address(), buffer->buffer_type());
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
 }
 
 }  // namespace detail
