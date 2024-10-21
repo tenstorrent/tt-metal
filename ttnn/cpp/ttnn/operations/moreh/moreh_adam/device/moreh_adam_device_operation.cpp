@@ -156,4 +156,14 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
             max_exp_avg_sq_in,
             {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}}};
 }
+auto MorehAdamOperation::compute_program_hash(
+    const MorehAdamOperation::operation_attributes_t& operation_attributes,
+    const MorehAdamOperation::tensor_args_t& tensor_args) -> tt::stl::hash::hash_t {
+    // For hash we'll set `step` to 0
+    auto operation_attributes_without_step = operation_attributes;
+    operation_attributes_without_step.step = 0;
+
+    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step, tensor_args);
+}
+
 }  // namespace ttnn::operations::moreh::moreh_adam
