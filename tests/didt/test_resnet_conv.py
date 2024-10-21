@@ -40,6 +40,9 @@ class ResnetConvTest(OpTestBase):
         input_height,
         input_width,
         groups,
+        weights_block_h,
+        weights_block_w,
+        weights_df_on_device,
         loop_count=1000,
         determinism_check_enabled=False,
         determinism_check_iterations=False,
@@ -75,6 +78,9 @@ class ResnetConvTest(OpTestBase):
         self.input_height = input_height
         self.input_width = input_width
         self.groups = groups
+        self.weights_block_h = weights_block_h
+        self.weights_block_w = weights_block_w
+        self.weights_df_on_device = weights_df_on_device
         self.reader_patterns_cache = {}
 
     # Remove weights shape
@@ -88,16 +94,24 @@ class ResnetConvTest(OpTestBase):
         return torch_input_tensor
 
     def generate_tt_activations_from_torch(self, torch_tensor):
-        # activations stay on host
-        return ttnn.from_torch(torch_tensor, self.in0_dtype)
+        return ttnn.from_torch(
+            torch_tensor,
+            dtype=self.in0_dtype,
+            layout=self.in0_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=self.mesh_device,
+            mesh_mapper=self.from_torch_mesh_mapper,
+        )
 
     def generate_tt_weights_from_torch(self, torch_tensor):
-        # weights stay on host
-        return ttnn.from_torch(torch_tensor, self.in1_dtype)
+        tt_weights = ttnn.Tensor(torch_tensor.flatten().tolist(), self.in1_shape, self.in1_dtype, ttnn.ROW_MAJOR_LAYOUT)
+        tt_weights_tiled_host = ttnn.operations.conv2d.convert_conv_weight_tensor_to_tiled_layout(
+            tt_weights, self.weights_block_h, self.weights_block_w, self.weights_df_on_device
+        )
+        return tt_weights_tiled_host.to(self.mesh_device, self.in1_mem_config)
 
     def convert_activations_to_memory_config(self, activations):
-        # For this case, activations need to be on device :(
-        return activations
+        return ttnn.to_memory_config(activations, self.in0_mem_config)
 
     def deallocate_activations(self):
         # Do nothing in conv case as activations are on device
@@ -160,6 +174,8 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
+    weights_block_h = 2
+    weights_block_w = 2
 
     in0_shape = conv_input_shape
     in1_shape = conv_weight_shape
@@ -217,6 +233,9 @@ def test_resnet_conv(mesh_device, iterations, determinism_check_iterations, use_
         input_height,
         input_width,
         groups,
+        weights_block_h,
+        weights_block_w,
+        weights_dtype,
         loop_count=iterations,
         determinism_check_enabled=True if determinism_check_iterations > 0 else False,
         determinism_check_iterations=determinism_check_iterations,
