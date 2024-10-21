@@ -351,8 +351,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
+JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -403,7 +403,31 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
                             env_.root_ + linker_str;
             break;
         }
-        case 1:
+        default:
+            TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+    }
+    this->process_defines_at_compile = true;
+
+    finish_init();
+}
+
+JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid idle ethernet processor");
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
+
+    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/llk_io ";
+
+    this->defines_ = env_.defines_;
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
+        this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
+    }
+
+    switch (this->core_id_) {
+        case 0: {
             this->target_name_ = "idle_erisc";
             this->cflags_ =
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -429,6 +453,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
             }
 
             break;
+        }
+        default:
+            TT_THROW("Invalid processor ID {} for Idle Ethernet core.", this->core_id_);
     }
     this->process_defines_at_compile = true;
 

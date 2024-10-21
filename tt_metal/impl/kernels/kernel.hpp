@@ -95,7 +95,7 @@ class Kernel : public JitBuildSettings {
     std::map<std::string, std::string> defines() const { return defines_; }
 
     virtual RISCV processor() const = 0;
-    uint8_t dispatch_class() { return this->dispatch_class_; }
+    uint32_t dispatch_class() { return this->dispatch_class_; }
 
     virtual bool configure(Device *device, const CoreCoord &logical_core) const = 0;
 
@@ -217,8 +217,7 @@ class ComputeKernel : public Kernel {
    public:
     ComputeKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const ComputeConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        // is this weird?
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE) * magic_enum::enum_count<DataMovementProcessor>();
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     }
 
     ~ComputeKernel() {}
