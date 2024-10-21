@@ -340,6 +340,7 @@ bool Buffer::is_dram() const {
 }
 bool Buffer::is_trace() const {
     return buffer_type() == BufferType::TRACE;
+
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
