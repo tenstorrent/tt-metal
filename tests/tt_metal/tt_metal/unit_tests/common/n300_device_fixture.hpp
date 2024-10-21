@@ -45,7 +45,7 @@ class N300DeviceFixture : public ::testing::Test {
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };

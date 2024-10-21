@@ -28,8 +28,8 @@ namespace tt {
 namespace tt_metal {
 
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core) :
-    id_(device_id), worker_thread_core(worker_core), work_executor(worker_core, device_id) {
+    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
+    id_(device_id), worker_thread_core(worker_core), completion_queue_reader_core(completion_queue_reader_core), work_executor(worker_core, device_id) {
     ZoneScoped;
     tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
@@ -3263,9 +3263,9 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(this, this->work_executor.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(tt::DevicePool::instance().get_handle(this), this->work_executor.get_worker_thread_id());
     } else {
-        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
+        tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(this));
     }
 }
 

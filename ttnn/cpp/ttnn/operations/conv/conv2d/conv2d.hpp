@@ -15,7 +15,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -136,7 +136,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t in_channels,
     uint32_t out_channels,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride);
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t weights_width,
+    uint32_t input_width,
+    uint32_t groups);
 
 template<typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_tensor_if_required(
@@ -149,7 +154,12 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_
     uint32_t in_channels,
     uint32_t out_channels,
     std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride);
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t weights_width,
+    uint32_t input_width,
+    uint32_t groups);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 

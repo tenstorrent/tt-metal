@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -28,6 +29,7 @@
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
+#include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
@@ -53,7 +55,6 @@ void py_module(py::module& module) {
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
-
 
     //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
@@ -97,6 +98,9 @@ void py_module(py::module& module) {
     auto m_embedding_backward = module.def_submodule("embedding_backward", "embedding backward operations");
     embedding_backward::py_bind_embedding_backward(m_embedding_backward);
 
+    auto m_full = module.def_submodule("full", "full operation");
+    full::bind_full_operation(m_full);
+
     auto m_loss = module.def_submodule("loss", "loss operations");
     loss::py_bind_loss_functions(m_loss);
 
@@ -105,6 +109,9 @@ void py_module(py::module& module) {
 
     auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
+
+    auto m_sliding_window = module.def_submodule("sliding_window", "sliding_window operations");
+    sliding_window::py_bind_sliding_window(m_sliding_window);
 
     auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
     conv::conv2d::py_bind_conv2d(m_conv2d);

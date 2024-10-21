@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -613,6 +613,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
 
+    // Local L1 to store temp vars
+    CircularBufferConfig cb_for_l1_array_config =
+        CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_for_l1_array, 32 * 2);
+    auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
 
     CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
