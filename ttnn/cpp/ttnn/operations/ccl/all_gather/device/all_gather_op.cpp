@@ -32,20 +32,27 @@ AllGather create_all_gather_struct(
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices[i] == input_tensor.device()) {
             device_index = i;
-            if (topology == ttnn::ccl::Topology::Ring) {
-                // Ring topology
-                receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-            } else if (topology == ttnn::ccl::Topology::Linear) {
-                // Linear topology
-                bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
-                bool is_last_chip_in_counter_clockwise_direction = i == 0;
-                receiver_device_id = is_last_chip_in_clockwise_direction ?
-                    std::nullopt :
-                    std::optional<chip_id_t>(devices.at(i+1)->id());
-                sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                    std::nullopt :
-                    std::optional<chip_id_t>(devices.at(i-1)->id());
+            switch(topology){
+                case ttnn::ccl::Topology::Ring:{
+                    // Ring topology
+                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
+                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
+                    break;
+                }
+                case ttnn::ccl::Topology::Linear:{
+                    // Linear topology
+                    bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
+                    bool is_last_chip_in_counter_clockwise_direction = i == 0;
+                    receiver_device_id = is_last_chip_in_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i+1)->id());
+                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                        std::nullopt :
+                        std::optional<chip_id_t>(devices.at(i-1)->id());
+                    break;
+                }
+                default:
+                    TT_FATAL(false, "Invalid Topology, Accepted topologies are Ring and Linear currently");
             }
             break;
         }
