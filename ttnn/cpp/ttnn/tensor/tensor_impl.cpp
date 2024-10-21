@@ -758,7 +758,7 @@ Tensor to_device(const Tensor& tensor, Device* target_device, const MemoryConfig
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto tile = tensor.get_tile();
-    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, layout, memory_config, padded_shape);
+    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, padded_shape);
 
     auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, shape, tensor_layout, queue);
 
