@@ -224,6 +224,7 @@ on:
           - eltwise.binary_backward.sub_bw
           - eltwise.binary_backward.ldexp_bw
           - eltwise.binary_backward.logaddexp_bw
+          - eltwise.binary_backward.logaddexp2_bw
           - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
@@ -255,6 +256,7 @@ on:
           - reduction.topk.topk
           - reduction.argmax.argmax
           - embedding.embedding
+          - eltwise.ternary_backward.addcmul_bw
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

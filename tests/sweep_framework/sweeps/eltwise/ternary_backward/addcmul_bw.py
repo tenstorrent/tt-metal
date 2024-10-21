@@ -32,12 +32,15 @@ parameters = {
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "grad_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_c_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "grad_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_c_layout": [ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_c_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -59,18 +62,22 @@ def run(
     grad_dtype,
     input_a_dtype,
     input_b_dtype,
+    input_c_dtype,
     grad_layout,
     input_a_layout,
     input_b_layout,
+    input_c_layout,
     grad_memory_config,
     input_a_memory_config,
     input_b_memory_config,
+    input_c_memory_config,
     output_memory_config,
     *,
     device,
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+    alpha = random.uniform(-10, 10)
 
     torch_grad_tensor = gen_func_with_cast_tt(partial(torch_random, low=-10, high=10, dtype=torch.float32), grad_dtype)(
         input_shape
@@ -88,8 +95,16 @@ def run(
     torch_input_tensor_b.requires_grad = True
     torch_input_tensor_b.retain_grad()
 
-    golden_function = ttnn.get_golden_function(ttnn.logaddexp_bw)
-    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b)
+    torch_input_tensor_c = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_c_dtype
+    )(input_shape)
+    torch_input_tensor_c.requires_grad = True
+    torch_input_tensor_c.retain_grad()
+
+    golden_function = ttnn.get_golden_function(ttnn.addcmul_bw)
+    torch_output_tensor = golden_function(
+        torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b, torch_input_tensor_c, alpha
+    )
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
@@ -115,8 +130,18 @@ def run(
         memory_config=input_b_memory_config,
     )
 
+    input_tensor_c = ttnn.from_torch(
+        torch_input_tensor_c.detach().clone(),
+        dtype=input_c_dtype,
+        layout=input_c_layout,
+        device=device,
+        memory_config=input_c_memory_config,
+    )
+
     start_time = start_measuring_time()
-    output_tensor = ttnn.logaddexp_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.addcmul_bw(
+        grad_tensor, input_tensor_a, input_tensor_b, input_tensor_c, alpha=alpha, memory_config=output_memory_config
+    )
 
     for i in range(len(output_tensor)):
         output_tensor[i] = ttnn.to_torch(output_tensor[i])
@@ -130,5 +155,27 @@ def run(
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     pcc[1] = str(pcc[1])
-    # print(f"pcc {pcc}")
+    # print(f"pcc {pcc} - {grad_dtype}, {input_a_dtype}, {input_b_dtype}")
     return [pcc, e2e_perf]
+
+
+# from tests.sweep_framework.permutations import *
+
+# start_time = start_measuring_time()
+# for suite in parameters.keys():
+#     device_id = 0
+#     device = ttnn.open_device(device_id=device_id)
+#     suite_vectors = list(permutations(parameters[suite]))
+#     print(len(suite_vectors))
+#     for vector in suite_vectors:
+#         try:
+#             passed, _ = run(**vector, device=device)
+#             if passed[0] != True:
+#                 print(passed)
+#         except Exception as e:
+#             print(e)
+
+#     ttnn.close_device(device)
+
+# e2e_perf = stop_measuring_time(start_time)
+# print(f"time {e2e_perf / 1000000000}s")
