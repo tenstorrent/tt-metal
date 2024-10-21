@@ -52,7 +52,7 @@ AllGather create_all_gather_struct(
                     break;
                 }
                 default:
-                    TT_FATAL(false, "Invalid Topology, Accepted topologies are Ring and Linear currently");
+                    TT_FATAL(false, "Invalid Topology {}, Accepted topologies are Ring and Linear currently", topology);
             }
             break;
         }
@@ -143,7 +143,7 @@ AllGatherConfig::AllGatherConfig(Tensor const& input_tensor, Tensor const& outpu
 
 
 void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1");
+    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -155,9 +155,9 @@ void AllGather::validate(const std::vector<Tensor> &input_tensors) const {
     // TODO: Validate ring
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr , "Operands to all_gather need to be allocated in buffers on device!");
-    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0");
+    TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y, "Worker cores used by links are parallelizaed over rows");
-    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error, Either receiver or sender device needs to have some value");
+    TT_FATAL(this->receiver_device_id.has_value() || this->sender_device_id.has_value(), "Error, All-gather was unable to identify either a sender or receiver device ID and atleast one must be identified for a valid all-gather configuration. The input mesh tensor or all-gather arguments may be incorrect");
 
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
