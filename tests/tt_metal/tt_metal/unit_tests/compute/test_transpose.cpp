@@ -52,13 +52,13 @@ void validate_transpose_wh(const std::vector<uint32_t> &src_vec, const std::vect
 
     // recover a linear view of input vector for consumption by gold_ function
     auto u16_src0_vec = u16_from_u32_vector(src_vec);
-    vector<uint16_t> src_linear = convert_layout<uint16_t>(u16_src0_vec, shape, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
+    vector<uint16_t> src_linear = convert_layout<uint16_t>(u16_src0_vec, shape, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
     vector<uint16_t> gold_reduced = gold_transpose_wh(src_linear, shape); // result is uint16_t untilized
 
     // Tilize from row major and convert to pairs (uint32_t)
     TT_FATAL(shape.size() == 4, "Error");
     vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
-    auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, shapeR, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES));
+    auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(gold_reduced, shapeR, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES));
 
     bool pass = packed_uint32_t_vector_comparison(result_vec, gold_4f_u32, comparison_function, &argfail);
     if (not pass) {

@@ -65,7 +65,7 @@ std::vector<Tensor> RotaryEmbeddingLlama::create_output_tensors(const std::vecto
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = this->compute_output_shapes(input_tensors)[0].logical_shape();
     return {create_device_tensor(
-        output_shape, output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+        output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
 }
 
 operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
