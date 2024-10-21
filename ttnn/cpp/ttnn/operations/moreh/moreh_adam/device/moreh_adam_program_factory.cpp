@@ -6,8 +6,8 @@
 
 #include "moreh_adam_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_adam {
 MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::ProgramFactory::create(
@@ -199,7 +199,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         const std::vector<uint32_t> reader_runtime_args{
@@ -233,13 +233,22 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {step});
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {
+        std::move(program),
+        {reader_kernel_id,
+         writer_kernel_id,
+         compute_kernel_1_id,
+         compute_kernel_2_id,
+         core_group_1,
+         core_group_2,
+         num_cores,
+         num_cores_y}};
 }
 
 void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
@@ -250,6 +259,8 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& compute_kernel_1_id = cached_program.shared_variables.compute_kernel_group1_id;
+    auto& compute_kernel_2_id = cached_program.shared_variables.compute_kernel_group2_id;
 
     auto param_in_buffer = tensor_args.param_in.buffer();
     auto grad_buffer = tensor_args.grad.buffer();
@@ -262,6 +273,9 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
     auto exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
     auto max_exp_avg_sq_out_buffer = tensor_return_value.at(3)->buffer();
+
+    auto& core_group_1 = cached_program.shared_variables.core_group_1;
+    auto& core_group_2 = cached_program.shared_variables.core_group_2;
 
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
@@ -277,6 +291,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             if (max_exp_avg_sq_in_buffer != nullptr) {
                 runtime_args[4] = max_exp_avg_sq_in_buffer->address();
             }
+            runtime_args[10] = operation_attributes.step;
         }
 
         {
@@ -286,6 +301,15 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             runtime_args[2] = exp_avg_sq_out_buffer->address();
             if (max_exp_avg_sq_out_buffer != nullptr) {
                 runtime_args[3] = max_exp_avg_sq_out_buffer->address();
+            }
+        }
+        {
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, {operation_attributes.step});
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_2_id, core, {operation_attributes.step});
+            } else {
+                TT_THROW("Core not in specified core ranges.");
             }
         }
     }

@@ -34,7 +34,7 @@ def create_tt_tensor(tensor: torch.Tensor, device):
 @pytest.mark.parametrize("weight_decay", [0.0, 0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device):
+def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, step=1):
     torch.manual_seed(0)
 
     x_data = torch.rand(shape).to(torch.bfloat16)
@@ -75,7 +75,9 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     cpu_grad = model.weight.grad.clone()
     dev_grad = create_tt_tensor(cpu_grad, device)
 
-    optimizer.step()
+    for _ in range(step):
+        optimizer.step()
+
     optimizer_state_dict = optimizer.state_dict()
 
     cpu_exp_avg_result = optimizer_state_dict["state"][0]["exp_avg"]
@@ -86,8 +88,6 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         cpu_max_exp_avg_sq_result = None
 
     compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
-
-    step = 1
 
     (
         dev_param_out,
@@ -166,3 +166,26 @@ def test_moreh_adam_callback(params, device, use_program_cache):
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en
+        ([32, 32], 0.0, (0.9, 0.999), 1e-06, 0.0, True, True),
+        ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
+    ),
+)
+def test_moreh_adam_caching(params, device, use_program_cache):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(1, 5):
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
+        test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, step=i)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    for i in range(1, 4):
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
