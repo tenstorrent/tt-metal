@@ -109,12 +109,10 @@ class Buffer : public tt::tt_metal::Buffer {
         uint32_t buffer_id = 0;
         void allocate() {
             TT_ASSERT(this->device());
-            this->device()->push_work([this] () mutable {
-                bool bottom_up = this->bottom_up_.value_or(this->is_dram());
-                tt::tt_metal::detail::AllocateBuffer(this, bottom_up);
+            this->device()->push_work([this]() mutable {
+                tt::tt_metal::detail::AllocateBuffer(this);
                 // The address inserted here, will be used during asynchronous deallocate
                 GLOBAL_BUFFER_ADDRESS_MAP.insert(this->buffer_id, this->address());
-
             });
         }
         void deallocate() {
@@ -123,11 +121,12 @@ class Buffer : public tt::tt_metal::Buffer {
             }
             this->set_size(0);
             TT_ASSERT(this->device()->allocator_ != nullptr, "Expected allocator to be initialized!");
-            // Extract the required buffer attributes from main thread (these are guaranteed to be correctly populated) and send to worker
-            this->device()->push_work([dev = this->device(), id = this->buffer_id, type = this->buffer_type()] () mutable {
+            // Extract the required buffer attributes from main thread (these are guaranteed to be correctly populated)
+            // and send to worker Change here can be ignored since ttnn buffer is going away
+            this->device()->push_work([dev = this->device(), buffer = this]() mutable {
                 // At this point, the address for this buffer has made it to GLOBAL_BUFFER_ADDRESS_MAP, since the worker has allocated the buffer.
-                tt::tt_metal::allocator::deallocate_buffer(*(dev->allocator_), GLOBAL_BUFFER_ADDRESS_MAP.buffer_address(id), type);
-                GLOBAL_BUFFER_ADDRESS_MAP.erase(id);
+                tt::tt_metal::allocator::deallocate_buffer(*(dev->allocator_), buffer);
+                GLOBAL_BUFFER_ADDRESS_MAP.erase(buffer->buffer_id);
             });
         }
 };

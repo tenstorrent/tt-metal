@@ -41,9 +41,15 @@ void validate_buffer_size_and_page_size(
         "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 
     if (is_sharded(buffer_layout)) {
-        TT_FATAL(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
-    } else if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        TT_FATAL(
+            shard_parameters != std::nullopt,
+            "Buffer was specified as sharded but does not have shard_parameters specified");
+    } else {
+        TT_FATAL(
+            shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
+        if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+            TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        }
     }
 }
 
@@ -119,7 +125,7 @@ Buffer::Buffer(
     DeviceAddr page_size,
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<ShardSpecBuffer> &shard_parameters,
     const std::optional<bool> bottom_up,
     bool allocate) :
     device_(device),
@@ -128,7 +134,8 @@ Buffer::Buffer(
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up),
+    bottom_up_(
+        bottom_up.value_or(this->is_dram())),  // L1 and Trace buffers (which live in DRAM) are allocated top down!
     buffer_page_mapping_(nullptr),
     allocate_(allocate) {
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
@@ -141,7 +148,7 @@ Buffer::Buffer(
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer) {
     BufferPageMapping buffer_page_mapping;
     bool row_major = buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR;
-    uint32_t num_cores = buffer.num_cores();
+    uint32_t num_cores = buffer.num_cores().value();
 
     buffer_page_mapping.all_cores_ = corerange_to_cores(buffer.shard_spec().grid(), num_cores, row_major);
     TT_ASSERT(num_cores == buffer_page_mapping.all_cores_.size());
@@ -268,10 +275,7 @@ Buffer &Buffer::operator=(Buffer &&other) {
 
 void Buffer::allocate() {
     TT_ASSERT(this->device_ != nullptr);
-    // L1 and Trace buffers (which live in DRAM) are allocated top down!
-    bool bottom_up = this->bottom_up_.value_or(this->is_dram());
-    detail::AllocateBuffer(this, bottom_up);
-    detail::BUFFER_MAP.insert({this->device_->id(), this->address_}, this);
+    detail::AllocateBuffer(this);
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -343,7 +347,6 @@ void Buffer::deallocate() {
     // Mark as deallocated
     this->size_ = 0;
     TT_ASSERT(this->device_->allocator_ != nullptr, "Expected allocator to be initialized!");
-    detail::BUFFER_MAP.erase({this->device_->id(), this->address_});
     detail::DeallocateBuffer(this);
 }
 
@@ -366,10 +369,6 @@ bool operator==(const ShardSpec &spec_a, const ShardSpec &spec_b) {
 }
 
 bool operator!=(const ShardSpec &spec_a, const ShardSpec &spec_b) { return not(spec_a == spec_b); }
-
-namespace detail {
-buffer_map_t BUFFER_MAP = {};
-}
 
 }  // namespace tt_metal
 }  // namespace tt

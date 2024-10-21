@@ -154,7 +154,7 @@ class Buffer {
         buffer_type_(BufferType::DRAM),
         buffer_layout_(TensorMemoryLayout::INTERLEAVED),
         shard_parameters_(std::nullopt),
-        bottom_up_(std::nullopt),
+        bottom_up_(true),
         allocate_(true) {}
 
     Buffer(
@@ -198,7 +198,7 @@ class Buffer {
         if (!is_sharded(this->buffer_layout_)) {
             return this->num_pages();
         } else {
-            return this->shard_spec().size() * this->num_cores();
+            return this->shard_spec().size() * this->num_cores().value();
         }
     }
 
@@ -220,6 +220,8 @@ class Buffer {
     bool is_trace() const { return buffer_type() == BufferType::TRACE; }
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
+
+    bool bottom_up() const { return bottom_up_; }
 
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
@@ -250,13 +252,14 @@ class Buffer {
     }
 
     void set_shard_spec(const ShardSpecBuffer& shard_spec) {
+        TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
         this->shard_parameters_ = shard_spec;
         this->buffer_page_mapping_ = nullptr;
     }
 
-    uint32_t num_cores() const {
+    std::optional<uint32_t> num_cores() const {
         if (!is_sharded(this->buffer_layout_))
-            return 1;
+            return std::nullopt;
         else {
             return this->shard_spec().tensor_shard_spec.grid.num_cores();
         }
@@ -278,46 +281,15 @@ class Buffer {
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type_;
     TensorMemoryLayout buffer_layout_;
+    bool bottom_up_;
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
     bool allocate_ = true;
-   protected:
-    std::optional<bool> bottom_up_;
 };
 
 }  // namespace v0
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
-
-namespace detail {
-using Deviceid = uint32_t;
-
-class buffer_map_t {
-   public:
-    void insert(std::tuple<Deviceid, DeviceAddr> buf_attr, Buffer *buffer) {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.insert({buf_attr, buffer});
-    }
-
-    void erase(std::tuple<Deviceid, DeviceAddr> buf_attr) {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.erase(buf_attr);
-    }
-
-    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> value() {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        return this->map;
-    }
-
-    ~buffer_map_t() { TT_ASSERT(this->map.empty(), "Not all buffers deallocated by runtime!"); }
-
-   private:
-    std::mutex map_mutex;
-    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> map = {};
-};
-
-extern buffer_map_t BUFFER_MAP;
-}  // namespace detail
 
 inline namespace v0 {
 
