@@ -2949,10 +2949,8 @@ bool Device::close() {
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     // After device close, no buffers on this device should be used
-    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
-        if (std::get<0>(buf_attr) == this->id()) {
-            DeallocateBuffer(*buf);
-        }
+    for (const auto &buf : this->get_allocated_buffers()) {
+        DeallocateBuffer(*buf);
     }
 
     this->compute_cores_.clear();
@@ -3172,6 +3170,11 @@ size_t Device::get_l1_small_size() const {
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
     this->check_allocator_is_initialized();
     return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
+}
+
+const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
+    this->check_allocator_is_initialized();
+    return allocator::get_allocated_buffers(*this->allocator_);
 }
 
 void Device::deallocate_buffers(){
