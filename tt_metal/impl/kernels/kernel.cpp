@@ -309,7 +309,7 @@ uint32_t Kernel::get_binary_text_size(Device *device, int index) const {
 }
 
 void DataMovementKernel::set_build_options(JitBuildOptions &build_options) const {
-    ZoneScoped;
+    //ZoneScoped;
     switch (this->config_.processor) {
         case DataMovementProcessor::RISCV_0: {
             build_options.brisc_defines = this->defines_;
