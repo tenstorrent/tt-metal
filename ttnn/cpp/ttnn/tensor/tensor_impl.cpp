@@ -45,6 +45,10 @@ uint32_t element_size_bytes(DataType dtype) {
 }
 
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
+    if (shape.rank() == 0) {
+        return 1;
+    }
+
     uint32_t W = shape[-1];
     uint32_t page_size = 0;
     const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;

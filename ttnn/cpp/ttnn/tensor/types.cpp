@@ -409,6 +409,9 @@ uint32_t& SimpleShape::operator[](int32_t index) {
 }
 
 uint64_t SimpleShape::volume() const {
+    if (value.empty()) {
+        return 0;
+    }
     return std::accumulate(this->value.begin(), this->value.end(),
                            uint64_t{1}, std::multiplies<uint64_t>());
 }
