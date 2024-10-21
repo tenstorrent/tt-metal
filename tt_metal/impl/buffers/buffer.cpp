@@ -28,8 +28,10 @@ void validate_buffer_size_and_page_size(
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
-    if (size == 0)
+    if (size == 0) {
+        TT_FATAL(page_size == 0, "Buffer page size should 0 for 0-sized buffers!");
         return;
+    }
 
     TT_FATAL(page_size != 0, "Buffer page size should be larger than 0 bytes!");
     bool valid_page_size = (size % page_size == 0);
@@ -286,12 +288,15 @@ DeviceAddr Buffer::page_size() const {
 }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
-    TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
+    TT_FATAL((size_ == 0 && page_size == 0) || size_ % page_size == 0, "buffer size must be divisible by new page size");
     page_size_ = page_size;
     this->buffer_page_mapping_ = nullptr;
 }
 
 uint32_t Buffer::num_pages() const {
+    if (this->size() == 0) {
+        return 0;
+    }
     return this->size() / this->page_size();
 }
 
