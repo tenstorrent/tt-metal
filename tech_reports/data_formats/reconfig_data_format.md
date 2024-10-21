@@ -31,6 +31,13 @@ There are 3 different functions (`reconfig_data_format`, `reconfig_data_format_s
 
 The template parameter `to_from_int8` serves to enable reconfiguring between FLOAT and INT8 DataFormats (ex. BFLOAT16 <-> UINT8), and requires that `DST_ACCUM_MODE==true`.
 
+The following DataFormat reconfigurations are currently supported:
+| Old DataFormat                            | New DataFormat                            | Requirements                                 |
+|-------------------------------------------|-------------------------------------------|----------------------------------------------|
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | UINT8                                     | `to_from_int8==true`, `DST_ACCUM_MODE==true` |
+| UINT8                                     | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | `to_from_int8==true`, `DST_ACCUM_MODE==true` |
+
 ## `pack_reconfig_data_format`
 
 This API reconfigures hardware associated with PACK (trisc2), and has 2 calls:
@@ -40,6 +47,13 @@ ALWI void pack_reconfig_data_format(const uint32_t new_operand)
 ALWI void pack_reconfig_data_format(const uint32_t old_operand, const uint32_t new_operand)
 ```
 The function `pack_reconfig_data_format` is overloaded to accept either just the new, or both the old and new operand CB index.
+
+The following DataFormat reconfigurations are currently supported:
+| Old DataFormat                            | New DataFormat                            | Requirements                                 |
+|-------------------------------------------|-------------------------------------------|----------------------------------------------|
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
+| {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | UINT8                                     | None                                         |
+| UINT8                                     | {FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B} | None                                         |
 
 ## Usage guidelines
 
