@@ -22,6 +22,10 @@ namespace tt {
 
 namespace tt_metal {
 
+static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
+    return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+}
+
 void DeviceProfiler::readRiscProfilerResults(
     int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
     ZoneScoped;
@@ -106,37 +110,91 @@ void DeviceProfiler::readRiscProfilerResults(
                     runHostCounterRead = (profile_buffer[index + 1] >> 16) & 0xFFFF;
 
                 } else {
-                    uint32_t phase = (profile_buffer[index] >> 28) & 0x7;
-                    if (phase < 2) {
-                        uint32_t time_H = profile_buffer[index] & 0xFFF;
-                        uint32_t marker = (profile_buffer[index] >> 12) & 0x7FFFF;
-                        if (marker || time_H) {
-                            uint32_t time_L = profile_buffer[index + 1];
+                    uint32_t timer_id = (profile_buffer[index] >> 12) & 0x7FFFF;
+                    kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
-                            if (opTime_H == 0) {
-                                opTime_H = time_H;
-                            }
-                            if (opTime_L == 0) {
-                                opTime_L = time_L;
-                            }
+                    switch (packet_type) {
+                        case kernel_profiler::ZONE_START:
+                        case kernel_profiler::ZONE_END: {
+                            uint32_t time_H = profile_buffer[index] & 0xFFF;
+                            if (timer_id || time_H) {
+                                uint32_t time_L = profile_buffer[index + 1];
 
-                            TT_ASSERT(
-                                riscNumRead == riscNum,
-                                "Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
-                                riscNum,
-                                riscNumRead,
-                                worker_core.x,
-                                worker_core.y,
-                                runCounterRead);
-                            TT_ASSERT(
-                                coreFlatIDRead == coreFlatID,
-                                "Unexpected core id, expected {}, read {}. In core {},{} at run {}",
+                                if (opTime_H == 0) {
+                                    opTime_H = time_H;
+                                }
+                                if (opTime_L == 0) {
+                                    opTime_L = time_L;
+                                }
+
+                                TT_ASSERT(
+                                    riscNumRead == riscNum,
+                                    "Unexpected risc id, expected {}, read {}. In core {},{} at run {}",
+                                    riscNum,
+                                    riscNumRead,
+                                    worker_core.x,
+                                    worker_core.y,
+                                    runCounterRead);
+                                TT_ASSERT(
+                                    coreFlatIDRead == coreFlatID,
+                                    "Unexpected core id, expected {}, read {}. In core {},{} at run {}",
+                                    coreFlatID,
+                                    coreFlatIDRead,
+                                    worker_core.x,
+                                    worker_core.y,
+                                    runCounterRead);
+
+                                dumpResultToFile(
+                                    runCounterRead,
+                                    runHostCounterRead,
+                                    device_id,
+                                    worker_core,
+                                    coreFlatID,
+                                    riscType,
+                                    0,
+                                    timer_id,
+                                    (uint64_t(time_H) << 32) | time_L);
+                            }
+                        } break;
+                        case kernel_profiler::ZONE_TOTAL: {
+                            uint32_t sum = profile_buffer[index + 1];
+
+                            uint32_t time_H = opTime_H;
+                            uint32_t time_L = opTime_L;
+                            dumpResultToFile(
+                                runCounterRead,
+                                runHostCounterRead,
+                                device_id,
+                                worker_core,
                                 coreFlatID,
-                                coreFlatIDRead,
-                                worker_core.x,
-                                worker_core.y,
-                                runCounterRead);
+                                riscType,
+                                sum,
+                                timer_id,
+                                (uint64_t(time_H) << 32) | time_L);
 
+                            break;
+                        }
+                        case kernel_profiler::TS_DATA: {
+                            uint32_t time_H = profile_buffer[index] & 0xFFF;
+                            uint32_t time_L = profile_buffer[index + 1];
+                            index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                            uint32_t data_H = profile_buffer[index];
+                            uint32_t data_L = profile_buffer[index + 1];
+                            dumpResultToFile(
+                                runCounterRead,
+                                runHostCounterRead,
+                                device_id,
+                                worker_core,
+                                coreFlatID,
+                                riscType,
+                                (uint64_t(data_H) << 32) | data_L,
+                                timer_id,
+                                (uint64_t(time_H) << 32) | time_L);
+                            continue;
+                        }
+                        case kernel_profiler::TS_EVENT: {
+                            uint32_t time_H = profile_buffer[index] & 0xFFF;
+                            uint32_t time_L = profile_buffer[index + 1];
                             dumpResultToFile(
                                 runCounterRead,
                                 runHostCounterRead,
@@ -145,25 +203,9 @@ void DeviceProfiler::readRiscProfilerResults(
                                 coreFlatID,
                                 riscType,
                                 0,
-                                marker,
+                                timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
                         }
-                    } else if (phase == 2) {
-                        uint32_t marker = (profile_buffer[index] >> 12) & 0x7FFFF;
-                        uint32_t sum = profile_buffer[index + 1];
-
-                        uint32_t time_H = opTime_H;
-                        uint32_t time_L = opTime_L;
-                        dumpResultToFile(
-                            runCounterRead,
-                            runHostCounterRead,
-                            device_id,
-                            worker_core,
-                            coreFlatID,
-                            riscType,
-                            sum,
-                            marker,
-                            (uint64_t(time_H) << 32) | time_L);
                     }
                 }
             }
@@ -192,50 +234,53 @@ void DeviceProfiler::dumpResultToFile(
     CoreCoord core,
     int core_flat,
     int risc_num,
-    uint64_t stat_value,
+    uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
     std::pair<uint32_t, CoreCoord> deviceCore = {device_id, core};
     std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     std::ofstream log_file;
 
-    tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
-    if (stat_value > 0) {
-        zone_phase = tracy::TTDeviceEventPhase::sum;
-    } else if (timer_id & (1 << 16)) {
-        zone_phase = tracy::TTDeviceEventPhase::end;
-    }
-
+    kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+    uint32_t t_id = timer_id & 0xFFFF;
     std::string zone_name = "";
     std::string source_file = "";
     uint64_t source_line = 0;
-    if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
-        std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
-        getline(source_info, zone_name, ',');
-        getline(source_info, source_file, ',');
 
-        std::string source_line_str;
-        getline(source_info, source_line_str, ',');
-        source_line = stoi(source_line_str);
-    }
+    if ((packet_type == kernel_profiler::ZONE_START) || (packet_type == kernel_profiler::ZONE_END)) {
+        tracy::TTDeviceEventPhase zone_phase = tracy::TTDeviceEventPhase::begin;
+        if (packet_type == kernel_profiler::ZONE_END) {
+            zone_phase = tracy::TTDeviceEventPhase::end;
+        }
 
-    tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
-        run_host_id,
-        device_id,
-        core.x,
-        core.y,
-        risc_num,
-        timer_id,
-        timestamp,
-        source_line,
-        source_file,
-        zone_name,
-        zone_phase);
+        if (hash_to_zone_src_locations.find((uint16_t)timer_id) != hash_to_zone_src_locations.end()) {
+            std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+            getline(source_info, zone_name, ',');
+            getline(source_info, source_file, ',');
 
-    auto ret = device_events.insert(event);
+            std::string source_line_str;
+            getline(source_info, source_line_str, ',');
+            source_line = stoi(source_line_str);
+        }
 
-    if (!ret.second) {
-        return;
+        tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
+            run_host_id,
+            device_id,
+            core.x,
+            core.y,
+            risc_num,
+            timer_id,
+            timestamp,
+            source_line,
+            source_file,
+            zone_name,
+            zone_phase);
+
+        auto ret = device_events.insert(event);
+
+        if (!ret.second) {
+            return;
+        }
     }
 
     firstTimestamp(timestamp);
@@ -244,8 +289,8 @@ void DeviceProfiler::dumpResultToFile(
         log_file.open(log_path);
         log_file << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, "
-                    "run ID, run host ID,  zone name, zone phase, source line, source file"
+        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, "
+                    "run host ID,  zone name, type, source line, source file"
                  << std::endl;
     } else {
         log_file.open(log_path, std::ios_base::app);
@@ -258,13 +303,13 @@ void DeviceProfiler::dumpResultToFile(
         core.x,
         core.y,
         tracy::riscName[risc_num],
-        timer_id,
+        t_id,
         timestamp,
-        stat_value,
+        data,
         run_id,
         run_host_id,
         zone_name,
-        magic_enum::enum_name(zone_phase),
+        magic_enum::enum_name(packet_type),
         source_line,
         source_file);
     log_file << std::endl;
