@@ -15,7 +15,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
 from enum import Enum
 
 
@@ -81,7 +80,8 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
 
 def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    rand_from, rand_to = rand_range[0], rand_range[1]
+    # Cast to np.float32: As python use float64 - double by default, this can lead to assert fail: rand_from <= generated_number.
+    rand_from, rand_to = np.float32(rand_range[0]), np.float32(rand_range[1])
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
     npu_input = ttnn.from_torch(cpu_input, device=device, dtype=get_lib_dtype(ttnn, dtype), layout=ttnn.TILE_LAYOUT)
 
@@ -99,7 +99,7 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
 
 
 # fmt: off
-@skip_for_grayskull("Requires wormhole_b0 to run")
+# @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
         [100, 100],
@@ -126,7 +126,6 @@ def test_uniform(shape, rand_range, dtype, device):
     run_uniform(shape, rand_range, dtype, device)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[2, 32, 32, 16]],
@@ -146,7 +145,6 @@ def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
             assert device.num_program_cache_entries() == num_program_cache_entries
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],
