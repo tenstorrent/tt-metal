@@ -426,6 +426,10 @@ def test_conv_ws(
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
 
+    if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        if input_channels == 2048:
+            pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
+
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
