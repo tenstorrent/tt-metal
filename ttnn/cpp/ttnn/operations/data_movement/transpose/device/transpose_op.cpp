@@ -77,72 +77,57 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> Transpose::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto out_shape = input_tensor.get_legacy_shape();
-    auto padding = out_shape.padding();
+
+    // TODO: Remove usage of input/output padded shape
+    // - Get output alignment from input alignment and output dtype, layout, mem_config
+    // - Get shard spec from output strides (logical shape + alignment)?
+    auto output_shape = input_tensor.get_logical_shape();
+    auto output_padded_shape = input_tensor.get_padded_shape();
+
     switch (this->dim){
         case TransposeOpDim::CN:
-            std::swap(out_shape[0], out_shape[1]);
-            std::swap(padding[0], padding[1]);
+            std::swap(output_shape[0], output_shape[1]);
+            std::swap(output_padded_shape[0], output_padded_shape[1]);
             break;
         case TransposeOpDim::HC:
-            std::swap(out_shape[1], out_shape[2]);
-            std::swap(padding[1], padding[2]);
+            std::swap(output_shape[1], output_shape[2]);
+            std::swap(output_padded_shape[1], output_padded_shape[2]);
             break;
         case TransposeOpDim::WH:
-            std::swap(out_shape[2], out_shape[3]);
-            std::swap(padding[2], padding[3]);
+            std::swap(output_shape[2], output_shape[3]);
+            std::swap(output_padded_shape[2], output_padded_shape[3]);
             break;
         case TransposeOpDim::NH:
-            std::swap(out_shape[0], out_shape[2]);
-            std::swap(padding[0], padding[2]);
+            std::swap(output_shape[0], output_shape[2]);
+            std::swap(output_padded_shape[0], output_padded_shape[2]);
             break;
         case TransposeOpDim::NW:
-            std::swap(out_shape[0], out_shape[3]);
-            std::swap(padding[0], padding[3]);
+            std::swap(output_shape[0], output_shape[3]);
+            std::swap(output_padded_shape[0], output_padded_shape[3]);
             break;
         case TransposeOpDim::CW:
-            std::swap(out_shape[1], out_shape[3]);
-            std::swap(padding[1], padding[3]);
+            std::swap(output_shape[1], output_shape[3]);
+            std::swap(output_padded_shape[1], output_padded_shape[3]);
             break;
     }
-    return {tt::tt_metal::LegacyShape(out_shape, padding)};
-}
 
-
-std::vector<Tensor> Transpose::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    // This is only for WH
+    auto output_mem_config = this->output_mem_config;
     if (this->output_mem_config.is_sharded()) {
         if (this->dim == TransposeOpDim::WH) {
+            const auto& input_padded_shape = input_tensor.get_padded_shape();
             ShardSpec shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2] * input_tensor.get_legacy_shape()[-1];
-            shard_spec.shape[1] = input_tensor.get_legacy_shape()[-2];
-            const auto output_shape = this->compute_output_shapes(input_tensors)[0];
-            auto mem_config = this->output_mem_config;
-            mem_config.shard_spec = shard_spec;
-            return {create_device_tensor(
-                output_shape,
-                input_tensor.get_dtype(),
-                input_tensor.get_layout(),
-                input_tensor.device(),
-                mem_config)};
+            shard_spec.shape[0] = shard_spec.shape[0] / input_padded_shape[-2] * input_padded_shape[-1];
+            shard_spec.shape[1] = input_padded_shape[-2];
+            output_mem_config.shard_spec = shard_spec;
         } else if (this->dim == TransposeOpDim::HC) {
-            const auto output_shape = this->compute_output_shapes(input_tensors)[0];
-            auto mem_config = this->output_mem_config;
-            mem_config.shard_spec = input_tensor.shard_spec().value();
-            return {create_device_tensor(
-                output_shape,
-                input_tensor.get_dtype(),
-                input_tensor.get_layout(),
-                input_tensor.device(),
-                mem_config)};
+            output_mem_config.shard_spec = input_tensor.shard_spec().value();
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
     }
-    return operation::generic_create_output_tensors(*this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    return {ttnn::TensorSpec(output_shape, TensorLayout::fromLegacyPaddedShape(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config, ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
 }
 
 operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

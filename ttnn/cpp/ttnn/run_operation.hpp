@@ -17,6 +17,11 @@ namespace tt::tt_metal {
 namespace operation {
 
 using ttnn::operations::experimental::auto_format::FormatParams;
+
+// TODO: create_output_tensors should become a fully manual path with no dependency on infra
+// - Pass output shapes directly
+// - Move default values for output_dtype and output_mem_config inside ops
+// - This function becomes just a regular helper function
 template <typename ConcreteOperation>
 auto generic_create_output_tensors(
     const ConcreteOperation& operation,
