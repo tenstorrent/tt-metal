@@ -5,6 +5,7 @@
 #include <variant>
 #include <vector>
 
+#include "common/core_coord.h"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -42,6 +43,10 @@ struct MorehAdamOperation {
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
+            KernelHandle compute_kernel_group1_id;
+            KernelHandle compute_kernel_group2_id;
+            CoreRangeSet core_group_1;
+            CoreRangeSet core_group_2;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -90,6 +95,8 @@ struct MorehAdamOperation {
 
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::moreh::moreh_adam
 

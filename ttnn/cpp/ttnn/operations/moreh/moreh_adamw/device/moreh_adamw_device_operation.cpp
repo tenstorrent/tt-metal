@@ -150,4 +150,13 @@ MorehAdamWDeviceOperation::invoke(
             max_exp_avg_sq_out}};
 }
 
+tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // For hash we'll set `step` to 0
+    auto operation_attributes_without_step = operation_attributes;
+    operation_attributes_without_step.step = 0;
+
+    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step, tensor_args);
+}
+
 }  // namespace ttnn::operations::moreh::moreh_adamw
