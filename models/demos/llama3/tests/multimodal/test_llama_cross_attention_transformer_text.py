@@ -114,16 +114,11 @@ def test_llama_cross_attention_transformer_text_inference(
         pt_xattn_cache_chunks = [torch.chunk(x, 2, dim=1) for x in pt_xattn_cache_chunks]
         pt_xattn_cache_chunks = [x for xx in pt_xattn_cache_chunks for x in xx]
         # slice out replicated k/v heads
-        pt_xattn_cache_chunks = [
-            # x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache_chunks
-            x.view(batch, n_heads, vision_seq_len, head_dim)
-            for x in pt_xattn_cache_chunks
-        ]
+        pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache_chunks]
 
         tt_xattn_cache = [layer.compute_xattn_kv_cache(tt_vision_tokens) for layer in tt_model.cross_attention_layers]
         tt_xattn_cache_torch = [
             ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
-                # batch, n_kv_heads, vision_seq_len, head_dim
                 batch,
                 n_heads,
                 vision_seq_len,
