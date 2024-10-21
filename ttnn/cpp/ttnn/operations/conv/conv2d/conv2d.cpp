@@ -283,7 +283,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
                                                                                                    : grid_size.x;
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
                                ? round_up(padded_in_channels * window_w, 32)
-                               : round_up((padded_in_channels / act_c_num_blocks) * window_h * window_w, tt::constants::TILE_WIDTH);
+                               : round_up((padded_in_channels / act_c_num_blocks) * window_w, tt::constants::TILE_WIDTH) * window_h;
     if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         act_block_w = (padded_in_channels * window_h * window_w)/(parallel_config.grid.num_cores() * act_block_w_div);
     }
