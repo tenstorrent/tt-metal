@@ -183,7 +183,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_tiles_per_core = num_units_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         const std::vector<uint32_t> reader_runtime_args{
@@ -221,7 +221,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             tt_metal::SetRuntimeArgs(program, compute_kernel_ids[1], core, compute_runtime_args);
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges.");
+            TT_THROW("Core not in specified core ranges.");
         }
 
         tile_offset += num_tiles_per_core;
@@ -231,6 +231,10 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         std::move(program),
         {.unary_reader_kernel_id = reader_kernel_id,
          .unary_writer_kernel_id = writer_kernel_id,
+         .compute_kernel_group1_id = compute_kernel_ids[0],
+         .compute_kernel_group2_id = compute_kernel_ids[1],
+         .core_group_1 = core_group_1,
+         .core_group_2 = core_group_2,
          .num_cores = num_cores,
          .num_cores_y = num_cores_y}};
 }
@@ -243,6 +247,10 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    auto& compute_kernel_1_id = cached_program.shared_variables.compute_kernel_group1_id;
+    auto& compute_kernel_2_id = cached_program.shared_variables.compute_kernel_group2_id;
+    auto& core_group_1 = cached_program.shared_variables.core_group_1;
+    auto& core_group_2 = cached_program.shared_variables.core_group_2;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
@@ -271,6 +279,7 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
             runtime_args[2] = exp_avg_in_addr;
             runtime_args[3] = exp_avg_sq_in_addr;
             runtime_args[4] = max_exp_avg_sq_in_addr;
+            runtime_args[10] = operation_attributes.step;
         }
 
         {
@@ -279,6 +288,18 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
             runtime_args[1] = exp_avg_out_addr;
             runtime_args[2] = exp_avg_sq_out_addr;
             runtime_args[3] = max_exp_avg_sq_out_addr;
+        }
+
+        {
+            if (core_group_1.core_coord_in_core_ranges(core)) {
+                auto& runtime_args = GetRuntimeArgs(program, compute_kernel_1_id, core);
+                runtime_args[0] = operation_attributes.step;
+            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                auto& runtime_args = GetRuntimeArgs(program, compute_kernel_2_id, core);
+                runtime_args[0] = operation_attributes.step;
+            } else {
+                TT_THROW("Core not in specified core ranges.");
+            }
         }
     }
 }
