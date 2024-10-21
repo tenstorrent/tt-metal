@@ -259,6 +259,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
     uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
     if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED && act_block_h_override > 0 ) {
+        log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
         act_block_h_ntiles = act_block_h_override / constants::TILE_HEIGHT;
     }
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
