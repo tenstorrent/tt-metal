@@ -29,9 +29,9 @@ namespace {
 std::atomic<bool> enable_persistent_kernel_cache = false;
 
 void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::shared_ptr<Kernel> kernel) {
-    ZoneScoped;
-    const std::string tracyPrefix = "GenerateBinaries_";
-    ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
+    //ZoneScoped;
+    //const std::string tracyPrefix = "GenerateBinaries_";
+    //ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
         jit_build_genfiles_descriptors(device->build_env(), build_options);
         kernel->generate_binaries(device, build_options);
@@ -467,7 +467,7 @@ void Program::invalidate_circular_buffer_allocation() {
 }
 
 void Program::allocate_circular_buffers(const Device *device) {
-    ZoneScoped;
+    //ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
         return;
     }
@@ -509,7 +509,7 @@ void Program::allocate_circular_buffers(const Device *device) {
 }
 
 void Program::validate_circular_buffer_region(const Device *device) const {
-    ZoneScoped;
+    //ZoneScoped;
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
@@ -600,7 +600,7 @@ void Program::construct_core_range_set_for_worker_cores() {
 }
 
 void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
-    ZoneScoped;
+    //ZoneScoped;
     for (auto logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (auto circular_buffer : cbs_on_core) {
@@ -613,7 +613,7 @@ void Program::set_cb_data_fmt(Device *device, const std::vector<CoreRange> &crs,
 }
 
 void Program::set_cb_tile_dims(Device *device, const std::vector<CoreRange> &crs, JitBuildOptions &build_options) const {
-    ZoneScoped;
+    //ZoneScoped;
     for (const auto &logical_cr : crs) {
         auto cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto &circular_buffer : cbs_on_core) {
@@ -1100,7 +1100,7 @@ void Program::finalize(Device *device) {
 }
 
 void Program::compile(Device *device, bool fd_bootloader_mode) {
-    ZoneScoped;
+    //ZoneScoped;
     if (compiled_.contains(device->id())) {
         return;
     }
