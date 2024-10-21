@@ -37,25 +37,15 @@ def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tens
     if alpha is not None:
         kwargs["alpha"] = alpha
     if torch_op == "leaky_relu":
-        if alpha != None:
+        if alpha is not None:
             pyt_y = torch.nn.functional.leaky_relu(input_tensor, negative_slope=alpha)
         else:
             pyt_y = torch.nn.functional.leaky_relu(input_tensor)
-    elif torch_op == "elu":
-        if alpha != None:
-            pyt_y = torch.nn.functional.elu(input_tensor, alpha=alpha)
-        else:
-            pyt_y = torch.nn.functional.elu(input_tensor)
-    elif torch_op == "celu":
-        if alpha != None:
-            pyt_y = torch.nn.functional.celu(input_tensor, alpha)
-        else:
-            pyt_y = torch.nn.functional.celu(input_tensor)
     else:
-        if alpha != None:
+        if alpha == None:
             pyt_y = torch_op(input_tensor)
         else:
-            pyt_y = torch_op(input_tensor, *args, **kwargs)
+            pyt_y = torch_op(input_tensor, alpha)
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
@@ -189,14 +179,14 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.elu_bw,
     golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "elu", grad, input, alpha, *args, **kwargs
+        torch.nn.functional.elu, grad, input, alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.celu_bw,
     golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "celu", grad, input, alpha, *args, **kwargs
+        torch.nn.functional.celu, grad, input, alpha, *args, **kwargs
     ),
 )
 
