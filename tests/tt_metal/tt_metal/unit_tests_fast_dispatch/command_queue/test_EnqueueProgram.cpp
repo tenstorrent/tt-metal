@@ -1391,7 +1391,9 @@ TEST_F(CommandQueueFixture, TestRandomizedProgram) {
 
 TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER, true);
         EnqueueProgram(device_->command_queue(), program, false);
@@ -1406,7 +1408,9 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::ETH, true);
         EnqueueProgram(device_->command_queue(), program, false);
@@ -1421,7 +1425,9 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
 
         bool eth_kernel_added_to_program = false;
@@ -1441,7 +1447,9 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
 
 TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
         this->create_kernel(program, CoreType::WORKER);
         EnqueueProgram(device_->command_queue(), program, false);
@@ -1456,7 +1464,9 @@ TEST_F(RandomProgramFixture, TestProgramsOnEth) {
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
         this->create_kernel(
             program,
@@ -1480,7 +1490,9 @@ TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
 
         bool eth_kernel_added_to_program = false;
@@ -1509,7 +1521,9 @@ TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
 
 TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
 
         uint32_t min_num_sems;
@@ -1561,7 +1575,9 @@ TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
 
 TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
 
         uint32_t min_num_sems;
@@ -1613,7 +1629,9 @@ TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
 
 TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        log_info(tt::LogTest, "Creating Program {}", i);
+        if (i % 10 == 0) {
+            log_info(tt::LogTest, "Creating Program {}", i);
+        }
         Program program = CreateProgram();
 
         uint32_t min_num_sems;
