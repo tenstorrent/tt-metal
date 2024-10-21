@@ -8,7 +8,8 @@ The VGG model is a popular convolutional neural network architecture introduced 
 # Model Architectures
 - VGG11
 - VGG16
-VGG11 and VGG16 currently supports BATCH_SIZE = 1.
+
+  NOTE: VGG11 and VGG16 currently supports BATCH_SIZE = 1.
 
 # How to Run
 To run the demo for image classification of the VGG model using ImageNet-1k Validation Dataset, follow these instructions
@@ -18,5 +19,3 @@ To run the demo for image classification of the VGG model using ImageNet-1k Vali
 ```
 pytest models/demos/vgg/demo/demo.py::test_demo_imagenet_vgg
 ```
-
-NOTE: one ttnn.reshape in VGG11 and VGG16 is on host.
