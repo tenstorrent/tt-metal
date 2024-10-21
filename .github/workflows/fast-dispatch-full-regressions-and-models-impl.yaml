@@ -163,6 +163,8 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent reg tests scripts
         timeout-minutes: 50
+        # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
+        # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
