@@ -25,7 +25,7 @@ run_perf_models_other() {
 
     env pytest models/demos/distilbert/tests/test_perf_distilbert.py -m $test_marker
 
-    env pytest -n auto tests/ttnn/integration_tests/whisper/test_performance.py -m $test_marker
+    env pytest -n auto models/demos/whisper/tests/test_performance.py -m $test_marker
 
     env pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
 
@@ -94,6 +94,8 @@ run_device_perf_models() {
     env pytest models/demos/vgg/tests/ -m $test_marker
 
     env pytest models/demos/convnet_mnist/tests/ -m $test_marker
+
+    env pytest models/demos/whisper/tests/ -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
