@@ -368,5 +368,6 @@ bool validate_worker_modes(const std::vector<Device *> &workers);
 namespace ttnn {
 
 using Tensor = tt::tt_metal::Tensor;
+using TensorSpec = std::pair<ttnn::SimpleShape, tt::tt_metal::TensorLayout>;
 
 }  // namespace ttnn
