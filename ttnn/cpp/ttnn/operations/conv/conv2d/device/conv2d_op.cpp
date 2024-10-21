@@ -198,8 +198,7 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             CoreRangeSet shard_grid =
                 CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
             log_debug(tt::LogOp, "Calculated shard_grid: {}", shard_grid.str());
-            std::array<uint32_t, 2> shard_shape = {tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) * TILE_HEIGHT,
-                                                   tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH) * TILE_WIDTH};
+            std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height, this->parallelization_config.per_core_out_matrix_width};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
@@ -207,7 +206,6 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
         } else {
             TT_THROW("Unsupported shard scheme");
         }
-
     }
     return operation::generic_create_output_tensors(*this, input_tensors, this->dtype, output_layout, this->memory_config);
 }
