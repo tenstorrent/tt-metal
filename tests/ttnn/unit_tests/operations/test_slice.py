@@ -708,3 +708,79 @@ def test_slice_7d(device):
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([8732, 4], 1, 0, 2, 1, ttnn.ROW_MAJOR_LAYOUT),  # Bad pcc
+        ([1, 14, 28, 192], 2, 1, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test (low priority)
+        ([1, 23, 40, 128], 3, 0, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test
+        ([1, 28, 28, 256], 1, 1, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test
+        (
+            [1, 3],
+            1,
+            0,
+            -1,
+            1,
+            ttnn.TILE_LAYOUT,
+        ),  # works when you turn it into a 2D tensor (compared to [3] example in the next test)
+    ),
+)
+def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, device):
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    slice_obj = slice(start, end, step)
+
+    # Prepare indices for slicing in the specified dimension
+    indices = [slice(None)] * len(input_shape)  # By default, select all elements along every dimension
+    indices[dim] = slice_obj  # Apply slicing to the target dimension
+    indices = tuple(indices)
+
+    # Apply slicing to the input_tensor
+    torch_output_tensor = torch_input[indices]
+
+    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn_tensor[indices]
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
+        (
+            [1, 7, 71, 64],
+            3,
+            0,
+            -1,
+            1,
+            ttnn.ROW_MAJOR_LAYOUT,
+        ),  # An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary
+        ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
+        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # Difference in expected shape as it's a 1D tensor
+    ),
+)
+def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
+    pytest.skip("These tests are expected to fail at the moment")
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    slice_obj = slice(start, end, step)
+
+    # Prepare indices for slicing in the specified dimension
+    indices = [slice(None)] * len(input_shape)  # By default, select all elements along every dimension
+    indices[dim] = slice_obj  # Apply slicing to the target dimension
+    indices = tuple(indices)
+
+    # Apply slicing to the input_tensor
+    torch_output_tensor = torch_input[indices]
+
+    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
+    ttnn_output = ttnn_tensor[indices]
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.99)
