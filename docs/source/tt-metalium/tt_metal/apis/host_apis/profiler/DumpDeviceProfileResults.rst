@@ -3,4 +3,4 @@
 DumpDeviceProfileResults
 ========================
 
-.. doxygenfunction:: DumpDeviceProfileResults(Device *device, const Program &program);
+.. doxygenfunction:: tt::tt_metal::v0::DumpDeviceProfileResults(Device *device, const Program &program);
