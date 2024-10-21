@@ -11,9 +11,13 @@ void kernel_main() {
     uint32_t src1_addr  = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
+    uint32_t block_height = get_arg_val<uint32_t>(4);
+    uint32_t block_width = get_arg_val<uint32_t>(5);
+    uint32_t num_cores_y = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
+    constexpr bool block_or_width_sharded = get_compile_time_arg_val(2) == 1;
     #ifdef IN0_SHARDED
         cb_reserve_back(cb_id_in0, num_tiles);
         cb_push_back(cb_id_in0, num_tiles);
@@ -47,28 +51,60 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    for (uint32_t i=start_id; i<start_id + num_tiles; i ++) {
-        #ifndef IN0_SHARDED
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i, s0, l1_write_addr_in0);
-        #endif
+    if constexpr (block_or_width_sharded) {
+        uint32_t row_start_tile_id = start_id;
+        for (uint32_t h = 0; h < block_height; h++) {
+            uint32_t tile_id = row_start_tile_id;
+            for(uint32_t w = 0; w < block_width; w++) {
+                #ifndef IN0_SHARDED
+                cb_reserve_back(cb_id_in0, onetile);
+                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
+                #endif
 
-        #ifndef IN1_SHARDED
-        cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_tile(i, s1, l1_write_addr_in1);
-        #endif
+                #ifndef IN1_SHARDED
+                cb_reserve_back(cb_id_in1, onetile);
+                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
+                #endif
 
-        noc_async_read_barrier();
+                tile_id++;
+                noc_async_read_barrier();
 
-        #ifndef IN0_SHARDED
-        cb_push_back(cb_id_in0, onetile);
-        #endif
+                #ifndef IN0_SHARDED
+                cb_push_back(cb_id_in0, onetile);
+                #endif
 
-        #ifndef IN1_SHARDED
-        cb_push_back(cb_id_in1, onetile);
-        #endif
+                #ifndef IN1_SHARDED
+                cb_push_back(cb_id_in1, onetile);
+                #endif
+            }
+            row_start_tile_id += num_cores_y * block_width;
+        }
+    } else {
+       for (uint32_t tile_id=start_id; tile_id<start_id + num_tiles; tile_id ++) {
+            #ifndef IN0_SHARDED
+            cb_reserve_back(cb_id_in0, onetile);
+            l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+            noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
+            #endif
+
+            #ifndef IN1_SHARDED
+            cb_reserve_back(cb_id_in1, onetile);
+            l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+            noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
+            #endif
+
+            noc_async_read_barrier();
+
+            #ifndef IN0_SHARDED
+            cb_push_back(cb_id_in0, onetile);
+            #endif
+
+            #ifndef IN1_SHARDED
+            cb_push_back(cb_id_in1, onetile);
+            #endif
+        }
     }
     #endif
 }
