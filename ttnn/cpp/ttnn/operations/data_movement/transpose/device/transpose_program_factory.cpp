@@ -9,6 +9,7 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_log.h"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 

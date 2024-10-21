@@ -56,8 +56,9 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
+                const std::optional<const MemoryConfig> memory_config,
                 const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -75,6 +76,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0},
 
         ttnn::pybind_overload_t{
@@ -93,8 +95,9 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
+                const std::optional<const MemoryConfig> memory_config,
                 const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -112,6 +115,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
 
@@ -126,7 +130,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t in_channels,
            uint32_t out_channels,
            std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },
@@ -153,7 +157,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t in_channels,
            uint32_t out_channels,
            std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           std::array<uint32_t, 2> stride) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
                 device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, kernel_size, stride);
         },

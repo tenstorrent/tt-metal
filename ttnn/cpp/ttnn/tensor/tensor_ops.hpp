@@ -8,7 +8,9 @@
 namespace tt::tt_metal {
 struct Tensor;
 struct MemoryConfig;
+namespace distributed {
 class MeshDevice;
+}  // namespace distributed
 
 inline namespace v0 {
 class CommandQueue;
@@ -24,7 +26,7 @@ Tensor tensor_to(const Tensor& input_tensor, const std::vector<Device*>& workers
 
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, MeshDevice* mesh_device);
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id);
 
@@ -32,13 +34,13 @@ Tensor tensor_cpu_sharded(const Tensor& input_tensor);
 
 void tensor_print(const Tensor& input_tensor);
 
-Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const tt::tt_metal::LegacyShape& input_tensor_start, float pad_value);
+Tensor tensor_pad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value);
 
-Tensor tensor_unpad(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_start, const tt::tt_metal::LegacyShape& output_tensor_end);
+Tensor tensor_unpad(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
 
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_tensor_shape);
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape);
 
 Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W);
 

@@ -19,7 +19,6 @@
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using tt::tt_metal::LegacyShape;
 using ttnn::operations::unary::UnaryWithParam;
 
 namespace {
@@ -333,7 +332,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const CoreCoord& compute_with_storage_grid_size) {
+    const CoreCoord& compute_with_storage_grid_size,
+    const MemoryConfig& mem_config) {
     const auto &ashape = input_tensor_a.get_legacy_shape(), bshape = input_tensor_b.get_legacy_shape();
     uint32_t batch_size_a = get_batch_size(ashape);
     uint32_t num_output_tiles = batch_size_a * ashape[-2] * bshape[-1] / TILE_HW;  // Output M x N
@@ -362,9 +362,16 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     num_blocks_y = (Mt - 1) / per_core_M + 1;
     num_blocks_x = (Nt - 1) / per_core_N + 1;
 
+    // MatmulMultiCoreProgramConfig does not support sharded output.
+    // Reduce in0_block_w if necessary to choose other configs.
+    if (mem_config.is_sharded() and Kt % in0_block_w != 0) {
+        in0_block_w = 1;
+    }
+
     if (num_blocks_x * num_blocks_y <= num_cores_x * num_cores_y and Kt % in0_block_w == 0) {
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
-        if (core_range.y == 1) {
+        bool use_mcast_config = mem_config.is_sharded() and core_range.y == 0;
+        if (core_range.y == 1 or (use_mcast_config and mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED)) {
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -374,7 +381,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
-        } else if (core_range.x == 1) {
+        } else if (core_range.x == 1 or (use_mcast_config and mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED)) {
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -384,7 +391,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 false /* out_sharded */,
                 std::nullopt /* compute_with_storage_grid_size */,
                 compute_kernel_config);
-        } else if (core_range.y > 0 && num_blocks_x <= num_cores_x && num_blocks_y <= num_cores_y) {
+        } else if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or
+                (use_mcast_config and mem_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED)) {
             bool transpose_mcast = input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED &&
                                    input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
             out_subblock_h = 4;
@@ -420,7 +428,8 @@ MatmulProgramConfig create_matmul_program_config(
     const Tensor& input_tensor_b,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<UnaryWithParam> fused_activation,
-    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const MemoryConfig& mem_config) {
     auto a_shape = input_tensor_a.get_shape();
     auto b_shape = input_tensor_b.get_shape();
     auto a_padded_shape = a_shape.with_tile_padding();
@@ -467,7 +476,7 @@ MatmulProgramConfig create_matmul_program_config(
             if (!can_cbs_fit_in_l1(
                     input_tensor_a, input_tensor_b, m_tiles_per_core, n_tiles_per_core, k_tiles_per_core)) {
                 return create_simple_matmul_program_config(
-                    input_tensor_a, input_tensor_b, compute_kernel_config, core_coord);
+                    input_tensor_a, input_tensor_b, compute_kernel_config, core_coord, mem_config);
             }
         } else if (a_is_sharded) {
             TT_FATAL(
@@ -726,7 +735,7 @@ MatmulProgramConfig get_matmul_program_config(
         };
     }
     return create_matmul_program_config(
-        input_tensor_a, input_tensor_b, user_core_coord, fused_activation, compute_kernel_config);
+        input_tensor_a, input_tensor_b, user_core_coord, fused_activation, compute_kernel_config, output_mem_config);
 }
 
 inline MatmulProgramConfig generate_matmul_program_config(
@@ -743,12 +752,12 @@ inline MatmulProgramConfig generate_matmul_program_config(
         if (has_user_grid) {
             core_coord = user_core_coord.value();
             return create_matmul_program_config(
-                input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config);
+                input_tensor_a, input_tensor_b, user_core_coord, user_fused_activation, compute_kernel_config, mem_config);
         } else {
             tt::tt_metal::Device* device = input_tensor_a.device();
             auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
             return create_simple_matmul_program_config(
-                input_tensor_a, input_tensor_b, compute_kernel_config, compute_with_storage_grid_size);
+                input_tensor_a, input_tensor_b, compute_kernel_config, compute_with_storage_grid_size, mem_config);
         }
     } else {
         bool bmm = user_run_batched;
@@ -1315,29 +1324,24 @@ void Matmul::validate(
         chosen_program_config);
 }
 
-std::vector<tt::tt_metal::LegacyShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const tt::tt_metal::LegacyShape& input_shape_a = input_tensors.at(0).get_legacy_shape();
-    const tt::tt_metal::LegacyShape& input_shape_b = input_tensors.at(1).get_legacy_shape();
+std::vector<ttnn::SimpleShape> Matmul::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const ttnn::SimpleShape input_shape_a = input_tensors.at(0).get_logical_shape();
+    const ttnn::SimpleShape input_shape_b = input_tensors.at(1).get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    tt::tt_metal::LegacyShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
     for (auto index = 0; index < rank_difference; index++) {
         TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");
         output_shape[index] = input_shape_b[index];
-        dimensions_pads.push_back(input_shape_b.padding()[index]);
     }
     for (auto index = 0; index < a_rank - 1; index++) {
         output_shape[rank_difference + index] = input_shape_a[index];
-        dimensions_pads.push_back(input_shape_a.padding()[index]);
     }
     output_shape[-1] = input_shape_b[-1];
-    dimensions_pads.push_back(input_shape_b.padding()[b_rank - 1]);
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {std::move(output_shape)};
 }
 
 std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

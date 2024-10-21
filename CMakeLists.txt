@@ -35,6 +35,7 @@ project(Metalium
         HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
         LANGUAGES CXX
 )
+include(CTest)
 
 CHECK_COMPILERS()
 
@@ -126,13 +127,6 @@ if(SANITIZER_ENABLED AND ENABLE_UBSAN)
 endif()
 
 unset(SANITIZER_ENABLED)
-
-include(GNUInstallDirs)
-set(CMAKE_INSTALL_PREFIX "${PROJECT_BINARY_DIR}")
-set(CMAKE_INSTALL_LIBDIR "${PROJECT_BINARY_DIR}/lib")
-set(CMAKE_INSTALL_BINDIR "${PROJECT_BINARY_DIR}/tmp/bin")
-set(CMAKE_INSTALL_INCLUDEDIR "${PROJECT_BINARY_DIR}/tmp/include")
-set(CMAKE_INSTALL_DATAROOTDIR "${PROJECT_BINARY_DIR}/tmp/share")
 
 ############################################################################################################################
 # Find all required libraries to build
@@ -269,15 +263,17 @@ endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
+include(GNUInstallDirs)
+
 install(TARGETS tt_metal
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
+    COMPONENT dev
 )
 install(TARGETS ttnn
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT tt_build_artifacts
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT dev
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
@@ -295,4 +291,3 @@ add_custom_target(clean-built
 
 # Debian Package
 include(cmake/packaging.cmake)
-

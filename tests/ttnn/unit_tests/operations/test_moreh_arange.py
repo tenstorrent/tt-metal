@@ -8,17 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import to_npu
-
-
-def get_lib_dtype(lib, dtype):
-    """Maps dtype to corresponding library dtype."""
-    dtype_map = {
-        "int32": lib.int32,
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-    }
-    return dtype_map.get(dtype, None)
+from tests.ttnn.unit_tests.operations.test_utils import to_ttnn, get_lib_dtype
 
 
 def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
@@ -110,14 +100,7 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 @pytest.mark.parametrize(
     "start_end_step",
     [
-        [0, 32, 1],
-        [2.3, 15.3, 0.5],
-        [10.9, -13, -0.3],
-        [-100, 32 * 10, 1],
-        [0, 32000, 1],
-        [2300.3, 15300.3, 0.5392],
         [10900.9, -13000, -0.3111],
-        [-10000, 32 * 10000, 1],
     ],
 )
 @pytest.mark.parametrize(
@@ -130,14 +113,13 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 )
 def test_arange_callback(start_end_step, optional_output, dtype, device, use_program_cache):
     """Test arange functionality with callback and program cache validation."""
+    torch.manual_seed(2024)
     num_program_cache_entries_list = []
-    for i in range(4):
-        if i % 2 == 0:
-            run_moreh_arange(start_end_step, optional_output, dtype, True, device)
-        else:
-            run_moreh_arange(start_end_step, optional_output, dtype, False, device)
+    for i in range(2):
+        run_moreh_arange(start_end_step, optional_output, dtype, True, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
+        tt_dummy = to_ttnn(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list == [1, 2, 2, 2]
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

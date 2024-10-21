@@ -32,19 +32,17 @@ void LayerNormPreAllGather::validate(const std::vector<Tensor> &input_tensors) c
     TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 }
 
-std::vector<tt::tt_metal::LegacyShape> LayerNormPreAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::SimpleShape> LayerNormPreAllGather::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
-    auto output_shape = input_tensor.get_legacy_shape();
-    auto padding = output_shape.padding();
+    auto output_shape = input_tensors.at(0).get_logical_shape();
     uint32_t num_tiles_w = 1;
     if (this->norm_type == LayerNormDistributedType::LAYERNORM) {
         num_tiles_w = 2;
     }
     output_shape[3] = num_tiles_w * TILE_WIDTH;
-    padding[3] = Padding::PadDimension{0, 31};
 
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return {output_shape};
 }
 
 std::vector<Tensor> LayerNormPreAllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {

@@ -592,6 +592,7 @@ def test_llama_demo(
     if is_ci_env and instruct_weights == False:
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
+    device.enable_async(True)
     return run_llama_demo(
         user_input=input_prompts,
         batch_size=1,

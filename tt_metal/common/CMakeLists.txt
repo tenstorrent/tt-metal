@@ -14,5 +14,4 @@ target_include_directories(common PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
 )

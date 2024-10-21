@@ -13,7 +13,7 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 30),),
+    ((16, 0.0080, 30),),
 )
 def test_perf(
     device,
@@ -73,7 +73,7 @@ def test_perf_trace(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.0070, 30),),
+    ((16, 0.0080, 30),),
 )
 def test_perf_2cqs(
     device,

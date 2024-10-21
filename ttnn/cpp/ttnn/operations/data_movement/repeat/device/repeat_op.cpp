@@ -32,8 +32,8 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         "Output of repeat must be interleaved.");
 }
 
-std::vector<tt::tt_metal::LegacyShape> RepeatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    tt::tt_metal::LegacyShape shape_out = input_tensors[0].get_legacy_shape();
+std::vector<ttnn::SimpleShape> RepeatDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+    ttnn::SimpleShape shape_out = input_tensors[0].get_logical_shape();
     shape_out[this->repeat_dim] *= this->num_repeats;
     return {shape_out};
 }

@@ -446,7 +446,6 @@ class resnet50:
         stride,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=None,
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
@@ -459,7 +458,6 @@ class resnet50:
         self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
-        self.mesh_mapper = mesh_mapper
         if is_grayskull():
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -630,7 +628,7 @@ class resnet50:
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
+        _, self.override_fold_mem_config, _, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
             device=device,
             input_tensor=conv_dummy_tensor,
             conv_config=self.conv1_config,

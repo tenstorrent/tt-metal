@@ -10,12 +10,12 @@ import tt_lib as ttl
 import ttnn
 from models.utility_functions import comp_allclose
 
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_cpu,
-    to_npu,
+    to_torch,
+    to_ttnn,
     TILE_HEIGHT,
     TILE_WIDTH,
     check_dim,
@@ -38,8 +38,8 @@ def get_tt_tensors(torch_input, output_shape, device):
     torch_input = torch_input.bfloat16()
     torch_output = torch.empty(output_shape, dtype=torch.bfloat16)
 
-    tt_input = to_npu(torch_input, device)
-    tt_output = to_npu(torch_output, device)
+    tt_input = to_ttnn(torch_input, device=device)
+    tt_output = to_ttnn(torch_output, device=device)
     return tt_input, tt_output
 
 
@@ -59,8 +59,8 @@ def get_tt_backward_tensors(torch_output_grad, input_grad_shape, device):
 
     torch_input_grad = torch.empty(input_grad_shape, dtype=cpu_dtype)
 
-    tt_input_grad = to_npu(torch_input_grad, device)
-    tt_output_grad = to_npu(torch_output_grad, device)
+    tt_input_grad = to_ttnn(torch_input_grad, device=device)
+    tt_output_grad = to_ttnn(torch_output_grad, device=device)
 
     return tt_output_grad, tt_input_grad
 
@@ -82,7 +82,7 @@ def run_moreh_mean(input_shape_dim, device, keepdim=False, compute_kernel_option
     ttnn.operations.moreh.mean(
         tt_input, dim=dim, keepdim=keepdim, output=tt_output, compute_kernel_config=compute_kernel_config
     )
-    tt_output_cpu = to_cpu(tt_output, torch_output.shape)
+    tt_output_cpu = to_torch(tt_output, shape=torch_output.shape)
 
     # test for equivalance
     rtol = atol = 0.1
@@ -130,7 +130,7 @@ def run_moreh_mean_backward(input_shape_dim, device, keepdim=False, compute_kern
             compute_kernel_config=compute_kernel_config,
         )
 
-    tt_input_grad_cpu = to_cpu(tt_input_grad, torch_input.grad.shape)
+    tt_input_grad_cpu = to_torch(tt_input_grad, shape=torch_input.grad.shape)
 
     # test for equivalance
     rtol = atol = 0.1
@@ -202,17 +202,16 @@ def test_moreh_mean_compute_kernel_options(input_shape_dim, compute_kernel_optio
     ],
 )
 def test_moreh_mean_callback(input_shape_dim, device, use_program_cache):
-    torch.manual_seed(2023)
-
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
@@ -275,17 +274,16 @@ def test_moreh_mean_backward_compute_kernel_options(input_shape_dim, compute_ker
     ],
 )
 def test_moreh_mean_backward_callback(input_shape_dim, device, use_program_cache):
-    torch.manual_seed(2023)
-
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_mean_backward(input_shape_dim, device, keepdim=True)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_npu(torch_dummy, device)
-        if i == 0:
-            num_program_cache_entries = device.num_program_cache_entries()
-            assert num_program_cache_entries > 0
-        else:
-            assert device.num_program_cache_entries() == num_program_cache_entries
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
