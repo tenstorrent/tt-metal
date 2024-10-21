@@ -82,7 +82,7 @@ FORCE_INLINE void setup_remote_sender_cb_interface() {
 
 }
 
-FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size) {
+FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size, uint32_t* remote_noc_x, uint32_t* remote_noc_y, uint8_t noc = noc_index) {
     uint32_t num_pages = remote_cb_interface.fifo_size / page_size;
     uint32_t cb_size_page_aligned = num_pages * page_size;
 
@@ -93,8 +93,22 @@ FORCE_INLINE void setup_remote_cb_page_size(uint32_t page_size) {
     uint32_t curr_fifo_wr_ptr = remote_cb_interface.fifo_wr_ptr;
     bool fifo_wr_ptr_exceed_fifo_limit = curr_fifo_wr_ptr > remote_cb_interface.fifo_limit_page_aligned;
     uint32_t num_pages_till_fifo_limit = (remote_cb_interface.fifo_limit_page_aligned - curr_fifo_wr_ptr) / page_size;
-    remote_cb_interface.fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ?
-        remote_cb_interface.fifo_start_addr : remote_cb_interface.fifo_limit_page_aligned - num_pages_till_fifo_limit * page_size;
+
+    if (fifo_wr_ptr_exceed_fifo_limit) {
+        remote_cb_interface.fifo_wr_ptr = remote_cb_interface.fifo_start_addr;
+    } else {
+        uint32_t next_fifo_wr_ptr = remote_cb_interface.fifo_limit_page_aligned - num_pages_till_fifo_limit * page_size;
+        uint32_t pages_sent = (next_fifo_wr_ptr - remote_cb_interface.fifo_wr_ptr) / remote_cb_interface.aligned_page_size;
+        remote_cb_interface.fifo_wr_ptr = next_fifo_wr_ptr;
+
+        // increment the aligned pages sent because we skipped to next aligned page location
+        for (uint32_t i=0; i < remote_cb_interface.num_receivers; ++i) {
+            uint32_t remote_noc_xy = uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_x[i]), DYNAMIC_NOC_Y(noc, remote_noc_y[i])));
+            *remote_cb_interface.pages_sent[i] += pages_sent;
+            uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)remote_cb_interface.pages_sent[i]);
+            noc_semaphore_inc(remote_ack_ptr_addr, pages_sent, noc);
+        }
+    }
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t num_pages) {
@@ -298,7 +312,7 @@ void kernel_main() {
         uint32_t curr_num_tile_rows = num_tile_rows[l];
         uint32_t curr_receiver_block_num_tiles = curr_block_num_tiles / num_receivers;
 
-        setup_remote_cb_page_size(curr_page_size);
+        setup_remote_cb_page_size(curr_page_size, noc_x, noc_y, noc);
 
         for (uint32_t block = 0; block < curr_num_blocks; ++block) {
 
