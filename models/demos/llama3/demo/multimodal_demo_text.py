@@ -8,19 +8,11 @@ from loguru import logger
 from PIL import Image as PIL_Image
 from termcolor import cprint
 
-import importlib
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.generation as llama_reference_generation
 
-llama_reference_generation = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.generation"
-)
+from models.demos.llama3.reference.llama_models.models.llama3.api.datatypes import ImageMedia
 
-# Must import from reference for formatter to understand type of ImageMedia
-datatypes = importlib.import_module("models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.api.datatypes")
-ImageMedia = datatypes.ImageMedia
-
-# THIS_DIR = Path(__file__).parent.resolve()
-# TODO: Generalize not to cglagovich home :)
-THIS_DIR = Path("/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/models/scripts/")
+THIS_DIR = Path(__file__).parent.parent.resolve() / "reference/llama_models/models/scripts/"
 
 import torch
 import pytest

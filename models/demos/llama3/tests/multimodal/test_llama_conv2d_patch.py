@@ -29,44 +29,7 @@ from models.demos.llama3.tt.multimodal.llama_conv2d_patch import (
 )
 
 from models.demos.llama3.tt.model_config import TtModelArgs
-
-import importlib
-
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-
-
-# ##### Torch op #####
-# class Conv2dPatch(torch.nn.Module):
-#     """Conv2D Patching layer with model parallelism.
-#     Column parallel over unfolded input.
-#     Arguments:
-#         in_channels: Input channels.
-#         out_channels: Output channels.
-#         kernel_size: Size of convolution kernel.
-#         stride (default 1): Stride for convolution.
-#         bias (default False): Use bias in Conv2d.
-#     Input: (bsz, in_channels, width, height)
-#     Output: (bsz, num_tokens, out_channels)
-#     """
-
-#     def __init__(self, in_channels, out_channels, kernel_size, stride, bias) -> None:
-#         super().__init__()
-#         if isinstance(kernel_size, int):
-#             kernel_size = (kernel_size, kernel_size)
-#         self._unfold = torch.nn.Unfold(kernel_size=kernel_size, stride=stride)
-#         self._linear = torch.nn.Linear(
-#             in_channels * kernel_size[0] * kernel_size[1],
-#             out_channels,
-#             bias=bias,
-#         )
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         x = self._unfold(x)
-#         x = x.permute(0, 2, 1)
-#         x = F.linear(x, self._linear.weight)
-#         return x
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

@@ -5,13 +5,9 @@ import torch
 import pytest
 from loguru import logger
 import os
-import time
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )

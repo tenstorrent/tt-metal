@@ -6,11 +6,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
+import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
@@ -62,6 +59,7 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
 
     # Create rand inputs of the right shape
     batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, 448)
+    chunk_seq_len = (patch_size // model_args.vision_patch_size) ** 2 + 1  # tokens per chunk + 1 class token
     images = torch.randn(batch, num_media, num_chunks, n_channel, patch_size, patch_size)
     ars = torch.tensor([2, 2]).reshape(batch, num_media, 2)
 
@@ -69,7 +67,7 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
         reference_output = reference_model(images, ars)
         tt_out = tt_model(images, ars)
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        tt_output_torch = tt_output_torch[0, :, :, :].view(reference_output.shape)
+        tt_output_torch = tt_output_torch[0, :, :chunk_seq_len, :].view(reference_output.shape)
 
         logger.info(f"Reference output shape: {reference_output.shape}")
         logger.info(f"TT output shape: {tt_output_torch.shape}")
