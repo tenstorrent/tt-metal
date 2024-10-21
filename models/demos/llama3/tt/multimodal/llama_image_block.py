@@ -10,9 +10,9 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.llama_layernorm import TtLayerNorm
-from models.demos.llama3.tt.llama_image_attention import TtLlamaImageAttention
-from models.demos.llama3.tt.llama_image_mlp import TtLlamaImageFeedForward
+from models.demos.llama3.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.demos.llama3.tt.multimodal.llama_image_attention import TtLlamaImageAttention
+from models.demos.llama3.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
 import os
 
 
