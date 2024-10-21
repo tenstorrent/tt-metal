@@ -480,9 +480,6 @@ using CompletionReaderQueue = LockFreeQueue<CompletionReaderVariant>;
 struct AllocBufferMetadata {
     Buffer* buffer;
     std::reference_wrapper<Allocator> allocator;
-    BufferType buffer_type;
-    uint32_t device_address;
-    bool bottom_up;
 };
 
 struct RuntimeArgsMetadata {
@@ -696,9 +693,8 @@ class CommandQueue {
 
 // Primitives used to place host only operations on the SW Command Queue.
 // These are used in functions exposed through tt_metal.hpp or host_api.hpp
-void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking);
-void EnqueueDeallocateBuffer(
-    CommandQueue& cq, Allocator& allocator, uint32_t device_address, BufferType buffer_type, bool blocking);
+void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool blocking);
+void EnqueueDeallocateBuffer(CommandQueue& cq, Allocator& allocator, Buffer* buffer, bool blocking);
 void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking);
 void EnqueueSetRuntimeArgs(
     CommandQueue& cq,

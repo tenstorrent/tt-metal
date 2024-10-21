@@ -853,13 +853,13 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-void AllocateBuffer(Buffer *buffer, bool bottom_up) {
-    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
-        GraphTracker::instance().track_allocate(buffer, bottom_up);
+void AllocateBuffer(Buffer *buffer) {
+    if (GraphTracker::instance().hook_allocate(buffer)) {
+        GraphTracker::instance().track_allocate(buffer);
         return;
     }
-    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
-    GraphTracker::instance().track_allocate(buffer, bottom_up);
+    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, false);
+    GraphTracker::instance().track_allocate(buffer);
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -867,12 +867,7 @@ void DeallocateBuffer(Buffer *buffer) {
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
     }
-    EnqueueDeallocateBuffer(
-        buffer->device()->command_queue(),
-        *(buffer->device()->allocator_),
-        buffer->address(),
-        buffer->buffer_type(),
-        false);
+    EnqueueDeallocateBuffer(buffer->device()->command_queue(), *(buffer->device()->allocator_), buffer, false);
 }
 
 }  // namespace detail

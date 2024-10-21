@@ -2788,30 +2788,18 @@ void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
     uint32_t allocated_addr;
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
-            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            alloc_md.bottom_up,
-            buffer->num_cores());
+            *(buffer->device()->allocator_), buffer->num_dev_pages() * buffer->page_size(), buffer);
     } else {
-        allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
-            buffer->size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            alloc_md.bottom_up,
-            std::nullopt);
+        allocated_addr = allocator::allocate_buffer(*(buffer->device()->allocator_), buffer->size(), buffer);
     }
     TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
     buffer->set_address(static_cast<DeviceAddr>(allocated_addr));
 }
 
-void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {
+void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool blocking) {
     auto alloc_md = AllocBufferMetadata{
         .buffer = buffer,
         .allocator = *(buffer->device()->allocator_),
-        .bottom_up = bottom_up,
     };
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::ALLOCATE_BUFFER,
@@ -2821,16 +2809,14 @@ void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, boo
 }
 
 void EnqueueDeallocateBufferImpl(AllocBufferMetadata alloc_md) {
-    allocator::deallocate_buffer(alloc_md.allocator, alloc_md.device_address, alloc_md.buffer_type);
+    allocator::deallocate_buffer(alloc_md.allocator, alloc_md.buffer);
 }
 
-void EnqueueDeallocateBuffer(
-    CommandQueue& cq, Allocator& allocator, uint32_t device_address, BufferType buffer_type, bool blocking) {
+void EnqueueDeallocateBuffer(CommandQueue& cq, Allocator& allocator, Buffer* buffer, bool blocking) {
     // Need to explictly pass in relevant buffer attributes here, since the Buffer* ptr can be deallocated a this point
     auto alloc_md = AllocBufferMetadata{
+        .buffer = buffer,
         .allocator = allocator,
-        .buffer_type = buffer_type,
-        .device_address = device_address,
     };
     cq.run_command(CommandInterface{
         .type = EnqueueCommandType::DEALLOCATE_BUFFER,
