@@ -178,6 +178,10 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
                     val(cmd->debug.stride));
                 break;
             case CQ_DISPATCH_CMD_DELAY: cq_file << fmt::format(" (delay={})", val(cmd->delay.delay)); break;
+            case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
+                cq_file << fmt::format(
+                    " (num_worker_sems={})", val(cmd->set_num_worker_sems.num_worker_sems));
+                break;
             // These commands don't have any additional data to dump.
             case CQ_DISPATCH_CMD_ILLEGAL: break;
             case CQ_DISPATCH_CMD_GO: break;
@@ -185,7 +189,6 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd *cmd, uint32_t cmd_addr, std::ofstream 
             case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
             case CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL: break;
-            case CQ_DISPATCH_SET_UNICAST_ONLY_CORES: break;
             case CQ_DISPATCH_CMD_TERMINATE: break;
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;

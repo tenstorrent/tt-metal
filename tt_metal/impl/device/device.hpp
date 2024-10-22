@@ -63,6 +63,9 @@ inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device {
+   private:
+    static constexpr uint32_t MAX_NUM_SUB_DEVICES = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
+    static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
    public:
     // friend void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
@@ -137,9 +140,7 @@ class Device {
 
     bool is_inactive_ethernet_core(CoreCoord logical_core) const;
 
-    uint32_t num_eth_worker_cores() const;
-
-    uint32_t num_worker_cores() const;
+    uint32_t num_worker_cores(HalProgrammableCoreType core_type, uint32_t sub_device_id) const;
 
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const {
         return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
@@ -156,6 +157,8 @@ class Device {
     void setup_tunnel_for_remote_devices();
 
     void update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants);
+
+    uint32_t num_sub_devices() const;
 
     uint32_t num_banks(const BufferType &buffer_type) const;
     uint32_t bank_size(const BufferType &buffer_type) const;
@@ -199,6 +202,8 @@ class Device {
     const std::unordered_set<Buffer *> &get_allocated_buffers() const;
 
     void deallocate_buffers();
+
+    std::optional<DeviceAddr> lowest_occupied_l1_address(uint32_t bank_id, tt::stl::Span<const uint32_t> sub_device_ids) const;
 
     // machine epsilon
     float sfpu_eps() const;
@@ -301,14 +306,13 @@ class Device {
     uint32_t worker_thread_core;
     uint32_t completion_queue_reader_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
-    LaunchMessageRingBufferState worker_launch_message_buffer_state;
+    std::array<LaunchMessageRingBufferState, Device::MAX_NUM_SUB_DEVICES> worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs;
     bool using_fast_dispatch;
     program_cache::detail::ProgramCache program_cache;
-    uint32_t num_worker_cores_;
-    uint32_t num_eth_worker_cores_;
+
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() {
@@ -329,8 +333,8 @@ class Device {
         return program_cache.num_entries();
     }
 
-   uint32_t trace_buffers_size = 0;
-   void update_dispatch_cores_for_multi_cq_eth_dispatch();
+    uint32_t trace_buffers_size = 0;
+    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
     HalProgrammableCoreType get_programmable_core_type(CoreCoord phys_core) const;
     template <typename T = DeviceAddr>
@@ -345,11 +349,29 @@ class Device {
     bool distributed_dispatcher() const;
     size_t get_device_kernel_defines_hash();
 
+    const vector_memcpy_aligned<uint32_t>& noc_mcast_data(uint32_t sub_device_id) const;
+    const vector_memcpy_aligned<uint32_t>& noc_unicast_data(uint32_t sub_device_id) const;
+    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data(uint32_t sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
+    uint32_t num_noc_mcast_txns(uint32_t sub_device_id) const;
+    uint32_t num_noc_unicast_txns(uint32_t sub_device_id) const;
+    uint32_t num_noc_mcast_unicast_txns(uint32_t sub_device_id, bool mcast_data=true, bool unicast_data=true) const;
+
    private:
+    void reset_num_sub_devices(uint32_t num_sub_devices);
+    NOC dispatch_go_signal_noc() const;
+
     void MarkAllocationsUnsafe();
     void MarkAllocationsSafe();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
     std::map<std::string, std::string> device_kernel_defines_;
+
+    // Data structures queried when no SubDeviceManager is active
+    // Otherwise this data comes from the SubDeviceManager
+    // TODO: Encapsulate the default case in a SubDeviceManager as well?
+    std::array<uint32_t, NumHalProgrammableCoreTypes> num_worker_cores_{};
+    vector_memcpy_aligned<uint32_t> noc_mcast_data_;
+    vector_memcpy_aligned<uint32_t> noc_unicast_data_;
+    vector_memcpy_aligned<uint32_t> noc_mcast_unicast_data_;
 };
 
 }  // namespace v0
