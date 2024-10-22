@@ -244,7 +244,7 @@ class TtMixtralAttention(LightweightModule):
             q_heads_1B4D,
             keys_1BPD,
             values_1BPD,
-            start_pos_ids,
+            cur_pos=start_pos_ids,
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGCFG"],
             compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
