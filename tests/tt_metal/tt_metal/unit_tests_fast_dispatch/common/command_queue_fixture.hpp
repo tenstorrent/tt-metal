@@ -166,9 +166,11 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
      static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
      static const uint32_t MIN_NUM_SEMS = 0;
      static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
+     static const uint32_t SEM_VAL = 1;
      static const uint32_t MIN_NUM_CBS = 0;
      static const uint32_t MAX_NUM_CBS = NUM_CIRCULAR_BUFFERS;
-     static const uint32_t SEM_VAL = 1;
+     static const uint32_t CB_TOTAL_SIZE = 1024;
+     static const uint32_t CB_PAGE_SIZE = 16;
      static const uint32_t NUM_PROGRAMS = 75;
 
      Device *device_;
@@ -255,8 +257,8 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          const uint32_t num_cbs = this->generate_random_num(min, max);
          vector<uint32_t> cb_indices;
          for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
-            CircularBufferConfig config(1024, {{cb_idx, tt::DataFormat::Float16_b}});
-            config.set_page_size(cb_idx, 16);
+            CircularBufferConfig config(CB_TOTAL_SIZE, {{cb_idx, tt::DataFormat::Float16_b}});
+            config.set_page_size(cb_idx, CB_PAGE_SIZE);
             CreateCircularBuffer(program, cores, config);
             cb_indices.push_back(cb_idx);
          }
@@ -274,8 +276,13 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              max >= num_sems + num_cbs,
              "Max number of runtime args to generate must be >= number of semaphores + number of circular buffers "
              "created");
+         TT_FATAL(
+             min >= num_sems + num_cbs,
+             "Min number of runtime args to generate must be >= number of semaphores + number of circular buffers "
+             "created");
          const uint32_t max_num_unique_rt_args = max - num_sems - num_cbs;
-         const uint32_t num_unique_rt_args = this->generate_random_num(min, max_num_unique_rt_args);
+         const uint32_t min_num_unique_rt_args = max - num_sems - num_cbs;
+         const uint32_t num_unique_rt_args = this->generate_random_num(min_num_unique_rt_args, max_num_unique_rt_args);
 
          const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
          const uint32_t num_common_rt_args = this->generate_random_num(0, max_num_common_rt_args);
