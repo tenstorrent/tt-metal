@@ -7,13 +7,11 @@
 #include "llrt/hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
-#if defined (ARCH_GRAYSKULL)
-
 #include "hw/inc/grayskull/dev_mem_map.h"
-#include "hw/inc/grayskull/eth_l1_address_map.h" // TODO remove when commonruntimeaddressmap is gone
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "hw/inc/dev_msgs.h"
+#include "hw/inc/grayskull/eth_l1_address_map.h"
 
+#ifdef ARCH_GRAYSKULL
+#include "hw/inc/dev_msgs.h" // This file is not common, it depends on ARCH_NAME include paths
 #endif
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_MAILBOX_BASE)->x))
@@ -23,12 +21,19 @@
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE = ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
+// Kernel config buffer is WIP
+// Size is presently based on the old sizes of the RTAs + CB config + Sems
+// plus some extra space freed up in the mem map
+constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = MEM_MAP_END;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128 + 512;
+static_assert(L1_KERNEL_CONFIG_BASE % L1_ALIGNMENT == 0);
+
 namespace tt {
 
 namespace tt_metal {
 
 void Hal::initialize_gs() {
-#if defined (ARCH_GRAYSKULL)
+#ifdef ARCH_GRAYSKULL
 
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
 
@@ -47,6 +52,7 @@ void Hal::initialize_gs() {
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::CORE_INFO)] = GET_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = GET_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
+    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::MEMORY_MAP_END)] = MEM_MAP_END;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::COUNT));
@@ -59,6 +65,7 @@ void Hal::initialize_gs() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::UNRESERVED)] = MEM_L1_SIZE - mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::UNRESERVED)];
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
+    mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::MEMORY_MAP_END)] = sizeof(uint32_t);
 
     this->core_info_.push_back({HalProgrammableCoreType::TENSIX, CoreType::WORKER, num_proc_per_tensix_core, mem_map_bases, mem_map_sizes, true});
 
