@@ -22,7 +22,7 @@ using namespace tt::test_utils;
 namespace unit_tests_common::matmul::test_matmul_large_block {
 
 void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_env_arch_name());
+    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }
@@ -184,7 +184,7 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
     auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
     auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
-    std::vector<uint32_t> mm_reader_rt_args{
+    const std::array mm_reader_rt_args{
         src0_dram_buffer->address(),
         (std::uint32_t)dram_src0_noc_xy.x,
         (std::uint32_t)dram_src0_noc_xy.y,

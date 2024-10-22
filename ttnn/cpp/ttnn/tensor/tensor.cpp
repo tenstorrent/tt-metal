@@ -181,7 +181,7 @@ Tensor::Tensor(
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).buffers =
                 std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
             std::get<MultiDeviceHostStorage>(this->tensor_attributes->storage).shapes =
-                std::vector<tt::tt_metal::LegacyShape>(num_buffers, this->tensor_attributes->shape.value);
+                std::vector<ttnn::Shape>(num_buffers, this->tensor_attributes->shape);
         }
         this->tensor_attributes->num_shards_to_be_populated = num_buffers;
     }
@@ -580,11 +580,11 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(int N, int C, int H, int W) const {
-    return tensor_ops::tensor_reshape(*this, N, C, H, W);
+Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
-Tensor Tensor::reshape(const tt::tt_metal::LegacyShape& new_shape) const {
+Tensor Tensor::reshape(const ttnn::Shape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
 }
 

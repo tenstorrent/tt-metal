@@ -276,9 +276,7 @@ int main(int argc, char **argv) {
                                           worker_g,
                                           tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .defines = defines});
         if (page_size_as_runtime_arg_g) {
-            vector<uint32_t> args;
-            args.push_back(page_size_g);
-            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, args);
+            tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
         }
 
         std::shared_ptr<Event> sync_event = std::make_shared<Event>();

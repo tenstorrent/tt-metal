@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -18,8 +19,9 @@
 #include "jit_build/kernel_args.hpp"
 #include "tools/profiler/common.hpp"
 #include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;
 
@@ -53,7 +55,6 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
 
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
-    this->objcopy_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy ";
 
     // Flags
     string common_flags;
@@ -350,8 +351,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
+JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -382,6 +383,7 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisc.cc");
+                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-crt0.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/erisck.cc");
             }
@@ -401,7 +403,31 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
                             env_.root_ + linker_str;
             break;
         }
-        case 1:
+        default:
+            TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+    }
+    this->process_defines_at_compile = true;
+
+    finish_init();
+}
+
+JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid idle ethernet processor");
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
+
+    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/llk_io ";
+
+    this->defines_ = env_.defines_;
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
+        this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
+    }
+
+    switch (this->core_id_) {
+        case 0: {
             this->target_name_ = "idle_erisc";
             this->cflags_ =
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -427,6 +453,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
             }
 
             break;
+        }
+        default:
+            TT_THROW("Invalid processor ID {} for Idle Ethernet core.", this->core_id_);
     }
     this->process_defines_at_compile = true;
 
@@ -520,7 +549,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
     if (!this->is_fw_) {
         string weakened_elf_name =
             env_.out_firmware_root_ + this->target_name_ + "/" + this->target_name_ + "_weakened.elf";
-        cmd += " -Xlinker \"--just-symbols=" + weakened_elf_name + "\" ";
+        cmd += "-Wl,--just-symbols=" + weakened_elf_name + " ";
     }
 
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
@@ -536,16 +565,15 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
     ZoneScoped;
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.objcopy_;
-    cmd += " --wildcard --weaken-symbol \"*\" --weaken-symbol \"!__fw_export_*\" " + this->target_name_ + ".elf " +
-           this->target_name_ + "_weakened.elf";
 
-    log_debug(tt::LogBuildKernels, "    objcopy cmd: {}", cmd);
-    if (!tt::utils::run_command(cmd, log_file, false)) {
-        build_failure(this->target_name_, "objcopy weaken", cmd, log_file);
-    }
+    std::string pathname_in = out_dir + target_name_ + ".elf";
+    std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
+
+    ll_api::ElfFile elf;
+    elf.ReadImage(pathname_in);
+    static std::string_view const strong_names[] = {"__fw_export_*"};
+    elf.WeakenDataSymbols(strong_names);
+    elf.WriteImage(pathname_out);
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {

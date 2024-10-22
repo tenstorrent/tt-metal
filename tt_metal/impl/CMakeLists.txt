@@ -1,11 +1,13 @@
 
 set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/device/device_handle.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/kernels/runtime_args_data.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/allocator/basic_allocator.cpp

@@ -545,13 +545,14 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
     for (uint32_t programmable_core_type_index = 0;
          programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
+        uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
         for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
             if (kg.total_rta_size != 0) {
                 // Reserve 2x for unique rtas as we pontentially split the cmds due to not fitting in one prefetch cmd
                 command_count += 2;
             }
         }
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             uint32_t common_size = program.get_program_config(programmable_core_type_index).crta_sizes[dispatch_class];
             if (common_size != 0) {
                 command_count++;
@@ -568,6 +569,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
             continue;
         }
         CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
 
         for (auto& kg : program.get_kernel_groups(index)) {
             if (kg.total_rta_size != 0) {
@@ -578,7 +580,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
 
                             unique_rt_args_data.resize(unique_rt_args_data.size() + 1);
                             unique_rt_data_and_sizes.resize(unique_rt_data_and_sizes.size() + 1);
-                            for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                                 auto& optional_id = kg.kernel_ids[dispatch_class];
                                 if (optional_id) {
                                     auto kernel = detail::GetKernel(program, optional_id.value());
@@ -626,7 +628,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
             }
         }
 
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
             for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
                 auto kernel = detail::GetKernel(program, kernel_id);
@@ -989,11 +991,6 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             pcie_alignment);
     }
 
-    // Wait Cmd
-    if (program.program_transfer_info.num_active_cores > 0) {
-        cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
     std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
     std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
     std::vector<CQDispatchWritePackedMulticastSubCmd> multicast_go_signal_sub_cmds;
@@ -1069,9 +1066,12 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
             this->packed_write_max_unicast_sub_cmds,
             unicast_go_signals_payload);
     }
-    // If dispatch_s is enabled, have dispatch_d send a semaphore update to dispatch_s
-    // Either dispatch_d or dispatch_s will send the go signal
-    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE + this->device->dispatch_s_enabled() * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+    // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier on dispatch_d if program is active)
+    // if not,  check if the program is active on workers. If active, have dispatch_d issue a write barrier
+    cmd_sequence_sizeB += (this->device->dispatch_s_enabled() || program.program_transfer_info.num_active_cores > 0) * CQ_PREFETCH_CMD_BARE_MIN_SIZE;
+
+    // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
+    cmd_sequence_sizeB += CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 
     program_command_sequence.device_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
 
@@ -1248,15 +1248,16 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
         }
     }
 
-    // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
-    if (program.program_transfer_info.num_active_cores > 0) {
-        device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
-    }
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        // dispatch_d signals dispatch_s that its safe to send the go signal after a barrier
-        device_command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
+        device_command_sequence.add_notify_dispatch_s_go_signal_cmd(program.program_transfer_info.num_active_cores > 0);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
+    } else {
+        // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
+        if (program.program_transfer_info.num_active_cores > 0) {
+            device_command_sequence.add_dispatch_wait(true, this->dispatch_message_addr, 0, 0, false, false);
+        }
     }
     go_msg_t run_program_go_signal;
     run_program_go_signal.signal = RUN_MSG_GO;
@@ -1707,7 +1708,7 @@ void EnqueueTraceCommand::process() {
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (this->device->dispatch_s_enabled()) {
-        command_sequence.add_notify_dispatch_s_go_signal_cmd();
+        command_sequence.add_notify_dispatch_s_go_signal_cmd(false);
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
     }
     go_msg_t reset_launch_message_read_ptr_go_signal;
@@ -1829,7 +1830,7 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->worker_thread_core);
+    set_device_thread_affinity(this->completion_queue_thread, device->completion_queue_reader_core);
     this->expected_num_workers_completed = 0;
 }
 

@@ -32,7 +32,7 @@ class N300TestDevice {
         if (not slow_dispatch) {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
     const bool source_is_dram = std::stoi(argv[7]) == 1;
     const bool dest_is_dram = std::stoi(argv[8]) == 1;
     const uint32_t precomputed_source_addresses_buffer_size = std::stoi(argv[9]);
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices != 2) {

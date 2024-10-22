@@ -8,11 +8,14 @@
 
 #include "llrt/hal.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
+#include "hw/inc/blackhole/core_config.h"
 #include "hw/inc/blackhole/dev_mem_map.h"
 #include "hw/inc/blackhole/eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
+
+#include <magic_enum.hpp>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((uint64_t) & (((mailboxes_t *)MEM_IERISC_MAILBOX_BASE)->x))
 
@@ -22,8 +25,9 @@ namespace tt_metal {
 
 HalCoreInfoType create_idle_eth_mem_map() {
 
-    constexpr uint32_t num_proc_per_idle_eth_core = 1;
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
+
+    static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
 
@@ -33,8 +37,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::WATCHER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::DPRINT)] = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
-    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::KERNEL_CONFIG)] = IDLE_ERISC_L1_KERNEL_CONFIG_BASE;
-    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::UNRESERVED)] = ((L1_KERNEL_CONFIG_BASE + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1; // TODO: this is wrong, need idle eth specific value
+    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_MAP_END;
+    mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::UNRESERVED)] = ((MEM_IERISC_MAP_END + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::CORE_INFO)] = GET_IERISC_MAILBOX_ADDRESS_HOST(core_info);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = GET_IERISC_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
@@ -51,7 +55,13 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
+    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
+    std::vector<uint8_t> processor_types{0};
+    for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+        processor_classes[processor_class_idx] = processor_types;
+    }
+
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal

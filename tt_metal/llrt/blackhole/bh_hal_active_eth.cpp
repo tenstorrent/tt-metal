@@ -8,11 +8,14 @@
 
 #include "llrt/hal.hpp"
 #include "llrt/blackhole/bh_hal.hpp"
+#include "hw/inc/blackhole/core_config.h"
 #include "hw/inc/blackhole/dev_mem_map.h"
 #include "hw/inc/blackhole/eth_l1_address_map.h"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
+
+#include <magic_enum.hpp>
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t) & (((mailboxes_t *)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
@@ -22,8 +25,6 @@ namespace tt {
 namespace tt_metal {
 
 HalCoreInfoType create_active_eth_mem_map() {
-
-    constexpr uint32_t num_proc_per_idle_eth_core = 1;
 
     std::vector<DeviceAddr> mem_map_bases;
 
@@ -51,7 +52,13 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, num_proc_per_idle_eth_core, mem_map_bases, mem_map_sizes, false};
+    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
+    std::vector<uint8_t> processor_types{0};
+    for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+        processor_classes[processor_class_idx] = processor_types;
+    }
+
+    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal

@@ -6,7 +6,7 @@
 
 #include <climits>
 
-#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC)
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
 #include "risc_common.h"
 #include "dataflow_api.h"
 #else
@@ -50,15 +50,15 @@ namespace kernel_profiler{
 
 #if defined(COMPILE_FOR_BRISC)
     constexpr uint32_t myRiscID = 0;
-#elif defined(COMPILE_FOR_ERISC)
+#elif defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC)
     constexpr uint32_t myRiscID = 0;
 #elif defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t myRiscID = 1;
-#elif COMPILE_FOR_TRISC == 0
+#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 0
     constexpr uint32_t myRiscID = 2;
-#elif COMPILE_FOR_TRISC == 1
+#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 1
     constexpr uint32_t myRiscID = 3;
-#elif COMPILE_FOR_TRISC == 2
+#elif defined(COMPILE_FOR_TRISC) && COMPILE_FOR_TRISC == 2
     constexpr uint32_t myRiscID = 4;
 #endif
 
@@ -83,7 +83,7 @@ namespace kernel_profiler{
             sums[i] = 0;
         }
 
-#if defined(COMPILE_FOR_ERISC) ||  defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC) ||  defined(COMPILE_FOR_BRISC)
         uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
         profiler_control_buffer[PROFILER_DONE] = 0;
 
@@ -183,7 +183,7 @@ namespace kernel_profiler{
     __attribute__((noinline)) void finish_profiler()
     {
         risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined (COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
         if (profiler_control_buffer[PROFILER_DONE] == 1){
             return;
         }

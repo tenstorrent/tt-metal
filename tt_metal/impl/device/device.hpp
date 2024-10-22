@@ -73,7 +73,8 @@ class Device {
         std::size_t trace_region_size,
         const std::vector<uint32_t> &l1_bank_remap = {},
         bool minimal = false,
-        uint32_t worker_core = 0);
+        uint32_t worker_core = 0,
+        uint32_t completion_queue_reader_core = 0);
 
     ~Device();
 
@@ -208,11 +209,11 @@ class Device {
 
     void generate_device_headers(const std::string &path) const;
     const JitBuildEnv& build_env() const { return this->build_env_; }
-    const string build_firmware_target_path(JitBuildProcessorType t, int i) const;
-    const string build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const;
-    const JitBuildState& build_firmware_state(JitBuildProcessorType t, int i) const;
-    const JitBuildState& build_kernel_state(JitBuildProcessorType t, int i) const;
-    const JitBuildStateSubset build_kernel_states(JitBuildProcessorType t) const;
+    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const;
+    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const;
+    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
+    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const;
+    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const;
     SystemMemoryManager& sysmem_manager() { return *sysmem_manager_; }
     HWCommandQueue& hw_command_queue(size_t cq_id = 0);
     CommandQueue& command_queue(size_t cq_id = 0);
@@ -234,7 +235,7 @@ class Device {
     void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
     void build_firmware();
-    void initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
+    void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
     void reset_cores();
     void initialize_and_launch_firmware();
     void init_command_queue_host();
@@ -248,7 +249,7 @@ class Device {
     void get_associated_dispatch_phys_cores(
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
         std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
-    std::pair<int, int> build_processor_type_to_index(JitBuildProcessorType t) const;
+    std::pair<int, int> build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const;
 
     // Puts device into reset
     bool close();
@@ -279,6 +280,7 @@ class Device {
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;
     JitBuildStateSet kernel_build_states_;
+    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
 
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;
@@ -291,6 +293,7 @@ class Device {
     // all tasks scheduled on this device
     WorkExecutor work_executor;
     uint32_t worker_thread_core;
+    uint32_t completion_queue_reader_core;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     LaunchMessageRingBufferState worker_launch_message_buffer_state;
     uint8_t num_hw_cqs_;

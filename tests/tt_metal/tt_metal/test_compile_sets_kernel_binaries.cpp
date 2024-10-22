@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
             ids.push_back(id);
         }
         tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreType::WORKER);
-        std::vector<Device*> devices = tt::DevicePool::instance().get_all_active_devices();
+        auto devices = tt::DevicePool::instance().get_all_active_devices();
         std::vector<Program> programs;
         std::set<uint32_t> build_keys;
         // kernel->binaries() returns 32B aligned binaries
@@ -180,6 +180,8 @@ int main(int argc, char **argv) {
 
             std::vector<std::thread> ths;
             ths.reserve(num_devices);
+            uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+            uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
                 auto& program = new_programs[i];
@@ -197,7 +199,8 @@ int main(int argc, char **argv) {
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                         std::string brisc_hex_path = device->build_kernel_target_path(
-                            JitBuildProcessorType::DATA_MOVEMENT,
+                            programmable_core_index,
+                            dm_class_idx,
                             0,
                             get_latest_kernel_binary_path(mask, riscv0_kernel));
                         ll_api::memory brisc_binary = llrt::get_risc_binary(brisc_hex_path, 0, llrt::PackSpans::PACK);
@@ -205,7 +208,8 @@ int main(int argc, char **argv) {
                             brisc_binary == brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
                         std::string ncrisc_hex_path = device->build_kernel_target_path(
-                            JitBuildProcessorType::DATA_MOVEMENT,
+                            programmable_core_index,
+                            dm_class_idx,
                             1,
                             get_latest_kernel_binary_path(mask, riscv1_kernel));
                         ll_api::memory ncrisc_binary = llrt::get_risc_binary(ncrisc_hex_path, 1, llrt::PackSpans::PACK);
@@ -215,7 +219,8 @@ int main(int argc, char **argv) {
                         for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                             std::string trisc_id_str = std::to_string(trisc_id);
                             std::string trisc_hex_path = device->build_kernel_target_path(
-                                JitBuildProcessorType::COMPUTE,
+                                programmable_core_index,
+                                compute_class_idx,
                                 trisc_id,
                                 get_latest_kernel_binary_path(mask, compute_kernel));
                             ll_api::memory trisc_binary = llrt::get_risc_binary(trisc_hex_path, 2, llrt::PackSpans::PACK);

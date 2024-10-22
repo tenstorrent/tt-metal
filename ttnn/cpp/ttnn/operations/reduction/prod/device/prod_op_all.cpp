@@ -27,9 +27,8 @@ void Prod_op::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> Prod_op::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+std::vector<ttnn::SimpleShape> Prod_op::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors.at(0).get_logical_shape()};
 }
 
 std::vector<Tensor> Prod_op::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

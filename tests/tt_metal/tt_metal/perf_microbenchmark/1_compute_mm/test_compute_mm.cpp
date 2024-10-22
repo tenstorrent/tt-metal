@@ -52,7 +52,7 @@ using namespace tt;
 //   cores for certain input shapes. In that case, only some cores are used with
 //   a warning message.
 //   - To measure performance in the slow dispatch mode, build tt_metal project
-//   with the profiler option using scripts/build_scripts/build_with_profiler_opt.sh first. This benchmark
+//   with the profiler option using build_metal.sh --enable-profiler first. This benchmark
 //   copied device profiler's internal code to get the "t0 to any riscfw end"
 //   cycles. If device profiler is changed, it also should be updated.
 //   Otherwise, it may get inappropriate cycle value.
@@ -290,7 +290,7 @@ int main(int argc, char** argv) {
 #if !defined(TRACY_ENABLE)
             log_error(
                 "In the slow dispatch mode, device profiler is used to measure the "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+                "profiler option using ./build_metal.sh --enable-profiler");
 
             TT_ASSERT(false);
 #endif
@@ -1212,7 +1212,7 @@ tt_metal::Program create_program(
             auto phy_core = device->worker_core_from_logical_core(core);
 
             // Write runtime args to device
-            std::vector<uint32_t> mm_in0_reader_args = {
+            std::array<uint32_t, 12> mm_in0_reader_args = {
                 (std::uint32_t)in0_addr,     // in0_buffer->address(), // in0_tensor_addr
                 (std::uint32_t)0,            // K * per_core_Mt * output_idx_y, //
                                              // in0_tensor_start_tile_id
@@ -1236,7 +1236,7 @@ tt_metal::Program create_program(
                 out_tensor_stride_h = last_block_w;
             }
 
-            std::vector<uint32_t> mm_in1_reader_writer_args = {
+            std::array<uint32_t, 31> mm_in1_reader_writer_args = {
                 (std::uint32_t)in1_addr,                   // in1_buffer->address(), // in1_tensor_addr
                 (std::uint32_t)0,                          // per_core_Nt * output_idx_x,
                                                            // //in1_tensor_start_tile_id
@@ -1270,50 +1270,50 @@ tt_metal::Program create_program(
             };
 
             if (core_idx_y == core_range.y - 1) {
-                mm_in0_reader_args.push_back(last_block_h);  // last_block_h
+                mm_in0_reader_args.back() = last_block_h;  // last_block_h
             } else {
-                mm_in0_reader_args.push_back(per_core_Mt);
+                mm_in0_reader_args.back() = per_core_Mt;
             }
 
             // padding args (WRITER)
             if (core_idx_x == core_range.x - 1) {
-                mm_in1_reader_writer_args.push_back(last_block_w);
+                mm_in1_reader_writer_args[23] = last_block_w;
             } else {
-                mm_in1_reader_writer_args.push_back(per_core_Nt);
+                mm_in1_reader_writer_args[23] = per_core_Nt;
             }
 
             if (core_idx_x == core_range.x - 1 && core_idx_y == core_range.y - 1) {
-                mm_in1_reader_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_reader_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_reader_writer_args.push_back(last_block_padded_block_tiles_h_skip);
-                mm_in1_reader_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                mm_in1_reader_writer_args.push_back(last_subblock_of_last_block_w);
-                mm_in1_reader_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
-                mm_in1_reader_writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                mm_in1_reader_writer_args[24] = last_block_num_nonzero_subblocks_h;
+                mm_in1_reader_writer_args[25] = last_subblock_of_last_block_h;
+                mm_in1_reader_writer_args[26] = last_block_padded_block_tiles_h_skip;
+                mm_in1_reader_writer_args[27] = last_block_num_nonzero_subblocks_w;
+                mm_in1_reader_writer_args[28] = last_subblock_of_last_block_w;
+                mm_in1_reader_writer_args[29] = last_block_padded_subblock_tiles_addr_skip;
+                mm_in1_reader_writer_args[30] = last_block_padded_block_tiles_w_skip;
             } else if (core_idx_y == core_range.y - 1) {
-                mm_in1_reader_writer_args.push_back(last_block_num_nonzero_subblocks_h);
-                mm_in1_reader_writer_args.push_back(last_subblock_of_last_block_h);
-                mm_in1_reader_writer_args.push_back(last_block_padded_block_tiles_h_skip);
-                mm_in1_reader_writer_args.push_back(per_core_Nt / out_subblock_w);
-                mm_in1_reader_writer_args.push_back(out_subblock_w);
-                mm_in1_reader_writer_args.push_back(0);
-                mm_in1_reader_writer_args.push_back(0);
+                mm_in1_reader_writer_args[24] = last_block_num_nonzero_subblocks_h;
+                mm_in1_reader_writer_args[25] = last_subblock_of_last_block_h;
+                mm_in1_reader_writer_args[26] = last_block_padded_block_tiles_h_skip;
+                mm_in1_reader_writer_args[27] = per_core_Nt / out_subblock_w;
+                mm_in1_reader_writer_args[28] = out_subblock_w;
+                mm_in1_reader_writer_args[29] = 0;
+                mm_in1_reader_writer_args[30] = 0;
             } else if (core_idx_x == core_range.x - 1) {
-                mm_in1_reader_writer_args.push_back(per_core_Mt / out_subblock_h);
-                mm_in1_reader_writer_args.push_back(out_subblock_h);
-                mm_in1_reader_writer_args.push_back(0);
-                mm_in1_reader_writer_args.push_back(last_block_num_nonzero_subblocks_w);
-                mm_in1_reader_writer_args.push_back(last_subblock_of_last_block_w);
-                mm_in1_reader_writer_args.push_back(last_block_padded_subblock_tiles_addr_skip);
-                mm_in1_reader_writer_args.push_back(last_block_padded_block_tiles_w_skip);
+                mm_in1_reader_writer_args[24] = per_core_Mt / out_subblock_h;
+                mm_in1_reader_writer_args[25] = out_subblock_h;
+                mm_in1_reader_writer_args[26] = 0;
+                mm_in1_reader_writer_args[27] = last_block_num_nonzero_subblocks_w;
+                mm_in1_reader_writer_args[28] = last_subblock_of_last_block_w;
+                mm_in1_reader_writer_args[29] = last_block_padded_subblock_tiles_addr_skip;
+                mm_in1_reader_writer_args[30] = last_block_padded_block_tiles_w_skip;
             } else {
-                mm_in1_reader_writer_args.push_back(per_core_Mt / out_subblock_h);
-                mm_in1_reader_writer_args.push_back(out_subblock_h);
-                mm_in1_reader_writer_args.push_back(0);
-                mm_in1_reader_writer_args.push_back(per_core_Nt / out_subblock_w);
-                mm_in1_reader_writer_args.push_back(out_subblock_w);
-                mm_in1_reader_writer_args.push_back(0);
-                mm_in1_reader_writer_args.push_back(0);
+                mm_in1_reader_writer_args[24] = per_core_Mt / out_subblock_h;
+                mm_in1_reader_writer_args[25] = out_subblock_h;
+                mm_in1_reader_writer_args[26] = 0;
+                mm_in1_reader_writer_args[27] = per_core_Nt / out_subblock_w;
+                mm_in1_reader_writer_args[28] = out_subblock_w;
+                mm_in1_reader_writer_args[29] = 0;
+                mm_in1_reader_writer_args[30] = 0;
             }
             tt_metal::SetRuntimeArgs(program, mm_in0_reader_kernel_id, core, mm_in0_reader_args);
             tt_metal::SetRuntimeArgs(program, mm_in1_reader_writer_kernel_id, core, mm_in1_reader_writer_args);

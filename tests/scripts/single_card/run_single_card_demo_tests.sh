@@ -7,8 +7,22 @@ run_common_func_tests() {
 
   # Falcon7B
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo[wormhole_b0-True-user_input0-1-default_mode_1024_stochastic]; fail+=$?
-  # llama3.1-8B
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/demo/demo.py --timeout 600; fail+=$?
+
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  # Llama3.2-1B
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  # Llama3.2-3B
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.2-11B  (#Skip: Weights too big for single-chip ci VM)
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  # Run all Llama3 tests for 8B, 1B, and 3B weights
+  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  done
+
   # Mistral7B
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo.py --timeout 420; fail+=$?
 
@@ -34,9 +48,6 @@ run_common_func_tests() {
 run_common_perf_tests(){
   # working on both n150 and n300
   fail=0
-
-  # llama3.1-8B
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/demo/demo_with_prefill.py --timeout 600; fail+=$?
 
   # Mistral7B
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo_with_prefill.py --timeout 420; fail+=$?
@@ -78,7 +89,7 @@ run_n300_perf_tests(){
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py; fail+=$?
 
-  # llama3.1-8B trace mode
+  # llama3.1-8B (single-chip) trace mode
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/llama31_8b/demo/demo_trace.py --timeout 600; fail+=$?
 
   if [[ $fail -ne 0 ]]; then

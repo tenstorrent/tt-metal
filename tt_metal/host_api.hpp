@@ -7,10 +7,10 @@
 #include <variant>
 #include <vector>
 
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/kernels/runtime_args_data.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/tt_stl/span.hpp"
 
 /** @file */
 
@@ -308,13 +308,13 @@ using RuntimeArgs = std::vector<std::variant<Buffer *, uint32_t>>;
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 void SetRuntimeArgs(
     const Program &program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
-    const std::vector<uint32_t> &runtime_args);
+    stl::Span<const uint32_t> runtime_args);
 
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
@@ -382,9 +382,9 @@ void SetRuntimeArgs(
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | const std::vector<uint32_t> &                          |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
-void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, const std::vector<uint32_t> &runtime_args);
+void SetCommonRuntimeArgs(const Program &program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
 
 /**
  * Get the runtime args for a kernel.

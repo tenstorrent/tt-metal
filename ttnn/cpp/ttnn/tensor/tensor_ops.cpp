@@ -348,27 +348,18 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
     return output;
 }
 
-Tensor tensor_reshape(const Tensor& input_tensor, int N, int C, int H, int W) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, N, C, H, W);
-    auto new_shape = infer_dims_for_reshape(N, C, H, W, input_tensor.volume());
-    auto output = input_tensor.reshape(new_shape);
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
-Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShape& new_shape) {
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
+    const auto& new_padded_shape = new_shape.padded_shape();
     TT_ASSERT(
-        input_tensor.volume() == tt::tt_metal::compute_volume(new_shape),
+        input_tensor.volume() == new_padded_shape.volume(),
         "{} != {}",
         input_tensor.volume(),
-        tt::tt_metal::compute_volume(new_shape));
+        new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
-            new_shape[-2] % constants::TILE_HEIGHT == 0 && new_shape[-1] % constants::TILE_WIDTH == 0 &&
+            new_padded_shape[-2] % constants::TILE_HEIGHT == 0 && new_padded_shape[-1] % constants::TILE_WIDTH == 0 &&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(
@@ -384,7 +375,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShap
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, tt::tt_metal::LegacyShape> new_shapes;
+                std::unordered_map<int, ttnn::Shape> new_shapes;
 
                 for (auto device_id : updated_storage.ordered_device_ids) {
                     new_shapes.insert({device_id, new_shape});
@@ -434,6 +425,10 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::LegacyShap
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
+}
+
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
+    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.as_vector()));
 }
 
 }

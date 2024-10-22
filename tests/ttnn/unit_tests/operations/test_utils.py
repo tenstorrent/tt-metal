@@ -42,47 +42,47 @@ def get_compute_kernel_options(compute_kernel_options):
     return compute_kernel_config
 
 
-def to_cpu(npu_tensor, shape, *, cpu_layout=ttnn.ROW_MAJOR_LAYOUT):
-    if npu_tensor is None:
+def to_torch(ttnn_tensor, *, shape=None):
+    """
+    Converts a ttnn tensor to a torch tensor. If ttnn tensor is None, returns None.
+    If shape specified, reshapes the resulting torch tensor to the given shape.
+    """
+    if ttnn_tensor is None:
         return None
-
-    shape = list(shape)
-
-    unpad_shape = copy.copy(shape)
-
-    if shape == []:
-        unpad_shape = [1, 1]
-
-    if len(shape) == 1:
-        unpad_shape = [1] + shape
-
-    cpu_tensor = npu_tensor.cpu().to(cpu_layout).unpad_from_tile(unpad_shape).to_torch().reshape(shape)
-
-    return cpu_tensor
+    torch_tensor = ttnn.to_torch(ttnn_tensor)
+    if shape is not None:
+        torch_tensor = torch_tensor.reshape(shape)
+    return torch_tensor
 
 
-def to_npu(
-    cpu_tensor,
-    device,
+def to_ttnn(
+    torch_tensor,
     *,
-    npu_layout=ttnn.TILE_LAYOUT,
-    npu_dtype=ttnn.bfloat16,
+    device=None,
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=None,
     shape=None,
 ):
-    if cpu_tensor is None:
+    """
+    Converts a torch tensor to a ttnn tensor, with optional arguments to control
+    the device, data type, memory layout, and memory configuration. The tensor can
+    also be reshaped if a shape is provided. If the torch tensor is a scalar (a tensor
+    with zero dimensions), it will be automatically reshaped to have a shape of [1, 1].
+    """
+    if torch_tensor is None:
         return None
-
     if shape is not None:
-        cpu_tensor = cpu_tensor.view(shape)
-
-    if len(cpu_tensor.shape) == 1:
-        cpu_tensor = cpu_tensor.reshape([1, len(cpu_tensor)])
-
-    if len(cpu_tensor.shape) == 0:
-        cpu_tensor = cpu_tensor.reshape([1, 1])
-
-    npu_tensor = ttnn.Tensor(cpu_tensor, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    return npu_tensor
+        torch_tensor = torch_tensor.reshape(shape)
+    if len(torch_tensor.shape) == 0:
+        torch_tensor = torch_tensor.reshape([1, 1])
+    return ttnn.from_torch(
+        torch_tensor,
+        device=device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=memory_config,
+    )
 
 
 # For keepdim in torch
@@ -155,3 +155,24 @@ def check_dim(input_shape, dim, keepdim):
             for i in dim:
                 if len(input_shape) - 2 <= i:
                     pytest.skip("`keepdim == false` don't support last 2-dim")
+
+
+def get_lib_dtype(lib, dtype):
+    """
+    Maps string-based data types to their corresponding library-specific dtypes.
+
+    Parameters:
+    lib: library module (e.g., torch, ttnn)
+        The library for which the dtype mapping is required.
+    dtype: str
+        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32').
+
+    Returns:
+    Corresponding library-specific dtype or None if not found.
+    """
+    dtype_map = {
+        "bfloat16": lib.bfloat16,
+        "float32": lib.float32,
+        "int32": lib.int32,
+    }
+    return dtype_map.get(dtype, None)
