@@ -9,7 +9,7 @@
 #include <span>
 #include <string_view>
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
 namespace tt::tt_metal {

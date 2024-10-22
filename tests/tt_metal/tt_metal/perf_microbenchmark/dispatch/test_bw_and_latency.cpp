@@ -8,7 +8,7 @@
 #include <random>
 #include <string>
 
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

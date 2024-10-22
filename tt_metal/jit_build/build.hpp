@@ -10,7 +10,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "common/executor.hpp"
 #include "common/utils.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "jit_build/data_format.hpp"
 #include "jit_build/settings.hpp"
 #include "hostdevcommon/common_values.hpp"
