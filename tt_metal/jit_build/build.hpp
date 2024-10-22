@@ -28,12 +28,6 @@ using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_
 
 class JitBuildSettings;
 
-enum class JitBuildProcessorType {
-    DATA_MOVEMENT,
-    COMPUTE,
-    ETHERNET
-};
-
 struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
@@ -47,7 +41,8 @@ class JitBuildEnv {
     friend class JitBuildState;
     friend class JitBuildDataMovement;
     friend class JitBuildCompute;
-    friend class JitBuildEthernet;
+    friend class JitBuildActiveEthernet;
+    friend class JitBuildIdleEthernet;
 
   public:
     JitBuildEnv();
@@ -150,10 +145,16 @@ class JitBuildCompute : public JitBuildState {
     JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
-class JitBuildEthernet : public JitBuildState {
+class JitBuildActiveEthernet : public JitBuildState {
   private:
   public:
-    JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
+    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
+};
+
+class JitBuildIdleEthernet : public JitBuildState {
+  private:
+  public:
+    JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config);
 };
 
 // Abstract base class for kernel specialization
