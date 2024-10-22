@@ -12,6 +12,7 @@ all-reduce), allocation
 
 * All Gather
 * Reduce Scatter
+* All Reduce (experimental)
 
 ### Configurations
 For the time being, input and output configurations are expected to match
@@ -36,7 +37,7 @@ Future Tologies:
 * Torus (2d, 3d)
 
 # Future Operations
-* All Reduce
+* All Reduce (Full support)
 * Reduce
 * Scatter
 * Gather Scatter

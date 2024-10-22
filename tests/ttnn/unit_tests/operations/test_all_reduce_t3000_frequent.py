@@ -6,8 +6,8 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -159,6 +159,7 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
+@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

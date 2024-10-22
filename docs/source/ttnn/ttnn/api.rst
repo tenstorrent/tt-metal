@@ -479,6 +479,7 @@ CCL
 
    ttnn.all_gather
    ttnn.reduce_scatter
+   ttnn.experimental.all_reduce
 
 
 Embedding
