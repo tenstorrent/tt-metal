@@ -19,8 +19,9 @@ inline void llk_math_eltwise_unary_sfpu_rand_init(uint seed = 0) {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_rand(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::rand<APPROXIMATE>, dst_index, vector_mode);
+inline void llk_math_eltwise_unary_sfpu_rand(uint dst_index, float from, float to) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::rand<APPROXIMATE>, dst_index, VectorMode::RC, from, to);
 }
 
 }  // namespace ckernel

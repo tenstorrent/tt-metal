@@ -16,21 +16,14 @@ void kernel_main() {
     constexpr bool output_is_dram = get_compile_time_arg_val(2) == 1;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    union {
-        float f;
-        uint32_t u;
-    } f2u_from, f2u_to;
-    f2u_from.u = get_arg_val<uint32_t>(1);
-    f2u_to.u = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(3);
-    uint32_t num_tiles = get_arg_val<uint32_t>(4);
+    uint32_t start_id = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles = get_arg_val<uint32_t>(2);
     uint32_t end_id = start_id + num_tiles;
 
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
         .bank_base_address = dst_addr, .page_size = get_tile_size(dst_cb_id), .data_format = get_dataformat(dst_cb_id)};
 
     uint32_t max_uint = 4294967295;
-    float random_range = f2u_to.f - f2u_from.f;
 
     cb_reserve_back(dst_cb_id, 1);
     uint32_t dst_cb_write_ptr = get_write_ptr(dst_cb_id);
@@ -47,7 +40,6 @@ void kernel_main() {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 float rand_float = *intermed_cb_addr;
                 DPRINT << rand_float << " ";
-                rand_float = rand_float * random_range + f2u_from.f;
 
 #ifdef OUTPUT_DTYPE_FLOAT32
                 *(float *)dst_cb_addr = rand_float;

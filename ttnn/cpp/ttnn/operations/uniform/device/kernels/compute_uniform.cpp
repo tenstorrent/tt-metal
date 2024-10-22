@@ -12,8 +12,14 @@ void MAIN {
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
 
     const uint32_t seed = get_arg_val<uint32_t>(0);
-    const uint32_t start_id = get_arg_val<uint32_t>(1);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    union {
+        float f;
+        uint32_t u;
+    } f2u_from, f2u_to;
+    f2u_from.u = get_arg_val<uint32_t>(1);
+    f2u_to.u = get_arg_val<uint32_t>(2);
+    const uint32_t start_id = get_arg_val<uint32_t>(3);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(4);
     const uint32_t end_id = start_id + num_tiles;
 
     init_sfpu(intermed_cb_id);
@@ -24,7 +30,7 @@ void MAIN {
         cb_reserve_back(intermed_cb_id, 1);
 
         tile_regs_acquire();
-        rand_tile(0);
+        rand_tile(0, f2u_from.f, f2u_to.f);
         tile_regs_commit();
 
         tile_regs_wait();

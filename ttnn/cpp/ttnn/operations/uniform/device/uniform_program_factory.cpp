@@ -97,9 +97,6 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> compute_runtime_args = {get_random_seed(), tile_offset, units_per_core};
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
-
         const float eps = 1e-6;
         union {
             float f;
@@ -107,9 +104,11 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         } f2u_from, f2u_to;
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
+        std::vector<uint32_t> compute_runtime_args = {
+            get_random_seed(), f2u_from.u, f2u_to.u, tile_offset, units_per_core};
+        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        std::vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(), f2u_from.u, f2u_to.u, tile_offset, units_per_core};
+        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         tile_offset += units_per_core;
