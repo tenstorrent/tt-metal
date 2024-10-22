@@ -24,6 +24,9 @@ class TestMode(Enum):
     BENCHMARK = 1
 
 
+bfloat16_ep = 0.015
+
+
 def check_torch_uniform_bfloat16():
     input = torch.zeros(10, 10, dtype=torch.bfloat16).uniform_(2.1, 2.11)
     logger.info(input)
@@ -65,8 +68,6 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
     logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
     logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
 
-    bfloat16_ep = 0.015
-
     """
     Random bfloat16 is converted from random float. As 16 bits are truncated, the generated number might be smaller/bigger than from/to.
     (even torch can't handle that case, check check_torch_uniform_bfloat16() function). bfloat16_ep is used to avoid asserting fail.
@@ -103,7 +104,6 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
-        # [32, 32],
         [100, 100],
         [1, 512, 2, 256],
         [512, 512],

@@ -30,7 +30,6 @@ void MAIN {
 
         tile_regs_acquire();
         rand_tile(0, f2u_from.f, f2u_to.f);
-        // rand_tile(0, 0, 1);
         tile_regs_commit();
 
         tile_regs_wait();

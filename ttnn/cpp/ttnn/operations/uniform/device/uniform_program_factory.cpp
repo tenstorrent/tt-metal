@@ -14,7 +14,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 std::mt19937 rng(std::time(nullptr));
-std::uniform_int_distribution distribution(1, 1 << 20);
+std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
 
 auto get_random_seed() -> uint32_t { return distribution(rng); }
 
