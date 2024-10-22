@@ -33,6 +33,8 @@ on:
       - "(TGG) TGG unit tests"
       - "(TGG) TGG demo tests"
       - "(TGG) TGG frequent tests"
+      - "ttnn - Run sweeps"
+      - "Blackhole post-commit tests"
     types:
       - completed
 
