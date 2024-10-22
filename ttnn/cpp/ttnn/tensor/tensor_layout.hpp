@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "impl/tile/tile.hpp"
 #include "types.hpp"
 #include "enum_types.hpp"
 
@@ -55,11 +54,11 @@ using Strides = std::vector<size_t>;
 //   This class is a work in progress. Many of its public methods have to be moved to private or even pImpl.
 class TensorLayout {
 public:
-    TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const Alignment& alignment = {});
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment = {});
 
     // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape);
 
     Layout get_layout() const { return m_page_config.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
     PageConfig get_page_config() const { return m_page_config; }

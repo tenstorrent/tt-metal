@@ -6,6 +6,9 @@
 
 #include <array>
 
+#include "impl/tile/tile.hpp"
+#include "size.hpp"
+
 namespace tt::tt_metal {
 
 class RowMajorPageConfig {

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace tt::tt_metal {
 
 // Container wrapper that allows negative indexing

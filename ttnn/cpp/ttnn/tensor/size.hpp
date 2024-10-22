@@ -22,7 +22,6 @@ public:
     Size operator*(size_t scalar) const;
     Size operator%(const Size& rhs) const;
 
-    // comparison operator
     bool operator==(const Size& rhs) const;
 
     [[nodiscard]] size_t height() const;
