@@ -9,7 +9,7 @@
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor_types.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 #include "tt_metal/hostdevcommon/common_values.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {

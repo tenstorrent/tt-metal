@@ -5,7 +5,7 @@
 #pragma once
 
 #include "llrt/hal.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
 
