@@ -738,7 +738,7 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
-void bind_power(py::module& module, const unary_operation_t& operation) {
+void bind_power(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -748,22 +748,26 @@ void bind_power(py::module& module, const unary_operation_t& operation) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
+            exponent (float, int): the exponent value.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
-            exponent (float,int, optional): exponent is an integer. Defaults to `>0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            {2}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor, exponent)
         )doc",
         ttnn::pow.base_name(),
-        ttnn::pow.python_fully_qualified_name());
+        ttnn::pow.python_fully_qualified_name(),
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -1662,7 +1666,16 @@ void py_module(py::module& module) {
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
-    detail::bind_power(module, ttnn::pow);
+    detail::bind_power(module, ttnn::pow,
+        R"doc(Supported dtypes, layouts, and ranks:
+
+            +----------------------------+---------------------------------+-------------------+
+            |     Dtypes                 |         Layouts                 |     Ranks         |
+            +----------------------------+---------------------------------+-------------------+
+            |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+            +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
 // it is only supporetd for range -9 to 9
 // not supported for grayskull
