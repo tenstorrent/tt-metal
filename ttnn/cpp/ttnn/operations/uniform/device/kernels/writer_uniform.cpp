@@ -6,6 +6,7 @@
 
 #include "common/constants.hpp"
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 using namespace tt;
 
@@ -39,13 +40,13 @@ void kernel_main() {
 
         uint32_t intermed_cb_read_ptr = get_read_ptr(intermed_cb_id);
 
-        uint32_t *intermed_cb_addr = reinterpret_cast<uint32_t *>(intermed_cb_read_ptr);
-        uint8_t *dst_cb_addr = reinterpret_cast<uint8_t *>(dst_cb_write_ptr);
+        auto *intermed_cb_addr = reinterpret_cast<float *>(intermed_cb_read_ptr);
+        auto *dst_cb_addr = reinterpret_cast<uint8_t *>(dst_cb_write_ptr);
 
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
-                uint32_t rand_uint32 = *intermed_cb_addr;
-                float rand_float = static_cast<float>(rand_uint32) / max_uint;
+                float rand_float = *intermed_cb_addr;
+                DPRINT << rand_float << " ";
                 rand_float = rand_float * random_range + f2u_from.f;
 
 #ifdef OUTPUT_DTYPE_FLOAT32

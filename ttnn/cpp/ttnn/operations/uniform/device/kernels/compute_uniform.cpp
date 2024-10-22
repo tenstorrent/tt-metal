@@ -4,7 +4,7 @@
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rand_uint.h"
+#include "compute_kernel_api/eltwise_unary/rand.h"
 
 namespace NAMESPACE {
 
@@ -19,12 +19,12 @@ void MAIN {
     init_sfpu(intermed_cb_id);
 
     for (uint32_t i = start_id; i < end_id; ++i) {
-        rand_uint_tile_init(i * seed);
+        rand_tile_init(i * seed);
 
         cb_reserve_back(intermed_cb_id, 1);
 
         tile_regs_acquire();
-        rand_uint_tile(0);
+        rand_tile(0);
         tile_regs_commit();
 
         tile_regs_wait();
