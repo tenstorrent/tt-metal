@@ -365,10 +365,10 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     Tensor b_slim = input_b;
 
     if(!skip_reshape_a) {
-        a_slim = ttnn::reshape(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, input_a.volume(), 1}});
+        a_slim = ttnn::reshape(input_a, ttnn::SimpleShape{std::array<uint32_t, 4>{1, 1, input_a.volume(), 1}});
     }
     if(!skip_reshape_b) {
-        b_slim = ttnn::reshape(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
+        b_slim = ttnn::reshape(input_b, ttnn::SimpleShape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
     }
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
