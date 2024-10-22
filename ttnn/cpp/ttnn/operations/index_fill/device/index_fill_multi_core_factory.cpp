@@ -50,6 +50,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     Device* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
@@ -107,7 +108,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)index_is_dram,
         (std::uint32_t)src_cb_index,
         (std::uint32_t)index_cb_index,
-        (std::uint32_t)(dim == n - 1)};
+        (std::uint32_t)(dim == n - 1),
+        (std::uint32_t)index.volume()};
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -124,10 +126,11 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t unit_offset = 0;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        const CoreCoord core(i / num_cores_y, i % num_cores_y);
-
-        uint32_t num_rows_per_core = 0;
+    uint32_t num_cores_group_1 = core_group_1.num_cores();
+    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
+    for (uint32_t i = 0; i < cores.size(); i++) {
+        const auto& core = cores[i];
+        uint32_t num_rows_per_core = i < num_cores_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
@@ -146,8 +149,6 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
              index_unit_size,
              unit_offset,
              num_rows_per_core,
-             input_shape[-1],
-             index.volume(),
              num_rows_to_fill_per_index,
              input_shape[dim]});
         SetRuntimeArgs(

@@ -28,16 +28,15 @@ void kernel_main() {
     uint32_t index_page_size = get_arg_val<uint32_t>(4);
     uint32_t start_row_id = get_arg_val<uint32_t>(5);
     uint32_t num_rows_per_core = get_arg_val<uint32_t>(6);
-    uint32_t row_size = get_arg_val<uint32_t>(7);
-    uint32_t index_size = get_arg_val<uint32_t>(8);
-    uint32_t num_rows_to_fill_per_index = get_arg_val<uint32_t>(9);
-    uint32_t dim = get_arg_val<uint32_t>(10);
+    uint32_t num_rows_to_fill_per_index = get_arg_val<uint32_t>(7);
+    uint32_t dim = get_arg_val<uint32_t>(8);
 
     constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool index_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t index_cb_id = get_compile_time_arg_val(3);
     constexpr bool is_last_dim = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t index_size = get_compile_time_arg_val(5);
 
     constexpr uint32_t onetile = 1;
 
@@ -55,7 +54,6 @@ void kernel_main() {
     noc_async_read(index_noc_addr, index_cb_reader, index_page_size);
     noc_async_read_barrier();
     uint32_t *index_ptr = reinterpret_cast<uint32_t *>(index_cb_reader);
-
     if (is_last_dim) {
         for (uint32_t row_id = start_row_id; row_id < start_row_id + num_rows_per_core; row_id++) {
             cb_reserve_back(src_cb_id, onetile);
@@ -66,7 +64,7 @@ void kernel_main() {
 
             uint32_t *input_ptr = reinterpret_cast<uint32_t *>(src_cb_reader);
 
-            for (uint32_t i = 0; i < index_page_size / 4; i++) {
+            for (uint32_t i = 0; i < index_size; i++) {
                 uint32_t current_index = index_ptr[i];
                 input_ptr[current_index] = fill_value;
             }
@@ -81,22 +79,22 @@ void kernel_main() {
             noc_async_read(input_noc_addr, src_cb_reader, input_page_size);
             noc_async_read_barrier();
 
-            if (is_in_indices(index_ptr, index_page_size / 4, row_id / num_rows_to_fill_per_index % dim)) {
+            if (is_in_indices(index_ptr, index_size, row_id / num_rows_to_fill_per_index % dim)) {
 #ifdef OUTPUT_DTYPE_BFLOAT16
                 auto ptr = reinterpret_cast<uint16_t *>(write_addr);
-                for (uint32_t i = 0; i < input_page_size / 4; ++i) {
+                for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = val.u >> 16;
                 }
 #endif
 #ifdef OUTPUT_DTYPE_INT32
                 auto ptr = reinterpret_cast<uint32_t *>(write_addr);
-                for (uint32_t i = 0; i < input_page_size / 4; ++i) {
+                for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = fill_value;
                 }
 #endif
 #ifdef OUTPUT_DTYPE_FLOAT32
                 auto ptr = reinterpret_cast<float *>(write_addr);
-                for (uint32_t i = 0; i < input_page_size / 4; ++i) {
+                for (uint32_t i = 0; i < index_size; ++i) {
                     ptr[i] = val.f;
                 }
 #endif
