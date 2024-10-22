@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"

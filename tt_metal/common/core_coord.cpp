@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 #include <algorithm>
 #include <limits>

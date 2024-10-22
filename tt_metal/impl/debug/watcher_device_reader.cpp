@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "hw/inc/debug/ring_buffer.h"
 #include "hw/inc/dev_msgs.h"
 #include "impl/device/device.hpp"

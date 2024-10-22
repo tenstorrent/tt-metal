@@ -4,7 +4,7 @@
 
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "core_coord_fixture.hpp"
 
 namespace basic_tests::CoreRange {

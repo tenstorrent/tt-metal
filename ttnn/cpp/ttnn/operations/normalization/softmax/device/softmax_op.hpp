@@ -6,7 +6,7 @@
 
 #include <cmath>
 #include "common/base_types.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"

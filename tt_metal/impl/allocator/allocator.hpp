@@ -11,7 +11,7 @@
 
 #include "allocator_types.hpp"
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 #include "llrt/hal.hpp"
 

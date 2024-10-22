@@ -5,7 +5,7 @@
 #pragma once
 
 #include "common/tt_backend_api_types.hpp"
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "third_party/umd/device/tt_soc_descriptor.h"
 
 //! tt_SocDescriptor contains information regarding the SOC configuration targetted.

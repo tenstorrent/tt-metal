@@ -8,7 +8,7 @@
 #include <filesystem>
 
 #include "assert.hpp"
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "detail/tt_metal.hpp"
 #include "host_api.hpp"
 #include "impl/kernels/data_types.hpp"

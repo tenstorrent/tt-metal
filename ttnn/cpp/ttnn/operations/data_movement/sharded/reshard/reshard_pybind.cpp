@@ -9,7 +9,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "reshard.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 namespace ttnn::operations::data_movement {
 

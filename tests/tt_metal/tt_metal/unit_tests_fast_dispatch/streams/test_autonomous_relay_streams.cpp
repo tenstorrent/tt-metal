@@ -18,7 +18,7 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
