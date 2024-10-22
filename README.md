@@ -53,6 +53,8 @@
 | [ViT](./models/demos/grayskull/vit)                                         | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [ViT](./models/demos/wormhole/vit)                                          | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 0.167   | 0.3        |             |
+| [U-Net](./models/experimental/functional_unet)                              | 2     | [n150](https://tenstorrent.com/hardware/wormhole)        | 530     | 1000       | [v0.53.0-rc22](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc22) |
+
 
 ## NLPs
 | Model                                               | Batch | Hardware                                           | sen/sec | Target sen/sec | Release |
