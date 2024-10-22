@@ -181,7 +181,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                 .set_page_size(untilize_mode_reblock_cb, out_tile_size);
         auto cb_reblock = tt_metal::CreateCircularBuffer(program, core, cb_reblock_config);
         log_debug(LogOp, "Reblock CB: {}, npages: {}, pagesize: {}", untilize_mode_reblock_cb, num_reblock_cb_tiles, out_tile_size);
-        bool need_unpad_after_untilize = output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * 1024;
+        bool need_unpad_after_untilize = output_shard_shape[1] * output_shard_shape[0] < num_writer_output_tiles * TILE_HW;
         if (need_unpad_after_untilize) {
             CircularBufferConfig compute_cb_output_config =
             CircularBufferConfig(num_writer_output_tiles * out_tile_size, {{untilized_padded_out_cb, out_df}})

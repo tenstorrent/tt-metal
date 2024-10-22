@@ -5,7 +5,6 @@
 #include <array>
 #include <cstdint>
 #include "conv2d_op.hpp"
-#include <ostream>
 #include "common/math.hpp"
 
 #include "tt_metal/host_api.hpp"

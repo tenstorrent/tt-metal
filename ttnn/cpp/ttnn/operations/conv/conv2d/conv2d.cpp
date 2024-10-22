@@ -275,8 +275,10 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
             "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
     }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    uint32_t act_block_h_ntiles = act_block_h_override > 0 ? act_block_h_override / tt::constants::TILE_HEIGHT
-                                                           : div_up(conv_op_parallel_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
+    uint32_t act_block_h_ntiles = div_up(conv_op_parallel_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
+    if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED && act_block_h_override > 0 ) {
+        act_block_h_ntiles = act_block_h_override / constants::TILE_HEIGHT;
+    }
     uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
                                 : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
                                                                                                    : grid_size.x;
