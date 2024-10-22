@@ -41,9 +41,6 @@ class DeviceProfiler {
         // Output Dir for device Profile Logs
         std::filesystem::path output_dir;
 
-        // Global custom marker counter
-        uint32_t customMarkerCount = 0;
-
         // Device-Core tracy context
         std::map<std::pair<uint16_t,CoreCoord>, TracyTTCtx> device_tracy_contexts;
 
