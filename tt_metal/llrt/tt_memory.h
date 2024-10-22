@@ -4,15 +4,11 @@
 
 #pragma once
 
+#include <cstddef>
 #include <functional>
-#include <cassert>
 #include <cstdint>
-#include <istream>
-#include <sstream>
 #include <string>
 #include <vector>
-
-// #include "command_assembler/memory.h"
 
 namespace ll_api {
 

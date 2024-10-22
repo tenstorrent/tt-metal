@@ -4,14 +4,15 @@
 
 #include "tt_memory.h"
 
-#include <cassert>
 #include <cstdio>
-#include <fstream>
+#include <cstdint>
+#include <cstring>
+#include <functional>
 #include <limits>
-#include <stdexcept>
+#include <string>
+#include <span> // FIXME: No C++20 desired in tt_metal
+#include <vector>
 
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "tensix.h"
 #include "tt_elffile.hpp"
 #include "tt_metal/common/assert.hpp"
 
