@@ -24,13 +24,13 @@ void MAIN {
 
     init_sfpu(intermed_cb_id);
 
+    rand_tile_init(seed);
     for (uint32_t i = start_id; i < end_id; ++i) {
-        rand_tile_init(i * seed);
-
         cb_reserve_back(intermed_cb_id, 1);
 
         tile_regs_acquire();
         rand_tile(0, f2u_from.f, f2u_to.f);
+        // rand_tile(0, 0, 1);
         tile_regs_commit();
 
         tile_regs_wait();

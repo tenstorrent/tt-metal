@@ -29,11 +29,11 @@ inline void rand(float from, float to) {
 
         // -1 to ensure the float is within the range [0, 1).
         vFloat rand_floats = dst_reg[0];
-        // rand_floats -= vConst1;
+        rand_floats -= vConst1;
 
         vFloat v_from = from;
         vFloat v_to = to;
-        rand_floats = (rand_floats - vConst1) * (v_to - v_from) + v_from;
+        rand_floats = rand_floats * (v_to - v_from) + v_from;
         dst_reg[0] = rand_floats;
 
         dst_reg++;

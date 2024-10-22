@@ -80,7 +80,8 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         all_cores,
         ComputeConfig{
             .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
+                                       // generated number out of range [from, to)
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
