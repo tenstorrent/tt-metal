@@ -33,6 +33,7 @@ Tensor HaloTensorCreation(const Tensor &input){
     int input_height = input.get_legacy_shape()[1];
     int input_width = input.get_legacy_shape()[2];
     int num_cores_nhw = input.shard_spec().value().num_cores();
+    int num_cores_c = 1;
 
     ttnn::Tensor input_tensor = input;  // tensor to return
     SlidingWindowConfig sliding_window_config = SlidingWindowConfig(
@@ -43,6 +44,7 @@ Tensor HaloTensorCreation(const Tensor &input){
             {1, 0}, //padding
             {1, 1}, //dilation
             num_cores_nhw,
+            num_cores_c,
             input_tensor.memory_config().shard_spec.value().grid,
             false, true);
 

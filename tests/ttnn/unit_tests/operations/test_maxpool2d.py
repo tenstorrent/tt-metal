@@ -23,6 +23,7 @@ def run_max_pool(
     device,
     dtype,
     memory_config=None,
+    shard_scheme=None,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -30,22 +31,37 @@ def run_max_pool(
     stride_h, stride_w = stride
     dilation_h, dilation_w = dilation
 
-    if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-        pytest.skip("Invalid case")
-
-    if (kernel_h == 3 and pad_h != 1) or (kernel_h == 2 and pad_h != 0):
-        pytest.skip("kernel size and padding combination not supported")
+    if shard_scheme != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
+            pytest.skip("Invalid case")
+        if (kernel_h == 3 and pad_h != 1) or (kernel_h == 2 and pad_h != 0):
+            pytest.skip("kernel size and padding combination not supported")
 
     out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
     out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    if in_c % 16 != 0:
-        pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
+    cores_x = device.core_grid.x
+    cores_y = device.core_grid.y
+    max_cores = cores_x * cores_y
 
-    if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
-        pytest.skip("This case runs out of memory on Grayskull")
+    if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
+        if in_c % 16 != 0:
+            pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
+        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
+            pytest.skip("This case runs out of memory on Grayskull")
+        if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
+            pytest.skip("This case runs out of memory on Wormhole b0")
 
-    if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
-        pytest.skip("This case runs out of memory on Wormhole b0")
+    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if in_c < max_cores:
+            pytest.skip("Width sharding requires channles >= cores")
+        if in_c / max_cores < 16:
+            pytest.skip("Width sharding requires large enough channels to shard (at least 16 per core)")
+
+    if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        if in_c < cores_x:
+            pytest.skip("Block sharding requires channles >= cores")
+        if in_c / cores_x < 16:
+            pytest.skip("Block sharding requires large enough channels to shard (at least 16 per core)")
 
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
@@ -72,12 +88,15 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         if (in_h * in_w) % 32 != 0:
             pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
+        if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED and (in_c / max_cores) % 32 != 0:
+            pytest.skip("For BFP8_B datatype, input channels / max_cores should be multiple of 32")
+        if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and (in_c / cores_x) % 32 != 0:
+            pytest.skip("For BFP8_B datatype, input channels / cores_x should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
-    pre_shard = True
-    # pre_shard = False
+    pre_shard = shard_scheme == None
 
     ttact_device = ttnn.to_device(ttact, device)
     if pre_shard:
@@ -109,6 +128,7 @@ def run_max_pool(
         padding=[pad_h, pad_w],
         dilation=[dilation_h, dilation_w],
         memory_config=memory_config,
+        applied_shard_scheme=shard_scheme,
     )
 
     output_host = output.cpu()
@@ -247,6 +267,141 @@ def test_run_max_pool_mem_config(
     use_program_cache,
 ):
     run_max_pool(act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, ttnn.bfloat16, memory_config=memory_config)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 512, 28, 28],
+            [1, 512, 14, 14],
+            [1, 1024, 6, 6],
+            [1, 2048, 6, 6],
+            [1, 4096, 6, 6],
+            [4, 1024, 40, 40],
+            [2, 2048, 40, 40],
+            [8, 4096, 10, 16],
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (2, 2),
+        (3, 3),
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_run_max_pool_width_shard(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(
+        act_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape",  ## NCHW
+    (
+        (
+            [1, 256, 56, 56],
+            [1, 256, 28, 28],
+            [1, 256, 14, 14],
+            [1, 256, 10, 14],
+            [1, 512, 8, 6],
+            [1, 1024, 6, 6],
+            [1, 2048, 4, 6],
+            [4, 512, 40, 40],
+            [2, 1024, 40, 40],
+            [8, 2048, 10, 16],
+            ## resnet shapes
+            [1, 64, 112, 112],
+            [4, 64, 112, 112],
+            [8, 64, 112, 112],
+            [16, 64, 112, 112],
+            ## hpr shapes
+            [8, 32, 132, 20],
+            [16, 32, 132, 20],
+            [32, 32, 132, 20],
+            [64, 32, 132, 20],
+            [128, 32, 132, 20],
+            [8, 32, 264, 40],
+            [16, 32, 264, 40],
+            [32, 32, 264, 40],
+            [4, 16, 1056, 160],
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (2, 2),
+        (3, 3),
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    ((2, 2),),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_run_max_pool_block_shard(
+    act_shape,
+    kernel_size,
+    padding,
+    stride,
+    dilation,
+    device,
+    dtype,
+    use_program_cache,
+):
+    run_max_pool(
+        act_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

@@ -26,10 +26,15 @@ void validate_maxpool(const Tensor& input, const sliding_window::SlidingWindowCo
     TT_FATAL(is_pow2, "Row size (nchannels * bytes = {}) should be power of 2 ({}).", in_nbytes_c, is_pow2);
 
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
-    TT_FATAL(input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
-
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
-    TT_FATAL(out_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Only height sharded tensors are supported.");
+
+    // check that C dimnenion is a multiple of num_shards_c for all but height sharding
+    TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout;
+    if (in_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+        uint32_t num_shards_c = sliding_window_config.num_cores_c;
+        const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+        TT_FATAL(input_shape[3] % num_shards_c == 0, "For width and block sharding, input channels should be divisible by num_shards");
+    }
 }
 
 void MaxPool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
@@ -83,7 +88,7 @@ MaxPool2D::tensor_return_value_t MaxPool2D::create_output_tensors(const operatio
     Shape output_shape = compute_output_shapes(op_attr, tensors);
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
-        mem_config.shard_spec->shape[1] = output_shape[3];
+        mem_config.shard_spec->shape[1] = input.shard_spec()->shape[1];
     } else {
         uint32_t ncores = input.shard_spec().value().num_cores();
         TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
