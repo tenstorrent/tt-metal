@@ -15,22 +15,46 @@ from models.utility_functions import torch_random
 
 @pytest.mark.parametrize(
     "input_vector",
-    [[100.0, 101.0], [100.0, 1000.0], [-100.0, -101.0], [-1000.0, -100.0], [-100, -108, -99, -100, -101, -98]],
+    [
+        [100.0, 101.0],
+        [100.0, 1000.0],
+        [-100.0, -99.0],
+        [-100.0, -101.0],
+        [-1000.0, -100.0],
+        [-100, -108, -99, -100, -101, -98],
+    ],
 )
-def test_softmax_stable_neg_values(device, input_vector):
+@pytest.mark.parametrize("math_approx", [True, False])
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_en):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.tensor([[[input_vector]]], dtype=torch.bfloat16)
     torch_output_tensor = F.softmax(torch_input_tensor, dim=-1, dtype=torch.bfloat16)
 
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=math_approx,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=math_approx,
+            fp32_dest_acc_en=fp32_acc_en,
+            packer_l1_acc=False,
+        )
+
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.softmax(input_tensor, dim=-1, numeric_stable=True)
+    output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
-def run_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_mask, math_approx):
+def run_softmax_stable_with_program_cache(
+    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+):
     torch.manual_seed(0)
 
     scale = 1.0
@@ -47,7 +71,7 @@ def run_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_m
         torch_output_tensor = torch_input_tensor
     torch_output_tensor = F.softmax(torch_output_tensor, dim=-1, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     if is_grayskull():
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
@@ -58,7 +82,7 @@ def run_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_m
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=math_approx,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=fp32_acc_en,
             packer_l1_acc=False,
         )
 
@@ -80,9 +104,15 @@ def run_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_m
 @pytest.mark.parametrize("w", [1024, 1500])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
 @pytest.mark.parametrize("math_approx", [True, False])
-def test_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_mask, math_approx, use_program_cache):
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_softmax_stable_with_program_cache(
+    device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
+):
     for _ in range(2):
-        run_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_mask, math_approx)
+        run_softmax_stable_with_program_cache(
+            device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+        )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -96,7 +126,9 @@ def test_softmax_stable_with_program_cache(device, batch_size, h, w, skip_scale_
     assert device.num_program_cache_entries() == 1
 
 
-def run_softmax_sharded_stable(device, batch_size, num_heads, h, w, skip_scale_mask):
+def run_softmax_sharded_stable(
+    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+):
     torch.manual_seed(0)
 
     grid_size = (batch_size, num_heads)
@@ -123,21 +155,41 @@ def run_softmax_sharded_stable(device, batch_size, num_heads, h, w, skip_scale_m
     )
     program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        subblock_w=6,
+        subblock_w=6 if not fp32_acc_en else 3,
         block_h=h // 32,
         block_w=w // 32,
     )
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=math_approx,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=math_approx,
+            fp32_dest_acc_en=fp32_acc_en,
+            packer_l1_acc=False,
+        )
 
     input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
     if not skip_scale_mask:
         output_tensor = ttnn.scale_mask_softmax_in_place(
-            input_tensor, scale, attention_mask_t, program_config=program_config, numeric_stable=True
+            input_tensor,
+            scale,
+            attention_mask_t,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            numeric_stable=True,
         )
     else:
         output_tensor = ttnn.scale_mask_softmax_in_place(
-            input_tensor, program_config=program_config, numeric_stable=True
+            input_tensor,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            numeric_stable=True,
         )
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -149,11 +201,16 @@ def run_softmax_sharded_stable(device, batch_size, num_heads, h, w, skip_scale_m
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [384])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
+@pytest.mark.parametrize("math_approx", [True, False])
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_softmax_sharded_stable_with_program_cache(
-    device, batch_size, num_heads, h, w, skip_scale_mask, use_program_cache
+    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, use_program_cache
 ):
     for _ in range(2):
-        run_softmax_sharded_stable(device, batch_size, num_heads, h, w, skip_scale_mask)
+        run_softmax_sharded_stable(
+            device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+        )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)

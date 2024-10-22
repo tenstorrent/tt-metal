@@ -107,6 +107,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     uint32_t in5_t = 1;
     // numeric_stable cb max
     uint32_t im2_t = 1;
+    uint32_t im4_t = tt::div_up(Wt, block_size)*block_size;
 
     // cb_exps - keeps exps in tt::CB in L1 to avoid recomputing
     uint32_t im0_t  = block_size*tt::div_up(Wt, block_size);
@@ -215,10 +216,10 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::optional<CBHandle> cb_intermed4_id;
     if (numeric_stable) {
         // cb_max
-        auto c_intermed2_config = CircularBufferConfig(im2_t * in0_tile_size, {{tt::CB::c_intermed2, in0_cb_data_format}}).set_page_size(tt::CB::c_intermed2, in0_tile_size);
+        auto c_intermed2_config = CircularBufferConfig(im2_t * im_tile_size, {{tt::CB::c_intermed2, im_cb_data_format}}).set_page_size(tt::CB::c_intermed2, im_tile_size);
         cb_intermed2_id = CreateCircularBuffer( program, all_device_cores, c_intermed2_config );
         // cb_x
-        auto c_x_config = CircularBufferConfig(in0_t * in0_tile_size, {{tt::CB::c_intermed4, in0_cb_data_format}}).set_page_size(tt::CB::c_intermed4, in0_tile_size);
+        auto c_x_config = CircularBufferConfig(im4_t * im_tile_size, {{tt::CB::c_intermed4, im_cb_data_format}}).set_page_size(tt::CB::c_intermed4, im_tile_size);
         cb_intermed4_id = CreateCircularBuffer( program, all_device_cores, c_x_config);
     }
 
@@ -288,6 +289,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             cb_in4_id,
             causal_mask,
             numeric_stable,
+            fp32_dest_acc_en,
             cb_intermed2_id,
             cb_intermed4_id
         ]
@@ -322,7 +324,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         }
 
         int32_t num_tiles = input_tensors.at(0).volume()/TILE_HW;
-        uint32_t block_size = find_max_divisor(Wt, 8);
+        uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
         // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
         uint32_t in0_t  = numeric_stable ? tt::div_up(Wt, block_size)*block_size : block_size*2;
@@ -332,6 +334,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
         uint32_t in3_t  = 1; // 1/sqrt() scaler tile cb for fused scale/mask/softmax variant
         uint32_t in4_t  = tt::div_up(Wt, block_size)*block_size; // attention mask (N,C,32,W) - Wt is reused for each Ht, NC is cycled
         uint32_t im2_t = 1;
+        uint32_t im4_t = tt::div_up(Wt, block_size)*block_size;
 
         // cb_exps - keeps exps in tt::CB in L1 to avoid recomputing
         uint32_t im0_t  = block_size*tt::div_up(Wt, block_size);
@@ -366,8 +369,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             UpdateCircularBufferTotalSize(program, cb_in4_id.value(), in4_t * mask_tile_size);
         }
         if (numeric_stable) {
-            UpdateCircularBufferTotalSize(program, cb_intermed2_id.value(), im2_t * in0_tile_size);
-            UpdateCircularBufferTotalSize(program, cb_intermed4_id.value(), in0_t * in0_tile_size);
+            UpdateCircularBufferTotalSize(program, cb_intermed2_id.value(), im2_t * im_tile_size);
+            UpdateCircularBufferTotalSize(program, cb_intermed4_id.value(), im4_t * im_tile_size);
         }
 
         uint32_t curr_row = 0;
@@ -554,8 +557,8 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     // output buffer size
     uint32_t out_CB_size = block_wt * block_ht * out0_tile_size;
     // numeric_stable cb max
-    uint32_t max_CB_size = 1 * in0_tile_size;
-    uint32_t x_CB_size = block_wt * in0_tile_size;
+    uint32_t max_CB_size = 1 * im_tile_size;
+    uint32_t x_CB_size = block_wt * im_tile_size;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -697,12 +700,12 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     auto cb_intermed1_id = CreateCircularBuffer( program, all_device_cores, c_intermed1_config );
     if (numeric_stable) {
         // cb_max
-        auto c_intermed3_config = CircularBufferConfig(max_CB_size, {{tt::CB::c_intermed3, in0_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed3, in0_tile_size);
+        auto c_intermed3_config = CircularBufferConfig(max_CB_size, {{tt::CB::c_intermed3, im_cb_data_format}})
+            .set_page_size(tt::CB::c_intermed3, im_tile_size);
         auto cb_intermed3_id = CreateCircularBuffer( program, all_device_cores, c_intermed3_config );
         // cb_x
-        auto c_intermed4_config = CircularBufferConfig(x_CB_size, {{tt::CB::c_intermed4, in0_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed4, in0_tile_size);
+        auto c_intermed4_config = CircularBufferConfig(x_CB_size, {{tt::CB::c_intermed4, im_cb_data_format}})
+            .set_page_size(tt::CB::c_intermed4, im_tile_size);
         auto cb_intermed4_id = CreateCircularBuffer( program, all_device_cores, c_intermed4_config );
     }
 
