@@ -25,8 +25,10 @@ enum TensorLayout {
 template <class T, template <typename...> typename BufferType>
 std::vector<T> convert_to_tile_layout(
     const BufferType<T>& data,
-    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    const std::optional<const std::vector<uint32_t>>& tile_shape = std::nullopt,
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt,
+    const std::optional<bool>& transpose_within_face,
+    const std::optional<bool>& transpose_of_faces) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -36,6 +38,8 @@ std::vector<T> convert_to_tile_layout(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
+    bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
+    bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
     TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
@@ -45,21 +49,41 @@ std::vector<T> convert_to_tile_layout(
         std::vector<T> bottom_left;
         std::vector<T> bottom_right;
 
-        int index = tile_idx * tile_HW;
-        for(int row = 0; row < tile_H; row++) {
+        if (transpose_face) {
             for(int col = 0; col < tile_W; col++) {
-                if(row < face_H and col < face_W) {
-                    top_left.push_back(data[index]);
-                } else if(row < face_H and col >= face_W) {
-                    top_right.push_back(data[index]);
-                } else if(row >= face_H and col < face_W) {
-                    bottom_left.push_back(data[index]);
-                } else if(row >= face_H and col >= face_W) {
-                    bottom_right.push_back(data[index]);
-                } else {
-                    TT_ASSERT(false);
+                int index = tile_idx * tile_HW + col;
+                for(int row = 0; row < tile_H; row++) {
+                    if(row < face_H and col < face_W) {
+                        top_left.push_back(data[index]);
+                    } else if(row < face_H and col >= face_W) {
+                        top_right.push_back(data[index]);
+                    } else if(row >= face_H and col < face_W) {
+                        bottom_left.push_back(data[index]);
+                    } else if(row >= face_H and col >= face_W) {
+                        bottom_right.push_back(data[index]);
+                    } else {
+                        TT_ASSERT(false);
+                    }
+                    index += tile_W;
                 }
-                index++;
+            }
+        } else {
+            int index = tile_idx * tile_HW;
+            for(int row = 0; row < tile_H; row++) {
+                for(int col = 0; col < tile_W; col++) {
+                    if(row < face_H and col < face_W) {
+                        top_left.push_back(data[index]);
+                    } else if(row < face_H and col >= face_W) {
+                        top_right.push_back(data[index]);
+                    } else if(row >= face_H and col < face_W) {
+                        bottom_left.push_back(data[index]);
+                    } else if(row >= face_H and col >= face_W) {
+                        bottom_right.push_back(data[index]);
+                    } else {
+                        TT_ASSERT(false);
+                    }
+                    index++;
+                }
             }
         }
         TT_ASSERT(top_left.size() == face_HW);
@@ -67,10 +91,17 @@ std::vector<T> convert_to_tile_layout(
         TT_ASSERT((bottom_left.size() == 0) or (bottom_left.size() == face_HW));
         TT_ASSERT((bottom_right.size() == 0) or (bottom_right.size() == face_HW));
 
-        result.insert(result.end(), top_left.begin(), top_left.end());
-        result.insert(result.end(), top_right.begin(), top_right.end());
-        result.insert(result.end(), bottom_left.begin(), bottom_left.end());
-        result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        if (transpose_face_order) {
+            result.insert(result.end(), top_left.begin(), top_left.end());
+            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
+            result.insert(result.end(), top_right.begin(), top_right.end());
+            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        } else {
+            result.insert(result.end(), top_left.begin(), top_left.end());
+            result.insert(result.end(), top_right.begin(), top_right.end());
+            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
+            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        }
     }
 
     return result;
@@ -80,7 +111,9 @@ template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(
     const BufferTyp<T>& data,
     const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt,
+    const std::optional<bool>& transpose_within_face,
+    const std::optional<bool>& transpose_of_faces) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -92,18 +125,49 @@ std::vector<T> convert_to_flat_layout(
     auto face_HW = face_H * face_W;
     auto num_faces_row = tile_W / face_W;
     auto num_faces_col = tile_H / face_H;
+    bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
+    bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
     TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        int tile_start = tile_idx * tile_HW;
-        for(int face_y = 0; face_y < num_faces_col; face_y++) {
-            for(int row = 0; row < face_H; row++) {
-                int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
-                for(int face_x = 0; face_x < num_faces_row; face_x++) {
-                    int offset = face_x * face_HW;
-                    for(int col = offset; col < offset + face_W; col++) {
-                        result.push_back(data[start + col]);
+
+        if (transpose_face && !transpose_face_order) {
+            int tile_start = tile_idx * tile_HW;
+            for(int face_y = 0; face_y < num_faces_col; face_y++) {
+                for(int col = 0; col < face_W; col++) {
+                    int start = tile_start + face_y * (face_H * tile_W) + col;
+                    for(int face_x = 0; face_x < num_faces_row; face_x++) {
+                        int offset = face_x * face_HW;
+                        for(int row = offset; row < offset + face_H; row++) {
+                            result.push_back(data[start + row * face_W]);
+                        }
+                    }
+                }
+            }
+        } else if (transpose_face && transpose_face_order) {
+            int tile_start = tile_idx * tile_HW;
+            for(int face_x = 0; face_x < num_faces_row; face_x++) {
+                for(int col = 0; col < face_W; col++) {
+                    int start = tile_start + face_x * face_HW + col;
+                    for(int face_y = 0; face_y < num_faces_col; face_y++) {
+                        int offset = face_y * (face_H * tile_W);
+                        for(int row = offset; row < offset + face_H; row++) {
+                            result.push_back(data[start + row * face_W]);
+                        }
+                    }
+                }
+            }
+        } else {
+            int tile_start = tile_idx * tile_HW;
+            for(int face_y = 0; face_y < num_faces_col; face_y++) {
+                for(int row = 0; row < face_H; row++) {
+                    int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
+                    for(int face_x = 0; face_x < num_faces_row; face_x++) {
+                        int offset = face_x * face_HW;
+                        for(int col = offset; col < offset + face_W; col++) {
+                            result.push_back(data[start + col]);
+                        }
                     }
                 }
             }

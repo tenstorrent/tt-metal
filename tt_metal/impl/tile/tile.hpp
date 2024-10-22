@@ -41,8 +41,11 @@ struct Tile {
     uint32_t num_faces = constants::TILE_HW / constants::FACE_HW;
     uint32_t partial_face = 0;
     uint32_t narrow_tile = 0;
+    bool transpose_within_face = false; // tranpose datums within each face
+    bool transpose_of_faces = false; // transpose the face order
 
-    Tile(const std::array<uint32_t, 2>& tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}) : tile_shape(tile_shape) {
+    Tile(const std::array<uint32_t, 2>& tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}, bool transpose_tile = false, bool tranpose_face = false) :
+        tile_shape(tile_shape) {
         auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(),
                            [this, &tile_shape](const auto& pair) {
                                if (pair[0] == tile_shape) {
@@ -53,6 +56,21 @@ struct Tile {
                            });
         if (it == TILE_FACE_HW_CHOICES.end()) {
             TT_THROW("Tile size is not valid for our hardware");
+        }
+
+        if (transpose_tile) {
+            transpose_within_face = true;
+            transpose_of_faces = true;
+        } else if (tranpose_face) {
+            transpose_within_face = true;
+            transpose_of_faces = false;
+        } else {
+            transpose_within_face = false;
+            transpose_of_faces = false;
+        }
+
+        if (transpose_tile || tranpose_face) {
+            TT_FATAL((tile_shape[0] == constants::FACE_HEIGHT or tile_shape[0] == constants::TILE_HEIGHT), "tile height must equal 16 or 32 in tranpose mode");
         }
 
         tile_hw = tile_shape[0] * tile_shape[1];
