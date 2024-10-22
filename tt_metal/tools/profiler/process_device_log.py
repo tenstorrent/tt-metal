@@ -207,7 +207,7 @@ def import_device_profile_log(logPath):
                 chipID = int(row[0].strip())
                 core = (int(row[1].strip()), int(row[2].strip()))
                 risc = row[3].strip()
-                timerID = {"id": int(row[4].strip()), "zone_name": "", "zone_phase": "", "src_line": "", "src_file": ""}
+                timerID = {"id": int(row[4].strip()), "zone_name": "", "type": "", "src_line": "", "src_file": ""}
                 timeData = int(row[5].strip())
                 statData = 0
                 if len(row) == 13:
@@ -215,14 +215,14 @@ def import_device_profile_log(logPath):
                     timerID["run_id"] = int(row[7].strip())
                     timerID["run_host_id"] = int(row[8].strip())
                     timerID["zone_name"] = row[9].strip()
-                    timerID["zone_phase"] = row[10].strip()
+                    timerID["type"] = row[10].strip()
                     timerID["src_line"] = int(row[11].strip())
                     timerID["src_file"] = row[12].strip()
                 elif len(row) == 12:
                     statData = int(row[6].strip())
                     timerID["run_id"] = int(row[7].strip())
                     timerID["zone_name"] = row[8].strip()
-                    timerID["zone_phase"] = row[9].strip()
+                    timerID["type"] = row[9].strip()
                     timerID["src_line"] = int(row[10].strip())
                     timerID["src_file"] = row[11].strip()
 
@@ -278,7 +278,7 @@ def import_device_profile_log(logPath):
                     riscData["timeseries"].insert(
                         0,
                         (
-                            {"id": 0, "zone_name": "", "zone_phase": "", "src_line": "", "src_file": ""},
+                            {"id": 0, "zone_name": "", "type": "", "src_line": "", "src_file": ""},
                             deviceData["metadata"]["global_min"]["ts"],
                             0,
                         ),
