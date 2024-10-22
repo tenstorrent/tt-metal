@@ -1882,7 +1882,7 @@ void v1::UpdateDynamicCircularBufferAddress(
 
 void Program::dump_circular_buffer_info(std::string opath) {
     nlohmann::json cb_log;
-    for (const auto& cb : circular_buffers_) {// TODO: may move it to circular buffer
+    for (const auto& cb : circular_buffers_) {// TODO: may move it to circular buffer (define to_json_t)
         nlohmann::json cb_info;
         // core range
         // nlohmann::json cb_core_ranges;

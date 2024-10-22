@@ -15,6 +15,68 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
+// TODO: move it!
+std::string to_string(BufferType btype) {
+    switch(btype) {
+        case BufferType::DRAM:
+            return "DRAM";
+        case BufferType::L1:
+            return "L1";
+        case BufferType::L1_SMALL:
+            return "L1_SMALL";
+        default:
+            return "other";
+    }
+}
+std::string to_string(TensorMemoryLayout layout) {
+    switch(layout) {
+        case TensorMemoryLayout::INTERLEAVED:
+            return "INTERLEAVED";
+        case TensorMemoryLayout::SINGLE_BANK:
+            return "SINGLE_BANK";
+        case TensorMemoryLayout::HEIGHT_SHARDED:
+            return "HEIGHT_SHARDED";
+        case TensorMemoryLayout::WIDTH_SHARDED:
+            return "WIDTH_SHARDED";
+        case TensorMemoryLayout::BLOCK_SHARDED:
+            return "BLOCK_SHARDED";
+        default:
+            return "other";
+    }
+}
+
+void dump_json(std::string opath, const nlohmann::json& ojson) {
+    std::ofstream out(opath);
+    if (out.fail()) {
+        throw std::runtime_error("output file open failure");
+    }
+    std::string summaries = ojson.dump(2);
+    out << summaries << std::endl;
+    out.close();
+}
+
+namespace tt::stl::json {
+// TODO: move to buffer.hpp?
+template <>
+struct to_json_t<std::shared_ptr<tt::tt_metal::Buffer>> {
+    nlohmann::json operator()(std::shared_ptr<tt::tt_metal::Buffer> buffer) { // TODO: what happed for having except?
+        nlohmann::json ojson;
+        ojson["device id"] = buffer->device()->id(); // TODO: include device breaks compilation (in buffer.hpp)
+        ojson["total bytes"] = buffer->size();
+        ojson["address"] = buffer->address();
+        ojson["page size (B)"] = buffer->page_size();
+        ojson["buffer type"] = to_string(buffer->buffer_type());
+        ojson["tensor memory layout"] = to_string(buffer->buffer_layout());
+        if (is_sharded(buffer->buffer_layout())) { // TODO: need to test it
+            ojson["shard spec"] = to_json(buffer->shard_spec().tensor_shard_spec);
+        } else {
+            ojson["shard spec"] = "na";
+        }
+        return ojson;
+    }
+};
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -140,6 +202,9 @@ int main(int argc, char** argv) {
         tt_metal::detail::LaunchProgram(device, program);
 
         program.dump_circular_buffer_info("/tmp");
+        dump_json("/tmp/src0_buffer_info.json", tt::stl::json::to_json(src0_dram_buffer));
+        dump_json("/tmp/src1_buffer_info.json", tt::stl::json::to_json(src1_dram_buffer));
+        dump_json("/tmp/dst_buffer_info.json", tt::stl::json::to_json(dst_dram_buffer));
 
         std::vector<uint32_t> result_vec;
         tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
