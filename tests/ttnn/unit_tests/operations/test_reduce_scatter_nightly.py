@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.test_reduce_scatter_post_commit import (

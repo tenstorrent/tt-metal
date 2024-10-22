@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-from loguru import logger
 import ttnn
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.test_reduce_scatter_post_commit import (
