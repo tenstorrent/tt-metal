@@ -320,7 +320,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
 
         ##### Prepare Inputs #####
         prev_pos = total_len - 1
-        tt_inp_emb, prev_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tokens, prev_pos)
+        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_inputs(tokens, prev_pos)
         tt_inp_emb = ttnn.to_device(tt_inp_emb, submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
