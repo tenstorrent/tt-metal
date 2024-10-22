@@ -38,6 +38,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     7_kernel_launch/test_kernel_launch.cpp
     8_dram_adjacent_core_read/test_dram_read.cpp
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
+    10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
 )
 
 foreach (TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
