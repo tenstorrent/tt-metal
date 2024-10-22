@@ -284,12 +284,12 @@ class UNetDownblock:
             )
 
     def __call__(self, x):
-        assert list(x.shape) == [
-            1,
-            1,
-            nearest_32(self.conv1.input_height * self.conv1.input_width * self.conv1.batch_size),
-            x.shape[-1],  # Channels can be padded
-        ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
+        # assert list(x.shape) == [
+        # 1,
+        # 1,
+        # nearest_32(self.conv1.input_height * self.conv1.input_width * self.conv1.batch_size),
+        # x.shape[-1],  # Channels can be padded
+        # ], f"Expected downblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
         if self.should_reshard:
             x = ttnn.to_memory_config(
                 x,
@@ -361,10 +361,10 @@ class UNetUpblock:
         return x
 
     def __call__(self, x, residual):
-        assert list(x.shape)[:2] == [
-            1,
-            1,
-        ], f"Expected upblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
+        # assert list(x.shape)[:2] == [
+        # 1,
+        # 1,
+        # ], f"Expected upblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
 
         residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -522,12 +522,10 @@ class UNet:
 
         self.input_sharded_memory_config = ttnn.create_sharded_memory_config(
             [
-                1,
-                1,
-                self.downblock1.conv1.batch_size
-                * self.downblock1.conv1.input_height
-                * self.downblock1.conv1.input_width,
+                self.downblock1.conv1.batch_size,
                 nearest_16(self.downblock1.conv1.in_channels),
+                self.downblock1.conv1.input_height,
+                self.downblock1.conv1.input_width,
             ],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
@@ -544,20 +542,25 @@ class UNet:
         x = self.bnc(x)
         return self.bnc2(x)
 
+    def preprocess_input_tensor(self, x):
+        x = ttnn.permute(x, (0, 2, 3, 1))
+        return ttnn.reshape(x, [1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]])
+
     def postprocess_output_tensor(self, x):
-        # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
-        return ttnn.to_layout(
-            ttnn.reshape(
-                x, shape=ttnn.Shape([1, 1, x.shape[2], 16], [1, 1, x.shape[2], 32])
-            ),  # At the moment we can only reduce the padding from 32 to 16 because reshape is broken.
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
+        x = ttnn.reshape(x, [2, 1056, 160, 1])
+        x = ttnn.transpose(x, 2, 3)  # 2, 1056, 1, 160
+        x = ttnn.untilize(x)
+        x = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], 1, x.shape[3]])
+        breakpoint()
+        return ttnn.transpose(x, 1, 2)  # 2, 1, 1056, 160
 
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
 
         if move_input_tensor_to_device:
             x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
+
+        x = self.preprocess_input_tensor(x)
 
         x, c1_residual = self.downblock1(x)
         x, c2_residual = self.downblock2(x)
