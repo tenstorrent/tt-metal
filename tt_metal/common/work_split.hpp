@@ -9,7 +9,7 @@
 #pragma once
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/host_api.hpp"
 

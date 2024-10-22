@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {

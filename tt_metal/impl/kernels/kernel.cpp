@@ -15,7 +15,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/common/utils.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 namespace tt {
 
