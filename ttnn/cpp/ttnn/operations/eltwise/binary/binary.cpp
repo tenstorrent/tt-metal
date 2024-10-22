@@ -212,24 +212,60 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
     using namespace tt::constants;
-    // Cast Float Scalar to a device tensor
-    auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
-    host_buffer[0] = scalar;
-    Tensor scalar_tensor_host = Tensor(
-        OwnedStorage{host_buffer},
-        ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
-        DataType::BFLOAT16,
-        Layout::TILE);
-    Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
-    // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-    return BinaryOperation::invoke(
-        input_tensor_a,
-        scalar_tensor_device,
-        dtype,
-        memory_config,
-        optional_output_tensor,
-        activations,
-        input_tensor_a_activation);
+
+    bool arithmetic_op = ( binary_op_type == BinaryOpType::ADD  || binary_op_type == BinaryOpType::SUB || binary_op_type == BinaryOpType::MUL || binary_op_type == BinaryOpType::DIV_FAST );
+
+
+    if(arithmetic_op) {
+        if(input_tensor_a_activation.has_value()){
+            std::vector<unary::UnaryWithParam> input_a_activation = {};
+            input_a_activation.push_back(input_tensor_a_activation.value());
+            ttnn::unary_chain(queue_id, input_tensor_a, input_a_activation, std::nullopt, input_tensor_a);
+        }
+        switch (binary_op_type) {
+            case BinaryOpType::ADD:
+                ttnn::add_sfpu(queue_id, input_tensor_a, scalar, std::nullopt, input_tensor_a);
+                break;
+            case BinaryOpType::SUB:
+                ttnn::sub_sfpu(queue_id, input_tensor_a, scalar, std::nullopt, input_tensor_a);
+                break;
+            case BinaryOpType::MUL:
+                ttnn::mul_sfpu(queue_id, input_tensor_a, scalar, std::nullopt, input_tensor_a);
+                break;
+            case BinaryOpType::DIV_FAST:
+                ttnn::div_sfpu(queue_id, input_tensor_a, scalar, std::nullopt, input_tensor_a);
+                break;
+
+            default: TT_ASSERT(false && "non arithmetic op");
+        }
+        if(activations.has_value() && optional_output_tensor.has_value()){
+            return ttnn::unary_chain(queue_id, input_tensor_a, activations.value(), std::nullopt, optional_output_tensor);
+        }
+        if(activations.has_value()){
+            return ttnn::unary_chain(queue_id, input_tensor_a, activations.value(), std::nullopt, input_tensor_a);
+        }
+        return input_tensor_a;
+    }
+    else {
+        // Cast Float Scalar to a device tensor
+        auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
+        host_buffer[0] = scalar;
+        Tensor scalar_tensor_host = Tensor(
+            OwnedStorage{host_buffer},
+            ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
+            DataType::BFLOAT16,
+            Layout::TILE);
+        Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
+        // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
+        return BinaryOperation::invoke(
+            input_tensor_a,
+            scalar_tensor_device,
+            dtype,
+            memory_config,
+            optional_output_tensor,
+            activations,
+            input_tensor_a_activation);
+    }
 }
 
 template <BinaryOpType binary_op_type>
