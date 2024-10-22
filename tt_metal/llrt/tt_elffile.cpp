@@ -28,9 +28,7 @@
 #error "Host must be little endian"
 #endif
 
-#ifdef PT_RISCV_ATTRIBUTES
-#warning "PT_RISCV_ATTRIBUTES available, remove workaround"
-#else
+#ifndef PT_RISCV_ATTRIBUTES
 // Missing from my elf.h
 #define PT_RISCV_ATTRIBUTES (PT_LOPROC + 3)
 enum {
