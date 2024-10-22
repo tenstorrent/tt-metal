@@ -109,7 +109,8 @@ class TtLlamaAttention(LightweightModule):
         )
 
         # For ring topology we can use all gather matmul for wo
-        if self.is_multichip and configuration.ccl_topology() == ttnn.Topology.Ring:
+        self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
+        if self.is_multichip and self.use_fused_all_gather_matmul:
             pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
             wo_ttnn = ttnn.as_tensor(
                 pt_wo,
@@ -323,7 +324,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
-        if self.is_multichip and self.ccl_topology == ttnn.Topology.Ring:
+        if self.is_multichip and self.use_fused_all_gather_matmul:
             _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
                 attn_output_cat,
                 self.wo,
@@ -353,7 +354,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(dense_out_sharded)
 
         # All reduce
-        if self.is_multichip and not self.ccl_topology == ttnn.Topology.Ring:
+        if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 dense_out,
                 scatter_dim=3,
@@ -503,7 +504,16 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
 
-        # TODO All-gather matmul fused in prefill has issues when we use the batch dim. Should be more efficient to do reduce scatter instead.
+        # Non fused All Gather Matmul
+        if self.is_multichip and self.use_fused_all_gather_matmul:
+            attn_output_11SH = ttnn.all_gather(
+                attn_output_11SH,
+                dim=3,
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -517,7 +527,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        if self.is_multichip:
+        if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 output_11SH,
                 scatter_dim=3,

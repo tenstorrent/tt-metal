@@ -248,3 +248,15 @@ def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
         hidden_dim = int(ffn_dim_multiplier * hidden_dim)
     hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
     return hidden_dim
+
+
+def get_out_subblock_w(per_core_N, out_subblock_h):
+    """
+    Helper function to calculate the out_subblock_w based on the per_core_N and out_subblock_h
+    """
+    out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w

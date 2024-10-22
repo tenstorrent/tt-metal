@@ -15,6 +15,7 @@ from models.demos.llama3.tt.llama_common import (
     freqs_to_rotation_matrix,
     num_to_core_range_set,
     calculate_hidden_dim,
+    get_out_subblock_w,
 )
 from typing import Tuple
 from models.utility_functions import nearest_32
@@ -245,25 +246,38 @@ class TtModelArgs:
                 num_cores=self.n_heads // self.num_devices,
             )
 
-            dense_out_core_grid_size = (8, 2)  # TODO: revisit num cores - use same num cores as rest of attention??
-            self.model_config[
-                "ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"
-            ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=dense_out_core_grid_size,
-                in0_block_w=self.dim
-                // self.tile_size
-                // 8,  # [32 x 8k] x [8k x 1k] = [32 x 1k] # TODO: why is this 8 and not dense_out_core_grid_size[0] * dense_out_core_grid_size[1] = 16??
-                out_subblock_h=1,
-                out_subblock_w=2,  # Max out_subblock_w = 4, needs to be divisible by per_core_N (2)
-                per_core_M=self.tile_padded_batch_rows // self.tile_size,
-                per_core_N=self.dim
-                // self.num_devices
-                // self.tile_size
-                // (dense_out_core_grid_size[0] * dense_out_core_grid_size[1]),  # 2,
-                fuse_batch=True,
-                fused_activation=None,
-                mcast_in0=True,
+            # All Gather Matmul for Dense Out (DO)
+            # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
+            # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
+                self.ccl_topology() == ttnn.Topology.Ring
+                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
             )
+
+            if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
+                do_core_grid_size = (8, 1)
+                do_per_core_N = (
+                    self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
+                )
+                self.model_config[
+                    "ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"
+                ] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=do_core_grid_size,
+                    in0_block_w=self.dim
+                    // self.tile_size
+                    // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
+                    out_subblock_h=1,
+                    out_subblock_w=get_out_subblock_w(
+                        do_per_core_N, out_subblock_h=1
+                    ),  # Max out_subblock_w = 4, needs to be divisible by per_core_N
+                    per_core_M=self.tile_padded_batch_rows // self.tile_size,
+                    per_core_N=do_per_core_N,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                )
+            else:
+                self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_PROGCFG"] = None
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = self.matmul_config(
                 m=1024, k=self.dim, n=self.hidden_dim // self.num_devices, grid_size=(8, 8)
@@ -827,11 +841,7 @@ class TtModelArgs:
         per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
-        out_subblock_w = 4
-        while out_subblock_w > 1:
-            if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
-                break
-            out_subblock_w -= 1
+        out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
 
         if in0_block_w is None:
             in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
