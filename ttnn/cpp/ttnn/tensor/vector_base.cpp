@@ -22,22 +22,22 @@ int32_t normalized_index(int32_t index, size_t container_size) {
 }
 }
 
-bool vector_base::operator==(const vector_base &other) const {
-    return this->mValue == other.mValue;
+bool VectorBase::operator==(const VectorBase &other) const {
+    return this->m_value == other.m_value;
 }
 
-bool vector_base::operator==(const std::vector<uint32_t> &other) const {
-    return this->mValue == other;
+bool VectorBase::operator==(const std::vector<uint32_t> &other) const {
+    return this->m_value == other;
 }
 
-uint32_t vector_base::operator[](int32_t index) const {
-    auto norm_index = normalized_index(index, mValue.size());
-    return mValue[norm_index];
+uint32_t VectorBase::operator[](int32_t index) const {
+    auto norm_index = normalized_index(index, m_value.size());
+    return m_value[norm_index];
 }
 
-uint32_t& vector_base::operator[](int32_t index) {
-    auto norm_index = normalized_index(index, mValue.size());
-    return mValue[norm_index];
+uint32_t& VectorBase::operator[](int32_t index) {
+    auto norm_index = normalized_index(index, m_value.size());
+    return m_value[norm_index];
 }
 
 }

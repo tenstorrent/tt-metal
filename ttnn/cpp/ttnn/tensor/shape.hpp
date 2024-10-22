@@ -8,18 +8,18 @@
 
 namespace ttnn {
 
-class SimpleShape final : protected tt::tt_metal::vector_base {
+class SimpleShape final : protected tt::tt_metal::VectorBase {
 public:
-    using tt::tt_metal::vector_base::vector_base;
-    using tt::tt_metal::vector_base::operator[];
-    using tt::tt_metal::vector_base::cbegin;
-    using tt::tt_metal::vector_base::cend;
-    using tt::tt_metal::vector_base::as_vector;
+    using tt::tt_metal::VectorBase::VectorBase;
+    using tt::tt_metal::VectorBase::operator[];
+    using tt::tt_metal::VectorBase::cbegin;
+    using tt::tt_metal::VectorBase::cend;
+    using tt::tt_metal::VectorBase::as_vector;
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
-        const bool sameSize = mValue.size() == N;
-        return sameSize && std::equal(mValue.begin(), mValue.end(), other.begin());
+        const bool sameSize = m_value.size() == N;
+        return sameSize && std::equal(m_value.begin(), m_value.end(), other.begin());
     }
 
     bool operator==(const SimpleShape &other) const;
@@ -31,7 +31,7 @@ public:
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->mValue); }
+    auto attribute_values() const { return std::forward_as_tuple(this->m_value); }
 
     friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
 };

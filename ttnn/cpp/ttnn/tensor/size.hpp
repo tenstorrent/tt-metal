@@ -29,11 +29,11 @@ public:
     [[nodiscard]] size_t width() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("height", "width");
-    auto attribute_values() const { return std::forward_as_tuple(mHeight, mWidth); }
+    auto attribute_values() const { return std::forward_as_tuple(m_height, m_width); }
 
 private:
-    size_t mHeight = 0;
-    size_t mWidth = 0;
+    size_t m_height = 0;
+    size_t m_width = 0;
 };
 
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Size &size);

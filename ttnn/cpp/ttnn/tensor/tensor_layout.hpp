@@ -61,11 +61,11 @@ public:
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
     static TensorLayout fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
 
-    Layout get_layout() const { return mPageConfig.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
-    PageConfig get_page_config() const { return mPageConfig; }
-    DataType get_data_type() const { return mDataType; }
-    const MemoryConfig& get_memory_config() const { return mMemoryConfig; }
-    const Alignment& get_alignment() const { return mAlignment; }
+    Layout get_layout() const { return m_page_config.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
+    PageConfig get_page_config() const { return m_page_config; }
+    DataType get_data_type() const { return m_dtype; }
+    const MemoryConfig& get_memory_config() const { return m_memory_config; }
+    const Alignment& get_alignment() const { return m_alignment; }
 
     Strides get_strides(const ttnn::SimpleShape& shape) const;
 
@@ -94,10 +94,10 @@ private:
     Size get_page_shape(const Size& physical_size) const;
     size_t get_page_size_bytes(const Size& page_size) const;
 
-    DataType mDataType = DataType::BFLOAT16;
-    PageConfig mPageConfig;
-    MemoryConfig mMemoryConfig;
-    Alignment mAlignment;
+    DataType m_dtype = DataType::BFLOAT16;
+    PageConfig m_page_config;
+    MemoryConfig m_memory_config;
+    Alignment m_alignment;
 };
 
 } // tt::tt_metal

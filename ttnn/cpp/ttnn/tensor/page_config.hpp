@@ -30,7 +30,7 @@ public:
     const Tile& get_tile() const;
 
 private:
-    Tile mTile;
+    Tile m_tile;
 };
 
 class PageConfig {
@@ -52,7 +52,7 @@ public:
     bool is_row_major() const;
 
 private:
-    Config mConfig;
+    Config m_config;
 };
 
 } // namespace tt::tt_metal

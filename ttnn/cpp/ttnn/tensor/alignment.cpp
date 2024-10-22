@@ -6,16 +6,14 @@
 
 namespace tt::tt_metal {
 
-bool Alignment::operator==(const Alignment &other) const {
-    return this->mValue == other.mValue;
-}
+bool Alignment::operator==(const Alignment &other) const = default;
 
 bool Alignment::operator==(const std::vector<uint32_t> &other) const {
-    return this->mValue == other;
+    return this->m_value == other;
 }
 
 size_t Alignment::size() const {
-    return this->mValue.size();
+    return this->m_value.size();
 }
 
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &alignment) {

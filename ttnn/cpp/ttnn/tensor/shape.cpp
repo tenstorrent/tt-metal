@@ -6,16 +6,14 @@
 
 namespace ttnn {
 
-bool SimpleShape::operator==(const SimpleShape &other) const {
-    return this->mValue == other.mValue;
-}
+bool SimpleShape::operator==(const SimpleShape &other) const = default;
 
 bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
-    return this->mValue == other;
+    return this->m_value == other;
 }
 
 size_t SimpleShape::rank() const {
-    return this->mValue.size();
+    return this->m_value.size();
 }
 
 uint64_t SimpleShape::volume() const {
