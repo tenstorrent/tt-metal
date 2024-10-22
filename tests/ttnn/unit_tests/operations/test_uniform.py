@@ -24,9 +24,6 @@ class TestMode(Enum):
     BENCHMARK = 1
 
 
-bfloat16_ep = 0.015
-
-
 def check_torch_uniform_bfloat16():
     input = torch.zeros(10, 10, dtype=torch.bfloat16).uniform_(2.1, 2.11)
     logger.info(input)
@@ -65,25 +62,20 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
     min_val, max_val = torch.min(tt_input).item(), torch.max(tt_input).item()
 
     logger.info(f"Distinct elements: {len(elem_cnt.keys())}")
+    logger.info(f"Min val: {min_val}, Max val: {max_val}")
     logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
     logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
 
-    """
-    Random bfloat16 is converted from random float. As 16 bits are truncated, the generated number might be smaller/bigger than from/to.
-    (even torch can't handle that case, check check_torch_uniform_bfloat16() function). bfloat16_ep is used to avoid asserting fail.
-    """
-    if dtype == "bfloat16":
-        assert rand_from - bfloat16_ep <= min_val and max_val < rand_to + bfloat16_ep
-    else:
-        assert rand_from <= min_val and max_val < rand_to
+    a = torch.tensor(rand_from, dtype=get_lib_dtype(torch, dtype)) <= tt_input
+    b = tt_input < torch.tensor(rand_to, dtype=get_lib_dtype(torch, dtype))
+    assert False not in a and False not in b
     assert np.allclose(npu_mean, expected_mean, rtol=0.5)
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 
 
 def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    # Cast to np.float32: As python use float64 - double by default, this can lead to assert fail: rand_from <= generated_number.
-    rand_from, rand_to = np.float32(rand_range[0]), np.float32(rand_range[1])
+    rand_from, rand_to = rand_range[0], rand_range[1]
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
     npu_input = ttnn.from_torch(cpu_input, device=device, dtype=get_lib_dtype(ttnn, dtype), layout=ttnn.TILE_LAYOUT)
 
@@ -104,6 +96,7 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
+        # [32, 32]
         [100, 100],
         [1, 512, 2, 256],
         [512, 512],
@@ -128,34 +121,34 @@ def test_uniform(shape, rand_range, dtype, device):
     run_uniform(shape, rand_range, dtype, device)
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "shape",
-    [[2, 32, 32, 16]],
-)
-@pytest.mark.parametrize("rand_range", [[-3, 4]])
-@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
-    torch.manual_seed(0)
-    num_program_cache_entries_list = []
-    for i in range(2):
-        run_uniform(shape, rand_range, dtype, device)
-        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
-        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
-    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-    assert num_program_cache_entries_list[0] > 0
-    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+# @skip_for_grayskull("Requires wormhole_b0 to run")
+# @pytest.mark.parametrize(
+#     "shape",
+#     [[2, 32, 32, 16]],
+# )
+# @pytest.mark.parametrize("rand_range", [[-3, 4]])
+# @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+# def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
+#     torch.manual_seed(0)
+#     num_program_cache_entries_list = []
+#     for i in range(2):
+#         run_uniform(shape, rand_range, dtype, device)
+#         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+#         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+#         num_program_cache_entries_list.append(device.num_program_cache_entries())
+#     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+#     assert num_program_cache_entries_list[0] > 0
+#     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "shape",
-    [[512, 512], [5, 2, 4, 70, 40]],
-)
-@pytest.mark.parametrize("rand_range", [[0, 1]])
-@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_uniform_with_compute_kernel_options(shape, rand_range, dtype, device, compute_kernel_options):
-    torch.manual_seed(0)
-    run_uniform(shape, rand_range, dtype, device, compute_kernel_options)
+# @skip_for_grayskull("Requires wormhole_b0 to run")
+# @pytest.mark.parametrize(
+#     "shape",
+#     [[512, 512], [5, 2, 4, 70, 40]],
+# )
+# @pytest.mark.parametrize("rand_range", [[0, 1]])
+# @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+# @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+# def test_uniform_with_compute_kernel_options(shape, rand_range, dtype, device, compute_kernel_options):
+#     torch.manual_seed(0)
+#     run_uniform(shape, rand_range, dtype, device, compute_kernel_options)

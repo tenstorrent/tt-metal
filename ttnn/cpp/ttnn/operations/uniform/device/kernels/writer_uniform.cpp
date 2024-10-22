@@ -32,6 +32,18 @@ void kernel_main() {
         uint32_t intermed_cb_read_ptr = get_read_ptr(intermed_cb_id);
         auto intermed_cb_addr = reinterpret_cast<float *>(intermed_cb_read_ptr);
 
+        // for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
+        //     for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
+        //         float rand_float = *intermed_cb_addr;
+        //         DPRINT << rand_float << " ";
+        //         intermed_cb_addr += 1;
+        //     }
+        // }
+
+        // noc_async_write_tile(i, output_addrg, intermed_cb_read_ptr);
+        // noc_async_write_barrier();
+        // cb_pop_front(intermed_cb_id, 1);
+
 #ifdef OUTPUT_DTYPE_FLOAT32
         noc_async_write_tile(i, output_addrg, intermed_cb_read_ptr);
         noc_async_write_barrier();

@@ -28,11 +28,11 @@ namespace ckernel {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|-----------|
  * | tile_index     | The index of the tile in DST register buffer to perform typecast operation | uint32_t | Must be
  * less than the size of the DST register buffer | True      | | from           | Random range lowerbound(inclusive) |
- * float    | Any float                                             | Default(0)| | to             | Random range
- * upperbound(exclusive)                                         | float    | Must be greater than from | Default(1)|
+ * uint    | Any number                                             | True| | to             | Random range
+ * upperbound(exclusive)                                         | uint    | Must be greater than from | True|
  */
-ALWI void rand_tile(uint32_t idst, float from = 0.0f, float to = 1.0f) {
-    MATH((llk_math_eltwise_unary_sfpu_rand<APPROX>(idst, from, to)));
+ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
+    MATH((llk_math_eltwise_unary_sfpu_rand<APPROX>(idst, from, scale)));
 }
 
 /**
