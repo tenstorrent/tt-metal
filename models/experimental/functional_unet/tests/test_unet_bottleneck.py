@@ -21,15 +21,15 @@ from models.experimental.functional_unet.tests.common import is_n300_with_eth_di
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [2])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_unet_bottleneck(batch: int, groups: int, device: ttnn.Device, reset_seeds):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+def test_unet_bottleneck(batch, groups, device, reset_seeds):
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
+    parameters = create_unet_model_parameters(model, torch_input, groups=groups)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
     torch_input, ttnn_input = create_unet_input_tensors(
-        batch, groups, pad_input=True, input_channels=32, input_height=66, input_width=10
+        batch, groups, channel_order="last", input_channels=32, input_height=66, input_width=10
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(f"Created input tensors: shape={list(ttnn_input.shape)}")
@@ -56,20 +56,20 @@ def test_unet_bottleneck_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
-    parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
+    parameters = create_unet_model_parameters(model, torch_input, groups=groups)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, mesh_device, mesh_mapper=weights_mesh_mapper)
 
     num_devices = len(mesh_device.get_device_ids())
     torch_input, ttnn_input = create_unet_input_tensors(
         num_devices * batch,
         groups,
-        pad_input=True,
         input_channels=32,
         input_height=66,
         input_width=10,
+        channel_order="last",
         mesh_mapper=inputs_mesh_mapper,
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
