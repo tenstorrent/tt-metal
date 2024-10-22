@@ -110,7 +110,7 @@ class TtLlamaAttention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         if self.is_multichip and configuration.ccl_topology() == ttnn.Topology.Ring:
-            pt_wo = self.state_dict[wo_str].transpose(-1, -2)
+            pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
             wo_ttnn = ttnn.as_tensor(
                 pt_wo,
                 dtype=ttnn.bfloat8_b,
@@ -133,7 +133,7 @@ class TtLlamaAttention(LightweightModule):
                     -1,
                 ),
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
                 memory_config=wo_mem_config,
                 dtype=self.dtype,
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
@@ -354,14 +354,14 @@ class TtLlamaAttention(LightweightModule):
 
         # All reduce
         if self.is_multichip and not self.ccl_topology == ttnn.Topology.Ring:
-            dense_out_gathered = ttnn.all_gather(dense_out, dim=1, num_links=1, topology=self.ccl_topology)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+            dense_out_reduced = ttnn.reduce_scatter(
+                dense_out,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            # TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working
             ttnn.deallocate(dense_out)
-            ttnn.deallocate(dense_out_gathered)
-
             return dense_out_reduced
         else:
             return dense_out
@@ -504,7 +504,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 2048, 2048, -1])
 
         # all gather matmul
-        if self.ccl_topology == ttnn.Topology.Ring:
+        if self.is_multichip and self.ccl_topology == ttnn.Topology.Ring:
             attn_output_11SH = ttnn.all_gather(
                 attn_output_11SH,
                 dim=3,
@@ -525,28 +525,16 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        if not self.ccl_topology == ttnn.Topology.Ring and self.is_multichip:
-            assert (
-                False
-            ), "n300 not supported. TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working"
-            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=self.ccl_topology)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
+        if self.is_multichip and not self.ccl_topology == ttnn.Topology.Ring:
+            dense_out_reduced = ttnn.reduce_scatter(
+                output_11SH,
+                scatter_dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(output_11SH)
-            ttnn.deallocate(dense_out_gathered)
-
             return dense_out_reduced
-        # # Ring topology supports reduce scatter
-        # dense_out_reduced = ttnn.reduce_scatter(
-        #     output_11SH,
-        #     scatter_dim=3,
-        #     math_op=ttnn.ReduceType.Sum,
-        #     num_links=1,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        # ttnn.deallocate(output_11SH)
-        # return dense_out_reduced
         else:
             return output_11SH
 

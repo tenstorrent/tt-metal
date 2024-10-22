@@ -128,8 +128,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 
         # All reduce
-        if self.args.ccl_topology() == ttnn.Topology.Ring:
-            # Ring topology supports reduce scatter
+        if self.args.is_multichip:
             w2_out_reduced = ttnn.reduce_scatter(
                 w2_out,
                 scatter_dim=3,
@@ -138,18 +137,6 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if mode == "prefill" else ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(w2_out)
-            return w2_out_reduced
-        elif self.args.is_multichip:
-            assert (
-                False
-            ), "n300 not supported. TODO: selection matmul for N300 and TG OR BETTER: use reduce scatter as soon as we have it working"
-            # Line topology required all_gather and local reduction for now
-            w2_out_gathered = ttnn.all_gather(w2_out, dim=1, num_links=1, topology=self.args.ccl_topology)
-            w2_out_reduced = ttnn.experimental.fast_reduce_nc(
-                w2_out_gathered, dims=[1], output=None, compute_kernel_config=None
-            )
-            ttnn.deallocate(w2_out)
-            ttnn.deallocate(w2_out_gathered)
             return w2_out_reduced
         else:
             return w2_out
