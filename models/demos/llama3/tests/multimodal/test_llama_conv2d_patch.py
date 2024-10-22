@@ -45,8 +45,7 @@ import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.m
 @pytest.mark.parametrize(
     "input_shape, in_channels, out_channels, kernel_size, stride, bias",
     [
-        # ((1, 3, 32 * 32, 32 * 32), 3, 512, 32, 32, False),
-        ((1, 3, 14 * 32, 14 * 32), 3, 1280, 14, 14, False),  # Llama3.2 case
+        ((1, 3, 448, 448), 3, 1280, 14, 14, False),  # Llama3.2-11B Base
     ],
 )
 def test_llama_conv2d_inference(

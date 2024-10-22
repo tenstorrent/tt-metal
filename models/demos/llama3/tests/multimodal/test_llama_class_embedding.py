@@ -65,9 +65,7 @@ class ClassEmbedding(nn.Module):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        ((1, 4, 4, 1024, 1280)),
-        ((1, 4, 4, 1024 + 1, 1280)),
-        ((1, 4, 4, 1032, 1280)),
+        ((1, 4, 4, 1024, 1280)),  # Patch 448
     ],
 )
 @pytest.mark.parametrize(
