@@ -19,7 +19,7 @@ class CommandQueueFixture : public ::testing::Test {
             tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const int device_id = 0;
 
@@ -43,7 +43,7 @@ class CommandQueueMultiDeviceFixture : public ::testing::Test {
             TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (num_devices_ < 2 ) {
@@ -78,7 +78,7 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
             GTEST_SKIP();
         }
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
         const chip_id_t mmio_device_id = 0;
@@ -121,7 +121,7 @@ protected:
                 GTEST_SKIP();
             }
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const int device_id = 0;
         const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
         const chip_id_t mmio_device_id = 0;

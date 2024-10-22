@@ -64,7 +64,7 @@ protected:
         }
 
         // Set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         auto num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
         // An extra flag for if we have remote devices, as some tests are disabled for fast

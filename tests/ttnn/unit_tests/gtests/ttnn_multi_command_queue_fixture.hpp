@@ -15,7 +15,7 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi CQ test suite, since it can only be run in Fast Dispatch Mode.";
@@ -42,7 +42,7 @@ class MultiCommandQueueT3KFixture : public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi CQ test suite, since it can only be run in Fast Dispatch Mode.";

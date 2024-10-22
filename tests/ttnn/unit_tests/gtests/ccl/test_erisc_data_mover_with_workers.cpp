@@ -59,7 +59,7 @@ void set_edm_runtime_args(
 class N300TestDevice {
    public:
     N300TestDevice() : device_open(false) {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
@@ -681,7 +681,7 @@ int TestEntrypoint(
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_info("This test can only be run on n300 devices");

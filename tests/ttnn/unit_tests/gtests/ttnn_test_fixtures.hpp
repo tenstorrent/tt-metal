@@ -26,7 +26,7 @@ class TTNNFixture : public ::testing::Test {
 
     void SetUp() override {
         std::srand(0);
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
     }
 
@@ -59,7 +59,7 @@ class T3kMultiDeviceFixture : public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        const auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
             GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";

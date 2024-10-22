@@ -23,7 +23,7 @@ using namespace tt::test_utils;
 
 class DeviceParamFixture : public ::testing::TestWithParam<int> {
    protected:
-    tt::ARCH arch = tt::get_arch_from_string(get_env_arch_name());
+    tt::ARCH arch = tt::get_arch_from_string(get_umd_arch_name());
 };
 
 namespace unit_tests_common::basic::test_device_init {
