@@ -344,7 +344,7 @@ class ShardTensor2dMesh(TensorToMesh):
 
         if len(tensor_shards) != rows * cols:
             raise ValueError(
-                "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh dimensions."
+                f"ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh dimensions. Got {len(tensor_shards)} shards but expected {rows * cols} ({rows} rows * {cols} cols)."
             )
 
         return tensor_shards
