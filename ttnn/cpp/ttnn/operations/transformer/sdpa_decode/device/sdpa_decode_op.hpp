@@ -14,6 +14,7 @@
 namespace ttnn::operations::transformer {
 
 struct ScaledDotProductAttentionDecode {
+    const bool is_causal;
     std::vector<uint32_t> cur_pos;
     const std::optional<float> scale;
     const MemoryConfig output_mem_config;
