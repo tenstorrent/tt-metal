@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,183 +54,6 @@ size_t lcm(size_t a, size_t b) {
 }
 }
 
-namespace utils {
-size_t element_size_bytes(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B:
-            TT_THROW("element_size_bytes() should not be used for BFLOAT8_B and BFLOAT4_B types becaues of how they are packed");
-
-        default:
-            TT_THROW("Unsupported data type!");
-    }
-}
-}
-
-Size::Size(size_t height, size_t width) : mHeight(height), mWidth(width) {}
-Size::Size(const std::pair<size_t, size_t>& size) : mHeight(size.first), mWidth(size.second) {}
-Size::Size(const std::array<size_t, 2>& size) : mHeight(size[0]), mWidth(size[1]) {}
-
-
-Size Size::operator/(const Size& rhs) const {
-    return Size(mHeight / rhs.mHeight, mWidth / rhs.mWidth);
-}
-
-Size Size::operator*(size_t scalar) const {
-    return Size(mHeight * scalar, mWidth * scalar);
-}
-
-Size Size::operator%(const Size& rhs) const {
-    return Size(mHeight % rhs.mHeight,  mWidth % rhs.mWidth);
-}
-
-Size::operator std::pair<size_t, size_t>() const {
-    return {mHeight, mWidth};
-}
-
-Size::operator std::array<size_t, 2>() const {
-    return {mHeight, mWidth};
-}
-
-Size::operator std::array<uint32_t, 2>() const {
-    return {static_cast<uint32_t>(mHeight), static_cast<uint32_t>(mWidth)};
-}
-
-size_t Size::height() const { return mHeight; }
-size_t Size::width() const { return mWidth; }
-
-bool Size::operator==(const Size& rhs) const {
-    return mHeight == rhs.mHeight && mWidth == rhs.mWidth;
-}
-
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)
-{
-    os << "(" << size.height() << ", " << size.width() << ")";
-    return os;
-}
-
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value) {
-    os << "Alignment([";
-    for (size_t i = 0; i < value.size(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << value[i];
-    }
-    os << "])";
-    return os;
-}
-
-TilePageConfig::TilePageConfig(const Tile& tile)
- : tile(tile) {
-}
-
-Alignment RowMajorPageConfig::createDefaultAlignment(DataType dataType) const {
-{
-    TT_FATAL(dataType != DataType::BFLOAT4_B && dataType != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-    return Alignment({sizeof(uint32_t) / utils::element_size_bytes(dataType)});}
-}
-
-Alignment TilePageConfig::createDefaultAlignment(DataType dataType) const {
-    return Alignment({tile.get_height(), tile.get_width()});
-}
-
-void RowMajorPageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
-    TT_FATAL(alignment.size() > 0, "Alignment should have at least 1 dimension for Row Major layout");
-    uint32_t widthAlignment = alignment[-1];
-    uint32_t element_size = utils::element_size_bytes(dataType);
-    uint32_t page_alignment = sizeof(uint32_t) / element_size;
-    TT_FATAL((widthAlignment % page_alignment) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packed as uint32_t (4 bytes).",
-        alignment, element_size, page_alignment);
-}
-
-void TilePageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
-    TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
-    const auto widthAlignment = alignment[-1];
-    TT_FATAL(widthAlignment % tile.get_width() == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, tile.get_width());
-    auto heightAlignment = alignment[-2];
-    TT_FATAL((heightAlignment % tile.get_height()) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile.get_height());
-}
-
-Size RowMajorPageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
-    if (memoryConfig.shard_spec.has_value()) {
-        const auto& shard_spec = memoryConfig.shard_spec.value();
-        const auto& shard_shape = shard_spec.shape;
-        return Size(1, shard_shape[1]);
-    }
-    return Size(1, physical_size.width());
-}
-
-Size TilePageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
-    return Size(tile.get_height(), tile.get_width());
-}
-
-size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
-    const auto size = page_shape.height() * page_shape.width() * utils::element_size_bytes(dataType);
-    return size;
-}
-
-size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
-    const auto tiles_count = page_shape.height() / tile.get_height() * page_shape.width() / tile.get_width();
-    const auto size = tiles_count * tile.get_tile_size(datatype_to_dataformat_converter(dataType));
-    return size;
-}
-
-PageConfig::PageConfig(const Config& config)
-    : mConfig(config) {
-}
-
-PageConfig::PageConfig(Layout layout)
-    : PageConfig(layout, std::nullopt) {
-}
-
-PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
-    if(layout == Layout::ROW_MAJOR) {
-        mConfig = RowMajorPageConfig();
-    }
-    else {
-        mConfig =  TilePageConfig(tile.value_or(Tile()));
-    }
-}
-
-Alignment PageConfig::createDefaultAlignment(DataType dataType) const {
-    return std::visit([&](const auto& config) constexpr { return config.createDefaultAlignment(dataType); }, mConfig);
-}
-
-void PageConfig::validateAlignment(const Alignment& alignment, DataType dataType) const {
-    std::visit([&](const auto& config) constexpr { config.validateAlignment(alignment, dataType); }, mConfig);
-}
-
-Size PageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memoryConfig); }, mConfig);
-}
-
-size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dataType) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dataType); }, mConfig);
-}
-
-bool PageConfig::isRowMajor() const {
-    return std::holds_alternative<RowMajorPageConfig>(mConfig);
-}
-
-std::optional<Tile> PageConfig::get_tile() const
-{
-    if(std::holds_alternative<TilePageConfig>(mConfig)) {
-        return std::get<TilePageConfig>(mConfig).tile;
-    }
-
-    return std::nullopt;
-}
-
 
 TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const Alignment& alignment)
     : mDataType(dataType),
@@ -238,29 +61,24 @@ TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, cons
       mMemoryConfig(memoryConfig),
       mAlignment(alignment) {
 
-    initializeAlignment();
-    validateAlignment();
-}
-
-// Private constructor to create TensorLayout from LegacyPaddedShape
-TensorLayout::TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape)
-    : TensorLayout(dataType, pageConfig, memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape)) {
+    initialize_alignment();
+    validate_alignment();
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape) {
-    return TensorLayout(dataType, pageConfig, memoryConfig, legacyPaddedShape);
+    return TensorLayout(dataType, pageConfig, memoryConfig, legacyPaddedShapeToAlignment(legacyPaddedShape));
 }
 
-void TensorLayout::initializeAlignment() {
+void TensorLayout::initialize_alignment() {
     if(mAlignment.size() != 0)
         return;
 
-    mAlignment = mPageConfig.createDefaultAlignment(mDataType);
+    mAlignment = mPageConfig.create_default_alignment(mDataType);
 }
 
-void TensorLayout::validateAlignment() const
+void TensorLayout::validate_alignment() const
 {
-    return mPageConfig.validateAlignment(mAlignment, mDataType);
+    return mPageConfig.validate_alignment(mAlignment, mDataType);
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
