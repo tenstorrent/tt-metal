@@ -8,12 +8,10 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
-import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case_n300
-from ttnn import ShardTensorToMesh
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
