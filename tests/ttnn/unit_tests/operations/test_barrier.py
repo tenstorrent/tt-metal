@@ -1381,7 +1381,7 @@ def run_all_gather_sharded_t3k(
     ),
 )
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 70000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 72000}], indirect=True)
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
