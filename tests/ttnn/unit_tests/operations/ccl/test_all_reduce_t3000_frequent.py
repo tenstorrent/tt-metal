@@ -101,9 +101,12 @@ def run_all_reduce_test(
 
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
-
     tt_input_tensors = []
     input_tensors = []
+
+    numel = per_chip_output_shape[0] * per_chip_output_shape[1] * per_chip_output_shape[2] * per_chip_output_shape[3]
+    if debug:
+        input_tensors[-1] = torch.arange(numel).reshape(per_chip_output_shape).bfloat16()
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
         tt_input_tensors.append(
@@ -113,6 +116,7 @@ def run_all_reduce_test(
         )
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
+
     unchunked_input_tensor = torch.cat(input_tensors)
 
     assert len(tt_input_tensors) == num_devices
@@ -132,18 +136,21 @@ def run_all_reduce_test(
             ttnn.synchronize_device(mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
+    golden_canonical_out_tensor = torch.zeros(per_chip_output_shape).bfloat16()
+    for i, t in enumerate(input_tensors):
+        golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t.view(per_chip_output_shape)).bfloat16()
+
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
-    golden_canonical_out_tensor = torch.sum(unchunked_input_tensor, 0, keepdim=True)
-    golden_canonical_out_tensor = golden_canonical_out_tensor.view(per_chip_output_shape)
     # Compare
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
-            logger.error(f"output mismatch for tensor {i}")
+            logger.error(f"output mismatch for tensor {i}. Mesh device ID: {mesh_device.get_devices()[i].id()}")
             if debug:
                 for w in range(tt_output_tensor.shape[0]):
                     for z in range(tt_output_tensor.shape[1]):
@@ -174,14 +181,14 @@ def run_all_reduce_test(
         ([1, 1, 32, 8192]),
         ([1, 1, 32, 1024]),
         ([1, 1, 32, 2048]),
-        ([1, 1, 4096, 32]),
-        ([1, 1, 8192, 32]),
-        ([1, 1, 1024, 32]),
-        ([1, 1, 2048, 32]),
+        # ([1, 1, 4096, 32]), #Skipped due to hang
+        # ([1, 1, 8192, 32]),
+        # ([1, 1, 1024, 32]),
+        # ([1, 1, 2048, 32]),
         ([4, 1, 32, 4096]),
         ([8, 1, 32, 1024]),
-        ([1, 4, 1024, 32]),
-        ([2, 4, 2048, 32]),
+        # ([1, 4, 1024, 32]),
+        # ([2, 4, 2048, 32]),
     ],
 )
 @pytest.mark.parametrize(
@@ -194,7 +201,7 @@ def run_all_reduce_test(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(

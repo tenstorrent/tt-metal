@@ -73,7 +73,7 @@ std::vector<ttnn::SimpleShape> ReduceScatter::compute_output_shapes(const std::v
     auto shape = input_tensors[0].get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
-        "The size of the scatter dimension must be a multiple of the ring size");
+        "The size of the scatter dimension {} must be a multiple of the ring size {}", shape[this->scatter_dim], this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
     return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }

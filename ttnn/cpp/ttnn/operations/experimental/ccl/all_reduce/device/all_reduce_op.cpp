@@ -86,22 +86,43 @@ Tensor all_reduce(
 
             auto shape = input_tensor.get_logical_shape();
             auto rank = shape.rank();
+            uint32_t num_devices = devices.size();
 
             uint32_t merged_dim_size = 1;
             for (uint32_t i = 0; i <= rank - 3; ++i) {
                 merged_dim_size *= shape[i];
             }
 
+            uint32_t all_reduce_dim = -1;
+            for (uint32_t i = 0; i < rank; ++i) {
+                if(shape[i] % num_devices == 0){
+                    all_reduce_dim = i;
+                }
+            }
+            TT_FATAL(all_reduce_dim != -1, "Atleast one dim should be divisible by num_devices {}", num_devices);
+
             std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
 
             auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-            const auto& gathered_tensor = operation::run(
-                create_all_gather_struct(reshaped_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+            const auto& reduced_tensor = operation::run(
+                create_reduce_scatter_struct(
+                    reshaped_tensor,
+                    binary_op_type,
+                    all_reduce_dim,
+                    num_links,
+                    output_mem_config,
+                    user_defined_num_workers,
+                    user_defined_num_buffers_per_channel,
+                    devices,
+                    topology),
                 {reshaped_tensor});
 
-            auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);
-            auto final_output = ttnn::reshape(sum_tensor, shape);
+            const auto& gathered_tensor = operation::run(
+                create_all_gather_struct(reduced_tensor.at(0), all_reduce_dim, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                {reduced_tensor.at(0)});
+
+            auto final_output = ttnn::reshape(gathered_tensor.at(0), shape);
 
             return {final_output};
             },
