@@ -713,7 +713,9 @@ def test_slice_7d(device):
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
-        ([8732, 4], 1, 0, 2, 1, ttnn.ROW_MAJOR_LAYOUT),  # Bad pcc
+        ([1, 28, 56, 96], 2, 0, -1, 2, ttnn.TILE_LAYOUT),  # Formerly bad pcc
+        ([1, 56, 56, 96], 1, 0, -1, 2, ttnn.TILE_LAYOUT),  # Formerly bad pcc
+        ([8732, 4], 1, 0, 2, 1, ttnn.ROW_MAJOR_LAYOUT),  # Formerly bad pcc
         ([1, 14, 28, 192], 2, 1, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test (low priority)
         ([1, 23, 40, 128], 3, 0, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test
         ([1, 28, 28, 256], 1, 1, -1, 2, ttnn.TILE_LAYOUT),  # Bad pcc on sweeps but not on unit test
@@ -744,13 +746,13 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     ttnn_output = ttnn_tensor[indices]
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
-
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
+        ([8732, 4], 1, 0, -1, 4, ttnn.TILE_LAYOUT),  # Need tensor for this or a padding aware tiled kernel
         ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
         (
             [1, 7, 71, 64],
@@ -783,4 +785,4 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
