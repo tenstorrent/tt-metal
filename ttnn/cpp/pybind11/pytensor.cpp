@@ -221,7 +221,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
         case DataType::BFLOAT8_B: {
             auto data_ptr = reinterpret_cast<float *>(torch_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
             auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
             auto storage = OwnedStorage{std::move(buffer)};
             // TODO(arakhmati): should it be Layout::TILE?
@@ -230,7 +230,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
         case DataType::BFLOAT4_B: {
             auto data_ptr = reinterpret_cast<float *>(torch_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
             auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
             auto storage = OwnedStorage{std::move(buffer)};
             // TODO(arakhmati): should it be Layout::TILE?
@@ -370,7 +370,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
         case DataType::BFLOAT8_B: {
             auto data_ptr = reinterpret_cast<float *>(np_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
             auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
             auto storage = OwnedStorage{std::move(buffer)};
             // TODO(arakhmati): should it be Layout::TILE?
@@ -379,7 +379,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
         case DataType::BFLOAT4_B: {
             auto data_ptr = reinterpret_cast<float *>(np_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
+            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
             auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
             auto storage = OwnedStorage{std::move(buffer)};
             // TODO(arakhmati): should it be Layout::TILE?
@@ -489,18 +489,19 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             },
             tt_tensor.get_storage());
 
+        const auto& tile = tt_tensor.get_tile();
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
-            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }
         if (tt_dtype == DataType::BFLOAT4_B) {
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
-            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }
@@ -563,12 +564,13 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             },
             tt_tensor.get_storage());
 
+        const auto& tile = tt_tensor.get_tile();
         auto tt_dtype = tt_tensor.get_dtype();
         if (tt_dtype == DataType::BFLOAT8_B) {
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
-                unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                unpack_bfp8_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }
@@ -576,7 +578,7 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
             TT_ASSERT(std::holds_alternative<OwnedBuffer>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
             auto uint32_data = std::get<owned_buffer::Buffer<std::uint32_t>>(std::get<OwnedBuffer>(buffer)).get();
             auto float_unpacked_data =
-                unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false);
+                unpack_bfp4_tiles_into_float_vec(uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
             buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
             tt_dtype = DataType::FLOAT32;
         }

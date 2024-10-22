@@ -12,7 +12,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-
+#include "tt_metal/impl/tile/tile.hpp"
 
 inline uint8_t get_max_exp(const std::vector<uint32_t> &vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
@@ -272,7 +272,7 @@ inline uint32_t create_packed_bfp_packed_as_u32(const std::vector<uint32_t> &u32
 }
 
 template <tt::DataFormat BfpFormat>
-inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a) {
+inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
     TT_ASSERT(

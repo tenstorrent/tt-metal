@@ -93,6 +93,7 @@ Tensor to_layout_impl(
     const auto intended_shape = tensor_arg.get_shape();
 
     auto tensor = tensor_arg;
+    const auto& tile = tensor.tile();
 
     SmallVector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {
@@ -109,7 +110,11 @@ Tensor to_layout_impl(
 
     auto padded_output_shape = output_shape;
     for (auto index = output_shape.size() - 2; index < output_shape.size(); ++index) {
-        padded_output_shape[index] = ttnn::pad_to_multiple_of_tile_size(padded_output_shape[index]);
+        if (index == output_shape.size() - 2) { // h
+            padded_output_shape[index] = ttnn::pad_to_multiple_of_tile_size(padded_output_shape[index], tile.get_tile_shape()[0]);
+        } else { // w
+            padded_output_shape[index] = ttnn::pad_to_multiple_of_tile_size(padded_output_shape[index], tile.get_tile_shape()[1]);
+        }
     }
 
     auto output_memory_config =
@@ -157,8 +162,10 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> padded_output_shape;
 
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
-                if (index >= tensor.get_shape().rank() - 2) {
-                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
+                if (index == tensor.get_shape().rank() - 2) { // h dim
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index], tile.get_tile_shape()[0]));
+                } else if (index == tensor.get_shape().rank() - 1) { // w dim
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index], tile.get_tile_shape()[1]));
                 } else {
                     padded_output_shape.push_back(tensor.get_shape()[index]);
                 }
@@ -208,8 +215,10 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> padded_output_shape;
             SmallVector<uint32_t> padded_input_start;
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
-                if (index >= tensor.get_shape().rank() - 2) {
-                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
+                if (index == tensor.get_shape().rank() - 2) { // h dim
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index], tile.get_tile_shape()[0]));
+                } else if (index == tensor.get_shape().rank() - 1) { // w dim
+                    padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index], tile.get_tile_shape()[1]));
                 } else {
                     padded_output_shape.push_back(tensor.get_shape()[index]);
                 }

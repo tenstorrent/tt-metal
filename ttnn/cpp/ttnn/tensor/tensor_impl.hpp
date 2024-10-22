@@ -210,8 +210,10 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
 
     auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
+    auto transpose_within_face = tile.get_transpose_within_face();
+    auto transpose_of_faces = tile.get_transpose_of_faces();
     return convert_layout(
-        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
 }
 
 template <typename T, template <typename> typename BufferType>

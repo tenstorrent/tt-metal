@@ -97,11 +97,22 @@ inline uint32_t create_packed_bfp8_packed_as_u32(const std::vector<uint32_t> &u3
     return tmp_o;
 }
 
-inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a) {
+inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
-    uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
-    int num_float_in_tile = 1024;
+    auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    auto subtiles_in_tile_row = tile_H / face_H;
+    auto subtiles_in_tile_col = tile_W / face_W;
+    auto subtile_rows = face_H;
+    auto subtile_cols = face_W;
+
+    uint32_t single_bfp8_tile_size = tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
+    int num_float_in_tile = tile_HW;
     TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
     uint32_t num_tiles = fp32_vec.size() / num_float_in_tile;
 
@@ -110,10 +121,6 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float
     std::vector<uint8_t> exponents;
     std::vector<uint32_t> data;
 
-    int subtiles_in_tile_row = 2;
-    int subtiles_in_tile_col = 2;
-    int subtile_rows = 16;
-    int subtile_cols = 16;
     int num_elements_in_dword = 4;
     int fp32_element_index = 0;
     for (int tile_index = 0; tile_index < num_tiles; ++tile_index) {
@@ -126,7 +133,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float
                     for (int j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
-                            data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                            data_index = (tr*face_H + i)*tile_W + (tc*face_W + j) + (num_float_in_tile * tile_index);
                         } else {
                             data_index = fp32_element_index++;
                         }
@@ -170,12 +177,27 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(const std::vector<float
     return packed_result;
 }
 
-inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uint32_t> &bfp8_tiles, bool row_major_output, bool is_exp_a) {
+inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uint32_t> &bfp8_tiles, bool row_major_output, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
+
+    auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    auto num_faces = tile_HW / face_HW;
+    auto subtiles_in_tile_row = tile_H / face_H;
+    auto subtiles_in_tile_col = tile_W / face_W;
+    auto subtile_rows = face_H;
+    auto subtile_cols = face_W;
+    uint32_t num_exp_words = num_faces * face_H / 4;
+    uint32_t num_tile_words = tile_HW / 4;
+    uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
 
     int num_elements_in_dword = 4;
     uint32_t size_bytes = bfp8_tiles.size() * num_elements_in_dword; // each uint32_t contains 4 BFP8 values
-    uint32_t single_bfp8_tile_size = tile_size(tt::DataFormat::Bfp8_b);
+    uint32_t single_bfp8_tile_size = tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
     TT_ASSERT(size_bytes % single_bfp8_tile_size == 0);
     uint32_t num_tiles = size_bytes / single_bfp8_tile_size;
 
@@ -192,11 +214,6 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
     }
     uint32_t exp_word, sub_word_index;
 
-    int subtiles_in_tile_row = 2;
-    int subtiles_in_tile_col = 2;
-    int subtile_rows = 16;
-    int subtile_cols = 16;
-    uint32_t num_bfp8_in_tile = 256 + 16;
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
     uint32_t fp32_element_index = 0;
     std::vector<float> float_vec;
@@ -205,10 +222,10 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
         for (int tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (int tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (int i = 0; i < subtile_rows; ++i) {
-                    subtile_r = tr * 16 + i;
+                    subtile_r = tr * face_H + i;
                     for (int j = 0; j < subtile_cols; j += 8) {
-                        subtile_c = tc * 16 + j;
-                        data_index = (tr*128 + tc*64 + i*4 + j/4); // Each uint32_t contains 4 BFP8 values. Divide data index by 4.
+                        subtile_c = tc * face_W + j;
+                        data_index = (tr*(subtiles_in_tile_col*face_HW/4) + tc*(face_HW/4) + i*(face_W/4) + j/4); // Each uint32_t contains 4 BFP8 values. Divide data index by 4.
                         int tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
 
                         int exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
@@ -217,8 +234,8 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
                         sub_word_index = (tile_and_data_index >> 2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
                         __m256i exp_vector = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
                         // Take 2 uint32_t values. These are 8 BFP8 values
-                        __m128i first = _mm_set1_epi32(bfp8_tiles.at(16 + tile_and_data_index)); // Replicate first uint32_t 4 times (one for each BFP8 value)
-                        __m128i second = _mm_set1_epi32(bfp8_tiles.at(16 + tile_and_data_index + 1)); //  Replicate second uint32_t 4 times
+                        __m128i first = _mm_set1_epi32(bfp8_tiles.at(num_exp_words + tile_and_data_index)); // Replicate first uint32_t 4 times (one for each BFP8 value)
+                        __m128i second = _mm_set1_epi32(bfp8_tiles.at(num_exp_words + tile_and_data_index + 1)); //  Replicate second uint32_t 4 times
                         first = _mm_srlv_epi32(_mm_and_si128(first, mask), shift); // Extract each BFP8 from the first uint32_t
                         second = _mm_srlv_epi32(_mm_and_si128(second, mask), shift); // Extract each BFP8 from the second uint32_t
                         __m256i combined = _mm256_set_m128i(second, first); // Concatenate 2 128 vectors to 1 256
@@ -248,7 +265,7 @@ inline std::vector<float> unpack_bfp8_tiles_into_float_vec(const std::vector<uin
 
                         uint32_t float_data_index;
                         if (row_major_output) {
-                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                            float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {
                             float_data_index = fp32_element_index;
                             fp32_element_index += 8;

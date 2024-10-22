@@ -29,7 +29,9 @@ template <class T, template <typename...> typename BufferType>
 std::vector<T> convert_to_tile_layout(
     const BufferType<T>& data,
     std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
-    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt,
+    const std::optional<bool>& transpose_within_face = std::nullopt,
+    const std::optional<bool>& transpose_of_faces = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     if(data.size() == 0) {
@@ -43,6 +45,8 @@ std::vector<T> convert_to_tile_layout(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
+    bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
+    bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
     TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
@@ -52,21 +56,41 @@ std::vector<T> convert_to_tile_layout(
         std::vector<T> bottom_left;
         std::vector<T> bottom_right;
 
-        int index = tile_idx * tile_HW;
-        for(int row = 0; row < tile_H; row++) {
+        if (transpose_face) {
             for(int col = 0; col < tile_W; col++) {
-                if(row < face_H and col < face_W) {
-                    top_left.push_back(data[index]);
-                } else if(row < face_H and col >= face_W) {
-                    top_right.push_back(data[index]);
-                } else if(row >= face_H and col < face_W) {
-                    bottom_left.push_back(data[index]);
-                } else if(row >= face_H and col >= face_W) {
-                    bottom_right.push_back(data[index]);
-                } else {
-                    TT_ASSERT(false);
+                int index = tile_idx * tile_HW + col;
+                for(int row = 0; row < tile_H; row++) {
+                    if(row < face_H and col < face_W) {
+                        top_left.push_back(data[index]);
+                    } else if(row < face_H and col >= face_W) {
+                        top_right.push_back(data[index]);
+                    } else if(row >= face_H and col < face_W) {
+                        bottom_left.push_back(data[index]);
+                    } else if(row >= face_H and col >= face_W) {
+                        bottom_right.push_back(data[index]);
+                    } else {
+                        TT_ASSERT(false);
+                    }
+                    index += tile_W;
                 }
-                index++;
+            }
+        } else {
+            int index = tile_idx * tile_HW;
+            for(int row = 0; row < tile_H; row++) {
+                for(int col = 0; col < tile_W; col++) {
+                    if(row < face_H and col < face_W) {
+                        top_left.push_back(data[index]);
+                    } else if(row < face_H and col >= face_W) {
+                        top_right.push_back(data[index]);
+                    } else if(row >= face_H and col < face_W) {
+                        bottom_left.push_back(data[index]);
+                    } else if(row >= face_H and col >= face_W) {
+                        bottom_right.push_back(data[index]);
+                    } else {
+                        TT_ASSERT(false);
+                    }
+                    index++;
+                }
             }
         }
         TT_ASSERT(top_left.size() == face_HW);
@@ -74,10 +98,17 @@ std::vector<T> convert_to_tile_layout(
         TT_ASSERT((bottom_left.size() == 0) or (bottom_left.size() == face_HW));
         TT_ASSERT((bottom_right.size() == 0) or (bottom_right.size() == face_HW));
 
-        result.insert(result.end(), top_left.begin(), top_left.end());
-        result.insert(result.end(), top_right.begin(), top_right.end());
-        result.insert(result.end(), bottom_left.begin(), bottom_left.end());
-        result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        if (transpose_face_order) {
+            result.insert(result.end(), top_left.begin(), top_left.end());
+            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
+            result.insert(result.end(), top_right.begin(), top_right.end());
+            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        } else {
+            result.insert(result.end(), top_left.begin(), top_left.end());
+            result.insert(result.end(), top_right.begin(), top_right.end());
+            result.insert(result.end(), bottom_left.begin(), bottom_left.end());
+            result.insert(result.end(), bottom_right.begin(), bottom_right.end());
+        }
     }
 
     return result;
@@ -243,7 +274,9 @@ inline std::vector<T> convert_layout(
     tests::utils::TensorLayoutType inL,
     tests::utils::TensorLayoutType outL,
     std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
-    std::optional<const tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
+    std::optional<const tt::stl::Span<const uint32_t>> face_shape = std::nullopt,
+    const std::optional<bool>& transpose_within_face = std::nullopt,
+    const std::optional<bool>& transpose_of_faces = std::nullopt) {
     ZoneScoped;
     if(inp.size() == 0) {
         return std::vector<T>();
@@ -252,7 +285,7 @@ inline std::vector<T> convert_layout(
     switch (inL) {
         case tests::utils::TensorLayoutType::TILED_SWIZZLED:
             if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                return convert_to_tile_layout<T>(inp, tile_shape, face_shape);
+                return convert_to_tile_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
             } else
@@ -262,8 +295,8 @@ inline std::vector<T> convert_layout(
             if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
                 return tilize_nchw<T>(inp, shape, tile_shape);
             } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, tests::utils::TensorLayoutType::TILED_SWIZZLED, tile_shape, face_shape);
-                return convert_layout<T>(swiz32, shape, tests::utils::TensorLayoutType::TILED_SWIZZLED, outL, tile_shape, face_shape);
+                auto swiz32 = convert_layout<T>(inp, shape, inL, tests::utils::TensorLayoutType::TILED_SWIZZLED, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return convert_layout<T>(swiz32, shape, tests::utils::TensorLayoutType::TILED_SWIZZLED, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;

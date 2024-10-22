@@ -190,7 +190,7 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT)
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile)
         shape_with_padding = tensor.shape
         tensor = tensor.reshape(tensor.shape.with_tile_padding())
         tensor = ttnn.to_torch(tensor)

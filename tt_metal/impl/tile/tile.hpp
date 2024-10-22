@@ -41,25 +41,47 @@ struct Tile {
     uint32_t num_faces = constants::TILE_HW / constants::FACE_HW;
     uint32_t partial_face = 0;
     uint32_t narrow_tile = 0;
+    bool transpose_within_face = false; // tranpose datums within each face
+    bool transpose_of_faces = false; // transpose the face order
 
-    Tile(const std::array<uint32_t, 2>& tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}) : tile_shape(tile_shape) {
+    Tile(std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}, bool transpose_tile = false) :
+        tile_shape(tile_shape) {
+
+        if (transpose_tile) {
+            std::swap(this->tile_shape[0], this->tile_shape[1]);
+        }
+
         auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(),
-                           [this, &tile_shape](const auto& pair) {
-                               if (pair[0] == tile_shape) {
-                                   this->face_shape = pair[1];
-                                   return true;
-                               }
-                               return false;
-                           });
+                            [this](const auto& pair) {
+                                if (pair[0] == this->tile_shape) {
+                                    this->face_shape = pair[1];
+                                    return true;
+                                }
+                                return false;
+                            });
+
         if (it == TILE_FACE_HW_CHOICES.end()) {
             TT_THROW("Tile size is not valid for our hardware");
         }
 
-        tile_hw = tile_shape[0] * tile_shape[1];
+        if (transpose_tile) {
+            transpose_within_face = true;
+            transpose_of_faces = true;
+        } else {
+            transpose_within_face = false;
+            transpose_of_faces = false;
+        }
+
+        if (transpose_tile) {
+            TT_FATAL((this->tile_shape[0] == constants::FACE_HEIGHT || this->tile_shape[0] == constants::TILE_HEIGHT),
+                    "Tile height must equal 16 or 32 in transpose mode");
+        }
+
+        tile_hw = this->tile_shape[0] * this->tile_shape[1];
         face_hw = face_shape[0] * face_shape[1];
         num_faces = tile_hw / face_hw;
-        partial_face = (uint32_t)(tile_shape[0] < constants::TILE_HEIGHT);
-        narrow_tile = (uint32_t)(tile_shape[1] < constants::TILE_WIDTH);
+        partial_face = static_cast<uint32_t>(this->tile_shape[0] < constants::TILE_HEIGHT);
+        narrow_tile = static_cast<uint32_t>(this->tile_shape[1] < constants::TILE_WIDTH);
     }
 
     // Getter methods
@@ -72,15 +94,17 @@ struct Tile {
     const uint32_t get_narrow_tile() const { return narrow_tile; }
     const std::array<uint32_t, 2> get_tile_shape() const { return tile_shape; }
     const std::array<uint32_t, 2> get_face_shape() const { return face_shape; }
+    const bool get_transpose_within_face() const { return transpose_within_face; }
+    const bool get_transpose_of_faces() const { return transpose_of_faces; }
 
     const uint32_t get_tile_size(const DataFormat& format) const {
         switch (format) {
             case DataFormat::Bfp2:
-            case DataFormat::Bfp2_b: return (tile_hw / 4) + (16 * num_faces);
+            case DataFormat::Bfp2_b: return (tile_hw / 4) + (face_shape[0] * num_faces);
             case DataFormat::Bfp4:
-            case DataFormat::Bfp4_b: return (tile_hw / 2) + (16 * num_faces);
+            case DataFormat::Bfp4_b: return (tile_hw / 2) + (face_shape[0] * num_faces);
             case DataFormat::Bfp8:
-            case DataFormat::Bfp8_b: return tile_hw + (16 * num_faces);
+            case DataFormat::Bfp8_b: return tile_hw + (face_shape[0] * num_faces);
             case DataFormat::Float16:
             case DataFormat::Float16_b: return (tile_hw * 2);
             case DataFormat::Float32: return (tile_hw * 4);
@@ -94,6 +118,32 @@ struct Tile {
             case DataFormat::RawUInt16: return (tile_hw * 2);
             case DataFormat::Int32: return (tile_hw * 4);
             case DataFormat::RawUInt32: return (tile_hw * 4);
+            case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
+            default: throw std::invalid_argument("Unknown format");
+        }
+    }
+
+    const uint32_t get_tile_volume(const DataFormat& format) const {
+        switch (format) {
+            case DataFormat::Bfp2:
+            case DataFormat::Bfp2_b:
+            case DataFormat::Bfp4:
+            case DataFormat::Bfp4_b:
+            case DataFormat::Bfp8:
+            case DataFormat::Bfp8_b: return tile_hw + (face_shape[0] * num_faces);
+            case DataFormat::Float16:
+            case DataFormat::Float16_b:
+            case DataFormat::Float32: return tile_hw;
+            case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+            case DataFormat::Int8:
+            case DataFormat::Lf8:
+            case DataFormat::UInt8:
+            case DataFormat::UInt16:
+            case DataFormat::UInt32:
+            case DataFormat::RawUInt8:
+            case DataFormat::RawUInt16:
+            case DataFormat::Int32:
+            case DataFormat::RawUInt32: return tile_hw;
             case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
             default: throw std::invalid_argument("Unknown format");
         }

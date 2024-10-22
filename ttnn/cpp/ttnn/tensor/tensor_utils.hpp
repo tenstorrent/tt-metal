@@ -72,17 +72,20 @@ static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type) {
+static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const std::optional<Tile>& tile = std::nullopt) {
     const size_t volume = shape.volume();
+    auto tile_hw = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
     if (data_type == DataType::BFLOAT8_B) {
-        TT_ASSERT(volume % constants::TILE_HW == 0);
-        const auto bfloat8_b_volume = volume / constants::TILE_HW * constants::BFLOAT8_B_TILE_HW;
+        auto tile_volume = tile.has_value() ? tile->get_tile_volume(DataFormat::Bfp8_b) : constants::BFLOAT8_B_TILE_HW;
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat8_b_volume = volume / tile_hw * tile_volume;
         TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
         return bfloat8_b_volume / sizeof(std::uint32_t);
     }
     if (data_type == DataType::BFLOAT4_B) {
-        TT_ASSERT(volume % constants::TILE_HW == 0);
-        const auto bfloat4_b_volume = volume / constants::TILE_HW * constants::BFLOAT4_B_TILE_HW;
+        auto tile_volume = tile.has_value() ? tile->get_tile_volume(DataFormat::Bfp4_b) : constants::BFLOAT4_B_TILE_HW;
+        TT_ASSERT(volume % tile_hw == 0);
+        const auto bfloat4_b_volume = volume / tile_hw * tile_volume;
         TT_ASSERT(volume % sizeof(std::uint32_t) == 0);
         return bfloat4_b_volume / sizeof(std::uint32_t);
     }
