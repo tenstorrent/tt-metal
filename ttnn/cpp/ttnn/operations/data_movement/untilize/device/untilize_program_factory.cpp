@@ -328,7 +328,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         uint32_t num_cores = all_cores.num_cores();
         ncores = num_cores;
         core_range = all_cores;
-        core_range_cliff = CoreRangeSet({});
+        core_range_cliff = CoreRangeSet();
         ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
         nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
         nblocks_per_core_cliff = 0;

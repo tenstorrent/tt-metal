@@ -815,9 +815,9 @@ int main(int argc, char **argv) {
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks; // number of DRAM banks
 
-        CoreRangeSet all_dram_reader_cores = CoreRangeSet{{}};
+        CoreRangeSet all_dram_reader_cores;
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
-         CoreRangeSet all_l1_receiver_cores = CoreRangeSet{{}};
+        CoreRangeSet all_l1_receiver_cores;
         std::vector<CoreCoord> all_l1_writer_cores_ordered;
         if (device->arch() == tt::ARCH::BLACKHOLE) {
             get_dram_reader_core_coords_blackhole(device, all_dram_reader_cores, all_dram_reader_cores_ordered);

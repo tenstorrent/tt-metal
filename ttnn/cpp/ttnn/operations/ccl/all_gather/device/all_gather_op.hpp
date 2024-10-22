@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstdint>
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
