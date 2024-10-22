@@ -34,7 +34,7 @@ using namespace tt::test_utils::df;
 class N300TestDevice {
    public:
     N300TestDevice() : device_open(false) {
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
         log_trace(tt::LogTest, "channel_counts[{}]: {}", i, channel_counts.back());
     }
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_trace(tt::LogTest, "Need at least 2 devices to run this test");

@@ -22,7 +22,7 @@ third_party/ @tt-rkim @TT-billteng
 MANIFEST.in @tt-rkim
 setup.py @tt-rkim
 pyproject.toml @tt-rkim @TT-billteng
-requirements*.txt @tt-rkim @TT-billteng
+requirements*.txt @tt-rkim @TT-billteng @ttmchiou
 setup_hugepages.py @tt-rkim @TT-billteng
 
 scripts/docker @TT-billteng
@@ -55,6 +55,7 @@ tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal
+tt_metal/**/requirements*.txt @tt-rkim @TT-billteng @ttmchiou
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT

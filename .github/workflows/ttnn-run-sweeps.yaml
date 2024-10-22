@@ -186,6 +186,7 @@ on:
           - eltwise.binary.fmod.fmod
           - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.lt.lt_tensor_pytorch2
           - eltwise.binary.lt.lt_scalar_pytorch2
