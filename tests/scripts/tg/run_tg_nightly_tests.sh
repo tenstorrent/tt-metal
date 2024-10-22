@@ -7,6 +7,8 @@ run_tg_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_70b_tests"
 
+  pytest tests/ttnn/unit_tests/operations/test_all_gather_TG_nightly.py ; fail+=$?
+
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
   pytest tests/nightly/tg/models/demos/tg/llama3_70b ; fail+=$?
 
