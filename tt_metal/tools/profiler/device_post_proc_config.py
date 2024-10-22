@@ -95,6 +95,17 @@ class default_setup(metaclass=MergeMetaclass):
     deviceTarball = "device_perf_results.tgz"
 
 
+class test_timestamped_events(default_setup):
+    timerAnalysis = {
+        "Events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "ERISC"},
+        },
+    }
+    detectOps = False
+
+
 class test_multi_op(default_setup):
     timerAnalysis = {
         "BRISC KERNEL_START->KERNEL_END": {
