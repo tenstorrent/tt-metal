@@ -50,6 +50,8 @@ void kernel_main() {
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(14);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(15);
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(16);
+    constexpr bool is_causal = get_compile_time_arg_val(17) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(18) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr  = get_arg_val<uint32_t>(arg_idx++);
@@ -57,6 +59,7 @@ void kernel_main() {
     const uint32_t v_addr  = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pos_addr  = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_addr  = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mask_addr  = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -71,32 +74,34 @@ void kernel_main() {
         return;
     }
     // Get cur_pos
-    uint32_t cur_pos = 0;
-    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg != UINT32_MAX){
-        cur_pos = cur_pos_arg;
-    }
-    else {
-        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
-        const InterleavedAddrGen<true> addrg = {
-                .bank_base_address = pos_addr,
-                .page_size = index_stick_size_B
-            };
+    uint32_t cur_pos = St*32-1; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
+    if (is_causal) {
+        // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+        if (cur_pos_arg != UINT32_MAX){
+            cur_pos = cur_pos_arg;
+        }
+        else {
+            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            const InterleavedAddrGen<true> addrg = {
+                    .bank_base_address = pos_addr,
+                    .page_size = index_stick_size_B
+                };
 
-        cb_reserve_back(cb_index_id, 1);
-        uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
-        // index_tensor has one page to read
-        uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-        noc_async_read_barrier();
-        cb_push_back(cb_index_id, 1);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-        cur_pos = index_ptr[cur_batch];
-    }
+            cb_reserve_back(cb_index_id, 1);
+            uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
+            // index_tensor has one page to read
+            uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+            noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+            noc_async_read_barrier();
+            cb_push_back(cb_index_id, 1);
+            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+            cur_pos = index_ptr[cur_batch];
+        }
 
-    if (cur_pos == UINT32_MAX) {
-        // cur_pos of -1 indicates that the user should be skipped
-        return;
+        if (cur_pos == UINT32_MAX) {
+            // cur_pos of -1 indicates that the user should be skipped
+            return;
+        }
     }
     const uint32_t valid_seq_len_tiles = (cur_pos + 1 + 32 - 1) / 32;
 
@@ -137,6 +142,7 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CB::c_in0;
     constexpr uint32_t cb_k_in = tt::CB::c_in1;
     constexpr uint32_t cb_v_in = tt::CB::c_in2;
+    constexpr uint32_t cb_mask_in = tt::CB::c_in3;
 
 
     constexpr uint32_t onetile = 1;
@@ -146,6 +152,8 @@ void kernel_main() {
     constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
+    constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -202,7 +210,16 @@ void kernel_main() {
         .data_format = v_data_format
     };
 
+    const InterleavedAddrGenFast<is_dram> mask_reader = {
+        .bank_base_address = mask_addr,
+        .page_size = mask_tile_bytes,
+        .data_format = mask_data_format
+    };
+
     for (uint32_t cur_head = cur_head_group*num_heads_per_core; cur_head < cur_head_group*num_heads_per_core + num_heads_per_core; ++cur_head) {
+        const uint32_t mask_batch_offset = (cur_batch % Bkv) * PNHt * St;
+        const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t;
+        uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         if constexpr (is_paged_attention) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
 
@@ -228,6 +245,29 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_k_in, k_chunk_tiles);
+
+                if constexpr(use_attention_mask){
+                    // Read mask chunk
+                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
+                    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+                    barrier_count = 0;
+                    for (uint32_t row = 0; row < PNHt; ++row) {
+                        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
+                        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+                            mask_tile_id++;
+                            mask_write_ptr += mask_tile_bytes;
+
+                            if (++barrier_count == barrier_threshold) {
+                                noc_async_read_barrier();
+                                barrier_count = 0;
+                            }
+                        }
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_mask_in, mask_chunk_tiles);
+                    mask_start_tile_id += mask_chunk_tiles;
+                }
 
                 // Read V chunk in row major order, write in row-major order
                 cb_reserve_back(cb_v_in, k_chunk_tiles);
@@ -288,6 +328,29 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_k_in, k_chunk_tiles);
                 k_start_tile_id += k_chunk_tiles;
+
+                if constexpr(use_attention_mask){
+                    // Read mask chunk
+                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
+                    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+                    barrier_count = 0;
+                    for (uint32_t row = 0; row < PNHt; ++row) {
+                        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
+                        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+                            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+                            mask_tile_id++;
+                            mask_write_ptr += mask_tile_bytes;
+
+                            if (++barrier_count == barrier_threshold) {
+                                noc_async_read_barrier();
+                                barrier_count = 0;
+                            }
+                        }
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_mask_in, mask_chunk_tiles);
+                    mask_start_tile_id += mask_chunk_tiles;
+                }
 
                 // Read V chunk
                 cb_reserve_back(cb_v_in, k_chunk_tiles);
