@@ -51,7 +51,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id = 0;
 
-    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<page_size, true>(input_addr, bank_id, vc);
+    uint32_t src_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(input_addr, page_size, bank_id, vc);
     uint32_t src_read_addr = 0;
 
 #ifdef ARCH_GRAYSKULL
