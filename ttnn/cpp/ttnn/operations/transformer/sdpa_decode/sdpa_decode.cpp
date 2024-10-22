@@ -37,6 +37,12 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     //uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
     uint32_t k_chunk_size = 512; //get_chunk_size(max_cur_pos + 1);
+    if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
+        k_chunk_size = program_config.value().k_chunk_size;
+        // assert chunk size must be power of 2 and multiple of 32
+        TT_FATAL((k_chunk_size & (k_chunk_size - 1)) == 0, "User provided k_chunk_size must be power of 2, got: {}", k_chunk_size);
+        TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
+    }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
     auto kernel_config_val = init_device_compute_kernel_config(

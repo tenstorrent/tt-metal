@@ -150,6 +150,7 @@ Pointwise Unary
    ttnn.log_sigmoid
    ttnn.logical_not
    ttnn.frac
+   ttnn.fill
    ttnn.logit
    ttnn.mish
    ttnn.multigammaln
@@ -478,6 +479,7 @@ CCL
 
    ttnn.all_gather
    ttnn.reduce_scatter
+   ttnn.experimental.all_reduce
 
 
 Embedding

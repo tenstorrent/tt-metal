@@ -23,7 +23,7 @@ using namespace tt::test_utils;
 
 class DeviceParamFixture : public ::testing::TestWithParam<int> {
    protected:
-    tt::ARCH arch = tt::get_arch_from_string(get_env_arch_name());
+    tt::ARCH arch = tt::get_arch_from_string(get_umd_arch_name());
 };
 
 namespace unit_tests_common::basic::test_device_init {
@@ -80,14 +80,13 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     }
 
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices;
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
     const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-    devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
     }
@@ -100,14 +99,13 @@ TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
         GTEST_SKIP();
     }
     ASSERT_TRUE(num_devices > 0);
-    std::vector<tt::tt_metal::Device *> devices;
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
     const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-    devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
         ASSERT_TRUE(unit_tests_common::basic::test_device_init::load_all_blank_kernels(device));
     }

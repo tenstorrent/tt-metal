@@ -56,9 +56,11 @@ run_t3000_llama3_tests() {
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
@@ -103,6 +105,7 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather_matmul.py -k post_commit ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/test_reduce_scatter_post_commit.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/test_all_reduce_t3000_frequent.py ; fail+=$?
 
   # distributed layernorm
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?

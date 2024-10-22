@@ -25,6 +25,7 @@ show_help() {
     echo "  --development                    Set the build type as RelWithDebInfo."
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
+    echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
 }
 
 clean() {
@@ -47,11 +48,12 @@ build_ttnn_tests="OFF"
 build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
+build_static_libs="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,release,development,debug,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-static-libs,release,development,debug,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -97,6 +99,8 @@ while true; do
             build_umd_tests="ON";;
         --build-programming-examples)
             build_programming_examples="ON";;
+        --build-static-libs)
+            build_static_libs="ON";;
         --release)
             build_type="Release";;
         --development)
@@ -212,6 +216,10 @@ fi
 
 if [ "$build_programming_examples" = "ON" ]; then
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
+fi
+
+if [ "$build_static_libs" = "ON" ]; then
+    cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
 fi
 
 # Create and link the build directory

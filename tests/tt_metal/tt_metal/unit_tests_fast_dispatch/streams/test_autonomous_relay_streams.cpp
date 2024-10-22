@@ -649,7 +649,7 @@ void build_and_run_autonomous_stream_test(
 }  // namespace tt
 
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreams) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
@@ -692,7 +692,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreams) {
 }
 
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSmallPackets) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
@@ -735,7 +735,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSmallPackets) {
 }
 
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingShort) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");
@@ -781,7 +781,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingShort) {
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingRandomShort) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
     //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
@@ -836,7 +836,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingRandomShor
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingLong) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
     //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
@@ -886,7 +886,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsLoopingLong) {
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
 TEST_F(CommandQueueFixture, DISABLED_TestAutonomousRelayStreamsSweep) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info(tt::LogTest, "Test must be run on WH");

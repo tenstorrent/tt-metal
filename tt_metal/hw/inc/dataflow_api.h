@@ -1621,9 +1621,9 @@ inline void RISC_POST_HEARTBEAT(uint32_t &heartbeat) {
 FORCE_INLINE
 uint32_t min(uint32_t a, uint32_t b) { return (a < b) ? a: b; }
 
-template <uint32_t page_size, bool use_vc>
+template <bool use_vc>
 FORCE_INLINE
-uint32_t noc_async_read_tile_dram_sharded_set_state(uint32_t bank_base_address, uint32_t bank_id = 0, const uint32_t vc = 0, uint8_t noc = noc_index) {
+uint32_t noc_async_read_tile_dram_sharded_set_state(uint32_t bank_base_address, uint32_t page_size, uint32_t bank_id = 0, const uint32_t vc = 0, uint8_t noc = noc_index) {
     uint32_t src_addr_;
     uint32_t src_noc_xy;
 

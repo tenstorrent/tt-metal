@@ -1288,7 +1288,7 @@ def clip(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.clip(t0, low, high, memory_config=output_mem_config)
+    t1 = ttnn.clip(t0, min=low, max=high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 

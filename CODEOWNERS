@@ -22,7 +22,7 @@ third_party/ @tt-rkim @TT-billteng
 MANIFEST.in @tt-rkim
 setup.py @tt-rkim
 pyproject.toml @tt-rkim @TT-billteng
-requirements*.txt @tt-rkim @TT-billteng
+requirements*.txt @tt-rkim @TT-billteng @ttmchiou
 setup_hugepages.py @tt-rkim @TT-billteng
 
 scripts/docker @TT-billteng
@@ -37,6 +37,7 @@ tests/CMakeLists.txt @tt-rkim @vtangTT @TT-billteng @blozano-tt @afuller-TT
 # Testing scripts and infra
 
 conftest.py @tt-rkim
+/conftest.py @tt-rkim @cfjchu @SeanNijjar
 
 tests/scripts/run_pre_post_commit_regressions.sh @tt-rkim
 tests/scripts/run_tests.sh @tt-rkim
@@ -54,6 +55,7 @@ tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal
+tt_metal/**/requirements*.txt @tt-rkim @TT-billteng @ttmchiou
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -114,8 +116,10 @@ ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
-tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
+tests/sweep_framework/sweeps
+tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 
 # TTNN Distributed
 ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
@@ -175,4 +179,4 @@ scripts/docker @ttmchiou @TT-billteng @tt-rkim
 dockerfile @ttmchiou @TT-billteng @tt-rkim
 
 tt_metal/CMakeLists.txt @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @blozano-tt
-ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy @blozano-tt
+ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @yan-zaretskiy
