@@ -1,14 +1,13 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
 from typing import Optional, Tuple
 from functools import partial
 
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
