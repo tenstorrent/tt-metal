@@ -3,6 +3,16 @@ name: "All post-commit tests"
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - CI
   push:
     branches: ["main"]
 
@@ -54,12 +64,14 @@ jobs:
     secrets: inherit
     with:
       build-docker: false
+      build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
       build-docker: false
+      build-type: ${{ inputs.build-type || 'Release' }}
     secrets: inherit
   # UMD Unit Tests
   umd-unit-tests:
