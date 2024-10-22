@@ -93,7 +93,8 @@ class TtTransformerBlock(LightweightModule):
         # FIXME: Currently, for decode mode, we are using DRAM intereleaved as L1 interleaved results in h being corrupted in MLP
         skip_mem_cfg = (
             ttnn.DRAM_MEMORY_CONFIG
-        )  # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+            # self.model_config["DEC_SKIP_OUTPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        )
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)

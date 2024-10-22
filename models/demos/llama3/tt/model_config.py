@@ -783,6 +783,7 @@ class TtModelArgs:
     def get_model_config(self):
         return self.model_config
 
+    # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
         if self.dummy_weights:
@@ -794,7 +795,9 @@ class TtModelArgs:
             state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
 
         keys_dict = list(state_dict.keys())[:]
-        remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
+        remv = [
+            f"layers.{i}." for i in list(range(self.n_layers, 32))
+        ]  # TODO, this is not generalized to all models. it assumes max layers = 32
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)

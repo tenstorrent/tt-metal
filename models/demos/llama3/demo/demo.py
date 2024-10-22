@@ -504,7 +504,6 @@ def run_llama3_demo(
 
 @pytest.mark.parametrize(
     "input_prompts, instruct_weights, num_batches, single_layer",
-    "input_prompts, instruct_weights, num_batches, single_layer",
     [
         ("models/demos/llama3/demo/input_data_prefill_128.json", False, 1, False),
         ("models/demos/llama3/demo/input_data_prefill_128.json", False, 3, False),
