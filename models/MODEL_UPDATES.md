@@ -4,6 +4,11 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## October 21, 2024
+
+### [Llama 3/3.1 - 70B](demos/t3000/llama3_70b)
+- Enabled prefill workloads to pad to multiples of 1024 instead of powers of 2, improving overall performance for longer sequences
+
 ## October 7, 2024
 
 ### [Llama 3.1 - 8B](demos/wormhole/llama31_8b)
