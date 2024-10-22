@@ -4,19 +4,17 @@
 
 #pragma once
 
-#include <chrono>
 #include <functional>
+#include <vector>
 
 #include "common/base.hpp"
 #include "common/metal_soc_descriptor.h"
-#include "common/test_common.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "host_mem_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
+#include "host_mem_address_map.h" // Comes from UMD, architecture specific, FIXME
 #include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
+// FIXME: Need to get rid of these, because they are architecture specific
 // clang-format off
 #include "noc/noc_parameters.h"
 #include "eth_interface.h"
@@ -80,9 +78,9 @@ class Cluster {
     void deassert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
     void assert_risc_reset_at_core(const tt_cxy_pair &physical_chip_coord) const;
 
-    void write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
+    void write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
     void read_dram_vec(
-        vector<uint32_t> &vec,
+        std::vector<uint32_t> &vec,
         uint32_t size_in_bytes,
         tt_target_dram dram,
         uint64_t addr,
@@ -94,7 +92,7 @@ class Cluster {
     void read_core(
         void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
     void read_core(
-        vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
+        std::vector<uint32_t> &data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access = false) const;
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair &target) const {
         chip_id_t mmio_device_id = device_to_mmio_device_.at(target.chip);

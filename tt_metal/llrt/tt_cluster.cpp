@@ -4,22 +4,32 @@
 
 #include "tt_cluster.hpp"
 
-#include <immintrin.h>
-
+#include <cstdint>
+#include <cstdlib> // getenv
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
+#include <set>
 #include <string>
+#include <tuple> // tie, make_tuple
+#include <unordered_set>
+#include <vector>
+#include <stdexcept>
 
-#include "hostdevcommon/dprint_common.h"
 #include "rtoptions.hpp"
-#include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "third_party/umd/device/device_api_metal.h"
+#include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "third_party/umd/device/simulation/tt_simulation_device.h"
+#include "third_party/umd/device/tt_cluster_descriptor_types.h" // chip_id_t
+#include "tt_metal/third_party/umd/device/tt_xy_pair.h" // tt_xy_pair, tt_cxy_pair
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tt_metal/common/core_coord.h"
+
+#include "common/test_common.hpp" // get_core_description_file
+#include "tt_metal/common/assert.hpp" // TT_FATAL
+#include "tt_metal/common/logger.hpp" // log_info
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
@@ -55,7 +65,7 @@ Cluster::Cluster() {
 void Cluster::detect_arch_and_target() {
     if(std::getenv("TT_METAL_SIMULATOR_EN")) {
         this->target_type_ = TargetDevice::Simulator;
-        auto arch_env = getenv("ARCH_NAME");
+        auto arch_env = std::getenv("ARCH_NAME");
         TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
         this->arch_ = tt::get_arch_from_string(arch_env);
     }else {
