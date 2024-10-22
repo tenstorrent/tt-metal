@@ -6,6 +6,7 @@
 
 #include <map>
 #include <mutex>
+#include <condition_variable>
 #include <optional>
 
 #include "common/bfloat16.hpp"
