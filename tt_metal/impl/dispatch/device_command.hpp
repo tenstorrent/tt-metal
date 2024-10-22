@@ -93,7 +93,7 @@ class DeviceCommand {
             relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
             relay_wait->relay_inline.dispatcher_type = dispatcher_type;
             relay_wait->relay_inline.length = sizeof(CQDispatchCmd);
-            relay_wait->relay_inline.stride = this->pcie_alignment;
+            relay_wait->relay_inline.stride = align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
 
             wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
             wait_cmd->wait.barrier = barrier;
@@ -250,14 +250,27 @@ class DeviceCommand {
         }
     }
 
-    void add_dispatch_go_signal_mcast(uint32_t wait_count, uint8_t mcast_flag, uint32_t go_signal, uint32_t wait_addr, DispatcherSelect dispatcher_type) {
-        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), dispatcher_type);
+    void add_dispatch_go_signal_mcast(
+        uint32_t wait_count,
+        uint32_t go_signal,
+        uint32_t wait_addr,
+        uint32_t num_mcast_txns,
+        uint32_t num_unicast_txns,
+        const vector_memcpy_aligned<uint32_t> &noc_mcast_unicast_data,
+        DispatcherSelect dispatcher_type) {
+        TT_ASSERT(num_mcast_txns <= std::numeric_limits<uint8_t>::max(), "Number of mcast destinations {} exceeds maximum {}", num_mcast_txns, std::numeric_limits<uint8_t>::max());
+        TT_ASSERT(num_unicast_txns <= std::numeric_limits<uint8_t>::max(), "Number of unicast destinations {} exceeds maximum {}", num_unicast_txns, std::numeric_limits<uint8_t>::max());
+        uint32_t total_data_size = noc_mcast_unicast_data.size() * sizeof(uint32_t);
+        uint32_t lengthB = sizeof(CQDispatchCmd) + total_data_size;
+        TT_ASSERT(lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE), "Data for go signal mcast must fit within one page");
+        this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
         auto initialize_mcast_cmd = [&](CQDispatchCmd *mcast_cmd) {
             *mcast_cmd = {};
             mcast_cmd->base.cmd_id = CQ_DISPATCH_CMD_SEND_GO_SIGNAL;
             mcast_cmd->mcast.go_signal = go_signal;
             mcast_cmd->mcast.wait_count = wait_count;
-            mcast_cmd->mcast.mcast_flag = mcast_flag;
+            mcast_cmd->mcast.num_mcast_txns = num_mcast_txns;
+            mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
             mcast_cmd->mcast.wait_addr = wait_addr;
         };
         CQDispatchCmd *mcast_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
@@ -269,16 +282,19 @@ class DeviceCommand {
         } else {
             initialize_mcast_cmd(mcast_cmd_dst);
         }
+        uint8_t * noc_coord_dst = this->reserve_space<uint8_t *>(total_data_size);
+        this->memcpy(noc_coord_dst, noc_mcast_unicast_data.data(), total_data_size);
         this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
-    void add_notify_dispatch_s_go_signal_cmd(uint8_t wait) {
+    void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask) {
         // Command to have dispatch_master send a notification to dispatch_slave
         this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), DispatcherSelect::DISPATCH_MASTER);
         auto initialize_sem_update_cmd = [&](CQDispatchCmd *sem_update_cmd) {
             *sem_update_cmd = {};
             sem_update_cmd->base.cmd_id = CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL;
             sem_update_cmd->notify_dispatch_s_go_signal.wait = wait;
+            sem_update_cmd->notify_dispatch_s_go_signal.index_bitmask = index_bitmask;
         };
         CQDispatchCmd *dispatch_s_sem_update_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
         if constexpr (hugepage_write) {
@@ -375,26 +391,22 @@ class DeviceCommand {
             initialize_exec_buf_cmd(exec_buf_cmd_dst);
         }
     }
-    void add_dispatch_set_unicast_only_cores(const std::vector<uint32_t>& noc_encodings, DispatcherSelect dispatcher_type) {
-        // noc_encodings are only populated if the device has active ethernet links. For devices such as Grayskull and N150, which
-        // don't have active ethernet links, this is essentially a NOP (command with empty payload).
-        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd) + noc_encodings.size() * sizeof(uint32_t), dispatcher_type);
-        auto initialize_set_unicast_only_cores_cmd = [&] (CQDispatchCmd *set_unicast_only_cores_cmd) {
-            *set_unicast_only_cores_cmd = {};
-            set_unicast_only_cores_cmd->base.cmd_id = CQ_DISPATCH_SET_UNICAST_ONLY_CORES;
-            set_unicast_only_cores_cmd->set_unicast_only_cores.num_unicast_only_cores = noc_encodings.size();
+
+    void add_dispatch_set_num_worker_sems(const uint32_t num_worker_sems, DispatcherSelect dispatcher_type) {
+        this->add_prefetch_relay_inline(true, sizeof(CQDispatchCmd), dispatcher_type);
+        auto initialize_set_num_worker_sems_cmd = [&] (CQDispatchCmd *set_num_worker_sems_cmd) {
+            set_num_worker_sems_cmd->base.cmd_id = CQ_DISPATCH_SET_NUM_WORKER_SEMS;
+            set_num_worker_sems_cmd->set_num_worker_sems.num_worker_sems = num_worker_sems;
         };
-        CQDispatchCmd *set_unicast_only_cores_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
+        CQDispatchCmd *set_num_worker_sems_cmd_dst = this->reserve_space<CQDispatchCmd *>(sizeof(CQDispatchCmd));
         if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_unicast_only_cores_cmd;
-            initialize_set_unicast_only_cores_cmd(&set_unicast_only_cores_cmd);
-            this->memcpy(set_unicast_only_cores_cmd_dst, &set_unicast_only_cores_cmd, sizeof(CQDispatchCmd));
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_num_worker_sems_cmd;
+            initialize_set_num_worker_sems_cmd(&set_num_worker_sems_cmd);
+            this->memcpy(set_num_worker_sems_cmd_dst, &set_num_worker_sems_cmd, sizeof(CQDispatchCmd));
         } else {
-            initialize_set_unicast_only_cores_cmd(set_unicast_only_cores_cmd_dst);
+            initialize_set_num_worker_sems_cmd(set_num_worker_sems_cmd_dst);
         }
-        uint32_t data_sizeB = noc_encodings.size() * sizeof(uint32_t);
-        uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
-        this->add_data(noc_encodings.data(), data_sizeB, increment_sizeB);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {

@@ -477,7 +477,7 @@ int main(int argc, char **argv) {
              0,    // prefetch_downstream_buffer_pages
              num_compute_cores, // max_write_packed_cores
              0,
-             0,
+             dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
              0,
              0,
              0,

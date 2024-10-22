@@ -33,8 +33,9 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     // Max of 2 CQs. COMPLETION_Q*_LAST_EVENT_PTR track the last completed event in the respective CQs
     COMPLETION_Q0_LAST_EVENT = 4,
     COMPLETION_Q1_LAST_EVENT = 5,
-    DISPATCH_MESSAGE = 6,
-    UNRESERVED = 7
+    DISPATCH_S_SYNC_SEM = 6,
+    DISPATCH_MESSAGE = 7,
+    UNRESERVED = 8
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -63,8 +64,12 @@ struct dispatch_constants {
         return *inst;
     }
 
+    using prefetch_q_entry_type = uint16_t;
+
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
-    typedef uint16_t prefetch_q_entry_type;
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 16;
+    static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = std::numeric_limits<decltype(go_msg_t::dispatch_message_offset)>::max();
+
     static constexpr uint32_t PREFETCH_Q_LOG_MINSIZE = 4;
 
     static constexpr uint32_t LOG_TRANSFER_PAGE_SIZE = 12;
@@ -127,6 +132,12 @@ struct dispatch_constants {
         return tt::utils::underlying_type<CommandQueueHostAddrType>(host_addr) * tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
     }
 
+    uint32_t get_dispatch_message_offset(uint32_t index) const {
+        TT_ASSERT(index < DISPATCH_MESSAGE_ENTRIES);
+        uint32_t offset = index * hal.get_alignment(HalMemType::L1);
+        return offset;
+    }
+
    private:
     dispatch_constants(const CoreType &core_type, const uint32_t num_hw_cqs) {
         TT_ASSERT(core_type == CoreType::WORKER or core_type == CoreType::ETH);
@@ -159,6 +170,7 @@ struct dispatch_constants {
         TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
         TT_ASSERT(scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
+        TT_ASSERT(DISPATCH_MESSAGE_ENTRIES <= DISPATCH_MESSAGES_MAX_OFFSET / L1_ALIGNMENT + 1, "Number of dispatch message entries exceeds max representable offset");
 
         uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
         uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
@@ -170,8 +182,10 @@ struct dispatch_constants {
                 device_cq_addr_sizes_[dev_addr_idx] = sizeof(uint32_t);
             } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
                 device_cq_addr_sizes_[dev_addr_idx] = l1_alignment - sizeof(uint32_t);
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
+                device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-                device_cq_addr_sizes_[dev_addr_idx] = 32; // Should this be 2x l1_alignment?
+                device_cq_addr_sizes_[dev_addr_idx] = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = l1_alignment;
             }
@@ -531,7 +545,7 @@ class SystemMemoryManager {
 
     bool get_bypass_mode() { return this->bypass_enable; }
 
-    std::vector<uint32_t> get_bypass_data() { return std::move(this->bypass_buffer); }
+    std::vector<uint32_t>& get_bypass_data() { return this->bypass_buffer; }
 
     uint32_t get_issue_queue_size(const uint8_t cq_id) const { return this->cq_interfaces[cq_id].issue_fifo_size << 4; }
 

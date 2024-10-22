@@ -1279,13 +1279,13 @@ void ReplayTrace(Device *device, const uint8_t cq_id, const uint32_t tid, const 
 
 void ReleaseTrace(Device *device, const uint32_t tid) { device->release_trace(tid); }
 
-void Synchronize(Device *device, const std::optional<uint8_t> cq_id) {
+void Synchronize(Device *device, const std::optional<uint8_t> cq_id, tt::stl::Span<const uint32_t> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id.value()));
+            Finish(device->command_queue(cq_id.value()), sub_device_ids);
         } else {
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id));
+                Finish(device->command_queue(cq_id), sub_device_ids);
             }
         }
     }

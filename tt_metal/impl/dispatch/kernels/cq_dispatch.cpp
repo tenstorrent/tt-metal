@@ -41,8 +41,8 @@ constexpr uint32_t prefetch_h_noc_xy = get_compile_time_arg_val(16);
 constexpr uint32_t prefetch_h_local_downstream_sem_addr = get_compile_time_arg_val(17);
 constexpr uint32_t prefetch_h_max_credits = get_compile_time_arg_val(18);
 constexpr uint32_t packed_write_max_unicast_sub_cmds = get_compile_time_arg_val(19); // Number of cores in compute grid
-constexpr uint32_t dispatch_s_sem_id = get_compile_time_arg_val(20);
-constexpr uint32_t worker_mcast_grid = get_compile_time_arg_val(21);
+constexpr uint32_t dispatch_s_sync_sem_base_addr = get_compile_time_arg_val(20);
+constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(21); // maximum number of worker semaphores
 constexpr uint32_t mcast_go_signal_addr = get_compile_time_arg_val(22);
 constexpr uint32_t unicast_go_signal_addr = get_compile_time_arg_val(23);
 constexpr uint32_t distributed_dispatcher = get_compile_time_arg_val(24);
@@ -110,9 +110,6 @@ typedef struct GoSignalState {
 static GoSignalState go_signal_state_ring_buf[4];
 static uint8_t go_signal_state_wr_ptr = 0;
 static uint8_t go_signal_state_rd_ptr = 0;
-// Used when dispatch_s is moved into main dispatcher and needs to unicast + multicast go signals
-static uint32_t unicast_only_cores[16];
-static int num_unicast_cores = -1; // Initialize to -1: Number of cores we need to unicast go signals to. Host will set this during init.
 
 FORCE_INLINE volatile uint32_t *get_cq_completion_read_ptr() {
     return reinterpret_cast<volatile uint32_t *>(dev_completion_q_rd_ptr);
@@ -822,30 +819,16 @@ void process_go_signal_mcast_cmd() {
     *aligned_go_signal_storage = cmd->mcast.go_signal;
 
     while (*worker_sem_addr < cmd->mcast.wait_count);
-    if (cmd->mcast.mcast_flag & GoSignalMcastSettings::SEND_MCAST) {
-        uint64_t dst = get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr);
-        // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
-        noc_async_write_multicast_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), packed_write_max_unicast_sub_cmds);
+    volatile uint32_t tt_l1_ptr *data_ptr = reinterpret_cast<volatile uint32_t tt_l1_ptr *>(cmd_ptr + sizeof(CQDispatchCmd));
+    for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+        uint64_t dst = get_noc_addr_helper(*(data_ptr++), mcast_go_signal_addr);
+        noc_async_write_multicast_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), *(data_ptr++));
     }
-    if (cmd->mcast.mcast_flag & GoSignalMcastSettings::SEND_UNICAST) {
-        for (int core_idx = 0; core_idx < num_unicast_cores; core_idx++) {
-            uint64_t dst = get_noc_addr_helper(unicast_only_cores[core_idx], unicast_go_signal_addr);
-            noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
-        }
+    for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
+        uint64_t dst = get_noc_addr_helper(*(data_ptr++), unicast_go_signal_addr);
+        noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
-    cmd_ptr += sizeof(CQDispatchCmd);
-}
-
-FORCE_INLINE
-void process_set_unicast_only_cores() {
-    volatile CQDispatchCmd tt_l1_ptr *cmd = (volatile CQDispatchCmd tt_l1_ptr *)cmd_ptr;
-    num_unicast_cores = (int)(cmd->set_unicast_only_cores.num_unicast_only_cores);
-    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);;
-    for (int core_idx = 0; core_idx < num_unicast_cores; core_idx++) {
-        unicast_only_cores[core_idx] = *((uint32_t tt_l1_ptr*)data_ptr);
-        data_ptr += sizeof(uint32_t);
-    }
-    cmd_ptr += sizeof(CQDispatchCmd) + num_unicast_cores * sizeof(uint32_t);
+    cmd_ptr = round_up_pow2((uint32_t)data_ptr, L1_ALIGNMENT);
 }
 
 FORCE_INLINE
@@ -858,14 +841,22 @@ void process_notify_dispatch_s_go_signal_cmd() {
         DPRINT << " DISPATCH_S_NOTIFY BARRIER\n";
         noc_async_write_barrier();
     }
-    if constexpr (distributed_dispatcher) {
-        uint64_t dispatch_s_notify_addr = get_noc_addr_helper(dispatch_s_noc_xy, get_semaphore<fd_core_type>(dispatch_s_sem_id));
-        static uint32_t num_go_signals_safe_to_send = 1;
-        noc_inline_dw_write(dispatch_s_notify_addr, num_go_signals_safe_to_send);
-        num_go_signals_safe_to_send++;
-    } else {
-        tt_l1_ptr uint32_t* notify_ptr = (uint32_t tt_l1_ptr*)(get_semaphore<fd_core_type>(dispatch_s_sem_id));
-        *notify_ptr = (*notify_ptr) + 1;
+    uint16_t index_bitmask = cmd->notify_dispatch_s_go_signal.index_bitmask;
+
+    while(index_bitmask != 0) {
+        uint32_t set_index = __builtin_ctz(index_bitmask);
+        uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + set_index * L1_ALIGNMENT;
+        if constexpr (distributed_dispatcher) {
+            static uint32_t num_go_signals_safe_to_send[max_num_worker_sems] = {0};
+            uint64_t dispatch_s_notify_addr = get_noc_addr_helper(dispatch_s_noc_xy, dispatch_s_sync_sem_addr);
+            num_go_signals_safe_to_send[set_index]++;
+            noc_inline_dw_write(dispatch_s_notify_addr, num_go_signals_safe_to_send[set_index]);
+        } else {
+            tt_l1_ptr uint32_t* notify_ptr = (uint32_t tt_l1_ptr*)(dispatch_s_sync_sem_addr);
+            *notify_ptr = (*notify_ptr) + 1;
+        }
+        // Unset the bit
+        index_bitmask &= index_bitmask - 1;
     }
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -969,9 +960,10 @@ re_run_command:
             process_go_signal_mcast_cmd();
             break;
 
-        case CQ_DISPATCH_SET_UNICAST_ONLY_CORES:
-            DPRINT << "cmd_set_unicast_only_cores" << ENDL();
-            process_set_unicast_only_cores();
+        case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
+            DPRINT << "cmd_set_num_worker_sems" << ENDL();
+            // This command is only used by dispatch_s
+            cmd_ptr += sizeof(CQDispatchCmd);
             break;
 
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:

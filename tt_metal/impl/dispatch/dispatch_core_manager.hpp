@@ -70,7 +70,6 @@ struct dispatch_worker_build_settings_t{
     uint32_t cb_pages;
     uint32_t tunnel_stop;
     uint32_t num_compute_cores;
-    uint32_t compute_core_mcast_noc_coords;
     uint32_t vc_count;
 };
 
