@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -145,23 +145,3 @@ def run(
 
     # print(f"pcc {pcc} input_a_dtype {input_a_dtype}")
     return [pcc, e2e_perf]
-
-
-# from tests.sweep_framework.permutations import *
-
-# start_time = start_measuring_time()
-# for suite in parameters.keys():
-#     device_id = 0
-#     device = ttnn.open_device(device_id=device_id)
-#     suite_vectors = list(permutations(parameters[suite]))
-#     print(len(suite_vectors))
-#     for vector in suite_vectors:
-#         try:
-#             passed, _ = run(**vector, device=device)
-#         except Exception as e:
-#             print(e)
-
-#     ttnn.close_device(device)
-
-# e2e_perf = stop_measuring_time(start_time)
-# print(f"time {e2e_perf / 1000000000}s")
