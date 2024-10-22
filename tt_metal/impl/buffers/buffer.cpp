@@ -154,7 +154,7 @@ Buffer::Buffer(
     TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
 
     if (size == 0) {
-        is_allocated_ = true;
+        allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
         return;
     }
 
@@ -228,8 +228,16 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
 }
 
 void Buffer::allocate() {
+    {
+        std::unique_lock lock(allocation_mutex_);
+        TT_FATAL(allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::NOT_ALLOCATED, "Can't allocate buffer after it was already allocated");
+        allocation_status_.store(AllocationStatus::ALLOCATION_REQUESTED, std::memory_order::relaxed);
+    }
+
     device_->push_work([self = weak_self.lock()] {
-        if (self->is_allocated_) {
+        std::unique_lock lock(self->allocation_mutex_);
+        if (self->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED) {
+            // The allocation was interrupted by a deallocation
             return;
         }
 
@@ -237,40 +245,86 @@ void Buffer::allocate() {
         detail::AllocateBuffer(self.get(), bottom_up);
         detail::BUFFER_MAP.insert({self->device_->id(), self->address_}, self.get());
 
-        self->is_allocated_ = true;
+        self->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+        lock.unlock();
+        self->allocation_cv_.notify_all();
     });
 }
 
 void Buffer::deallocate() {
+    if (size_ == 0) {
+        // 0-size buffer, no need to deallocate
+        return;
+    }
+
+    {
+        std::unique_lock lock(allocation_mutex_);
+        auto status = allocation_status_.load(std::memory_order::relaxed);
+        if (status != AllocationStatus::ALLOCATED && status != AllocationStatus::ALLOCATION_REQUESTED) {
+            // Buffer isn't allocated, nothing to be done
+            return;
+        }
+        // Overwriting either ALLOCATED or ALLOCATION_REQUESTED with DEALLOCATION_REQUESTED
+        allocation_status_.store(AllocationStatus::DEALLOCATION_REQUESTED, std::memory_order::relaxed);
+    }
+
     device_->push_work([self = weak_self.lock()] {
-        if (!self->is_allocated_ || !self->device_->initialized_ || self->size_ == 0) {
+        // Because the status is DEALLOCATION_REQUESTED, it won't be changed by anyone else, no need to lock a mutex
+        if (!self->device_->initialized_) {
             return;
         }
 
         detail::BUFFER_MAP.erase({self->device()->id(), self->address()});
         detail::DeallocateBuffer(self.get());
-        self->is_allocated_ = false;
+        self->allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
     });
 }
 
 void Buffer::deallocateAndDelete(Buffer* buffer) {
+    // This is the last reference to the buffer, no need to lock or update AllocationStatus
     buffer->device_->push_work([buffer] {
-        if (buffer->is_allocated_ && buffer->device_->initialized_ && buffer->size_ != 0) {
-            detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
-            detail::DeallocateBuffer(buffer);
+        // Buffer will be deleted at the end of this block
+        std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
+
+        auto status = buffer->allocation_status_.load(std::memory_order::relaxed);
+        if (status == AllocationStatus::NOT_ALLOCATED || status == AllocationStatus::ALLOCATION_REQUESTED || status == AllocationStatus::DEALLOCATED) {
+            // Buffer isn't allocated, nothing to be done
+            return;
         }
 
-        delete buffer;
+        if (!buffer->device_->initialized_ || buffer->size_ == 0) {
+            return;
+        }
+
+        detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
+        detail::DeallocateBuffer(buffer);
     });
 }
 
+bool Buffer::is_allocated() const {
+    auto allocation_status = allocation_status_.load(std::memory_order::relaxed);
+    if (device_->can_use_passthrough_scheduling()) {
+        return allocation_status == AllocationStatus::ALLOCATED;
+    }
+    // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED,
+    // because once the caller will try to access it, the buffer will already be fully allocated
+    return allocation_status == AllocationStatus::ALLOCATED || allocation_status == AllocationStatus::ALLOCATION_REQUESTED;
+}
+
 uint32_t Buffer::address() const {
-    TT_FATAL(device_->can_use_passthrough_scheduling() , "Buffer::address must be called in device worker thread");
+    if (device_->can_use_passthrough_scheduling()) {
+        // No locking required, because address can only be modified from the same thread
+        return address_;
+    }
+
+    std::unique_lock lock(allocation_mutex_);
+    allocation_cv_.wait(lock, [this] { return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED; });
     return address_;
 }
 
 void Buffer::set_address(uint64_t addr) {
     TT_FATAL(device_->can_use_passthrough_scheduling() , "Buffer::set_address must be called in device worker thread");
+    TT_FATAL(allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::ALLOCATION_REQUESTED, "Buffer address can only be set during allocation");
     address_ = addr;
 }
 

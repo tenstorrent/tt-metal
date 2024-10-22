@@ -158,7 +158,7 @@ class Buffer final {
 
     Device *device() const { return device_; }
     DeviceAddr size() const { return size_; }
-    bool is_allocated() const { return is_allocated_; }
+    bool is_allocated() const;
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
@@ -224,12 +224,35 @@ class Buffer final {
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
+    enum class AllocationStatus : uint8_t {
+        // The buffer is created in NOT_ALLOCATED state (except for 0-size buffers, which are initially ALLOCATED).
+        // The buffer can transition from NOT_ALLOCATED to ALLOCATION_REQUESTED only once in its lifetime.
+        NOT_ALLOCATED,
+        // The task is scheduled on the queue to allocate the buffer.
+        // When the task succeeds, the buffer transitions into ALLOCATED state.
+        // The scheduled allocation can be interrupted by a deallocation, which would transition the buffer to DEALLOCATION_REQUESTED,
+        // and then to DEALLOCATED states.
+        ALLOCATION_REQUESTED,
+        // The buffer is completely allocated and the address is available.
+        // The buffer can transition from ALLOCATED only to DEALLOCATION_REQUESTED.
+        ALLOCATED,
+        // The task is scheduled to deallocate the buffer.
+        // When the task succeeds, the buffer transitions into DEALLOCATED state.
+        DEALLOCATION_REQUESTED,
+        // The buffer is completely deallocated.
+        // This is the final state, no transitions from this state are possible.
+        DEALLOCATED,
+    };
+
     Device * const device_;
     const DeviceAddr size_; // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const std::optional<bool> bottom_up_;
-    std::atomic<bool> is_allocated_ = false;
+
+    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::NOT_ALLOCATED;
+    mutable std::condition_variable allocation_cv_;
+    mutable std::mutex allocation_mutex_;
 
     // These members must be only accessed on the device worker thread
     DeviceAddr address_ = 0; // Address of buffer
