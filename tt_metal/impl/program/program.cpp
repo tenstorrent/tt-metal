@@ -140,9 +140,11 @@ class Program_ {
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
 
+    const std::vector<uint32_t> &determine_sub_device_ids(const Device *device);
+
     // debug/test
-    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
-    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    uint32_t get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
@@ -161,6 +163,9 @@ class Program_ {
 
     bool finalized_;
     bool cached_;
+
+    // This will be turned into a map by SubDeviceManager handles once implemented
+    std::optional<std::vector<uint32_t>> sub_device_ids_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
@@ -235,7 +240,7 @@ class Program_ {
     void add_config_buffer(std::shared_ptr<Buffer> config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const Device *device) const;
+    void validate_circular_buffer_region(const Device *device);
 
     void set_cb_data_fmt( Device *device, const std::vector<CoreRange> & crs, JitBuildOptions& build_options) const;
 
@@ -741,14 +746,15 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
 
 void Program::allocate_circular_buffers(const Device *device) { pimpl_->allocate_circular_buffers(device); }
 
-void detail::Program_::validate_circular_buffer_region(const Device *device) const {
+void detail::Program_::validate_circular_buffer_region(const Device *device) {
     //ZoneScoped;
 
     // Banks are in lockstep so we only need to get lowest L1 address of one compute and storage core
     // Only compute with storage cores can have CBs and all compute with storage cores will have the same bank offset
+    // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     const std::vector<uint32_t> &bank_ids =
         device->bank_ids_from_logical_core(BufferType::L1, *device->compute_cores_.begin());
-    std::optional<DeviceAddr> lowest_address = allocator::lowest_occupied_l1_address(*device->allocator_, bank_ids[0]);
+    std::optional<DeviceAddr> lowest_address = device->lowest_occupied_l1_address(bank_ids[0], this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
 
     for (const CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
@@ -1293,6 +1299,24 @@ uint32_t& detail::Program_::get_program_config_size(uint32_t programmable_core_t
     return this->program_config_sizes_[programmable_core_type_index];
 }
 
+const std::vector<uint32_t> &detail::Program_::determine_sub_device_ids(const Device *device) {
+    // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
+    // are getting the sub_device_ids after compilation
+    if (this->compiled_.empty() || !this->sub_device_ids_.has_value()) {
+        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+            // No sub device manager, nothing to validate
+            this->sub_device_ids_ = {0};
+        } else {
+            // TODO: Add logic for determining which sub devices are used by the currently active configuration
+            // When program hasn't compiled, we will determine and return a value without caching the id inside program
+            // After program is compiled, the first time this is called we will compute and store the id.
+            // This makes subsequent calls faster, and is why this function is not const
+            this->sub_device_ids_ = {0};
+        }
+    }
+    return *this->sub_device_ids_;
+}
+
 void detail::Program_::finalize(Device *device) {
     // Store the number of tensix "go signals" for use by CQ
     // CQ iterates over these to update runtime addresses, needs to know when eth begins (after tensix)
@@ -1348,6 +1372,11 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
     //ZoneScoped;
     if (compiled_.contains(device->id())) {
         return;
+    }
+    // Clear the determined sub_device_ids when we compile the program for the first time
+    // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
+    if (compiled_.empty()) {
+        this->sub_device_ids_ = std::nullopt;
     }
 
     TT_FATAL(
@@ -1458,39 +1487,47 @@ void detail::Program_::set_runtime_id(uint64_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(uint64_t id) { pimpl_->set_runtime_id(id); }
 
-uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
     CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
-
+    const auto &sub_device_ids = this->determine_sub_device_ids(device);
+    // TODO: This restriction can be lifted once we have support for programs spanning multiple sub-devices
+    // Semaphores across sub-devices are expected to have the same address
+    TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
+    auto sub_device_id = sub_device_ids[0];
     uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_id).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].sem_offset;
 }
 
-uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t Program::get_sem_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
     return pimpl_->get_sem_base_addr(device, logical_core, core_type);
 }
 
-uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
 
     CoreCoord phys_core = device->physical_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
-
+    const auto &sub_device_ids = this->determine_sub_device_ids(device);
+    // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
+    // Addresses are not the same across sub-devices
+    TT_FATAL(sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
+    auto sub_device_id = sub_device_ids[0];
     uint32_t base_addr = device->using_fast_dispatch
-                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr(sub_device_id).get_last_slot_addr(
                                    programmable_core_type)
                              : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].cb_offset;
 }
 
-uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
+uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) {
     return pimpl_->get_cb_base_addr(device, logical_core, core_type);
 }
 
@@ -1615,6 +1652,8 @@ bool detail::Program_::is_finalized() const { return this->finalized_; }
 bool Program::is_finalized() const { return pimpl_->is_finalized(); }
 bool Program::is_cached() const { return pimpl_->is_cached(); }
 void Program::set_cached() { pimpl_->set_cached(); }
+
+const std::vector<uint32_t> & Program::determine_sub_device_ids(const Device *device) { return pimpl_->determine_sub_device_ids(device); }
 
 const ProgramTransferInfo &Program::get_program_transfer_info() const noexcept { return pimpl_->program_transfer_info; }
 

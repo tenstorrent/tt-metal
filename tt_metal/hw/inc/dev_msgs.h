@@ -112,7 +112,7 @@ struct kernel_config_msg_t {
 } __attribute__((packed));
 
 struct go_msg_t {
-    volatile uint8_t pad;
+    volatile uint8_t dispatch_message_offset;
     volatile uint8_t master_x;
     volatile uint8_t master_y;
     volatile uint8_t signal; // INIT, GO, DONE, RESET_RD_PTR
