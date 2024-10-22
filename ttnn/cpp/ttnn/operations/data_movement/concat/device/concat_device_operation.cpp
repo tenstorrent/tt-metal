@@ -53,7 +53,10 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor> &input_tensors) c
         }
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
         if (shard_first) {
-            TT_FATAL(in_ref.get_layout() == Layout::ROW_MAJOR, "Only row major supported for sharded concat.");
+            // TODO(jerrysky3): Remove this when we replace the two tensors concat kernel with the general one.
+            TT_FATAL(
+                input_tensors.size() > 2 || in_ref.get_layout() == Layout::ROW_MAJOR,
+                "Only row major supported for sharded two tensors concat.");
             TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
             TT_FATAL(
                 in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
