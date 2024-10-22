@@ -34,13 +34,14 @@ def test_concat(device, height, width, dim, async_mode):
 
 
 @pytest.mark.parametrize(
-    "inputs, output_shard_shape, shard_grid, strategy, cache_mode",
+    "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
     (
         (
             [((1, 1, 160, 32), (80, 32)), ((1, 1, 160, 32), (80, 32))],
             (80, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
         ),
         (
@@ -48,6 +49,7 @@ def test_concat(device, height, width, dim, async_mode):
             (80, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
         ),
         (
@@ -60,6 +62,7 @@ def test_concat(device, height, width, dim, async_mode):
                 }
             ),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
         ),
         pytest.param(
@@ -72,6 +75,7 @@ def test_concat(device, height, width, dim, async_mode):
                 }
             ),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             True,
             marks=pytest.mark.xfail(reason="two tensors concat kernel doesn't work with program cache (#13466)"),
         ),
@@ -80,6 +84,7 @@ def test_concat(device, height, width, dim, async_mode):
             (8, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
         ),
         (
@@ -87,6 +92,7 @@ def test_concat(device, height, width, dim, async_mode):
             (8, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
             True,
         ),
         (
@@ -94,6 +100,7 @@ def test_concat(device, height, width, dim, async_mode):
             (38, 16),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
             ttnn.ShardStrategy.WIDTH,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
         ),
         (
@@ -101,12 +108,39 @@ def test_concat(device, height, width, dim, async_mode):
             (38, 16),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
             ttnn.ShardStrategy.WIDTH,
+            ttnn.ROW_MAJOR_LAYOUT,
             True,
+        ),
+        (
+            [((1, 1, 256, 96), (64, 96)), ((1, 1, 256, 64), (64, 64)), ((1, 1, 256, 32), (64, 32))],
+            (64, 192),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)),
+                }
+            ),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.TILE_LAYOUT,
+            False,
+        ),
+        (
+            [((1, 1, 32, 512), (32, 64)), ((1, 1, 64, 512), (64, 64)), ((1, 1, 96, 512), (96, 64))],
+            (192, 64),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1)),
+                }
+            ),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.TILE_LAYOUT,
+            False,
         ),
     ),
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, cache_mode, async_mode):
+def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode, async_mode):
     device.enable_async(async_mode)
     if cache_mode:
         device.enable_program_cache()
@@ -124,7 +158,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
                 use_height_and_width_as_shard_shape=True,
             )
             torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
-            input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
             input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_memory_config)
             input_tensors.append((torch_input_tensor, input_tensor))
         return input_tensors
