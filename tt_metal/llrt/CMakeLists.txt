@@ -18,5 +18,5 @@ set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/blackhole/bh_hal_idle_eth.cpp)
 
 add_library(llrt OBJECT ${LLRT_SRC})
-target_link_libraries(llrt PUBLIC common)
+target_link_libraries(llrt PUBLIC common umd_device)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
