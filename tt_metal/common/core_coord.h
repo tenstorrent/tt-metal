@@ -242,27 +242,33 @@ class CoreRangeSet {
    public:
     CoreRangeSet(const std::set<CoreRange> &core_ranges) : ranges_(core_ranges) {
         ZoneScoped;
-        for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
-            for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
-                if (outer_it == inner_it) {
-                    continue;
-                }
-                CoreRange first_core_range = *outer_it;
-                CoreRange second_core_range = *inner_it;
-                bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
-                bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
-                bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
-                bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
-                auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
-                                  first_core_below_second;
-                if (not no_overlap) {
-                    TT_THROW(
-                        "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
-                        first_core_range.str(),
-                        second_core_range.str());
+        auto check_lambda = [&] () {
+            for (auto outer_it = this->ranges_.begin(); outer_it != this->ranges_.end(); outer_it++) {
+                for (auto inner_it = this->ranges_.begin(); inner_it != this->ranges_.end(); inner_it++) {
+                    if (outer_it == inner_it) {
+                        continue;
+                    }
+                    CoreRange first_core_range = *outer_it;
+                    CoreRange second_core_range = *inner_it;
+                    bool first_core_left_of_second = first_core_range.end_coord.x < second_core_range.start_coord.x;
+                    bool first_core_right_of_second = first_core_range.start_coord.x > second_core_range.end_coord.x;
+                    bool first_core_above_second = first_core_range.end_coord.y < second_core_range.start_coord.y;
+                    bool first_core_below_second = first_core_range.start_coord.y > second_core_range.end_coord.y;
+                    auto no_overlap = first_core_left_of_second or first_core_right_of_second or first_core_above_second or
+                                    first_core_below_second;
+                    if (not no_overlap) {
+                        TT_THROW(
+                            "Cannot create CoreRangeSet with specified core ranges because core ranges {} and {} overlap!",
+                            first_core_range.str(),
+                            second_core_range.str());
+                    }
                 }
             }
-        }
+        };
+#ifdef DEBUG
+        check_lambda();
+#endif
+
     }
 
     friend void swap(CoreRangeSet& first, CoreRangeSet& second) {

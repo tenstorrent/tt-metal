@@ -570,6 +570,7 @@ void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint
 void Program::add_config_buffer(std::shared_ptr<Buffer> config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::vector<std::vector<CoreCoord>> Program::logical_cores() const {
+    /*
     std::vector<std::vector<CoreCoord>> cores_in_program;
     std::vector<std::set<CoreCoord>> unique_cores;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size(); programmable_core_type_index++) {
@@ -583,6 +584,22 @@ std::vector<std::vector<CoreCoord>> Program::logical_cores() const {
                 }
                 unique_cores[programmable_core_type_index].insert(core);
                 cores_in_program[programmable_core_type_index].push_back(core);
+            }
+        }
+    }
+    return cores_in_program;*/
+    std::vector<std::vector<CoreCoord>> cores_in_program;
+    cores_in_program.reserve(kernels_.size());
+    for (auto& kernels : this->kernels_) {
+        std::unordered_set<CoreCoord> unique_cores;
+        auto& cores_in_program_buffer = cores_in_program.emplace_back();
+        for (auto [id, kernel] : kernels) {
+            for (auto core : kernel->logical_cores()) {
+                if (unique_cores.find(core) != unique_cores.end()) {
+                    continue;
+                }
+                unique_cores.insert(core);
+                cores_in_program_buffer.push_back(core);
             }
         }
     }
@@ -787,7 +804,7 @@ void Program::populate_dispatch_data(Device *device) {
 
         this->program_transfer_info.binary_data = binaries_data;
     }
-
+    auto current_logical_cores = this->logical_cores();
     std::uint32_t num_active_cores = 0;
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
@@ -829,7 +846,7 @@ void Program::populate_dispatch_data(Device *device) {
                 }
             }
         }
-        num_active_cores += this->logical_cores()[index].size();
+        num_active_cores += current_logical_cores[index].size();
     }
 
     this->program_transfer_info.num_active_cores = num_active_cores;
