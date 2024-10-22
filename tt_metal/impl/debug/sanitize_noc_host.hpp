@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tensix.h" // RISCV_DEBUG_REG_SOFT_RESET_0
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
