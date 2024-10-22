@@ -15,7 +15,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
-    to_ttnn,
 )
 
 
@@ -49,21 +48,16 @@ def run_moreh_bmm(shape, optional_output, compute_kernel_options, device):
     output = torch.bmm(input, mat2)
 
     # Perform TTNN BMM
-    ttnn_output = (
-        ttnn.operations.moreh.bmm(
-            ttnn_input,
-            ttnn_mat2,
-            output=ttnn_output if optional_output else None,
-            compute_kernel_config=compute_kernel_config,
-        )
-        .cpu()
-        .to(ttnn.ROW_MAJOR_LAYOUT)
-        .unpad_from_tile(output_shape)
-        .to_torch()
+    ttnn_output = ttnn.operations.moreh.bmm(
+        ttnn_input,
+        ttnn_mat2,
+        output=ttnn_output if optional_output else None,
+        compute_kernel_config=compute_kernel_config,
     )
+    actual_output = ttnn.to_torch(ttnn_output)
 
     # Compare results for equivalence
-    passing, output_pcc = comp_allclose_and_pcc(output, ttnn_output, pcc=0.999)
+    passing, output_pcc = comp_allclose_and_pcc(output, actual_output, pcc=0.999)
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
     assert passing
@@ -114,15 +108,15 @@ def run_moreh_bmm_backward(shape, requires_grad, compute_kernel_options, device)
     # Compare results for equivalence
     rtol = atol = 0.1
     if require_input_grad:
-        ttnn_cpu_input_grad = ttnn_input_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(input_shape).to_torch()
-        passing, output_pcc = comp_allclose_and_pcc(input.grad, ttnn_cpu_input_grad, pcc=0.999, rtol=rtol, atol=atol)
+        actual_input_grad = ttnn.to_torch(ttnn_input_grad)
+        passing, output_pcc = comp_allclose_and_pcc(input.grad, actual_input_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"input_grad passing={passing}")
         logger.debug(f"input_grad pcc={output_pcc}")
         assert passing
 
     if require_mat2_grad:
-        ttnn_cpu_mat2_grad = ttnn_mat2_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile(mat2_shape).to_torch()
-        passing, output_pcc = comp_allclose_and_pcc(mat2.grad, ttnn_cpu_mat2_grad, pcc=0.999, rtol=rtol, atol=atol)
+        actual_mat2_grad = ttnn.to_torch(ttnn_mat2_grad)
+        passing, output_pcc = comp_allclose_and_pcc(mat2.grad, actual_mat2_grad, pcc=0.999, rtol=rtol, atol=atol)
         logger.debug(f"mat2_grad passing={passing}")
         logger.debug(f"mat2_grad pcc={output_pcc}")
         assert passing
@@ -162,7 +156,7 @@ def test_moreh_bmm_callback(shape, optional_output, compute_kernel_options, devi
     for i in range(2):
         run_moreh_bmm(shape, optional_output, compute_kernel_options, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_ttnn(torch_dummy, device=device)
+        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
@@ -217,7 +211,7 @@ def test_moreh_bmm_backward_callback(shape, requires_grad, compute_kernel_option
     for i in range(2):
         run_moreh_bmm_backward(shape, requires_grad, compute_kernel_options, device)
         torch_dummy = torch.randn([32, 32])
-        tt_dummy = to_ttnn(torch_dummy, device=device)
+        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
