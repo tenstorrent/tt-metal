@@ -113,7 +113,7 @@ ParallelConfig determine_parallel_config(
         grid = CoreRangeSet({core_range});
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         num_cores_nhw = 1;
-        uint32_t num_cores_c = find_closest_common_largest_divisor(out_c_ntiles, std::ceil((float)input_channels / effective_tile_width), max_num_cores);
+        uint32_t num_cores_c = find_closest_largest_divisor(std::ceil((float)input_channels / effective_tile_width), max_num_cores);
         grid = num_cores_to_corerange_set(num_cores_c, grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);

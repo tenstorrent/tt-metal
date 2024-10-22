@@ -8,6 +8,7 @@
 
 
 void kernel_main() {
+
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(0);
     constexpr uint32_t core_in_channels_ntiles = get_compile_time_arg_val(1);
     constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
@@ -32,6 +33,8 @@ void kernel_main() {
     #endif
 
 
+    DPRINT<<"Remote Weight Height Blocks: "<<remote_weight_height_blocks<<ENDL();
+    DPRINT<<"Local Weight Height Blocks: "<<local_weight_height_blocks<<ENDL();
 
     // DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
     // weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
@@ -41,7 +44,10 @@ void kernel_main() {
     const uint32_t init_weight_start_tile_id = get_arg_val<uint32_t>(i); i+=1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
 
+
     uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
+    const uint32_t is_active = get_arg_val<uint32_t>(i); i+=1;
+    DPRINT<<"Active Weights : "<<is_active<<ENDL();
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const DataFormat weight_df = get_dataformat(cb_id_weight);
@@ -78,33 +84,35 @@ void kernel_main() {
          //Stride = in_channels*out_channels*sizeof(elem)/num_cores.
         for(uint32_t remote_weight_block_index = 0; remote_weight_block_index < remote_weight_height_blocks; remote_weight_block_index++) {
             cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-            uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
-            uint32_t weights_start_address = weight_write_l1_addr;
-            uint32_t weights_block_size_bytes = 0;
-            uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
+            if(is_active) {
+                uint32_t weight_write_l1_addr = get_write_ptr(cb_id_weight);
+                uint32_t weights_start_address = weight_write_l1_addr;
+                uint32_t weights_block_size_bytes = 0;
+                uint32_t weight_current_block_start_tile_id = weight_block_start_tile_id;
 
-            //for window size, picking up the channels for that window.
-            //Stride is in_channels*out_channels*sizeof(elem).
-            for(uint32_t block_weight_h = 0; block_weight_h < window_size_hw; block_weight_h++) {
-                uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
+                //for window size, picking up the channels for that window.
+                //Stride is in_channels*out_channels*sizeof(elem).
+                for(uint32_t block_weight_h = 0; block_weight_h < window_size_hw; block_weight_h++) {
+                    uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id;
 
 
-                // read the channels in one block.
-                for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < core_in_channels_ntiles; ++weight_tile_h_i) {
-                    uint32_t weight_tile_id = weight_row_start_tile_id;
+                    // read the channels in one block.
+                    for(uint32_t weight_tile_h_i = 0; weight_tile_h_i < core_in_channels_ntiles; ++weight_tile_h_i) {
+                        uint32_t weight_tile_id = weight_row_start_tile_id;
 
-                    // loop over output channels, width of the output/weights.
-                    for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
-                        weight_write_l1_addr += weight_tile_nbytes;
-                        weights_block_size_bytes += weight_tile_nbytes;
-                        weight_tile_id += 1;
-                    } // for weight_block_w
-                    weight_row_start_tile_id += weight_matrix_width_ntiles;
-                } // for weight_block_h
-                weight_current_block_start_tile_id += weight_next_channel_stride_h;
+                        // loop over output channels, width of the output/weights.
+                        for(uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
+                            s_weight.noc_async_read_tile(weight_tile_id, weight_write_l1_addr);
+                            weight_write_l1_addr += weight_tile_nbytes;
+                            weights_block_size_bytes += weight_tile_nbytes;
+                            weight_tile_id += 1;
+                        } // for weight_block_w
+                        weight_row_start_tile_id += weight_matrix_width_ntiles;
+                    } // for weight_block_h
+                    weight_current_block_start_tile_id += weight_next_channel_stride_h;
+                }
+                noc_async_read_barrier();
             }
-            noc_async_read_barrier();
             cb_push_back(cb_id_weight,weight_block_num_tiles);
             weight_block_start_tile_id += weight_next_block_other_core_stride_h;
         }

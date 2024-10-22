@@ -428,7 +428,8 @@ def test_conv_features(
         # (1280, 2560, 16, 16, 3, 3, 1, 1, 2),
         # (1280, 2560, 16, 16, 3, 3, 0, 0, 2),
         # (1280, 1280, 16, 16, 3, 3, 1, 1, 1),
-        (64, 64, 16, 16, 3, 3, 1, 1, 1),
+        (768, 32, 8, 8, 3, 3, 1, 1, 1),
+        (32, 128, 8, 8, 3, 3, 1, 1, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -443,7 +444,7 @@ def test_conv_features(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
-@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
+@pytest.mark.parametrize("auto_shard", [False], ids=["no_auto_shard"])
 def test_conv_ws(
     device,
     use_program_cache,

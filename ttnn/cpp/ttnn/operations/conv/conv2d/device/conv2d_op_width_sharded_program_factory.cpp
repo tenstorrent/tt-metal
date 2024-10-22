@@ -147,13 +147,20 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     // TODO: Loop naming in reader, writer, and compute kernels could also be cleaned up
     // TODO: Can conv_act_c_blocks be same as num_blocks_act_w?
     auto shard_shape = a.shard_spec().value().shape;
-    auto input_num_cores = a.shard_spec().value().grid.num_cores();
+
+    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
+    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
+    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
+    if(input_cores.num_cores()>output_cores.num_cores()){
+        all_cores = a.memory_config().shard_spec.value().grid;
+    }
+    auto input_num_cores = input_cores.num_cores();
+    auto output_num_cores = output_cores.num_cores();
 
     // parallelization config
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    uint32_t output_num_cores = p_config.num_cores_c;
     TT_FATAL(num_cores_x < 13, "Error");
     TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
@@ -401,15 +408,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     //Number of bytes to be read from the channel dimension in one block.
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
-    //Choose the largest shard spec to determine all cores.
-    CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
-    CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
-    CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
-    if(input_cores.num_cores()>output_cores.num_cores()){
-        all_cores = a.memory_config().shard_spec.value().grid;
-    }
-
-
     // log info for debugging opts
     {
         log_debug(LogOp, "input_channels_padded: {}", input_channels_padded);
@@ -539,7 +537,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles, //weight_next_block_this_core_stride_h
         weight_matrix_width_ntiles*weight_block_in_channels_ntiles* //weight_next_block_other_core_stride_h
                                          per_core_num_blocks_act_w,
-        output_num_cores,                                            //other_core_weight_height_blocks
+        input_num_cores,                                            //other_core_weight_height_blocks
         per_core_num_blocks_act_w,                                  //this_core_weight_height_blocks
         bias_cb,
         bias_in_dram
@@ -793,11 +791,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         );
 
         SetRuntimeArgs(program, act_kernel_id, CoreCoord(core_x, core_y), rt_args);
-
         SetRuntimeArgs(program, weights_kernel_id, CoreCoord(core_x, core_y), {
             core_index * weight_block_w_ntiles,
             b.buffer()->address(),
-            bias_base_address
+            bias_base_address,
+            (uint32_t) (core_index < output_num_cores ? 1 : 0)
         });
     }
 

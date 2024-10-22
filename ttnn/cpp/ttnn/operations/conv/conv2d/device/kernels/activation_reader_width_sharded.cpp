@@ -58,7 +58,7 @@ void kernel_main() {
 
     constexpr uint32_t act_block_h_datums               = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_num_tiles              = get_compile_time_arg_val(10);
-    constexpr uint32_t act_w_num_outer                  = get_compile_time_arg_val(11);
+    constexpr uint32_t num_input_cores                  = get_compile_time_arg_val(11);
     constexpr uint32_t act_num_blocks_w                 = get_compile_time_arg_val(12);
     const uint32_t act_mcast_sender_semaphore_addr      = get_semaphore(get_compile_time_arg_val(13));
     const uint32_t act_mcast_receiver_semaphore_addr    = get_semaphore(get_compile_time_arg_val(14));
@@ -67,7 +67,7 @@ void kernel_main() {
     constexpr uint32_t act_mcast_dest_noc_end_x         = get_compile_time_arg_val(17);
     constexpr uint32_t act_mcast_dest_noc_end_y         = get_compile_time_arg_val(18);
     constexpr uint32_t act_mcast_sender_size_bytes      = get_compile_time_arg_val(19);
-    constexpr uint32_t act_mcast_num_cores              = get_compile_time_arg_val(20);
+    constexpr uint32_t num_output_cores                 = get_compile_time_arg_val(20);
 
 
     uint32_t i = 0; //Runtime arg index
@@ -85,13 +85,14 @@ void kernel_main() {
     //Y lookup.
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
+    DPRINT<<"Input cores "<<num_input_cores<<", Output cores "<<num_output_cores<<ENDL();
 
     // DPRINT<<"Act Params L1 :  "<<dilation_h<<" "<<dilation_w<<" "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
-    // "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
-    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
+    // "L2  "<<num_input_cores<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
+    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
 
     //Equivalent to Core Index.
-    uint32_t act_mcast_sender_id = this_core_x + (num_cores_x * this_core_y) ;
+    uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y) ;
 
     constexpr uint32_t cb_id_act = tt::CB::c_in0;
     constexpr uint32_t cb_id_weight = tt::CB::c_in1;
@@ -151,23 +152,25 @@ void kernel_main() {
     {
         uint32_t reader_idx = 0;
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-        // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
+        if(this_core_id < num_input_cores) {
+            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+            // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
 
 
-        for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
-            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+            for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+                read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
 
-            reader_idx++;
+                reader_idx++;
+            }
+
+            //After reading one block, increment the starting read pointer by the width of the block.
+            //Next read uses the next set of channels.
+            act_l1_read_addr +=conv_act_c_read_bytes;
+
+            noc_async_read_barrier();
         }
-
-        //After reading one block, increment the starting read pointer by the width of the block.
-        //Next read uses the next set of channels.
-        act_l1_read_addr +=conv_act_c_read_bytes;
-
-        noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
 
@@ -179,14 +182,14 @@ void kernel_main() {
         uint32_t sender_noc_x = 0;
         uint32_t sender_noc_y = 0;
 
-        for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
+        for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
             cb_reserve_back(cb_id_act, act_block_num_tiles);
-            if (act_w_outer_i == act_mcast_sender_id) {
+            if (act_w_outer_i == this_core_id) {
                 // MCAST SENDER: send entire tilized input to other cores in column
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
 
-                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, act_mcast_num_cores-1);
+                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_output_cores-1);
                 noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -199,7 +202,7 @@ void kernel_main() {
 
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // // num_dests will source, since we are copying to a different local CB as well
-                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, act_mcast_num_cores , false, false);
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
 
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
@@ -210,7 +213,7 @@ void kernel_main() {
 #endif
 
                 // // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, act_mcast_num_cores , false, false);
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
 
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
@@ -232,7 +235,12 @@ void kernel_main() {
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
-            cb_push_back(cb_id_act, act_block_num_tiles);
+
+            //Only output cores do compute
+            if(this_core_id < num_output_cores)
+            {
+                cb_push_back(cb_id_act, act_block_num_tiles);
+            }
 
             sender_noc_x++;
             if(sender_noc_x >= num_cores_x) {
@@ -240,7 +248,7 @@ void kernel_main() {
                 sender_noc_y++;
             }
 
-        } // act_w_num_outer
+        } // num_input_cores
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
     }
 }
