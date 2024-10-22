@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "impl/tile/tile.hpp"
 #include "types.hpp"
 #include "enum_types.hpp"
 
@@ -12,82 +11,14 @@
 #include <ostream>
 #include <variant>
 
+#include "shape.hpp"
+#include "alignment.hpp"
+#include "size.hpp"
+#include "page_config.hpp"
+
 namespace tt::tt_metal {
 
-class Size {
-public:
-    Size(size_t height, size_t width);
-    Size(const std::pair<size_t, size_t>& size);
-    Size(const std::array<size_t, 2>& size);
-
-    operator std::pair<size_t, size_t>() const;
-    operator std::array<size_t, 2>() const;
-    operator std::array<uint32_t, 2>() const;
-
-    Size operator/(const Size& rhs) const;
-    Size operator*(size_t scalar) const;
-    Size operator%(const Size& rhs) const;
-
-    // comparison operator
-    bool operator==(const Size& rhs) const;
-
-    size_t height() const;
-    size_t width() const;
-
-    static constexpr auto attribute_names = std::forward_as_tuple("height", "width");
-    auto attribute_values() const { return std::forward_as_tuple(mHeight, mWidth); }
-
-private:
-    size_t mHeight = 0;
-    size_t mWidth = 0;
-};
-
-// Creating as a class to differentiate the use between LegacyPadding represented as SimpleShape and Alignment.
-// This class has to eventually become its own class
-class Alignment : public ttnn::SimpleShape {
-public:
-    using ttnn::SimpleShape::SimpleShape;
-    size_t size() const { return rank(); }
-};
-
 using Strides = std::vector<size_t>;
-
-struct RowMajorPageConfig {
-    Alignment createDefaultAlignment(DataType dataType) const;
-    void validateAlignment(const Alignment& alignment, DataType dataType) const;
-    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
-};
-struct TilePageConfig {
-    Tile tile;
-
-    TilePageConfig(const Tile& tile = Tile());
-
-    Alignment createDefaultAlignment(DataType dataType) const;
-    void validateAlignment(const Alignment& alignment, DataType dataType) const;
-    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
-};
-
-class PageConfig {
-public:
-    using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
-
-    PageConfig(const Config& config);
-    PageConfig(Layout layout);
-    PageConfig(Layout layout, const std::optional<Tile>& tile);
-
-    Alignment createDefaultAlignment(DataType dataType) const;
-    void validateAlignment(const Alignment& alignment, DataType dataType) const;
-    Size get_page_shape(const Size& physical_size, const MemoryConfig& memoryConfig) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dataType) const;
-
-    std::optional<Tile> get_tile() const;
-    bool isRowMajor() const;
-
-private:
-    Config mConfig;
-};
 
 // Alignment is a physical row alignment for each dimension of the tensor (except innermost dimension - there its a column alignment).
 // Example:
@@ -123,17 +54,17 @@ private:
 //   This class is a work in progress. Many of its public methods have to be moved to private or even pImpl.
 class TensorLayout {
 public:
-    TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const Alignment& alignment = {});
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment = {});
 
     // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
-    static TensorLayout fromLegacyPaddedShape(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
+    static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape);
 
-    Layout get_layout() const { return mPageConfig.isRowMajor() ? Layout::ROW_MAJOR : Layout::TILE; }
-    PageConfig get_page_config() const { return mPageConfig; }
-    DataType get_data_type() const { return mDataType; }
-    const MemoryConfig& get_memory_config() const { return mMemoryConfig; }
-    const Alignment& get_alignment() const { return mAlignment; }
+    Layout get_layout() const { return m_page_config.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
+    PageConfig get_page_config() const { return m_page_config; }
+    DataType get_data_type() const { return m_dtype; }
+    const MemoryConfig& get_memory_config() const { return m_memory_config; }
+    const Alignment& get_alignment() const { return m_alignment; }
 
     Strides get_strides(const ttnn::SimpleShape& shape) const;
 
@@ -153,30 +84,19 @@ public:
     Size get_physical_shape(const ttnn::SimpleShape& shape) const;
 
 private:
-    // Private constructor to create TensorLayout from LegacyPaddedShape
-    TensorLayout(DataType dataType, const PageConfig& pageConfig, const MemoryConfig& memoryConfig, const ttnn::SimpleShape& legacyPaddedShape);
-
-    // For the case when Aligmnet is not provided or is empty
-    // This method will initialize Alignment to reflect requirements of Layout/DType/Sharding(currently not supported)
-    void initializeAlignment();
-    void validateAlignment() const;
+    void initialize_alignment();
+    void validate_alignment() const;
 
     uint32_t get_header_size_bytes() const;
     uint32_t get_page_elements_count(const ttnn::SimpleShape& shape) const;
 
-    // Returns number of elements in a page
-    // For SINGLE_BANK layout returns physical size
-    // For ROW_MAJOR width is equal to physical width
     Size get_page_shape(const Size& physical_size) const;
     size_t get_page_size_bytes(const Size& page_size) const;
 
-    DataType mDataType = DataType::BFLOAT16;
-    PageConfig mPageConfig;
-    MemoryConfig mMemoryConfig;
-    Alignment mAlignment;
+    DataType m_dtype = DataType::BFLOAT16;
+    PageConfig m_page_config;
+    MemoryConfig m_memory_config;
+    Alignment m_alignment;
 };
-
-std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &value);
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size);
 
 } // tt::tt_metal
