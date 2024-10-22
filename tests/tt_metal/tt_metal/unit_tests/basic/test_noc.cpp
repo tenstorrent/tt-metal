@@ -74,7 +74,7 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
 
 
 TEST_F(BasicFixture, VerifyNocNodeIDs) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
@@ -97,7 +97,7 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
 TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    auto arch = tt::get_arch_from_string(get_umd_arch_name());
     if (arch == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();
     }
