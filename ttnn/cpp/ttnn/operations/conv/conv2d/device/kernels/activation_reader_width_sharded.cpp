@@ -85,10 +85,10 @@ void kernel_main() {
     //Y lookup.
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    DPRINT<<"                                                                               "<<ENDL();
-    // DPRINT<<"Act Params L1 :  "<<dilation_h<<" "<<dilation_w<<" "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL();
-    // DPRINT<<"L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<ENDL();
-    // DPRINT<<"L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
+
+    // DPRINT<<"Act Params L1 :  "<<dilation_h<<" "<<dilation_w<<" "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
+    // "L2  "<<act_w_num_outer<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
+    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<act_mcast_num_cores<<ENDL();
 
     //Equivalent to Core Index.
     uint32_t act_mcast_sender_id = this_core_x + (num_cores_x * this_core_y) ;
@@ -151,29 +151,25 @@ void kernel_main() {
     {
         uint32_t reader_idx = 0;
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-        if(act_mcast_sender_id<act_w_num_outer)
-        {
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-            // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
+        uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+        // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
 
 
-            for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
-                read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+        for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+            uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices & 0xffff, conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
+            read_channels<weight_size_h, weight_size_w>(l1_write_addr_act, act_l1_read_addr, two_reader_indices >> 16   , conv_act_c_bytes, conv_act_c_read_bytes, stride_h_bytes, stride_w_bytes);
 
-                reader_idx++;
-            }
-
-            //After reading one block, increment the starting read pointer by the width of the block.
-            //Next read uses the next set of channels.
-            act_l1_read_addr +=conv_act_c_read_bytes;
-
+            reader_idx++;
         }
+
+        //After reading one block, increment the starting read pointer by the width of the block.
+        //Next read uses the next set of channels.
+        act_l1_read_addr +=conv_act_c_read_bytes;
+
         noc_async_read_barrier();
         cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
-        // DPRINT<<": "<<this_core_y*10 + this_core_x<<ENDL();
 
         // Round robin self-mcast and receive tilized act matrix in cb_id_act
         // Compute should function like regular mm
@@ -184,7 +180,7 @@ void kernel_main() {
         uint32_t sender_noc_y = 0;
 
         for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-            // cb_reserve_back(cb_id_act, act_block_num_tiles);
+            cb_reserve_back(cb_id_act, act_block_num_tiles);
             if (act_w_outer_i == act_mcast_sender_id) {
                 // MCAST SENDER: send entire tilized input to other cores in column
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
@@ -196,7 +192,7 @@ void kernel_main() {
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                 // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                // cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+                cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
                 // // Now we have the block in the CB address, we can mcast to dests!
                 uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
@@ -236,7 +232,7 @@ void kernel_main() {
 
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
-            // cb_push_back(cb_id_act, act_block_num_tiles);
+            cb_push_back(cb_id_act, act_block_num_tiles);
 
             sender_noc_x++;
             if(sender_noc_x >= num_cores_x) {
@@ -245,7 +241,6 @@ void kernel_main() {
             }
 
         } // act_w_num_outer
-        // DPRINT<<": "<<this_core_y*10 + this_core_x<<ENDL();
-        // cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+        cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
     }
 }

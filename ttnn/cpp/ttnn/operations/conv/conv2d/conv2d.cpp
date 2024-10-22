@@ -9,7 +9,7 @@
 
 #include "common/constants.hpp"
 #include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/operations/conv/conv2d/device/optimized_conv_op.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
