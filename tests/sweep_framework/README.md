@@ -297,7 +297,7 @@ The test vectors are stored in a separate Elasticsearch index based on the modul
 
 To run the test vector generator:
 
-`python3 tests/sweep_framework/parameter_generator.py`
+`python3 tests/sweep_framework/sweeps_parameter_generator.py`
 
 Options:
 
@@ -335,7 +335,7 @@ The test runner reads in test vectors from the test vector database and executes
 **NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
 
 To run the test runner:
-`python3 tests/sweep_framework/runner.py`
+`python3 tests/sweep_framework/sweeps_runner.py`
 
 Options:
 
@@ -371,7 +371,7 @@ The vector and result commands will show a detailed view of the data, including 
 
 ### Usage
 
-`query.py [OPTIONS] COMMAND`
+`sweeps_query.py [OPTIONS] COMMAND`
 
 Options:
 
@@ -398,7 +398,7 @@ Commands:
 #### Examples
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add summary
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add summary
 
 +------+------+-------------------------+-------------------+---------+
 |      | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -410,7 +410,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name add summar
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name matmul_default_sharded --all summary
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name matmul_default_sharded --all summary
 
 +---------+------+-------------------------+-------------------+---------+
 |         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -420,7 +420,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name matmul_def
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suite-name dram summary
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --suite-name dram summary
 
 +----------------------+------+-------------------------+-------------------+---------+
 | vector_id            | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
@@ -461,7 +461,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suit
 
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add detail
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add detail
 
                         Sweep   Suite        Vector ID              Timestamp               Status                                              Details                                       Git Hash
 ---------------------- ------- ------- ---------------------- --------------------- ----------------------- -------------------------------------------------------------------------------- -----------
@@ -497,7 +497,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name add detail
 
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suite-name dram detail
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --suite-name dram detail
 
     run_id              Sweep   Suite        Vector ID              Timestamp        Status   Details   Git Hash
 ---------------------- ------- ------- ---------------------- --------------------- -------- --------- -----------
@@ -536,7 +536,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name add --suit
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --vector-id 6Va9k5ABKWg1nzaMCbVL vector
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --vector-id 6Va9k5ABKWg1nzaMCbVL vector
 
 {'sweep_name': 'add',
  'timestamp': '2024-07-08_19-05-57',
@@ -562,7 +562,7 @@ $ python3 tests/sweep_framework/query.py --elastic corp --module-name add --vect
 ```
 
 ```
-$ python3 tests/sweep_framework/query.py --elastic corp --module-name add --run-id TlbZmJABKWg1nzaMPbiV result
+$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --run-id TlbZmJABKWg1nzaMPbiV result
 
 {'sweep_name': 'add',
  'suite_name': 'l1',
@@ -586,13 +586,13 @@ Access credentials are shared separately.
 - If you see an error like the following, it means you did not set the `ELASTIC_USERNAME` and/or `ELASTIC_PASSWORD` environment variables:
 ```
 Traceback (most recent call last):
-  File "tests/sweep_framework/parameter_generator.py", line 136, in <module>
+  File "tests/sweep_framework/sweeps_parameter_generator.py", line 136, in <module>
     generate_tests(args.module_name)
-  File "tests/sweep_framework/parameter_generator.py", line 114, in generate_tests
+  File "tests/sweep_framework/sweeps_parameter_generator.py", line 114, in generate_tests
     generate_vectors(module_name)
-  File "tests/sweep_framework/parameter_generator.py", line 39, in generate_vectors
+  File "tests/sweep_framework/sweeps_parameter_generator.py", line 39, in generate_vectors
     export_suite_vectors(module_name, suite, suite_vectors)
-  File "tests/sweep_framework/parameter_generator.py", line 56, in export_suite_vectors
+  File "tests/sweep_framework/sweeps_parameter_generator.py", line 56, in export_suite_vectors
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
   File "/proj_sw/user_dev/jdesousa/tt-metal/python_env/lib/python3.8/site-packages/elasticsearch/_sync/client/__init__.py", line 423, in __init__
     self._headers = resolve_auth_headers(

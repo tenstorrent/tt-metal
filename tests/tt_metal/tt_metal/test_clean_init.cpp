@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
 
     const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-    std::vector<Device *> devices = tt::DevicePool::instance().get_all_active_devices();
+    const auto devices = tt::DevicePool::instance().get_all_active_devices();
 
     for (int device_id = 0; device_id < num_devices; device_id++) {
     try {
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
             dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
         EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
 
-        const std::vector<uint32_t> runtime_args = {
+        const std::array<uint32_t, 8> runtime_args = {
             l1_buffer->address(),
             input_dram_buffer->address(),
             static_cast<uint32_t>(input_dram_buffer->noc_coordinates().x),

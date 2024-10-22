@@ -17,8 +17,6 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(
             t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size", this->scatter_dim);
-
-        TT_FATAL(this->topology != ccl::Topology::Linear || !t.is_sharded(), "Sharded tensors are not supported for reduce scatter on a linear topology");
     }
 }
 
@@ -86,11 +84,14 @@ Tensor reduce_scatter(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            TT_FATAL(input_tensors.size() >= 1, "Reduce scatter op expects an input tensor but it received none");
+
+            uint32_t num_devices = devices.size();
+            if (num_devices == 2){
+                topology = ttnn::ccl::Topology::Linear;
+            }
             bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
             const auto& input_tensor = input_tensors.at(0);
-            uint32_t num_devices = devices.size();
             uint32_t device_index = 0; // Initialize device index
             std::optional<chip_id_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
             std::optional<chip_id_t> sender_device_id = std::nullopt; // Initialize sender device ID

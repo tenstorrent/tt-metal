@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    to_ttnn,
 )
 
 
@@ -105,13 +106,17 @@ def test_moreh_linear_wo_output(shapes, has_bias, device):
     ),
 )
 def test_moreh_linear_enable_cache(shapes, device, use_program_cache):
-    torch.manual_seed(3072)
-    compute_kernel_config = get_compute_kernel_options(False)
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
-        passing = moreh_linear(shapes, True, True, compute_kernel_config, device)
+        passing = moreh_linear(shapes, True, True, get_compute_kernel_options(False), device)
         assert passing
-
-    assert device.num_program_cache_entries() == 1
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 def moreh_linear_backward(
@@ -237,18 +242,22 @@ def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad, compu
     ),
 )
 def test_moreh_linear_backward_enable_cache(shapes, device, use_program_cache):
-    torch.manual_seed(3072)
     requires_input_grad, requires_weight_grad, requires_bias_grad = (True, True, True)
     compute_kernel_config = get_compute_kernel_options(False)
-    num_program_cache_entries_list = []
 
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
     for i in range(2):
         passing = moreh_linear_backward(
             shapes, requires_input_grad, requires_weight_grad, requires_bias_grad, compute_kernel_config, device
         )
-        num_program_cache_entries_list.append(device.num_program_cache_entries())
         assert passing
-    assert len(set(num_program_cache_entries_list)) == 1
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @skip_for_grayskull("GS does not support fp32")

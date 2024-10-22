@@ -30,12 +30,11 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
 )
 add_library(unit_tests_common_o OBJECT ${UNIT_TESTS_COMMON_SRC})
-target_link_libraries(unit_tests_common_o PUBLIC compiler_flags metal_header_directories gtest gtest_main magic_enum fmt)
+target_link_libraries(unit_tests_common_o PUBLIC compiler_flags metal_header_directories gtest gtest_main magic_enum fmt span)
 target_include_directories(unit_tests_common_o PUBLIC
     ${UMD_HOME}
     ${PROJECT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/tt_metal
-    ${PROJECT_SOURCE_DIR}/tt_metal/third_party/fmt
     ${PROJECT_SOURCE_DIR}/tt_metal/common
     ${PROJECT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/common

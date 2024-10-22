@@ -30,7 +30,7 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
                int X,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, W, Z, Y, X, memory_config);
+                return self(queue_id, input_tensor, std::vector<int32_t>{W, Z, Y, X}, memory_config);
             },
             py::arg("input_tensor"),
             py::arg("W"),

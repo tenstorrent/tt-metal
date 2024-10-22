@@ -681,7 +681,7 @@ class UNet2DConditionModel:
                 self.batch_size,
                 self.conv_out_input_height,
                 self.conv_out_input_width,
-                32,  # Padded to tile dim
+                -1,
             ),
         )
         sample = ttnn.permute(sample, (0, 3, 1, 2))  # permute from NHWC to NCHW

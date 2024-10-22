@@ -36,6 +36,31 @@ SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_t
     return physical_shape;
 }
 
+namespace types {
+
+const Shape Shape::to_rank(size_t new_rank) const {
+    auto padded_shape = value;
+    auto shape = value.without_padding();
+
+    std::vector<uint32_t> new_shape(new_rank, 1);
+    std::vector<uint32_t> new_padded_shape(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for(;cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        new_shape[new_idx] = shape[cur_idx];
+        new_padded_shape[new_idx] = padded_shape[cur_idx];
+    }
+    for(;cur_idx >= 0; cur_idx--) {
+        TT_FATAL(shape[cur_idx] == 1, "Can't convert shape rank");
+        TT_FATAL(padded_shape[cur_idx] == 1, "Can't convert shape rank");
+    }
+
+    return Shape(std::move(new_shape), std::move(new_padded_shape));
+}
+
+}
+
 }
 
 namespace tt {
@@ -213,6 +238,15 @@ const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
             rank - 1,
             normalized_index);
     return normalized_index;
+}
+
+Array4D LegacyShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    Array4D ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
 }
 
 bool operator==(const ReplicateTensor& a, const ReplicateTensor& b) {

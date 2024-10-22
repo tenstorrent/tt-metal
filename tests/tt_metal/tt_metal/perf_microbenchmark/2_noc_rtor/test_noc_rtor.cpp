@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+            "profiler option using ./build_metal.sh --enable-profiler");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
                 uint32_t core_index = i * num_cores_c + j;
                 uint32_t l1_buffer_addr = l1_buffer.address();
 
-                vector<uint32_t> noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
+                const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
                 SetRuntimeArgs(program, noc_kernel, core, noc_runtime_args);
             }
         }

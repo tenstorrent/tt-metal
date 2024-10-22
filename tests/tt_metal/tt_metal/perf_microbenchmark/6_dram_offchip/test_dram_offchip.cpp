@@ -140,7 +140,7 @@ int main(int argc, char **argv) {
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+                "profiler option using ./build_metal.sh --enable-profiler");
 #endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(
@@ -419,7 +419,7 @@ bool assign_runtime_args_to_program(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
-        std::vector<uint32_t> kernel_args = {
+        const std::array kernel_args = {
             (std::uint32_t)input_buffer_addr,
             (std::uint32_t)(num_tiles_used),
             (std::uint32_t)num_blocks,

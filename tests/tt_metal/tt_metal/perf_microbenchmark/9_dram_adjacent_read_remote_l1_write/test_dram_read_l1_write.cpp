@@ -165,7 +165,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
             }
         }
 
-        std::vector<uint32_t> reader_rt_args = {
+        const std::array reader_rt_args = {
             (std::uint32_t) bank_id,
             (std::uint32_t) vc
         };
@@ -177,7 +177,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         auto writer_core = all_l1_writer_cores_ordered[i];
         auto writer_core_phy = device->worker_core_from_logical_core(writer_core);
 
-        std::vector<uint32_t> writer_rt_args = {
+        const std::array writer_rt_args = {
             (std::uint32_t) (vc + 2) & 0x3,
             (std::uint32_t) writer_core_phy.x,
             (std::uint32_t) writer_core_phy.y
@@ -761,7 +761,7 @@ int main(int argc, char **argv) {
             log_error(
                 LogTest,
                 "Metal library and test code should be build with "
-                "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+                "profiler option using ./build_metal.sh --enable-profiler");
 #endif
             auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
             TT_FATAL(

@@ -28,6 +28,8 @@ on:
           - eltwise.unary.sin.sin_pytorch2
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
+          - eltwise.unary.clamp.clamp_pytorch2
+          - eltwise.unary.clamp.clamp_min_pytorch2
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
@@ -70,6 +72,8 @@ on:
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
           - eltwise.unary.logical_not.logical_not_output
+          - eltwise.unary.logical_not.logical_not_pytorch2
+          - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.i0.i0
@@ -142,15 +146,24 @@ on:
           - eltwise.unary.isneginf
           - eltwise.unary.isposinf
           - eltwise.binary.add.add_all_pytorch2
+          - eltwise.binary.add.add_different_memory_configs
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
           - eltwise.unary.lez.lez
           - eltwise.unary.nez.nez
+          - eltwise.unary.prelu.prelu
+          - eltwise.unary.hardswish.hardswish_pytorch2
+          - eltwise.unary.hardtanh.hardtanh_pytorch2
+          - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.reglu.reglu
           - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
+          - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.div.div
+          - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
@@ -174,6 +187,9 @@ on:
           - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.lt.lt_tensor_pytorch2
+          - eltwise.binary.lt.lt_scalar_pytorch2
+          - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.embedding_bw.embedding_bw
@@ -225,6 +241,11 @@ on:
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
+          - conv2d.full.conv2d_misc
+          - conv2d.full.conv2d_sharding
+          - conv2d.full.conv2d_sliding_window
+          - conv2d.short.conv2d_short_sweep
+          - max_pool2d.short.max_pool2d_short_sweep
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
@@ -258,14 +279,14 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
+          python tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/parameter_generator.py --elastic cloud --tag ci-main --explicit
+          python tests/sweep_framework/sweeps_parameter_generator.py --elastic cloud --tag ci-main --explicit
 
   ttnn-run-sweeps:
     needs: ttnn-generate-sweeps
@@ -319,11 +340,11 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
+          python tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --elastic cloud --tag ci-main
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          python tests/sweep_framework/runner.py --elastic cloud --tag ci-main --suite-name nightly
+          python tests/sweep_framework/sweeps_runner.py --elastic cloud --tag ci-main --suite-name nightly
