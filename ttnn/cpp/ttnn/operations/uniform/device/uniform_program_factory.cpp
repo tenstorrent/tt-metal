@@ -39,14 +39,14 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
-    const uint32_t uint32_tile_size = tile_size(tt::DataFormat::UInt32);
+    const uint32_t uint32_tile_size = tile_size(tt::DataFormat::Float32);
 
     constexpr uint32_t in_out_num_tiles = 1;
     constexpr uint32_t intermed_num_tiles = 2;
 
     constexpr uint32_t intermed_cb_id = CB::c_intermed0;
     CircularBufferConfig cb_intermed_config =
-        CircularBufferConfig(intermed_num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::UInt32}})
+        CircularBufferConfig(intermed_num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
             .set_page_size(intermed_cb_id, uint32_tile_size);
     CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
