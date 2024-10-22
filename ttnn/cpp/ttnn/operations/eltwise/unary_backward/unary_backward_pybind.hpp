@@ -1096,6 +1096,17 @@ void py_module(py::module& module) {
         std::nullopt,
         R"doc(Performs backward operations for clamp value on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`. Only one of 'min' or 'max' value can be None.)doc");
 
+    detail::bind_unary_backward_optional_float_params_with_default(
+        module,
+        ttnn::clip_bw,
+        "min",
+        "Minimum value",
+        std::nullopt,
+        "max",
+        "Maximum value",
+        std::nullopt,
+        R"doc(Performs backward operations for clip on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`. Only one of 'min' or 'max' value can be None.)doc");
+
     detail::bind_unary_backward_two_float_with_default(
         module,
         ttnn::hardtanh_bw,
