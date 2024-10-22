@@ -10,14 +10,10 @@
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/copy/copy.hpp"
-
+#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
-namespace detail {
-    static inline uint32_t wrap_index(int index, int size) {
-        return index < 0 ? size + index : index;
-    }
-}
 
 template<typename T>
 ttnn::Tensor SliceOperation::invoke(
@@ -30,8 +26,9 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
 
     // Ensure start and end vectors have matching sizes and correct tensor rank
-    uint32_t input_rank = input_tensor.get_shape().rank();
-    const auto &input_shape = input_tensor.get_shape();
+
+    const auto &input_shape = input_tensor.get_logical_shape();
+    uint32_t input_rank = input_shape.rank();
 
     bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
     bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
@@ -58,6 +55,7 @@ ttnn::Tensor SliceOperation::invoke(
     bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
     Tensor input = input_tensor;
     if (rm_only) {
+        TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Strided slice is not supported for BFLOAT8 tensors");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
     }
 
@@ -66,12 +64,12 @@ ttnn::Tensor SliceOperation::invoke(
         input = ttnn::unsqueeze_to_4D(input);
     }
 
-    auto padded_shape = input.get_legacy_shape();
+    auto padded_shape = input.get_padded_shape();
     size_t adjusted_rank = padded_shape.rank(); // Now adjusted to 4 after unsqueeze
 
     // Create modified vectors with wrapped indices and adjust them to match the tensor's rank
     std::vector<uint32_t> modified_begins(adjusted_rank, 0);
-    std::vector<uint32_t> modified_ends = tt::tt_metal::tensor_impl::detail::to_vector(padded_shape);
+    std::vector<uint32_t> modified_ends = padded_shape.as_vector();
     std::vector<uint32_t> modified_step(adjusted_rank, 1);
 
     size_t rank_diff = adjusted_rank - input_rank;
@@ -81,8 +79,8 @@ ttnn::Tensor SliceOperation::invoke(
         size_t idx = i + rank_diff;
 
         if constexpr (std::is_signed_v<T>) {
-            modified_begins[idx] = detail::wrap_index(begins[i], input_shape[i]);
-            modified_ends[idx] = detail::wrap_index(ends[i], input_shape[i]);
+            modified_begins[idx] = wrap_index(begins[i], input_shape[i]);
+            modified_ends[idx] = wrap_index(ends[i], input_shape[i]);
             modified_step[idx] = static_cast<uint32_t>(step[i]);
         } else {
             modified_begins[idx] = begins[i];
@@ -127,7 +125,7 @@ ttnn::Tensor SliceOperation::invoke(
     }
 
     // Early exit if slice is a no-op
-    if (tt::tt_metal::LegacyShape(final_padded_shape) == input.get_legacy_shape() && no_step) {
+    if (ttnn::SimpleShape(final_padded_shape) == input.get_padded_shape() && no_step) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
             auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
@@ -138,7 +136,7 @@ ttnn::Tensor SliceOperation::invoke(
 
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         TT_FATAL(no_step, "Host tensor slice does not support strides");
-        if (input_tensor.get_legacy_shape() == actual_shape) {
+        if (input_tensor.get_padded_shape() == actual_shape) {
             return input_tensor;
         } else {
             input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
@@ -147,7 +145,7 @@ ttnn::Tensor SliceOperation::invoke(
             return ttnn::reshape(input, output_shape);
         }
     } else {
-        auto& input_tensor_shape = input.get_legacy_shape();
+        const auto& input_tensor_shape = input.get_padded_shape();
         auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config() : memory_config_arg.value_or(input_tensor.memory_config());
 
         if (input.is_sharded() && input.memory_config() == memory_config && input_tensor_shape.rank() > 1) {
@@ -202,7 +200,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
 
-    const auto& padded_input_shape = input_tensor.get_shape().with_tile_padding();
+    const auto& padded_input_shape = input_tensor.get_padded_shape();
     TT_FATAL(padded_input_shape.rank() == 4, "Input tensor must have rank 4");
 
     bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
@@ -289,7 +287,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
 
     TT_FATAL(no_step, "Host tensor slice does not support strides");
 
-    if (input.get_legacy_shape() == actual_shape) {
+    if (input.get_padded_shape() == actual_shape) {
         return input;
     } else {
         auto input_4d_rm = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device *)nullptr);
