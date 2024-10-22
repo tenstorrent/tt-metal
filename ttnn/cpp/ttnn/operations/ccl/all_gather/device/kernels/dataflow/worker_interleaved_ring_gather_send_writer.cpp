@@ -55,18 +55,19 @@ void kernel_main() {
     volatile uint32_t *const writer_send_sem_ptr = reinterpret_cast<volatile uint32_t *const >(get_semaphore(get_compile_time_arg_val(4)));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(5);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(6);
+    constexpr ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode = static_cast<ttnn::ccl::EriscDataMoverTerminationMode>(get_compile_time_arg_val(7));
 
     ASSERT(half_cb_n_pages > rem_num_pages);
 
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(8);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(9);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(10);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(11);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(12);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(13);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(14) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(8));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(9);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(10);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(11);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(12);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(13);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(14);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(15) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -118,7 +119,7 @@ void kernel_main() {
         #endif
     #endif
 
-    ccl::edm::WorkerToEdmSender<ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED> sender(
+    ccl::edm::WorkerToEdmSender<edm_termination_mode> sender(
         ttnn::ccl::WorkerXY(eth_sender_noc_x, eth_sender_noc_y),
         eth_sender_l1_base_addr,
         num_buffers_per_channel,
