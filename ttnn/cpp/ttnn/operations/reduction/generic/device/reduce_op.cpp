@@ -56,10 +56,41 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Reduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+//std::vector<ttnn::SimpleShape> Reduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+//    const auto& input_tensor = input_tensors.at(0);
+//
+//    auto output_shape = input_tensor.get_legacy_shape();
+//    std::cout << "------------" << std::endl;
+//    std::cout << "computing output shapes for reduce: " << output_shape << std::endl;
+//    auto padding = output_shape.padding();
+//    switch (this->dim) {
+//        case ReduceOpDim::H:
+//            output_shape[2] = TILE_HEIGHT;
+//            padding[2] = Padding::PadDimension{0, 31};
+//            break;
+//        case ReduceOpDim::W:
+//            output_shape[3] = TILE_WIDTH;
+//            padding[3] = Padding::PadDimension{0, 31};
+//            break;
+//        case ReduceOpDim::HW:
+//            output_shape[2] = TILE_HEIGHT;
+//            output_shape[3] = TILE_WIDTH;
+//            padding[2] = Padding::PadDimension{0, 31};
+//            padding[3] = Padding::PadDimension{0, 31};
+//            break;
+//    }
+//    auto output2 = tt::tt_metal::LegacyShape(output_shape, padding);
+//    std::cout << output2 << std::endl;
+//    std::cout << output2.logical_shape() << std::endl;
+//    return {tt::tt_metal::LegacyShape(output_shape, padding).logical_shape()};
+//}
+
+std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensor.get_legacy_shape();
+    std::cout << "------------" << std::endl;
+    std::cout << "computing output specs for reduce: " << output_shape << std::endl;
     auto padding = output_shape.padding();
     switch (this->dim) {
         case ReduceOpDim::H:
@@ -77,24 +108,27 @@ std::vector<tt::tt_metal::LegacyShape> Reduce::compute_output_shapes(const std::
             padding[3] = Padding::PadDimension{0, 31};
             break;
     }
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    auto output_shape_with_padding = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padding));
+    return {std::pair(output_shape_with_padding.logical_shape(), TensorLayout::fromLegacyPaddedShape(this->output_dtype, PageConfig(Layout::TILE), this->output_mem_config, output_shape_with_padding.padded_shape()))};
 }
 
-std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    if (this->output_mem_config.is_sharded()) {
-        auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-        auto shard_spec = input_tensor.shard_spec().value();
-        shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
-        auto mem_config = this->output_mem_config;
-        mem_config.shard_spec = shard_spec;
-        return {
-            create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
-    }
-}
+//std::vector<Tensor> Reduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+//    const auto& input_tensor = input_tensors.at(0);
+//    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
+//
+//    if (this->output_mem_config.is_sharded()) {
+//        std::cout << "output mem config sharded" << std::endl;
+//        auto shard_spec = input_tensor.shard_spec().value();
+//        shard_spec.shape[0] = tt_metal::compute_volume(output_shape) / output_shape[-1];
+//        auto mem_config = this->output_mem_config;
+//        mem_config.shard_spec = shard_spec;
+//        return {
+//            create_device_tensor(output_shape, this->output_dtype, Layout::TILE, input_tensor.device(), mem_config)};
+//    } else {
+//        return operation::generic_create_output_tensors(
+//            *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+//    }
+//}
 
 operation::ProgramWithCallbacks Reduce::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

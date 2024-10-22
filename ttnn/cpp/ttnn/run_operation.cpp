@@ -297,18 +297,33 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     uint8_t cq_id);
 
 std::vector<LegacyShape> extract_legacy_shapes(
-    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>>&& shapes, const std::function<std::pair<DataType, Layout>(size_t idx)>& layout_provider) {
+    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>, std::vector<ttnn::TensorSpec>>&& shapes, const std::function<DataType(size_t idx)>& dtype_provider, const std::optional<std::function<Layout(size_t idx)>>& layout_provider) {
     if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(shapes)) {
         return std::get<std::vector<tt::tt_metal::LegacyShape>>(std::move(shapes));
+    } else if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(shapes)) {
+        const auto& simple_shapes = std::get<std::vector<ttnn::SimpleShape>>(shapes);
+        std::vector<LegacyShape> legacy_shapes;
+        legacy_shapes.reserve(simple_shapes.size());
+        for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
+            auto data_type = dtype_provider(idx);
+            auto layout = layout_provider.has_value() ? layout_provider.value()(idx) : Layout::TILE;
+            legacy_shapes.emplace_back(simple_shapes[idx].as_vector(), get_physical_shape(simple_shapes[idx], data_type, layout).as_vector());
+        }
+        return legacy_shapes;
+    } else if (std::holds_alternative<std::vector<ttnn::TensorSpec>>(shapes)) {
+        const auto& tensor_specs = std::get<std::vector<ttnn::TensorSpec>>(shapes);
+        std::vector<LegacyShape> legacy_shapes;
+        legacy_shapes.reserve(tensor_specs.size());
+        for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
+            const auto& [simple_shape, output_layout] = tensor_specs[idx];
+            auto data_type = dtype_provider(idx);
+            auto simple_padded_shape = layout_provider.has_value() ? get_physical_shape(simple_shape, data_type, layout_provider.value()(idx)) : output_layout.get_padded_shape(simple_shape);
+            legacy_shapes.emplace_back(simple_shape.as_vector(), simple_padded_shape.as_vector());
+        }
+        return legacy_shapes;
+    } else {
+        TT_THROW("extract_legacy_shapes only supports LegacyShape, SimpleShape, or TensorSpec");
     }
-    const auto& simple_shapes = std::get<std::vector<ttnn::SimpleShape>>(shapes);
-    std::vector<LegacyShape> legacy_shapes;
-    legacy_shapes.reserve(simple_shapes.size());
-    for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
-        auto [data_type, layout] = layout_provider(idx);
-        legacy_shapes.emplace_back(simple_shapes[idx].as_vector(), get_physical_shape(simple_shapes[idx], data_type, layout).as_vector());
-    }
-    return legacy_shapes;
 }
 
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
@@ -358,8 +373,8 @@ Tensors run_with_autoformat(
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
     auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
-        return std::pair{output_tensors[idx].get_dtype(), Layout::TILE};
-    });
+        return output_tensors[idx].get_dtype();
+    }, std::nullopt);
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
 
@@ -420,8 +435,8 @@ Tensors run_with_autoformat(
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
     auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
-        return std::pair{output_tensors[idx].get_dtype(), output_layouts[idx]};
-    });
+        return output_tensors[idx].get_dtype();
+    }, [&](size_t idx) { return output_layouts[idx]; } );
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
     TT_ASSERT(output_tensors.size() == output_layouts.size());

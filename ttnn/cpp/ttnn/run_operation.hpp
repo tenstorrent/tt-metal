@@ -17,6 +17,8 @@ namespace tt::tt_metal {
 namespace operation {
 
 using ttnn::operations::experimental::auto_format::FormatParams;
+
+// TODO: If ops switch to implementing create_output_layout, everything in this function can be automated
 template <typename ConcreteOperation>
 auto generic_create_output_tensors(
     const ConcreteOperation& operation,

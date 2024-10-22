@@ -660,6 +660,7 @@ tt::tt_metal::Padding Tensor::get_padding() const {
 
 Tensor create_device_tensor(
     const ttnn::SimpleShape& shape, const TensorLayout& tensor_layout, Device* device) {
+    std::cout << "create tensor: " << shape << ", " << tensor_layout.get_alignment() << std::endl;
     ZoneScoped;
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, tensor_layout.get_data_type(), tensor_layout.get_layout(), device, tensor_layout.get_memory_config());
 
