@@ -688,6 +688,8 @@ def parse_output_line(line, previous_line, current_status):
     # Check for test output
     test_match = re.search(r"\| models\.demos\.llama3\.tests\..+ - (.+)", line)
     if test_match:
+        if current_status.startswith("Loading") and (pcc is not None or speed is not None):
+            current_status = "Running"
         return current_status, test_match.group(1), speed, pcc
 
     return current_status, None, speed, pcc
