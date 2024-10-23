@@ -28,10 +28,10 @@ def get_tensors(
     require_input_grad,
     require_mat2_grad,
     device,
+    *,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
 ):
-    torch_dtype = torch.float32
-    ttnn_dtype = ttnn.bfloat16
-
     torch_input = torch.rand(input_shape, dtype=torch_dtype)
     torch_mat2 = torch.rand(mat2_shape, dtype=torch_dtype)
     torch_output = torch.rand(output_shape, dtype=torch_dtype)
@@ -64,7 +64,15 @@ def get_tensors(
     )
 
 
-def run_moreh_bmm(shape, optional_output, compute_kernel_options, device):
+def run_moreh_bmm(
+    shape,
+    optional_output,
+    compute_kernel_options,
+    device,
+    *,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+):
     """
     Function to test Batched Matrix Multiplication (BMM) using PyTorch and TTNN backends.
 
@@ -87,7 +95,16 @@ def run_moreh_bmm(shape, optional_output, compute_kernel_options, device):
         input,
         mat2,
         _,
-    ) = get_tensors(input_shape, mat2_shape, output_shape, False, False, device)
+    ) = get_tensors(
+        input_shape,
+        mat2_shape,
+        output_shape,
+        False,
+        False,
+        device,
+        torch_dtype=torch_dtype,
+        ttnn_dtype=ttnn_dtype,
+    )
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     # Perform PyTorch BMM
@@ -111,7 +128,15 @@ def run_moreh_bmm(shape, optional_output, compute_kernel_options, device):
     assert passing
 
 
-def run_moreh_bmm_backward(shape, requires_grad, compute_kernel_options, device):
+def run_moreh_bmm_backward(
+    shape,
+    requires_grad,
+    compute_kernel_options,
+    device,
+    *,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+):
     """
     Function to test the backward pass of Batched Matrix Multiplication (BMM) using PyTorch and TTNN backends.
 
@@ -135,7 +160,16 @@ def run_moreh_bmm_backward(shape, requires_grad, compute_kernel_options, device)
         input,
         mat2,
         output_grad,
-    ) = get_tensors(input_shape, mat2_shape, output_shape, require_input_grad, require_mat2_grad, device)
+    ) = get_tensors(
+        input_shape,
+        mat2_shape,
+        output_shape,
+        require_input_grad,
+        require_mat2_grad,
+        device,
+        torch_dtype=torch_dtype,
+        ttnn_dtype=ttnn_dtype,
+    )
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     # Perform PyTorch BMM (backward)
@@ -206,6 +240,18 @@ def test_moreh_bmm_compute_kernel_options(compute_kernel_options, device):
     run_moreh_bmm([10, 191, 447, 159], True, compute_kernel_options, device)
 
 
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_moreh_bmm_ttnn_dtype(ttnn_dtype, device):
+    """
+    PyTest wrapper for running BMM tests with multiple configurations.
+    """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
+    torch.manual_seed(2024)
+    run_moreh_bmm([10, 191, 447, 159], True, True, device, ttnn_dtype=ttnn_dtype)
+
+
 @pytest.mark.parametrize(
     "shape",
     [[10, 191, 447, 159]],
@@ -267,6 +313,18 @@ def test_moreh_bmm_backward_compute_kernel_options(compute_kernel_options, devic
     """
     torch.manual_seed(2024)
     run_moreh_bmm_backward([7, 511, 313, 765], [True, True], compute_kernel_options, device)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
+    """
+    PyTest wrapper for running BMM backward tests with multiple configurations.
+    """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
+    torch.manual_seed(2024)
+    run_moreh_bmm_backward([7, 511, 313, 765], [True, True], True, device, ttnn_dtype=ttnn_dtype)
 
 
 @pytest.mark.parametrize(
