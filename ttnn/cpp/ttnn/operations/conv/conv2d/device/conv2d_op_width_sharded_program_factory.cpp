@@ -151,8 +151,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     CoreRangeSet input_cores = a.memory_config().shard_spec.value().grid;
     CoreRangeSet output_cores = output.memory_config().shard_spec.value().grid;
     CoreRangeSet all_cores = output.memory_config().shard_spec.value().grid;
-    if(input_cores.num_cores()>output_cores.num_cores()){
-        all_cores = a.memory_config().shard_spec.value().grid;
+    if(input_cores.num_cores()>output_cores.num_cores()) {
+        all_cores = input_cores;
     }
     auto input_num_cores = input_cores.num_cores();
     auto output_num_cores = output_cores.num_cores();
@@ -795,7 +795,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             core_index * weight_block_w_ntiles,
             b.buffer()->address(),
             bias_base_address,
-            (uint32_t) (core_index < output_num_cores ? 1 : 0)
+            (uint32_t)(core_index < output_num_cores)
         });
     }
 

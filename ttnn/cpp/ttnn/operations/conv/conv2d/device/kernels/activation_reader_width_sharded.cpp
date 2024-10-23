@@ -234,11 +234,7 @@ void kernel_main() {
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
 
-            //Only output cores do compute
-            // if(this_core_id < num_output_cores)
-            {
-                cb_push_back(cb_id_act, act_block_num_tiles);
-            }
+            cb_push_back(cb_id_act, act_block_num_tiles);
 
             sender_noc_x++;
             if(sender_noc_x >= num_cores_x) {
