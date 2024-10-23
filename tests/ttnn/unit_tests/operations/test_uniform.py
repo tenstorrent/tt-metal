@@ -29,7 +29,7 @@ def check_torch_uniform_bfloat16():
     logger.info(input)
 
 
-# ttnn is faster than torch if the tensor is big enough: [1024, 1024]
+# With small tensor ttnn might be slower than torch
 def benchmark_uniform(cpu_input, npu_input, rand_from, rand_to):
     iter_num = 10
 
@@ -62,6 +62,8 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
     min_val, max_val = torch.min(tt_input).item(), torch.max(tt_input).item()
 
     logger.info(f"Distinct elements: {len(elem_cnt.keys())}")
+    if max_val == rand_to:
+        logger.info(f"Count max_val: {elem_cnt[max_val]}")
     logger.info(f"Min val: {min_val}, Max val: {max_val}")
     logger.info(f"Expected mean: {expected_mean}, NPU mean: {npu_mean}")
     logger.info(f"Expected var: {expected_var}, NPU var: {npu_var}")
@@ -96,24 +98,24 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
-        [32, 32]
-        # [100, 100],
-        # [1, 512, 2, 256],
-        # [512, 512],
-        # [1024, 1024],
+        [32, 32],
+        [64, 64],
+        [1, 512, 2, 256],
+        [512, 512],
+        [1024, 1024],
     ],
 )
 @pytest.mark.parametrize("rand_range",
     [
-        [0, 1]
-        # [2.1, 9],
-        # [-5.1, 1.2]
+        [0, 1],
+        [2.1, 9],
+        [-5.1, 1.2]
     ]
 )
 @pytest.mark.parametrize("dtype",
     [
         "bfloat16",
-        # "float32"
+        "float32"
     ]
 )
 # fmt: on
@@ -122,34 +124,34 @@ def test_uniform(shape, rand_range, dtype, device):
     run_uniform(shape, rand_range, dtype, device)
 
 
-# @skip_for_grayskull("Requires wormhole_b0 to run")
-# @pytest.mark.parametrize(
-#     "shape",
-#     [[2, 32, 32, 16]],
-# )
-# @pytest.mark.parametrize("rand_range", [[-3, 4]])
-# @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-# def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
-#     torch.manual_seed(0)
-#     num_program_cache_entries_list = []
-#     for i in range(2):
-#         run_uniform(shape, rand_range, dtype, device)
-#         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
-#         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-#         num_program_cache_entries_list.append(device.num_program_cache_entries())
-#     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
-#     assert num_program_cache_entries_list[0] > 0
-#     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "shape",
+    [[2, 32, 32, 16]],
+)
+@pytest.mark.parametrize("rand_range", [[-3, 4]])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
+    torch.manual_seed(0)
+    num_program_cache_entries_list = []
+    for i in range(2):
+        run_uniform(shape, rand_range, dtype, device)
+        # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
+        tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-# @skip_for_grayskull("Requires wormhole_b0 to run")
-# @pytest.mark.parametrize(
-#     "shape",
-#     [[512, 512], [5, 2, 4, 70, 40]],
-# )
-# @pytest.mark.parametrize("rand_range", [[0, 1]])
-# @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-# @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-# def test_uniform_with_compute_kernel_options(shape, rand_range, dtype, device, compute_kernel_options):
-#     torch.manual_seed(0)
-#     run_uniform(shape, rand_range, dtype, device, compute_kernel_options)
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "shape",
+    [[512, 512], [5, 2, 4, 70, 40]],
+)
+@pytest.mark.parametrize("rand_range", [[0, 1]])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_uniform_with_compute_kernel_options(shape, rand_range, dtype, device, compute_kernel_options):
+    torch.manual_seed(0)
+    run_uniform(shape, rand_range, dtype, device, compute_kernel_options)
