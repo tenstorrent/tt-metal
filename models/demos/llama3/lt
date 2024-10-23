@@ -630,9 +630,10 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
             if process.returncode != 0:
                 exception_name = find_exception_in_log(entry["log_file"].name)
                 entry["status"] = "Error"
-                entry["output"] = exception_name
-                reset_device_async(entry, screen_lock, screen_needs_update)
-                screen_needs_update.set()
+                if exception_name:
+                    entry["output"] = exception_name
+                    reset_device_async(entry, screen_lock, screen_needs_update)
+                    screen_needs_update.set()
             else:
                 entry["status"] = "Finished"
         entry["process"] = None
@@ -702,7 +703,7 @@ def get_llama_dir(model):
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
-        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked/"),
+        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
     }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
