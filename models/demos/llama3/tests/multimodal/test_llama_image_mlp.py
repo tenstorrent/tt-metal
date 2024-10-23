@@ -14,14 +14,15 @@ from models.demos.llama3.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    nearest_32,
 )
 from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "seq_len",
-    (4224,),
+    "batch, num_chunks",
+    ((1, 4),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -32,7 +33,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_mlp_inference(batch, num_chunks, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -48,8 +49,9 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
     model_args.WEIGHTS_DTYPE = dtype
 
-    dim = 1280
-    mlp_ratio = 4.0
+    dim = model_args.vision_dim
+    seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
+    mlp_ratio = model_args.vision_mlp_ratio
     act_layer = torch.nn.GELU
     dropout = 0.0
     reference_model = llama_reference_mod.ImageFeedForward(
@@ -68,7 +70,7 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
     )
-    torch_input = torch.randn(1, 1, seq_len, dim)
+    torch_input = torch.randn(1, batch, seq_len, dim)
     reference_output = reference_model(torch_input).squeeze()
     tt_input = ttnn.from_torch(
         torch_input,

@@ -19,7 +19,9 @@ import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.m
 import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 
 import ttnn
-from models.demos.llama3.tt.multimodal.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
+from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_vision import (
+    TtLlamaCrossAttentionTransformerVision,
+)
 from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
@@ -30,6 +32,9 @@ from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     get_single_rot_mat,
+)
+from models.utility_functions import (
+    nearest_32,
 )
 
 logger = logging.getLogger(__name__)
@@ -217,7 +222,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             # Back to torch
             vision_tokens = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-            chunk_seq_len = (self.configuration.vision_chunk_size // self.configuration.vision_patch_size) ** 2 + 1
+            chunk_seq_len = self.configuration.vision_chunk_ntok
             # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = (
                 vision_tokens[0, :, :chunk_seq_len]
@@ -226,11 +231,12 @@ class CrossAttentionTransformer(torch.nn.Module):
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)
+        padded_seq_len = self.max_num_chunks * nearest_32(self.configuration.vision_chunk_ntok)
 
         # Prepare vision tokens for TT text_model
         vision_tokens_squeeze = vision_tokens.view(1, bsz, -1, image_token_dim)
         vision_tokens_squeeze = torch.nn.functional.pad(
-            vision_tokens_squeeze, (0, 0, 0, 4224 - vision_tokens_squeeze.shape[2]), "constant", 0
+            vision_tokens_squeeze, (0, 0, 0, padded_seq_len - vision_tokens_squeeze.shape[2]), "constant", 0
         )
         vision_tokens_tt = ttnn.from_torch(
             vision_tokens_squeeze,
@@ -262,7 +268,7 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         cross_attention_masks = torch.nn.functional.pad(
             cross_attention_masks,
-            (0, 4224 - cross_attention_masks.shape[3]),
+            (0, padded_seq_len - cross_attention_masks.shape[3]),
             "constant",
             get_negative_inf_value(torch.float32),
         )

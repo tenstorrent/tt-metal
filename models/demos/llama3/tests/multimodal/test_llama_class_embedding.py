@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import math
 import pytest
 from loguru import logger
 import os
-import itertools
 
 ##### PyTorch imports #####
 import torch
@@ -63,9 +61,9 @@ class ClassEmbedding(nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "input_shape",
+    "bsz, num_concurrent_media, num_chunks",
     [
-        ((1, 4, 4, 1024, 1280)),  # Patch 448
+        ((1, 4, 4)),
     ],
 )
 @pytest.mark.parametrize(
@@ -79,7 +77,9 @@ def test_llama_class_embedding_inference(
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
     layout,
     ensure_gc,
 ):
@@ -95,13 +95,8 @@ def test_llama_class_embedding_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    (
-        bsz,
-        num_concurrent_media,
-        num_chunks,
-        ntok,
-        dim,
-    ) = input_shape
+    ntok = nearest_32(model_args.vision_chunk_ntok)
+    dim = model_args.vision_dim
 
     ##### Prepare inputs #####
     input_tensor = torch.randn(bsz * num_concurrent_media * num_chunks, ntok, dim)

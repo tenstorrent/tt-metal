@@ -83,37 +83,21 @@ class PositionalEmbedding(nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "image_size, patch_size",
-    [
-        ((448, 448), (14, 14)),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_shape, max_num_tiles",
-    [
-        ((1, 4, 4, 1024 + 1, 1280), 4),
-    ],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-    ],
+    "bsz, num_concurrent_media, num_chunks",
+    [(1, 4, 4)],
 )
 def test_llama_positional_embedding_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
-    layout,
-    # Positional Embedding params
-    image_size,
-    patch_size,
-    max_num_tiles,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
     pcc_required = 0.9999
 
     mesh_device.enable_async(True)
@@ -125,15 +109,13 @@ def test_llama_positional_embedding_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    (
-        bsz,
-        num_concurrent_media,
-        num_chunks,
-        ntok,
-        dim,
-    ) = input_shape
+    ntok = model_args.vision_chunk_ntok
+    dim = model_args.vision_dim
+    image_size = (model_args.vision_chunk_size, model_args.vision_chunk_size)
+    patch_size = (model_args.vision_patch_size, model_args.vision_patch_size)
 
     ##### Check parms #####
+    max_num_tiles = model_args.vision_max_num_chunks
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"
 
     ##### Prepare inputs #####

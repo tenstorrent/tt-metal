@@ -45,42 +45,27 @@ import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.m
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "gated",
+    "bsz, num_concurrent_media, num_chunks",
     [
-        True,
+        (1, 1, 4),
+        (1, 4, 4),
     ],
 )
-@pytest.mark.parametrize(
-    "input_shape, dim, max_num_tiles",
-    [
-        ((1, 32, 4, 1032), 1280, 4),
-        ((1, 8, 4, 1032), 1280, 4),
-        ((1, 4, 4, 1032), 1280, 4),
-        ((1, 1, 4, 1032), 1280, 4),
-        ((1, 1, 4, 1024), 1280, 4),
-        # ((1, 32, 16, 1032), 1280, 16), # Large test, takes some time
-    ],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-    ],
-)
+@pytest.mark.parametrize("pre_embed", [False, True])
 def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
-    layout,
-    # Tile Position Embedding params
-    dim,
-    gated,
-    max_num_tiles,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
+    pre_embed,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    gated = True
     pcc_required = 0.9999
 
     mesh_device.enable_async(True)
@@ -89,13 +74,16 @@ def test_llama_conv2d_inference(
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "vision_model.vision_encoder.pre_tile_pos_embed."
+    first_layer_prefix = "vision_model.vision_encoder." + (
+        "pre_tile_pos_embed." if pre_embed else "post_tile_pos_embed."
+    )
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    num_devices = model_args.num_devices
 
-    bsz, num_concurrent_media, num_chunks, ntok = input_shape
+    ntok = nearest_32(model_args.vision_chunk_ntok - (0 if pre_embed else 1))
+    dim = model_args.vision_dim
+    max_num_tiles = model_args.vision_max_num_tiles
 
     ##### Check parms #####
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"

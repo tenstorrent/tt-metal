@@ -14,15 +14,12 @@ from models.demos.llama3.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    nearest_32,
 )
 from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "seq_len",
-    (4224,),
-)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -32,13 +29,15 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+def test_layernorm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     width = model_args.vision_dim
+    num_chunks = 4
+    seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names

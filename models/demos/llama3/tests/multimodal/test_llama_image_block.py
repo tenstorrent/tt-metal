@@ -10,7 +10,7 @@ import ttnn
 import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal import encoder_utils
 from models.demos.llama3.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
-from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
+from models.demos.llama3.tt.multimodal.llama_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
@@ -24,8 +24,8 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch, num_chunks, ntok",
-    ((1, 4, 1024),),
+    "batch, num_chunks",
+    ((1, 4),),
 )
 @pytest.mark.parametrize(
     "gated",
@@ -36,7 +36,7 @@ from models.utility_functions import skip_for_grayskull
     [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
     indirect=True,
 )
-def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_block_inference(batch, num_chunks, mesh_device, gated, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
@@ -56,6 +56,7 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
 
     dim = model_args.vision_dim
     heads = model_args.vision_attn_n_heads
+    ntok = model_args.vision_chunk_ntok
     reference_model = llama_reference_mod.ImageTransformerBlock(
         d_model=dim, n_head=heads, mlp_ratio=model_args.vision_mlp_ratio, gated=gated
     )
@@ -92,7 +93,7 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
         attention_input.shape[0], attention_input.shape[1], attention_input.shape[2], attention_input.shape[3]
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
-    tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, 32, num_chunks)
+    tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
     attention_input = attention_input.reshape(1, batch, -1, dim)
 
     tt_mask = ttnn.from_torch(
@@ -105,7 +106,7 @@ def test_llama_block_inference(batch, num_chunks, ntok, mesh_device, gated, use_
     )
 
     tt_out = tt_model(attention_input, mask=tt_mask)
-    tt_out = tt_out.reshape(batch, num_chunks, ntok + 32, dim)
+    tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
     tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 

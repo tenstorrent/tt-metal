@@ -192,7 +192,6 @@ class TtLlamaVisionEncoder(LightweightModule):
         assert isinstance(
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
-        SKIP_EMBED = False
         if images.ndim == 5:
             num_concurrent_media = 1
             bsz, num_chunks, nch, w, h = images.shape
@@ -215,17 +214,15 @@ class TtLlamaVisionEncoder(LightweightModule):
         x = ttnn.reshape(x, (1, bsz * num_concurrent_media * num_chunks, ntok, dim))
 
         # apply cls token
-        if not SKIP_EMBED:
-            x = self.class_embedding(x)
-            ntok += 1
+        x = self.class_embedding(x)
+        ntok += 1
 
         # apply position embeddings
         # NOTE! After class embedding, x is padded tilized tensor. Reshapes fail for padded tilized tensors, so do the reshape in row-major
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (bsz * num_concurrent_media, num_chunks, ntok, dim))
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        if not SKIP_EMBED:
-            x = self.positional_embedding(x, ar)
+        x = self.positional_embedding(x, ar)
 
         # BUG: layernorm takes 4d tensor -> 3d??
         x = self.ln_pre(x)
@@ -239,6 +236,7 @@ class TtLlamaVisionEncoder(LightweightModule):
 
         fake_x = torch.zeros(x.shape[0], x.shape[1], x.shape[2], x.shape[3])
         attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
+        # Mask stripes for the extra padding required on TT hardware
         attn_mask = mask_tile_padding(attn_mask, ntok, npad, num_chunks)
         attn_mask = ttnn.as_tensor(
             attn_mask,

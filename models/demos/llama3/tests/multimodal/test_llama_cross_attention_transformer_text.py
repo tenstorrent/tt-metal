@@ -23,15 +23,12 @@ from models.demos.llama3.tt.llama_common import (
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    nearest_32,
 )
 from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "vision_seq_len",
-    (4224,),
-)
 @pytest.mark.parametrize(
     "text_seq_len",
     (2048,),
@@ -46,7 +43,6 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_cross_attention_transformer_text_inference(
-    vision_seq_len,
     text_seq_len,
     mesh_device,
     use_program_cache,
@@ -90,6 +86,9 @@ def test_llama_cross_attention_transformer_text_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     batch = 1
+    num_chunks = 4
+    chunk_length = nearest_32(model_args.vision_chunk_ntok)
+    vision_seq_len = num_chunks * chunk_length
 
     all_tests_pass = True
 

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import math
 import pytest
 from loguru import logger
 import os
@@ -20,9 +19,6 @@ from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-)
-from models.utility_functions import (
-    nearest_32,
 )
 from models.demos.llama3.tt.multimodal.llama_conv2d_patch import (
     TtLlamaConv2dPatch,
@@ -42,24 +38,10 @@ import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.m
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "input_shape, in_channels, out_channels, kernel_size, stride, bias",
-    [
-        ((1, 3, 448, 448), 3, 1280, 14, 14, False),  # Llama3.2-11B Base
-    ],
-)
 def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
-    # Input params
-    input_shape,
-    # Conv2d patch params
-    in_channels,
-    out_channels,
-    kernel_size,
-    stride,
-    bias,
     ensure_gc,
 ):
     pcc_required = 0.9999
@@ -78,7 +60,14 @@ def test_llama_conv2d_inference(
     num_devices = model_args.num_devices
 
     ##### Create input tensor for the all gather #####
-    B, NCH, H, W = input_shape
+    B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)
+    in_channels, out_channels, kernel_size, stride, bias = (
+        3,
+        model_args.vision_dim,
+        model_args.vision_patch_size,
+        model_args.vision_patch_size,
+        False,
+    )
 
     assert NCH == in_channels, "Number of channels in input tensor should match in_channels for the Conv2d patch."
     assert type(kernel_size) == int, "Only symmetric kernel_size is currently supported."
@@ -88,7 +77,7 @@ def test_llama_conv2d_inference(
     assert W % kernel_size == 0, "Width should be divisible by kernel_size."
 
     ##### Prepare inputs #####
-    input_tensor = torch.randn(input_shape)
+    input_tensor = torch.randn((B, NCH, H, W))
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
     ##### Perform the torch ops #####

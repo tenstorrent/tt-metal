@@ -11,7 +11,7 @@ import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.m
 from models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal import encoder_utils
 from models.demos.llama3.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
+from models.demos.llama3.tt.multimodal.llama_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
 )
@@ -24,8 +24,8 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch, num_chunks, ntok",
-    ((1, 4, 1024),),
+    "batch, num_chunks",
+    ((1, 4),),
 )
 @pytest.mark.parametrize(
     "is_global",
@@ -37,7 +37,7 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_image_transformer_inference(
-    batch, num_chunks, ntok, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
+    batch, num_chunks, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
     pcc_required = 0.86
@@ -66,7 +66,7 @@ def test_llama_image_transformer_inference(
     }
 
     dim = model_args.vision_dim
-    heads = model_args.vision_attn_n_heads
+    ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
 
     reference_model = llama_reference_mod.VisionEncoder(
         max_num_tiles=4,
