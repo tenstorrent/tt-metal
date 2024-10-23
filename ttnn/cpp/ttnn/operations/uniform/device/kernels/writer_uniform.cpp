@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-
 #include "common/constants.hpp"
 #include "dataflow_api.h"
 
