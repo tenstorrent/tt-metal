@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <sys/param.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #define ENABLE_DEBUG 0
@@ -70,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t num_output_cores                 = get_compile_time_arg_val(20);
 
 
+    constexpr uint32_t num_mcast_cores = MAX(num_input_cores, num_output_cores);
     uint32_t i = 0; //Runtime arg index
 
     uint32_t this_core_x = get_arg_val<uint32_t>(i); i+=1;
@@ -86,7 +88,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
 
-//    DPRINT<<"L3  "<<act_mcast_dest_noc_start_x<<" "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
+   DPRINT<<"L3  "<<act_mcast_dest_noc_start_x<<" "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
 
     //Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y) ;
@@ -186,7 +188,7 @@ void kernel_main() {
                 // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its value should be act_mcast_num_dests), then reset
                 // the semaphore_addr value back to zero for the next block
 
-                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_output_cores-1);
+                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_mcast_cores-1);
                 noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                 noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
@@ -197,18 +199,11 @@ void kernel_main() {
                 // // Now we have the block in the CB address, we can mcast to dests!
                 uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
-                uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // // num_dests will source, since we are copying to a different local CB as well
-                if(this_core_id < num_output_cores) {
-                    DPRINT<<"Core "<<this_core_id<<" Loopback "<<ENDL();
+                uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
-                    noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
-                } else {
-                    DPRINT<<"Core "<<this_core_id<<"No  Loopback "<<ENDL();
-
-                    noc_async_write_multicast(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
-                }
-
+                DPRINT<<"Core "<<this_core_id<<" MCast Write "<<ENDL();
+                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_mcast_cores , false, false);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
                 // Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
@@ -216,16 +211,12 @@ void kernel_main() {
                 // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not be sent in order they are issued
                 noc_async_writes_flushed();
 #endif
+                // // We should also multicast VALID flag to destinations for receiver semaphore
+                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_mcast_cores , false, false);
 
-                if(this_core_id < num_output_cores) {
-                    // // We should also multicast VALID flag to destinations for receiver semaphore
-                    noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                } else {
-                    noc_semaphore_set_multicast(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
-                }
+                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            } else if(this_core_id < num_output_cores) {
+            } else {
 
                 // MCAST RECEIVER: receive entire tilized input from sender core
                 // Set act semaphore value to INVALID

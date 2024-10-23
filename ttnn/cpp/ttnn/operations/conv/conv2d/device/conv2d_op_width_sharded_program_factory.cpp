@@ -498,7 +498,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t act_mcast_receiver_semaphore = tt_metal::CreateSemaphore(program, all_cores, 0); //0==INVALID.
 
     CoreCoord act_mcast_start_core_logical(0,0);
-    CoreCoord act_mcast_end_core_logical(p_config.grid_size.x-1,p_config.grid_size.y-1);
+    CoreCoord act_mcast_end_core_logical(all_cores.bounding_box().end_coord.x, all_cores.bounding_box().end_coord.y);
     auto act_mcast_start = device->worker_core_from_logical_core(act_mcast_start_core_logical);
     auto act_mcast_end = device->worker_core_from_logical_core(act_mcast_end_core_logical);
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
