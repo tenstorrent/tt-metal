@@ -514,3 +514,39 @@ def test_softmin_bfp8(shape_dim_strategy, device):
     passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
     logger.debug(out)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "shape_dim_strategy",
+    [
+        [[32, 32], 1, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_W],
+        [[32, 32], 0, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.SMALL_H],
+        [[2, 3, 32 * 4, 32 * 5], 3, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_W],
+        [[2, 3, 32 * 4, 32 * 5], 2, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_H],
+        [[1, 15, 32, 32], 1, ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy.LARGE_C],
+    ],
+)
+def test_softmin_backward_bfp8(shape_dim_strategy, device):
+    # TODO @thanhnguyen-moreh: Support bfloat8_b in kernel
+    pytest.skip(f"bfloat8_b is not supported in the kernel")
+    shape, dim, strategy = shape_dim_strategy
+    torch.manual_seed(0)
+
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
+
+    y = F.softmin(x, dim)
+    dev_y = ttnn.from_torch(y, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dev_dy = ttnn.from_torch(dy, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    y.backward(dy)
+    tt_npu = ttnn.operations.moreh.softmin_backward(dev_y, dev_dy, dim, strategy=strategy)
+
+    assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+
+    rtol = atol = 0.05
+    passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
+    logger.debug(out)
+    assert passing
