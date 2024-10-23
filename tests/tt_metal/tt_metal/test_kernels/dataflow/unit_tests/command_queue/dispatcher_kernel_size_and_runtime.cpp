@@ -52,11 +52,8 @@ void kernel_main() {
 
     uint32_t cb_idx = 0;
     for (uint32_t i = num_unique_rt_args + num_sems; i < num_unique_rt_args + num_sems + num_cbs; i++) {
-        // DPRINT << "i: " << i << ENDL();
-        // print_cb_details(cb_idx);
         const uint32_t expected_cb_page_size = get_arg_val<uint32_t>(i);
         const uint32_t actual_cb_page_size = cb_interface[cb_idx].fifo_page_size;
-        // DPRINT << cb_idx << " CB Total Size: " << cb_interface[cb_idx].fifo_size << ENDL();
         if (expected_cb_page_size != actual_cb_page_size) {
             DPRINT << cb_idx << " Actual circular buffer page size: " << actual_cb_page_size
                    << " Expected circular buffer page size: " << expected_cb_page_size << ENDL();
