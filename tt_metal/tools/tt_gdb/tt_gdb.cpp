@@ -10,7 +10,6 @@
 #include <filesystem>
 #include <thread>
 
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/device/device.hpp"
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 
