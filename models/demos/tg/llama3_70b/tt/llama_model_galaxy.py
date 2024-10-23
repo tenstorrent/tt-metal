@@ -183,8 +183,8 @@ class TtLlamaModel_galaxy:
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
 
             ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(xs.shape[2], xs.shape[3] // 8),
-                core_grid=ttnn.CoreGrid(y=1, x=8),
+                shape=(xs.shape[2], xs.shape[3] // 32),
+                core_grid=ttnn.CoreGrid(y=4, x=8),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

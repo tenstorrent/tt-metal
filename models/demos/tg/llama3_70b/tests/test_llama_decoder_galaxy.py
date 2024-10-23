@@ -114,8 +114,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 8 // llama_decoder_model.cluster_shape[0]),
-            core_grid=ttnn.CoreGrid(y=1, x=8),
+            shape=(x.shape[2], x.shape[3] // 32 // llama_decoder_model.cluster_shape[0]),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,

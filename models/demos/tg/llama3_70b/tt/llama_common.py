@@ -82,7 +82,7 @@ def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_li
     # Fast_reduce_nc does not support sharded memory configuration, convert to interleaved
     gathered_tensor = ttnn.to_memory_config(gathered_tensor, ttnn.L1_MEMORY_CONFIG)
     reduced_tensors = ttnn.experimental.fast_reduce_nc(
-        gathered_tensor, dims=[dim], output=None, compute_kernel_config=None
+        gathered_tensor, dims=[dim], output=None, compute_kernel_config=None, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     return reduced_tensors
 
