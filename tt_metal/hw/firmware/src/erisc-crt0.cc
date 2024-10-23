@@ -22,7 +22,7 @@ static void do_erisc_exit();
 // The function relies on optimization to avoid unexpected register
 // usage.
 
-extern "C" __attribute__((section("erisc_l1_code.0"), naked, optimize("Os"))) void ApplicationHandler(void) {
+extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _start(void) {
     // Save callee saves.
     __asm__ volatile(
         "addi sp, sp, -13 * 4\n\t"
