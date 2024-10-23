@@ -66,6 +66,7 @@ foreach (TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     )
     set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR})
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
+    target_compile_options(${TEST_TARGET} PRIVATE "-include${PROJECT_SOURCE_DIR}/tt_metal/common/test_common.hpp")
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()
 

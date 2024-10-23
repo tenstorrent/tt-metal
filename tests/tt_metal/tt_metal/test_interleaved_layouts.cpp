@@ -10,6 +10,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
+#include "tt_metal/common/test_common.hpp"
 
 #include "llrt/llrt.hpp"
 
