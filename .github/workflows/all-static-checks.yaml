@@ -8,6 +8,30 @@ on:
       - "main"
 
 jobs:
+  pre-commit:
+    name: Run Pre-commit Hooks and Propose Fixes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history so 'origin/main' is available
+          ref: ${{ github.head_ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.11
+
+      - name: Run Pre-commit and Fix Issues
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: "--from-ref origin/main --to-ref HEAD"
+        continue-on-error: false
+
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
@@ -27,11 +51,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
-  check-black:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: psf/black@23.10.1
   check-doc:
     runs-on: ubuntu-latest
     steps:
