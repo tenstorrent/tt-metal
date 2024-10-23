@@ -1,5 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
-cmake_policy(VERSION 3.16)
+cmake_minimum_required(VERSION 3.16..3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -41,36 +40,39 @@ project(
         CXX
 )
 include(CTest)
+list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
-option(ENABLE_CCACHE FALSE)
-if(ENABLE_CCACHE)
-    include(cmake/ccache.cmake)
+# Global settings if we're the top-level project
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(CMAKE_CONFIGURATION_TYPES
+        Release
+        RelWithDebInfo
+        Debug
+        CI
+    )
+    if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
+        message(STATUS "Setting build type to 'Release' as none was specified.")
+        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
+    endif()
+
+    set_property(
+        GLOBAL
+        PROPERTY
+            GLOBAL_DEPENDS_NO_CYCLES
+                ON
+    )
+
+    option(ENABLE_CCACHE FALSE)
+    if(ENABLE_CCACHE)
+        include(cmake/ccache.cmake)
+    endif()
 endif()
 
 CHECK_COMPILERS()
 
-############################################################################################################################
-# Setting build type flags
-#   Will default to Release build unless manually set with -DCMAKE_BUILD_TYPE
-############################################################################################################################
-# Define valid build types
-set(VALID_BUILD_TYPES
-    Debug
-    Release
-    RelWithDebInfo
-    CI
-)
-
-if(NOT CMAKE_BUILD_TYPE)
-    message(STATUS "Setting build type to 'Release' as none was specified.")
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
-endif()
-
-# Check if the specified build type is valid
-list(FIND VALID_BUILD_TYPES ${CMAKE_BUILD_TYPE} _build_type_index)
-
-if(_build_type_index EQUAL -1)
-    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${VALID_BUILD_TYPES}")
+if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
+    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${CMAKE_CONFIGURATION_TYPES}")
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
@@ -149,7 +151,7 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake)
+include(dependencies)
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
@@ -168,7 +170,7 @@ if(NOT NUMA_LIBRARY)
 endif()
 
 # Bring in UMD and all it's dependencies
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd)
+add_subdirectory(tt_metal/third_party/umd)
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -331,15 +333,15 @@ endif()
 # Build subdirectories
 ############################################################################################################################
 if(ENABLE_TRACY)
-    include(${PROJECT_SOURCE_DIR}/cmake/tracy.cmake)
+    include(tracy)
 endif()
 
-add_subdirectory(${PROJECT_SOURCE_DIR}/tt_metal)
-add_subdirectory(${PROJECT_SOURCE_DIR}/ttnn)
+add_subdirectory(tt_metal)
+add_subdirectory(ttnn)
 
 if(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
-endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
+endif()
 
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
@@ -387,5 +389,4 @@ add_custom_target(
     COMMENT "Cleaning `built` directory"
 )
 
-# Debian Package
-include(cmake/packaging.cmake)
+include(packaging)
