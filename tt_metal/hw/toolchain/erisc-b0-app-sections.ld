@@ -37,19 +37,21 @@ SECTIONS
 
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE
-  .sdata2         :
-  {
-    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
 
-.data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA
-  .dynamic        : { *(.dynamic) } > REGION_APP_DATA
-  .data           :
+  .data :
   {
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+    *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
+    *(.sdata .sdata.* .gnu.linkonce.s.*)
+    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
     *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
+    *(.data1)
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
   } > REGION_APP_DATA
+
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
   __l1_bss_start = .;
@@ -81,7 +83,7 @@ SECTIONS
 
   .stack :
   {
-   . = ALIGN(16);
+   ASSERT(. == ALIGN(16), "Stack is not aligned");
    __stack_bottom = .;
    . += __firmware_stack_size;
    __stack_top = .;
