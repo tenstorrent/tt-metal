@@ -280,6 +280,13 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto num_cores_y = cached_program.shared_variables.num_cores_y;
 
+    union {
+        float f;
+        uint32_t u;
+    } f2u_lr;
+
+    f2u_lr.f = operation_attributes.lr;
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
@@ -291,6 +298,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
             if (max_exp_avg_sq_in_buffer != nullptr) {
                 runtime_args[4] = max_exp_avg_sq_in_buffer->address();
             }
+            runtime_args[5] = f2u_lr.u;
             runtime_args[10] = operation_attributes.step;
         }
 

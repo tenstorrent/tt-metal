@@ -4,8 +4,8 @@
 
 #include "moreh_matmul_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
@@ -473,15 +473,6 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             {output.buffer()->address(), num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;
     }
-
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
-                                              const void *operation,
-                                              Program &program,
-                                              const std::vector<Tensor> &input_tensors,
-                                              const std::vector<std::optional<const Tensor>> &optional_input_tensors,
-                                              const std::vector<Tensor> &output_tensors) {
-
-    };
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
 }

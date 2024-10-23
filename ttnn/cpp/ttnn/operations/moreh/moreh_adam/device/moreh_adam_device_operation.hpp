@@ -5,7 +5,6 @@
 #include <variant>
 #include <vector>
 
-#include "common/core_coord.h"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
