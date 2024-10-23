@@ -67,9 +67,9 @@ void bind_unary_composite_optional_floats_with_default(py::module& module, const
                 return self(input_tensor, parameter_a, parameter_b, memory_config);
             },
             py::arg("input_tensor"),
-            py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
 
