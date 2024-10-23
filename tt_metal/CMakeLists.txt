@@ -1,4 +1,3 @@
-
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/hw)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/common)
@@ -23,30 +22,52 @@ set(TT_METAL_OBJECTS
 
 add_library(tt_metal ${TT_METAL_OBJECTS})
 
-target_link_libraries(tt_metal PUBLIC metal_header_directories umd_device metal_common_libs magic_enum fmt span)
-
-target_precompile_headers(tt_metal PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/public/tracy/Tracy.hpp
-    <functional>
-    <map>
-    <memory>
-    <unordered_map>
-    <variant>
-    <vector>
+target_link_libraries(
+    tt_metal
+    PUBLIC
+        metal_header_directories
+        umd_device
+        metal_common_libs
+        magic_enum
+        fmt
+        span
 )
 
-target_link_libraries(tt_metal PUBLIC compiler_flags $<$<BOOL:${ENABLE_TRACY}>:TracyClient>)
-target_include_directories(tt_metal PUBLIC
-    ${UMD_HOME}
-    ${PROJECT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}
+target_precompile_headers(
+    tt_metal
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/tracy/public/tracy/Tracy.hpp
+        <functional>
+        <map>
+        <memory>
+        <unordered_map>
+        <variant>
+        <vector>
+)
+
+target_link_libraries(
+    tt_metal
+    PUBLIC
+        compiler_flags
+        $<$<BOOL:${ENABLE_TRACY}>:TracyClient>
+)
+target_include_directories(
+    tt_metal
+    PUBLIC
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
 
-set_target_properties(tt_metal PROPERTIES
-    INSTALL_RPATH "${PROJECT_BINARY_DIR}/lib"
-    ADDITIONAL_CLEAN_FILES "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
+set_target_properties(
+    tt_metal
+    PROPERTIES
+        INSTALL_RPATH
+            "${PROJECT_BINARY_DIR}/lib"
+        ADDITIONAL_CLEAN_FILES
+            "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
 
 if(BUILD_PROGRAMMING_EXAMPLES)
