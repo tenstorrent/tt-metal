@@ -270,6 +270,13 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
     const uint32_t max_exp_avg_sq_out_addr =
         operation_attributes.amsgrad ? tensor_return_value.at(3).value().buffer()->address() : 0;
 
+    union {
+        float f;
+        uint32_t u;
+    } f2u_lr;
+
+    f2u_lr.f = operation_attributes.lr;
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
@@ -279,6 +286,7 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
             runtime_args[2] = exp_avg_in_addr;
             runtime_args[3] = exp_avg_sq_in_addr;
             runtime_args[4] = max_exp_avg_sq_in_addr;
+            runtime_args[5] = f2u_lr.u;
             runtime_args[10] = operation_attributes.step;
         }
 
