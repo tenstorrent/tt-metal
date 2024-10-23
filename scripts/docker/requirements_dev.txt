@@ -4,4 +4,4 @@ acl
 jq
 openssh-server
 vim
-libmpfr-dev 
+libmpfr-dev
