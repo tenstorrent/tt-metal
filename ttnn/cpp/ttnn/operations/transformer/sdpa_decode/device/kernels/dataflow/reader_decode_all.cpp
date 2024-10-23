@@ -27,6 +27,31 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(uint32_t seq_tile_idx, uint32_t
     return physical_block * block_stride + head_offset + block_offset;
 }
 
+template<uint32_t cb_mask_in, uint32_t mask_chunk_tiles, uint32_t mask_tile_bytes, uint32_t barrier_threshold, uint32_t PNHt, uint32_t Sk_chunk_t>
+uint32_t read_mask_chunk(uint32_t PSt, uint32_t mask_start_tile_id, const InterleavedAddrGenFast<true> mask_reader) {
+    // Read mask chunk
+    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
+    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
+    uint32_t barrier_count = 0;
+    for (uint32_t row = 0; row < PNHt; ++row) {
+        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
+        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
+            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+            mask_tile_id++;
+            mask_write_ptr += mask_tile_bytes;
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_mask_in, mask_chunk_tiles);
+    mask_start_tile_id += mask_chunk_tiles;
+    return mask_start_tile_id;
+}
+
 void kernel_main() {
     /*
     In DRAM, Q is (B, PNHt, DHt), K is (B, St, DHt), V is (B, St, DHt), mask is (B, PNHt, PSt)
@@ -74,8 +99,9 @@ void kernel_main() {
         return;
     }
     // Get cur_pos
-    uint32_t cur_pos = St*32-1; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
-    if (is_causal) {
+    constexpr uint32_t cur_pos_base = St*32-1;
+    uint32_t cur_pos = cur_pos_base; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
+    if constexpr(is_causal) {
         // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
         if (cur_pos_arg != UINT32_MAX){
             cur_pos = cur_pos_arg;
@@ -247,26 +273,7 @@ void kernel_main() {
                 cb_push_back(cb_k_in, k_chunk_tiles);
 
                 if constexpr(use_attention_mask){
-                    // Read mask chunk
-                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                    barrier_count = 0;
-                    for (uint32_t row = 0; row < PNHt; ++row) {
-                        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
-                        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                            mask_tile_id++;
-                            mask_write_ptr += mask_tile_bytes;
-
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_mask_in, mask_chunk_tiles);
-                    mask_start_tile_id += mask_chunk_tiles;
+                    mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_chunk_tiles, mask_tile_bytes, barrier_threshold, PNHt, Sk_chunk_t>(PSt, mask_start_tile_id, mask_reader);
                 }
 
                 // Read V chunk in row major order, write in row-major order
@@ -330,26 +337,7 @@ void kernel_main() {
                 k_start_tile_id += k_chunk_tiles;
 
                 if constexpr(use_attention_mask){
-                    // Read mask chunk
-                    cb_reserve_back(cb_mask_in, mask_chunk_tiles);
-                    uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
-                    barrier_count = 0;
-                    for (uint32_t row = 0; row < PNHt; ++row) {
-                        uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
-                        for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-                            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
-                            mask_tile_id++;
-                            mask_write_ptr += mask_tile_bytes;
-
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_mask_in, mask_chunk_tiles);
-                    mask_start_tile_id += mask_chunk_tiles;
+                    mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_chunk_tiles, mask_tile_bytes, barrier_threshold, PNHt, Sk_chunk_t>(PSt, mask_start_tile_id, mask_reader);
                 }
 
                 // Read V chunk

@@ -9,7 +9,7 @@
 #include "ttnn/run_operation.hpp"
 
 namespace {
-uint32_t get_chunk_size(uint32_t s) {
+inline uint32_t get_chunk_size(uint32_t s) {
     /*
     # find maximum power of 2 divisor of s
     for i in range(1, s):
@@ -43,7 +43,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    uint32_t s = input_tensor_k.get_shape()[-2];
+    uint32_t s = input_tensor_k.get_logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
@@ -118,7 +118,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    uint32_t s = input_tensor_k.get_shape()[-2];
+    uint32_t s = input_tensor_k.get_logical_shape()[-2];
     uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;

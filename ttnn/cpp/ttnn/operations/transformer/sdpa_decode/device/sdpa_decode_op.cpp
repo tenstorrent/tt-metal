@@ -23,10 +23,10 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
             input_tensor.get_dtype());
     }
 
-    const auto q_shape = input_tensors.at(0).get_legacy_shape();
-    const auto q_shape_unpadded = input_tensors.at(0).get_shape();
-    const auto k_shape = input_tensors.at(1).get_legacy_shape();
-    const auto v_shape = input_tensors.at(2).get_legacy_shape();
+    const auto q_shape = input_tensors.at(0).get_padded_shape();
+    const auto q_shape_unpadded = input_tensors.at(0).get_logical_shape();
+    const auto k_shape = input_tensors.at(1).get_padded_shape();
+    const auto v_shape = input_tensors.at(2).get_padded_shape();
 
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
@@ -48,8 +48,8 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         if (optional_input_tensors.at(2).has_value()){
             // Causal attention verification
             const auto& mask_tensor = optional_input_tensors.at(2).value();
-            const auto mask_shape = mask_tensor.get_legacy_shape();
-            const auto mask_shape_unpadded = mask_tensor.get_shape();
+            const auto mask_shape = mask_tensor.get_padded_shape();
+            const auto mask_shape_unpadded = mask_tensor.get_logical_shape();
 
             TT_FATAL(mask_shape[2] == q_shape[2], "Expect same number of padded heads in mask as in Q, got {} and {}", mask_shape[2], q_shape[2]);
             TT_FATAL(mask_shape_unpadded[2] == q_shape_unpadded[2], "Expect same number of heads in mask as in Q, got {} and {}", mask_shape_unpadded[3], q_shape_unpadded[2]);
@@ -78,7 +78,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
             const auto& cur_pos_tensor = optional_input_tensors.at(0).value();
             TT_FATAL(cur_pos_tensor.get_dtype() == DataType::INT32, "Expect cur_pos to be INT32, got {}", cur_pos_tensor.get_dtype());
             TT_FATAL(cur_pos_tensor.get_layout() == Layout::ROW_MAJOR, "Expect cur_pos to be ROW_MAJOR, got {}", cur_pos_tensor.get_layout());
-            const auto cur_pos_shape = cur_pos_tensor.get_legacy_shape();
+            const auto cur_pos_shape = cur_pos_tensor.get_padded_shape();
             TT_FATAL(cur_pos_shape[0] == B, "cur_pos must have batch size equal to Q, got {} and {}", cur_pos_shape[0], B);
         }
 
@@ -88,7 +88,7 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
         TT_FATAL(page_table_tensor.get_dtype() == DataType::INT32, "Error");
         TT_FATAL(page_table_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
 
-        const auto page_table_shape = page_table_tensor.get_legacy_shape();
+        const auto page_table_shape = page_table_tensor.get_padded_shape();
 
         TT_FATAL(page_table_shape[0] == B, "page_table must have hidden size equal to Q");
 
@@ -149,9 +149,9 @@ void ScaledDotProductAttentionDecode::validate(const std::vector<Tensor>& input_
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ScaledDotProductAttentionDecode::compute_output_shapes(
+std::vector<ttnn::SimpleShape> ScaledDotProductAttentionDecode::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(0).get_legacy_shape()};
+    return {input_tensors.at(0).get_padded_shape()};
 }
 
 std::vector<Tensor> ScaledDotProductAttentionDecode::create_output_tensors(
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
     }
 
     return detail::sdpa_decode_multi_core(
