@@ -94,7 +94,7 @@ ParallelConfig determine_parallel_config(
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t max_num_cores = grid_size.x * grid_size.y;
     uint32_t num_cores_nhw = 0;
-    CoreRangeSet grid = {{}};
+    CoreRangeSet grid;
     if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_nhw = find_closest_largest_divisor(out_nhw_ntiles, max_num_cores);
         if (num_cores_nhw < grid_size.x && out_nhw_ntiles > grid_size.x) {

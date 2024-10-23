@@ -107,8 +107,11 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> Program::program_counter = 0;
 
 Program::Program() :
-    id(program_counter++), runtime_id(0), worker_crs_({}), local_circular_buffer_allocation_needed_(false), finalized_(false) {
-
+    id(program_counter++),
+    runtime_id(0),
+    worker_crs_(),
+    local_circular_buffer_allocation_needed_(false),
+    finalized_(false) {
     uint32_t programmable_core_count = hal.get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count; i++) {
         kernels_.push_back({});
@@ -146,7 +149,7 @@ std::shared_ptr<Kernel> Program::get_kernel(KernelHandle kernel_id) const {
     return nullptr;
 }
 
-KernelGroup::KernelGroup() : core_ranges({}) {}
+KernelGroup::KernelGroup() : core_ranges(CoreRangeSet()) {}
 
 KernelGroup::KernelGroup(
     const Program &program,
@@ -155,8 +158,7 @@ KernelGroup::KernelGroup(
     bool erisc_is_idle,
     int last_cb_index,
     const CoreRangeSet &new_ranges) :
-    core_ranges({}) {
-
+    core_ranges(CoreRangeSet()) {
     this->programmable_core_type_index = programmable_core_type_index;
     this->core_ranges = this->core_ranges.merge(new_ranges);
     this->kernel_ids = kernel_ids;
@@ -171,7 +173,8 @@ KernelGroup::KernelGroup(
             hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
     }
 
-    for (int class_id = 0; class_id < DISPATCH_CLASS_MAX; class_id++) {
+    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+    for (int class_id = 0; class_id < processor_classes; class_id++) {
         auto& optional_id = kernel_ids[class_id];
         if (optional_id) {
             const auto kernel = program.get_kernel(optional_id.value());
@@ -181,14 +184,14 @@ KernelGroup::KernelGroup(
             if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                 // The code below sets the brisc_noc_id for use by the device firmware
                 // Use 0 if neither brisc nor ncrisc specify a noc
-                if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
+                if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) { // weird?
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                     if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
-                } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) { // weird?
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -234,6 +237,7 @@ struct KernelGroupInt {
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
+    // fix this
     void update(dispatch_core_processor_classes proc_class, size_t kernel_idx) {
         this->kernel_ids[proc_class] = static_cast<KernelHandle>(kernel_idx);
     }
@@ -288,7 +292,7 @@ void Program::update_kernel_groups(uint32_t programmable_core_type_index) {
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(kernel->dispatch_class(), id);
+                grid[core_index].update(magic_enum::enum_cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
             }
         }
 
@@ -662,9 +666,9 @@ void Program::populate_dispatch_data(Device *device) {
     };
 
     auto extract_dst_noc_unicast_info =
-        [&device](const std::set<CoreRange> &ranges, const CoreType core_type) -> std::vector<pair<transfer_info_cores, uint32_t>> {
+        [&device](const auto &ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-        vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+        vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -684,8 +688,8 @@ void Program::populate_dispatch_data(Device *device) {
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                device->extract_dst_noc_multicast_info<std::set<CoreRange>>(
+            vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -696,7 +700,7 @@ void Program::populate_dispatch_data(Device *device) {
         } else if (semaphore.core_type() == CoreType::ETH) {
             // TODO: we only fast dispatch to active eth...
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-            vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
+            vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                 extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -794,8 +798,8 @@ void Program::populate_dispatch_data(Device *device) {
         for (KernelGroup &kernel_group : this->get_kernel_groups(index)) {
             // TODO: add a bit in the hal that says if this core type is unicast/multicast
             if (core_type == CoreType::WORKER) {
-                std::vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                    device->extract_dst_noc_multicast_info<std::set<CoreRange>>(
+                std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                    device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                         kernel_group.core_ranges.ranges(), core_type);
 
                 vector<KernelHandle> kernel_ids;
@@ -813,7 +817,7 @@ void Program::populate_dispatch_data(Device *device) {
                 }
             } else {
                 TT_ASSERT(core_type == CoreType::ETH);
-                vector<pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
+                vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), core_type);
 
                 vector<KernelHandle> kernel_ids;
@@ -842,8 +846,10 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
     // Iterate over kernels in the program and "level" the number of RTAs based on the max
     // Unique RTAs are packed across dispatch classes
     // Common RTAs come after unique RTAs
-    vector<uint32_t> max_rtas(DISPATCH_CLASS_MAX);
-    vector<uint32_t> max_crtas(DISPATCH_CLASS_MAX);
+    uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
+
+    vector<uint32_t> max_rtas(processor_classes);
+    vector<uint32_t> max_crtas(processor_classes);
     uint32_t max_unique_rta_size = 0;
     uint32_t total_crta_size = 0;
 
@@ -854,7 +860,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             max_rtas[dispatch_class] = 0;
             auto& optional_id = kg.kernel_ids[dispatch_class];
             if (optional_id) {
@@ -872,7 +878,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         }
 
         uint32_t offset = 0;
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             auto& optional_id = kg.kernel_ids[dispatch_class];
             kg.rta_sizes[dispatch_class] = max_rtas[dispatch_class] * sizeof(uint32_t);
             if (optional_id) {
@@ -890,7 +896,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
         max_unique_rta_size = std::max(offset, max_unique_rta_size);
     }
 
-    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         max_crtas[dispatch_class] = 0;
     }
     // Find the max # common RTAs across all kernels for each dispatch class
@@ -907,7 +913,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     // Calculate the address offset and size for common RTAs for each dispatch class
     uint32_t offset = 0;
-    for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+    for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
         uint32_t size = max_crtas[dispatch_class] * sizeof(uint32_t);
         this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class] = base_offset + max_unique_rta_size + offset;
         this->get_program_config(programmable_core_type_index).crta_sizes[dispatch_class] = size;
@@ -929,7 +935,7 @@ uint32_t Program::finalize_rt_args(uint32_t programmable_core_type_index, uint32
 
     // Set the kernel group common runtime arg offsets use in the launch message
     for (auto& kg : this->get_kernel_groups(programmable_core_type_index)) {
-        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
             kg.launch_msg.kernel_config.rta_offset[dispatch_class].crta_offset = this->get_program_config(programmable_core_type_index).crta_offsets[dispatch_class];
         }
     }

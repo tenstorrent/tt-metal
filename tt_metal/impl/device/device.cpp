@@ -279,34 +279,61 @@ void Device::initialize_build() {
     uint32_t dispatch_message_addr =
         dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
-    auto init_helper = [this, dispatch_message_addr] (bool is_fw) -> JitBuildStateSet {
+    // TODO now: total number of processor types should be pulled from the HAL
+    uint32_t num_build_states = this->arch() == tt::ARCH::GRAYSKULL ? 5 : 7;
+
+    auto init_helper = [this, dispatch_message_addr, num_build_states] (bool is_fw) -> JitBuildStateSet {
         std::vector<std::shared_ptr<JitBuildState>> build_states;
 
-        build_states.resize(arch() == tt::ARCH::GRAYSKULL ? 5 : 7);
+        build_states.resize(num_build_states);
+        uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
+        if (is_fw) {
+            this->build_state_indices_.resize(programmable_core_type_count);
+        }
 
-        build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 0] =
-            std::make_shared<JitBuildDataMovement>(
-                this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-        build_states[build_processor_type_to_index(JitBuildProcessorType::DATA_MOVEMENT).first + 1] =
-            std::make_shared<JitBuildDataMovement>(
-                this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 0] =
-            std::make_shared<JitBuildCompute>(
-                this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 1] =
-            std::make_shared<JitBuildCompute>(
-                this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-        build_states[build_processor_type_to_index(JitBuildProcessorType::COMPUTE).first + 2] =
-            std::make_shared<JitBuildCompute>(
-                this->build_env_, JitBuiltStateConfig{.processor_id = 2, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-
-        if (arch() != tt::ARCH::GRAYSKULL) {
-            build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0] =
-                std::make_shared<JitBuildEthernet>(
-                    this->build_env_, JitBuiltStateConfig{.processor_id = 0, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-            build_states[build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1] =
-                std::make_shared<JitBuildEthernet>(
-                    this->build_env_, JitBuiltStateConfig{.processor_id = 1, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+        uint32_t index = 0;
+        for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
+            HalProgrammableCoreType core_type = magic_enum::enum_value<HalProgrammableCoreType>(programmable_core);
+            uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
+            if (is_fw) {
+                this->build_state_indices_[programmable_core].resize(processor_class_count);
+            }
+            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                auto compute_proc_class = magic_enum::enum_cast<HalProcessorClassType>(processor_class);
+                bool is_compute_processor = compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
+                uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
+                if (is_fw) {
+                    this->build_state_indices_[programmable_core][processor_class] = {index, processor_types_count};
+                }
+                for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
+                    switch (core_type) {
+                        case HalProgrammableCoreType::TENSIX: {
+                            if (is_compute_processor) {
+                                build_states[index] = std::make_shared<JitBuildCompute>(
+                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            } else {
+                                // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one processor class
+                                build_states[index] = std::make_shared<JitBuildDataMovement>(
+                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            }
+                            break;
+                        }
+                        case HalProgrammableCoreType::ACTIVE_ETH: {
+                            build_states[index] = std::make_shared<JitBuildActiveEthernet>(
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            break;
+                        }
+                        case HalProgrammableCoreType::IDLE_ETH: {
+                            build_states[index] = std::make_shared<JitBuildIdleEthernet>(
+                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                            break;
+                        }
+                        default:
+                            TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
+                    }
+                    index++;
+                }
+            }
         }
 
        return build_states;
@@ -324,71 +351,81 @@ void Device::build_firmware() {
     jit_build_set(this->firmware_build_states_, nullptr);
 }
 
-void Device::initialize_firmware(CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
+void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
     ZoneScoped;
 
-    if (llrt::is_ethernet_core(phys_core, this->id())) {
-        //ethernet core.
-        //Determine if its a connected or unconnected ethernet core.
-        //Unconnected ethernet cores will get idle_erisc fw.
-        auto active_eth_cores = this->get_active_ethernet_cores();
+    uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
+    uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
 
-        if (active_eth_cores.find(logical_core_from_ethernet_core(phys_core)) != active_eth_cores.end()) {
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
-                int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 0;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t fw_size = binary_mem.get_text_size();
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
-            }
-            llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
-            // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
-            launch_msg->kernel_config.mode = this->using_slow_dispatch() ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
-        } else {
-            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
-                int eriscv_id = build_processor_type_to_index(JitBuildProcessorType::ETHERNET).first + 1;
-                ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
-                uint32_t fw_size = binary_mem.get_text_size();
-                log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
-            }
+    switch (core_type) {
+        case HalProgrammableCoreType::TENSIX: {
             llrt::program_risc_startup_addr(this->id(), phys_core);
-            // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
-            launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
-        }
-    } else {
-        llrt::program_risc_startup_addr(this->id(), phys_core);
-        for (int riscv_id = 0; riscv_id < 5; riscv_id++) {
-            ll_api::memory binary_mem =
-                llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
-            uint32_t fw_size = binary_mem.get_text_size();
-            if (riscv_id == 1) {
-                // In this context, ncrisc_kernel_size16 is the size of the fw
-                launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
+            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
+                for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
+                    ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[riscv_id]->get_target_out_path(""), riscv_id);
+                    uint32_t fw_size = binary_mem.get_text_size();
+                    if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
+                        // In this context, ncrisc_kernel_size16 is the size of the fw
+                        launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
+                    }
+                    log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
+                    if (not llrt::OptionsG.get_skip_loading_fw()) {
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
+                    }
+                }
             }
-            log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
-                llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, riscv_id);
-            }
-        }
-        if (this->using_slow_dispatch()) {
-            // Host always writes launch messages
-            launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
-        } else {
-            std::vector<CoreCoord> physical_dispatch_cores = {};
-            if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
-                physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
-            }
-            if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), phys_core) != physical_dispatch_cores.end()) {
-                // Dispatch cores - Host writes launch messages
+
+            if (this->using_slow_dispatch()) {
+                // Host always writes launch messages
                 launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
             } else {
-                // Worker cores - Dispatcher will write launch messages
-                launch_msg->kernel_config.mode = DISPATCH_MODE_DEV;
+                std::vector<CoreCoord> physical_dispatch_cores = {};
+                if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
+                    physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
+                }
+                if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), phys_core) != physical_dispatch_cores.end()) {
+                    // Dispatch cores - Host writes launch messages
+                    launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
+                } else {
+                    // Worker cores - Dispatcher will write launch messages
+                    launch_msg->kernel_config.mode = DISPATCH_MODE_DEV;
+                }
             }
+
+            break;
         }
+        case HalProgrammableCoreType::ACTIVE_ETH:
+        case HalProgrammableCoreType::IDLE_ETH: {
+            bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
+            if (is_idle_eth) {
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
+            }
+            if (not llrt::OptionsG.get_skip_loading_fw()) {
+                for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                    auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
+                    for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
+                        ll_api::memory binary_mem = llrt::get_risc_binary(firmware_build_states_[eriscv_id]->get_target_out_path(""), eriscv_id);
+                        uint32_t fw_size = binary_mem.get_text_size();
+                        log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
+                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, eriscv_id);
+                    }
+                }
+            }
+            if (is_idle_eth) {
+                llrt::program_risc_startup_addr(this->id(), phys_core);
+            } else {
+                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
+            }
+            // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
+            // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
+            launch_msg->kernel_config.mode = (this->using_slow_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
+            break;
+        }
+        default:
+            TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
     }
+
     // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
     // launch_message during program execution need to at least have the correct dispatch mode.
     // When using Fast Dispatch on Tensix:
@@ -584,7 +621,7 @@ void Device::initialize_and_launch_firmware() {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
                 tt::llrt::write_hex_vec_to_core(
                     this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
-                this->initialize_firmware(worker_core, &launch_msg, &go_msg);
+                this->initialize_firmware(HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
                 not_done_cores.insert(worker_core);
             }
         }
@@ -604,14 +641,14 @@ void Device::initialize_and_launch_firmware() {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        this->initialize_firmware(phys_eth_core, &launch_msg, &go_msg);
+        this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        this->initialize_firmware(phys_eth_core, &launch_msg, &go_msg);
+        this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);
         not_done_cores.insert(phys_eth_core);
     }
 
@@ -3181,33 +3218,25 @@ float Device::sfpu_inf() const{
     return std::numeric_limits<float>::infinity();
 }
 
-pair<int, int> Device::build_processor_type_to_index(JitBuildProcessorType t) const {
-    constexpr int DataMovementBuildCount = 2;
-    constexpr int ComputeBuildCount = 3;
-    constexpr int EthernetBuildCount = 2;
-
-    switch (t) {
-    case JitBuildProcessorType::DATA_MOVEMENT: return pair<int, int>(0, DataMovementBuildCount);
-    case JitBuildProcessorType::COMPUTE: return pair<int, int>(DataMovementBuildCount, ComputeBuildCount);
-    case JitBuildProcessorType::ETHERNET: return pair<int, int>(DataMovementBuildCount + ComputeBuildCount, EthernetBuildCount);
-    default: TT_THROW("Bad processor type: {}", static_cast<std::underlying_type<JitBuildProcessorType>::type>(t));
-    }
-
-    // shh the warnings
-    return pair<int, int>(0, 0);
+std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
+    TT_ASSERT(programmable_core < this->build_state_indices_.size(),
+        "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
+    TT_ASSERT(processor_class < this->build_state_indices_[programmable_core].size(),
+        "Processor class type {} is not included in the FW or Kernel build state", processor_class);
+    return this->build_state_indices_[programmable_core][processor_class];
 }
 
 // Ideally the firmware getter would be private to the device, however, tests look for this
-const JitBuildState& Device::build_firmware_state(JitBuildProcessorType t, int i) const {
-    return *(this->firmware_build_states_[build_processor_type_to_index(t).first + i]);
+const JitBuildState& Device::build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
+    return *(this->firmware_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
 }
 
-const JitBuildState& Device::build_kernel_state(JitBuildProcessorType t, int i) const {
-    return *(this->kernel_build_states_[build_processor_type_to_index(t).first + i]);
+const JitBuildState& Device::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
+    return *(this->kernel_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
 }
 
-const JitBuildStateSubset Device::build_kernel_states(JitBuildProcessorType t) const {
-    pair<int, int> bptti = build_processor_type_to_index(t);
+const JitBuildStateSubset Device::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
+    std::pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
     JitBuildStateSubset subset = {
         &this->kernel_build_states_[bptti.first],
         bptti.second
@@ -3215,13 +3244,13 @@ const JitBuildStateSubset Device::build_kernel_states(JitBuildProcessorType t) c
     return subset;
 }
 
-const string Device::build_firmware_target_path(JitBuildProcessorType t, int i) const {
-    const JitBuildState& bs = build_firmware_state(t, i);
+const string Device::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
+    const JitBuildState& bs = build_firmware_state(programmable_core, processor_class, i);
     return bs.get_target_out_path("");
 }
 
-const string Device::build_kernel_target_path(JitBuildProcessorType t, int i, const string& kernel_name) const {
-    const JitBuildState& bs = build_kernel_state(t, i);
+const string Device::build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
+    const JitBuildState& bs = build_kernel_state(programmable_core, processor_class, i);
     return bs.get_target_out_path(kernel_name);
 }
 

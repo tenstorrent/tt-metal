@@ -63,7 +63,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
     bool row_major;
     uint32_t num_cores, num_batched_heads_per_core_group_1, num_batched_heads_per_core_group_2;
 
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
 
@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
         num_batched_heads_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_batched_heads_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
     bool row_major;
     uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
 
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
 
@@ -334,7 +334,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(const Tensor& cache_tensor
         all_cores = shard_spec.value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        core_group_2 = CoreRangeSet({});
+        core_group_2 = CoreRangeSet();
         num_blocks_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
         num_blocks_per_core_group_2 = 0;
         num_input_tiles = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;

@@ -40,10 +40,10 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
         {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                return CoreRangeSet(CoreRange(core_spec, core_spec));
             }
             else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet({core_spec});
+                return CoreRangeSet(core_spec);
             }
             else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 return core_spec;
@@ -798,6 +798,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (auto& kg : program.get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
@@ -805,7 +806,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-                        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
                                 const auto &kernel = detail::GetKernel(program, optional_id.value());
@@ -1059,9 +1060,9 @@ uint32_t CreateSemaphore(
     return std::visit(
         [&](auto &&c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs({});
+            CoreRangeSet crs;
             if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet({c});
+                crs = CoreRangeSet(c);
             } else {
                 crs = c;
             }

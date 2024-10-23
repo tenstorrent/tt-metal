@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 
 #include <cstdint>
 #include <vector>
