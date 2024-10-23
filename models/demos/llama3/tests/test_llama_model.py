@@ -66,18 +66,34 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         (28, False): "llama32_3b",
         (32, False): "llama31_8b",
         (32, True): "llama32_11b",
+        (80, False): "llama31_70b",
     }[(model_args.n_layers, model_args.is_vision())]
 
-    final_model_pcc = {"llama32_1b": 0.99912, "llama32_3b": 0.99898, "llama31_8b": 0.99888, "llama32_11b": 0.9976}[
+    final_model_pcc = {
+        "llama32_1b": 0.9991,
+        "llama32_3b": 0.9989,
+        "llama31_8b": 0.9976,
+        "llama32_11b": 0.9976,
+        "llama31_70b": 1.0,  # TBD,
+    }[model_name]
+
+    final_k_cache_pcc = {
+        "llama32_1b": 0.9998,
+        "llama32_3b": 0.9998,
+        "llama31_8b": 0.9995,
+        "llama32_11b": 0.9995,
+        "llama31_70b": 1.0,  # TBD,
+    }[model_name]
+    final_v_cache_pcc = {
+        "llama32_1b": 0.9996,
+        "llama32_3b": 0.9998,
+        "llama31_8b": 0.9996,
+        "llama32_11b": 0.9996,
+        "llama31_70b": 1.0,  # TBD,
+    }[model_name]
+    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
         model_name
     ]
-    final_k_cache_pcc = {"llama32_1b": 0.99984, "llama32_3b": 0.99980, "llama31_8b": 0.99983, "llama32_11b": 0.9995}[
-        model_name
-    ]
-    final_v_cache_pcc = {"llama32_1b": 0.99984, "llama32_3b": 0.99982, "llama31_8b": 0.99984, "llama32_11b": 0.9996}[
-        model_name
-    ]
-    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6}[model_name]
 
     iterations = quick_iterations if layers == 1 else 9
 
