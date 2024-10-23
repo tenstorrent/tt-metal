@@ -260,7 +260,7 @@ class Device {
     bool can_use_passthrough_scheduling() const;
     template<typename F>
     void push_work(F&& work, bool blocking = false) {
-        this->work_executor.push_work(std::move(work), blocking);
+        this->work_executor.push_work(std::forward<F>(work), blocking);
     }
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);

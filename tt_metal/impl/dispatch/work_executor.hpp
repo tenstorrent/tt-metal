@@ -152,7 +152,7 @@ class WorkExecutor {
             work_executor();
         } else {
             // Push to worker queue.
-            this->worker_queue.push(std::move(work_executor));
+            this->worker_queue.push(std::forward<F>(work_executor));
             {
                 std::lock_guard lock(this->cv_mutex);
                 cv.notify_one();
