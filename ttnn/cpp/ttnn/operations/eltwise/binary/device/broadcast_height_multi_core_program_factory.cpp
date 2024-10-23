@@ -39,7 +39,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
     const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto bshape = b->get_legacy_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -64,7 +64,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     tt_metal::Device* device = a.device();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
@@ -84,7 +84,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
     auto src0_buffer = a.buffer();
-    auto src1_buffer = b.buffer();
+    auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -159,7 +159,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
                 0,                          // 1
                 0,                          // 2
                 num_tensor_tiles_per_core,  // 3
-                b.buffer()->address(),      // 4
+                b->buffer()->address(),     // 4
                 0,                          // 5
                 0,                          // 6
                 num_btensor_tiles,          // 7
@@ -231,12 +231,12 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
     auto src_dram_buffer_a = input_tensor_a.buffer();
-    auto src_dram_buffer_b = input_tensor_b.buffer();
+    auto src_dram_buffer_b = input_tensor_b->buffer();
 
     auto dst_dram_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto bshape = input_tensor_b->get_legacy_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];

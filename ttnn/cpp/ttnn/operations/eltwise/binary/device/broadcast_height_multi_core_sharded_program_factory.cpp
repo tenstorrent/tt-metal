@@ -39,7 +39,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
     const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto bshape = b->get_legacy_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -74,7 +74,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
     TT_FATAL(out_shard_spec.num_cores() == ncores, "Output tensor should have same number of cores {} as input tensor {}", out_shard_spec.num_cores(), ncores);
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
-    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat b_df = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
     tt::DataFormat out_df = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
@@ -117,14 +117,14 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
                                           .set_globally_allocated_address(*output.buffer());
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t num_input_tiles = (b.get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
+    uint32_t num_input_tiles = (b->get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1)/ TILE_HW;
     uint32_t src1_cb_index = CB::c_in1;
     tt_metal::CircularBufferConfig src1_cb_config = tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
         .set_page_size(src1_cb_index, input1_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     auto src0_buffer = a.buffer();
-    auto src1_buffer = b.buffer();
+    auto src1_buffer = b->buffer();
     auto dst_buffer = output.buffer();
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
@@ -179,7 +179,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
             binary_reader_kernel_id,
             core,
             {
-                b.buffer()->address(), // 0
+                b->buffer()->address(), // 0
                 Ht, // 1
                 Wt, // 2
                 offset, // 3
@@ -242,7 +242,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
         uint32_t Wt = 0, Ht =0;
         const auto ashape = input_tensor_a.get_legacy_shape();
         uint32_t N  = ashape[0], C  = ashape[1], H  = ashape[2], W  = ashape[3];
-        uint32_t bN = input_tensor_b.get_legacy_shape()[0];
+        uint32_t bN = input_tensor_b->get_legacy_shape()[0];
         uint32_t NC = N*C;
         if(a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED){
             Wt = shard_spec.shape[1] / TILE_WIDTH;
@@ -284,7 +284,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
                 binary_reader_kernel_id,
                 core,
                 {
-                    b.buffer()->address(), // 0
+                    b->buffer()->address(), // 0
                     Ht, // 1
                     Wt, // 2
                     offset, // 3
