@@ -79,13 +79,13 @@ std::string kernel_attributes_str(std::shared_ptr<Kernel> kernel) {
     return attr_str;
 }
 
-void CompilationReporter::add_kernel_compile_stats(const Program &program, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
+void CompilationReporter::add_kernel_compile_stats(uint64_t program_id, std::shared_ptr<Kernel> kernel, bool cache_hit, size_t kernel_hash) {
     std::unique_lock<std::mutex> lock(mutex_);
 
     if (cache_hit) {
-        this->program_id_to_cache_hit_counter_[program.get_id()].hits++;
+        this->program_id_to_cache_hit_counter_[program_id].hits++;
     } else {
-        this->program_id_to_cache_hit_counter_[program.get_id()].misses++;
+        this->program_id_to_cache_hit_counter_[program_id].misses++;
     }
     std::string kernel_stats = "," + kernel->name() + ",";
     std::string cache_status = cache_hit ? "cache hit" : "cache miss";
@@ -99,13 +99,13 @@ void CompilationReporter::add_kernel_compile_stats(const Program &program, std::
         }
         index++;
     }
-    this->program_id_to_kernel_stats_[program.get_id()].push_back(kernel_stats);
+    this->program_id_to_kernel_stats_[program_id].push_back(kernel_stats);
 }
 
-void CompilationReporter::flush_program_entry(const Program &program, bool persistent_compilation_cache_enabled) {
+void CompilationReporter::flush_program_entry(uint64_t program_id, size_t num_kernels, std::function<std::shared_ptr<Kernel>(size_t)> get_kernel, bool persistent_compilation_cache_enabled) {
     std::unique_lock<std::mutex> lock(mutex_);
-    auto num_cache_misses = this->program_id_to_cache_hit_counter_.at(program.get_id()).misses;
-    auto num_cache_hits = this->program_id_to_cache_hit_counter_.at(program.get_id()).hits;
+    auto num_cache_misses = this->program_id_to_cache_hit_counter_.at(program_id).misses;
+    auto num_cache_hits = this->program_id_to_cache_hit_counter_.at(program_id).hits;
     if (this->total_num_compile_programs_ == 0) {
         this->init_reports();
     }
@@ -113,8 +113,8 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
     auto get_num_compute_and_data_movement_kernels = [&]() {
         uint32_t num_compute = 0;
         uint32_t num_data_movement = 0;
-        for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-            const auto kernel = detail::GetKernel(program, kernel_id);
+        for (size_t kernel_id = 0; kernel_id < num_kernels; kernel_id++) {
+            const auto kernel = get_kernel(kernel_id);
             if (kernel->processor() == tt::RISCV::BRISC or kernel->processor() == tt::RISCV::NCRISC) {
                 num_data_movement++;
             } else {
@@ -126,14 +126,14 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
 
     auto [num_compute_kernels, num_data_movement_kernels] = get_num_compute_and_data_movement_kernels();
 
-    this->summary_report_ << program.get_id() << ", "
+    this->summary_report_ << program_id << ", "
                             << num_compute_kernels << ", "
                             << num_data_movement_kernels << ", "
                             << (persistent_compilation_cache_enabled ? "Y" : "N") << ", "
                             << num_cache_misses << ", "
                             << num_cache_hits << "\n";
 
-    this->detailed_report_ << "Compiling Program: " << program.get_id() << "\n";
+    this->detailed_report_ << "Compiling Program: " << program_id << "\n";
     this->detailed_report_ << "\n,Kernel Creation Report:\n";
     this->detailed_report_ << ",,Number of Compute CreateKernel API calls: " << num_compute_kernels << "\n";
     this->detailed_report_ << ",,Number of Datamovement CreateKernel API calls: " << num_data_movement_kernels << "\n";
@@ -144,7 +144,7 @@ void CompilationReporter::flush_program_entry(const Program &program, bool persi
     this->detailed_report_ << ",,Total number of kernel compile cache hits: " << num_cache_hits << "\n";
 
     this->detailed_report_ << "\n,Kernel File Name, Core Range, Cache Hit, Kernel Attributes, Hash\n";
-    auto kernel_stats_vec = this->program_id_to_kernel_stats_.at(program.get_id());
+    auto kernel_stats_vec = this->program_id_to_kernel_stats_.at(program_id);
     for (const auto &kernel_stats : kernel_stats_vec) {
         this->detailed_report_ << kernel_stats;
     }
