@@ -14,7 +14,7 @@ on:
           - RelWithDebInfo
           - CI
   push:
-    branches: ["main", "rkim/14111-debug"]
+    branches: ["main"]
 
 permissions:
   actions: read
