@@ -211,6 +211,8 @@ on:
           - eltwise.binary_backward.sub_bw.sub_bw
           - eltwise.binary_backward.mul_bw.mul_bw
           - eltwise.binary_backward.div_bw.div_bw
+          - eltwise.binary_backward.fmod_bw.fmod_bw
+          - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
