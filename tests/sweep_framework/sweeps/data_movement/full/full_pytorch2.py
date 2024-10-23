@@ -75,14 +75,11 @@ def run(
     # Create a tensor filled with `fill_value` using torch.full
     torch_tensor = torch.full(shape, fill_value, dtype=torch.float32)
 
-    # Convert the torch tensor to the `ttnn` format
-    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
-
     # Measure performance of the full operation in `ttnn`
     start_time = start_measuring_time()
 
-    # Apply the `ttnn.fill` operation
-    ttnn_filled_tensor = ttnn.fill(fill_value, ttnn_tensor, memory_config=None)
+    # Apply the `ttnn.full` operation
+    ttnn_filled_tensor = ttnn.full(shape, fill_value, device, memory_config=None)
 
     e2e_perf = stop_measuring_time(start_time)
 
