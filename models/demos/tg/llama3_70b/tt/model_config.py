@@ -71,6 +71,7 @@ def get_model_config(llama_version="llama3-tg", max_batch_size=32, max_context_l
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         ),
+        "DECODE_ACT_CORE_GRID": (4, 8),
     }
 
     if llama_version == "llama3" or llama_version == "llama3-tg":

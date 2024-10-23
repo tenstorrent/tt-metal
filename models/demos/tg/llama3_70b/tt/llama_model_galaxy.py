@@ -182,9 +182,12 @@ class TtLlamaModel_galaxy:
             assert seq_len == 1, "Decode mode only supports seq_len=1"
             assert xs.shape == (seq_len, 1, batch, self.hidden_size // self.cluster_shape[0])
 
+            ACT_CORE_GRID_Y = self.model_config["DECODE_ACT_CORE_GRID"][0]
+            ACT_CORE_GRID_X = self.model_config["DECODE_ACT_CORE_GRID"][1]
+            ACT_CORE_GRID_SIZE = ACT_CORE_GRID_Y * ACT_CORE_GRID_X
             ACT_MEMCFG = ttnn.create_sharded_memory_config(
-                shape=(xs.shape[2], xs.shape[3] // 8),
-                core_grid=ttnn.CoreGrid(y=1, x=8),
+                shape=(xs.shape[2], xs.shape[3] // ACT_CORE_GRID_SIZE),
+                core_grid=ttnn.CoreGrid(y=ACT_CORE_GRID_Y, x=ACT_CORE_GRID_X),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
