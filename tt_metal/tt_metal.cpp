@@ -428,7 +428,7 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_ASSERT((buffer.size == 0 && page_size == 0) || buffer.size() % page_size == 0);
+    TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_ASSERT(page_size % bytes_per_page_entry == 0);
