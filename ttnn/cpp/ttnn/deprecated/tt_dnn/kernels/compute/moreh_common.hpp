@@ -27,7 +27,6 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
 
 constexpr uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
