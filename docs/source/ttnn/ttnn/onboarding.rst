@@ -13,7 +13,6 @@ is that the long term benefits will help us maintain our objectives. Please foll
     * When creating the branch, please follow the pattern of 'TTNN-<Issue Number>-<brief description>'.  For example, if the issue is 4730, the branch name would be `TTNN-4730-concat-operation`
     * Use the `fallback` reference implementation for the operation and implement the functionality.
     * Add the documentation in the rst format for the operation under `ttnn documentation <https://github.com/tenstorrent/tt-metal/tree/main/docs/source/ttnn/ttnn>`_
-    * Add :ref:`sweep tests<ttnn.sweep_tests>` to the branch using the fallback implementation under `ttnn sweep tests <https://github.com/tenstorrent/tt-metal/tree/main/tests/ttnn/sweep_tests/sweeps>`_
 3. Update the issue referencing the pull requests after verifying that all the sweep tests run as expected.  A TTNN CODEOWNERS will review the PR and verify that the API is acceptable and that the sweep tests reflect the intended functionality.
 4. If the pull request (PR) is accepted it will be merge into the main branch and a new branch should be created that adds the implementation.
     * The fallback implementation for the Operation should be left and will continue to be used for op-by-op PCC comparisons when debugging models (see `--ttnn-enable-debug-decorator`).
