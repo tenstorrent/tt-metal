@@ -50,35 +50,20 @@ SECTIONS
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
   } > REGION_APP_DATA
-
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
-
-  . = ALIGN(4); /* startup code will use word writes to zero bss */
-  __l1_bss_start = .;
-  .sbss           :
+  .bss :
   {
-    *(.dynsbss)
+    __ldm_bss_start = .;
+    *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
+    *(.dynbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
+    *(.dynbss)
+    *(.bss .bss.* .gnu.linkonce.b.*)
+    *(COMMON)
+    . = ALIGN(4);
+    __ldm_bss_end = .;
   } > REGION_APP_DATA
-  . = ALIGN(4);
-  __l1_bss_end = .;
 
-  .bss            :
-  {
-   __ldm_bss_start = .;
-   *(.dynbss)
-   *(.bss .bss.* .gnu.linkonce.b.*)
-   *(COMMON)
-
-   /* Align here to ensure that the .bss section occupies space up to
-      _end.  Align after .bss to ensure correct alignment even if the
-      .bss section disappears because there are no input sections.
-      FIXME: Why do we need it? When there is no .bss section, we don't
-      pad the .data section.  */
-   . = ALIGN(4);
-   __ldm_bss_end = .;
-  } > REGION_APP_DATA
   . = ALIGN(32 / 8);
 
   .stack :
