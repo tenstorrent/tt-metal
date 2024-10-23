@@ -3272,14 +3272,6 @@ bool Device::can_use_passthrough_scheduling() const {
     return this->work_executor.use_passthrough();
 }
 
-void Device::push_work(std::function<void()>&& work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
-}
-
-void Device::push_work(std::shared_ptr<std::function<void()>> work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
-}
-
 void Device::synchronize() {
     this->work_executor.synchronize();
 }

@@ -247,8 +247,8 @@ void launch_op(
             });
 
         for (auto target_device : workers) {
-            target_device->push_work(std::make_shared<std::function<void()>>(
-                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); }));
+            target_device->push_work(
+                [target_device, work_lambda]() mutable { (*work_lambda)(target_device); });
         }
     }
 

@@ -64,7 +64,7 @@ class LockFreeQueue {
             parent_thread_id.store(other.parent_thread_id.load());
         }
 
-        inline void push(const T& value) {
+        inline void push(T&& value) {
             // Legacy Push API allowing copy by value
             // for object T.
 
@@ -74,7 +74,7 @@ class LockFreeQueue {
             // has progressed (data has been read).
             lock_func();
             while(tail.load()->next == head.load()) {};
-            tail.load()->data = std::make_shared<T>(value);
+            tail.load()->data = std::make_shared<T>(std::move(value));
             tail.store(tail.load()->next);
             unlock_func();
         }
@@ -89,7 +89,7 @@ class LockFreeQueue {
             // has progressed (data has been read).
             lock_func();
             while(tail.load()->next == head.load()) {};
-            tail.load()->data = value;
+            tail.load()->data = std::move(value);
             tail.store(tail.load()->next);
             unlock_func();
         }

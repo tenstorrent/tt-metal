@@ -143,7 +143,8 @@ class WorkExecutor {
             this->worker_state != WorkerState::RUNNING;
     }
 
-    inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
+    template<typename F>
+    inline void push_work(F&& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
         if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
@@ -151,27 +152,7 @@ class WorkExecutor {
             work_executor();
         } else {
             // Push to worker queue.
-            this->worker_queue.push(work_executor);
-            {
-                std::lock_guard lock(this->cv_mutex);
-                cv.notify_one();
-            }
-            if (blocking) {
-                this->synchronize();
-            }
-        }
-    }
-
-    inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
-        // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
-        ZoneScopedN("PushWork");
-        if (use_passthrough()) {
-            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
-            // thread.
-            (*work_executor)();
-        } else {
-            // Push to worker queue.
-            this->worker_queue.push(work_executor);
+            this->worker_queue.push(std::move(work_executor));
             {
                 std::lock_guard lock(this->cv_mutex);
                 cv.notify_one();

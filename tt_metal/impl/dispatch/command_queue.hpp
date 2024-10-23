@@ -633,7 +633,7 @@ class CommandQueue {
 
     // Schedule a command to be run on the device
     // Blocking if in passthrough mode. Non-blocking if in async mode
-    void run_command(const CommandInterface& command);
+    void run_command(CommandInterface&& command);
 
     // API for setting/getting the mode of the command queue
     void set_mode(const CommandQueueMode& mode);

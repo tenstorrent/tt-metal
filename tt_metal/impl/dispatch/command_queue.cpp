@@ -3117,13 +3117,13 @@ void CommandQueue::run_worker() {
     }
 }
 
-void CommandQueue::run_command(const CommandInterface& command) {
+void CommandQueue::run_command(CommandInterface&& command) {
     log_trace(LogDispatch, "{} received {} in {} mode", this->name(), command.type, this->mode);
     if (this->async_mode()) {
         if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == parent_thread_id) {
             // In async mode when parent pushes cmd, feed worker through queue.
-            this->worker_queue.push(command);
             bool blocking = command.blocking.has_value() and *command.blocking;
+            this->worker_queue.push(std::move(command));
             if (blocking) {
                 TT_ASSERT(not this->trace_mode(), "Blocking commands cannot be traced!");
                 this->wait_until_empty();
@@ -3137,7 +3137,7 @@ void CommandQueue::run_command(const CommandInterface& command) {
         }
     } else if (this->trace_mode()) {
         // In trace mode push to the trace queue
-        this->worker_queue.push(command);
+        this->worker_queue.push(std::move(command));
     } else if (this->passthrough_mode()) {
         this->run_command_impl(command);
     } else {
