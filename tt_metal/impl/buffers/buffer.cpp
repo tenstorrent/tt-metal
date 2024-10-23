@@ -233,6 +233,7 @@ std::shared_ptr<Buffer> Buffer::create(
         auto expected_status = AllocationStatus::ALLOCATION_REQUESTED;
         if (!buffer->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::ALLOCATING)) {
             // Buffer was already deallocated before we got here
+            buffer->allocation_status_.notify_all();
             return;
         }
 
@@ -240,9 +241,8 @@ std::shared_ptr<Buffer> Buffer::create(
 
         // We need compare exchange here to handle the case of deallocation being requested before we finished allocating
         expected_status = AllocationStatus::ALLOCATING;
-        if (buffer->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::ALLOCATED)) {
-            buffer->allocation_status_.notify_all();
-        }
+        buffer->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::ALLOCATED);
+        buffer->allocation_status_.notify_all();
     });
 
     return buffer;
@@ -261,7 +261,6 @@ bool Buffer::prepare_deallocation(std::atomic<AllocationStatus>& status) {
             case AllocationStatus::ALLOCATION_REQUESTED:
                 // Allocation was requested but not started, canceling allocation, nothing else to be done
                 if (status.compare_exchange_weak(current_status, AllocationStatus::DEALLOCATED)) {
-                    status.notify_all();
                     return false;
                 }
                 break;
@@ -269,7 +268,6 @@ bool Buffer::prepare_deallocation(std::atomic<AllocationStatus>& status) {
             case AllocationStatus::ALLOCATED:
                 // Allocation already started, will have to deallocate
                 if (status.compare_exchange_weak(current_status, AllocationStatus::DEALLOCATION_REQUESTED)) {
-                    status.notify_all();
                     return true;
                 }
                 break;
