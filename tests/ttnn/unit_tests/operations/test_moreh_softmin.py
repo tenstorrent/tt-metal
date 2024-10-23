@@ -482,3 +482,35 @@ def test_softmin_backward_callback(shape_dim_strategy, device, use_program_cache
     passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
     logger.debug(out)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "shape_dim_strategy",
+    [
+        [[32, 32], 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W],
+        [[32, 32], 0, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H],
+        [[2, 3, 32 * 4, 32 * 5], 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W],
+        [[2, 3, 32 * 4, 32 * 5], 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H],
+        [[1, 15, 32, 32], 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C],
+    ],
+)
+def test_softmin_bfp8(shape_dim_strategy, device):
+    # TODO @thanhnguyen-moreh: Support bfloat8_b in kernel
+    pytest.skip(f"bfloat8_b is not supported in the kernel")
+    shape, dim, strategy = shape_dim_strategy
+    torch.manual_seed(0)
+
+    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+
+    dev_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_cpu = F.softmin(x, dim)
+    tt_npu = ttnn.operations.moreh.softmin(dev_x, dim, strategy=strategy)
+
+    assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
+    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+
+    rtol = atol = 0.05
+    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
+    logger.debug(out)
+    assert passing
