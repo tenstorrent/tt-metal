@@ -266,7 +266,7 @@ class UNetDownblock:
                 output_height=self.conv2.input_height,
                 output_width=self.conv2.input_width,
                 output_channels=self.conv1.out_channels,
-                device=device,
+                compute_grid_size=device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
@@ -320,7 +320,7 @@ class UNetUpblock:
                 output_height=self.conv2.input_height,
                 output_width=self.conv2.input_width,
                 output_channels=self.conv1.out_channels,
-                device=device,
+                compute_grid_size=device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
@@ -448,7 +448,7 @@ class UNet:
             output_height=self.bnc2.input_height,
             output_width=self.bnc2.input_width,
             output_channels=self.bnc.out_channels,
-            device=device,
+            compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=True,
         )
