@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <variant>
 #include <vector>
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "hostdevcommon/common_runtime_address_map.h"
@@ -274,7 +274,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          return cb_page_sizes;
      }
 
-     pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
+     std::pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
          const vector<uint32_t> &sem_ids,
          const vector<uint32_t> &cb_page_sizes,
          const uint32_t min = MIN_NUM_RUNTIME_ARGS,
@@ -388,10 +388,10 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
      }
 
      CoreRangeSet get_cores(const CoreType core_type) {
-        CoreRangeSet all_cores({});
+        CoreRangeSet all_cores;
         if (core_type == CoreType::WORKER) {
             CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
-            all_cores = CoreRangeSet({{{0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1}}});
+            all_cores = CoreRangeSet({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
         }
         else {
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
@@ -403,10 +403,10 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
             }
             all_cores = CoreRangeSet(core_ranges);
         }
-        CoreRangeSet empty_crs({});
+        CoreRangeSet empty_crs;
         all_cores = empty_crs.merge(all_cores);
 
-        CoreRangeSet cores({});
+        CoreRangeSet cores;
         const uint32_t num = this->generate_random_num(0, 2);
         switch (num) {
             case 0: cores = all_cores; break;
@@ -435,7 +435,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
             }
         }
 
-        CoreRangeSet empty_crs({});
+        CoreRangeSet empty_crs;
         CoreRangeSet resulting_cores = empty_crs.merge(cores_subset);
         return resulting_cores;
      }
