@@ -11,9 +11,14 @@ jobs:
     if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Test
         run: |
           echo "Testing..."
           ls
+  trigger-tests:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+      build-type: Release
+    secrets: inherit
