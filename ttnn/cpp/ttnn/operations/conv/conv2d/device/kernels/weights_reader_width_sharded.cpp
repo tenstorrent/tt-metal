@@ -33,8 +33,8 @@ void kernel_main() {
     #endif
 
 
-    DPRINT<<"Remote Weight Height Blocks: "<<remote_weight_height_blocks<<ENDL();
-    DPRINT<<"Local Weight Height Blocks: "<<local_weight_height_blocks<<ENDL();
+    // DPRINT<<"Remote Weight Height Blocks: "<<remote_weight_height_blocks<<ENDL();
+    // DPRINT<<"Local Weight Height Blocks: "<<local_weight_height_blocks<<ENDL();
 
     // DPRINT<<"Weights  "<<cb_id_weight<<" "<<core_in_channels_ntiles<<" "<<window_size_hw<<" "<<weight_block_width_ntiles<<" "<<
     // weight_block_num_tiles<<" "<<weight_matrix_width_ntiles<<" "<<weight_next_channel_stride_h<<" "<<weight_next_block_this_core_stride_h<<" "<<
@@ -47,7 +47,7 @@ void kernel_main() {
 
     uint32_t bias_addr_dram_base = get_arg_val<uint32_t>(i); i+=1;
     const uint32_t is_active = get_arg_val<uint32_t>(i); i+=1;
-    DPRINT<<"Active Weights : "<<is_active<<ENDL();
+    // DPRINT<<"Active Weights : "<<is_active<<ENDL();
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const DataFormat weight_df = get_dataformat(cb_id_weight);

@@ -85,11 +85,8 @@ void kernel_main() {
     //Y lookup.
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    DPRINT<<"Input cores "<<num_input_cores<<", Output cores "<<num_output_cores<<ENDL();
 
-    // DPRINT<<"Act Params L1 :  "<<dilation_h<<" "<<dilation_w<<" "<<conv_act_size_w<<"  "<<conv_act_c_read_bytes<<"  "<<weight_size_h<<"  "<<weight_size_w<<"  "<<act_block_h_datums<<"  "<<act_block_num_tiles<<ENDL()<<
-    // "L2  "<<num_input_cores<<"  "<<act_num_blocks_w<<"  "<<act_mcast_sender_semaphore_addr<<"  "<<act_mcast_receiver_semaphore_addr<<"  "<<act_mcast_dest_noc_start_x<<
-    // "L3  "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
+//    DPRINT<<"L3  "<<act_mcast_dest_noc_start_x<<" "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
 
     //Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y) ;
@@ -202,7 +199,15 @@ void kernel_main() {
 
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
                 // // num_dests will source, since we are copying to a different local CB as well
-                noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
+                if(this_core_id < num_output_cores) {
+                    DPRINT<<"Core "<<this_core_id<<" Loopback "<<ENDL();
+
+                    noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
+                } else {
+                    DPRINT<<"Core "<<this_core_id<<"No  Loopback "<<ENDL();
+
+                    noc_async_write_multicast(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_output_cores , false, false);
+                }
 
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
@@ -212,13 +217,15 @@ void kernel_main() {
                 noc_async_writes_flushed();
 #endif
 
-                // // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
+                if(this_core_id < num_output_cores) {
+                    // // We should also multicast VALID flag to destinations for receiver semaphore
+                    noc_semaphore_set_multicast_loopback_src(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
+                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                } else {
+                    noc_semaphore_set_multicast(act_mcast_sender_semaphore_valid_addr, act_mcast_receiver_semaphore_noc_addr, num_output_cores , false, false);
+                }
 
-
-                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-
-            } else {
+            } else if(this_core_id < num_output_cores) {
 
                 // MCAST RECEIVER: receive entire tilized input from sender core
                 // Set act semaphore value to INVALID
@@ -232,12 +239,12 @@ void kernel_main() {
                 noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-
+                DPRINT<<"Core "<<this_core_id<<" waiting for act semaphore, sender "<<sender_x<<" "<<sender_y<<ENDL();
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
 
             //Only output cores do compute
-            if(this_core_id < num_output_cores)
+            // if(this_core_id < num_output_cores)
             {
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }
