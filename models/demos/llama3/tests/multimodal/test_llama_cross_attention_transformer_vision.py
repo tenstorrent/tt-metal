@@ -59,7 +59,7 @@ def test_llama_vision_transformer_inference(mesh_device, use_program_cache, rese
 
     # Create rand inputs of the right shape
     batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, model_args.vision_chunk_size)
-    chunk_seq_len = model_args.vision_chunk_ntok - 1  # tokens per chunk without class token
+    chunk_seq_len = model_args.vision_chunk_ntok  # tokens per chunk, including class token
     images = torch.randn(batch, num_media, num_chunks, n_channel, patch_size, patch_size)
     ars = torch.tensor([2, 2]).reshape(batch, num_media, 2)
 

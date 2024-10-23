@@ -63,7 +63,7 @@ def test_llama_vision_encoder_inference(mesh_device, use_program_cache, reset_se
     )
 
     # Create rand inputs of the right shape
-    batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, 448)
+    batch, num_media, num_chunks, n_channel, patch_size = (1, 1, 4, 3, model_args.vision_chunk_size)
     images = torch.randn(batch, num_media, num_chunks, n_channel, patch_size, patch_size)
     ars = torch.tensor([2, 2]).reshape(batch, num_media, 2)
 
