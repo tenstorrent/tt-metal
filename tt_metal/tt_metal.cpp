@@ -40,10 +40,10 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
         {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                return CoreRangeSet(CoreRange(core_spec, core_spec));
             }
             else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet({core_spec});
+                return CoreRangeSet(core_spec);
             }
             else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 return core_spec;
@@ -113,11 +113,18 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    Program &program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup *kernel_group,
+    Device *device,
+    const CoreCoord &logical_core) {
 
+    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            // Need the individual offsets of each bin
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
+                kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
 }
@@ -756,7 +763,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -798,6 +805,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
+        uint32_t processor_classes = hal.get_processor_classes_count(index);
         for (auto& kg : program.get_kernel_groups(index)) {
             uint32_t kernel_config_base = kg.launch_msg.kernel_config.kernel_config_base[index];
             for (const CoreRange &core_range : kg.core_ranges.ranges()) {
@@ -805,7 +813,7 @@ void WriteRuntimeArgsToDevice(Device *device, Program &program) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                         CoreCoord logical_core(x, y);
                         auto physical_core = device->physical_core_from_logical_core(logical_core, core_type);
-                        for (int dispatch_class = 0; dispatch_class < DISPATCH_CLASS_MAX; dispatch_class++) {
+                        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg.kernel_ids[dispatch_class];
                             if (optional_id) {
                                 const auto &kernel = detail::GetKernel(program, optional_id.value());
@@ -1059,9 +1067,9 @@ uint32_t CreateSemaphore(
     return std::visit(
         [&](auto &&c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs({});
+            CoreRangeSet crs;
             if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet({c});
+                crs = CoreRangeSet(c);
             } else {
                 crs = c;
             }

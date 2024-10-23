@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <unordered_map>
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/device/device.hpp"
