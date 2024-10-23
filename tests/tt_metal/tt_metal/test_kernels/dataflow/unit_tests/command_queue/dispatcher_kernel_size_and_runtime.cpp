@@ -6,6 +6,7 @@
 
 #include "c_tensix_core.h"
 #include "circular_buffer.h"
+#include "common/assert.hpp"
 #include "core_config.h"
 #include "dataflow_api.h"
 #include "debug/dprint.h"
@@ -35,6 +36,7 @@ void kernel_main() {
         if (rt_arg != expected) {
             DPRINT << "Actual runtime argument value: " << rt_arg << " Expected runtime argument value: " << expected
                    << ENDL();
+            TT_ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
     }
@@ -46,6 +48,7 @@ void kernel_main() {
         if (expected_sem_val != actual_sem_val) {
             DPRINT << "Actual semaphore value: " << actual_sem_val << " Expected semaphore value: " << expected_sem_val
                    << ENDL();
+            TT_ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
     }
@@ -57,6 +60,7 @@ void kernel_main() {
         if (expected_cb_page_size != actual_cb_page_size) {
             DPRINT << cb_idx << " Actual circular buffer page size: " << actual_cb_page_size
                    << " Expected circular buffer page size: " << expected_cb_page_size << ENDL();
+            TT_ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
         cb_idx++;
@@ -68,6 +72,7 @@ void kernel_main() {
         if (common_rt_arg != expected) {
             DPRINT << "Actual common runtime argument value: " << common_rt_arg
                    << " Expected common runtime argument value: " << expected << ENDL();
+            TT_ASSERT(0);
             while (true);  // Hang kernel if values aren't correct
         }
     }

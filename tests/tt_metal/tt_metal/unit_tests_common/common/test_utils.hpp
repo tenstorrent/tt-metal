@@ -34,8 +34,6 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
 // Optionally force the max size for one of the vectors.
 inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
     const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
-    // Generate Unique Runtime Args. Common RT args starting address must be L1 Aligned, so account for that here via
-    // padding
     uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
     uint32_t num_rt_args_common =
         num_rt_args_unique < tt::tt_metal::max_runtime_args ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1) : 0;
