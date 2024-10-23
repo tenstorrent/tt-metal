@@ -67,7 +67,7 @@
 #define DPRINT_DATA1(x)
 #endif
 namespace internal_ {
-void __attribute__((section("code_l1"))) risc_context_switch();
+void risc_context_switch();
 }
 
 struct BF16 { uint16_t val; BF16(uint16_t val) : val(val) {} } ATTR_PACK;
