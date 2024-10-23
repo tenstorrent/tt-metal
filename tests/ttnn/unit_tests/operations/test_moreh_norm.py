@@ -22,7 +22,7 @@ def create_ttnn_tilized_tensor(torch_tensor, device, dtype):
     return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
 
-def make_torch_tensors(input_shape, dim, keepdim=False):
+def make_torch_tensors(input_shape, dim, keepdim=False, *, dtype=torch.float32):
     """
     Creates random tensors for input and gradient output based on the input shape and dimension.
 
@@ -37,8 +37,8 @@ def make_torch_tensors(input_shape, dim, keepdim=False):
             - `torch_output_grad`: Random gradient tensor with the shape corresponding to the output.
     """
     torch_output_shape, _ = compute_output_shape(input_shape, dim, keepdim=keepdim)
-    torch_input = torch.empty(input_shape, dtype=torch.float32).uniform_(-1, 1).requires_grad_()
-    torch_output_grad = torch.empty(torch_output_shape, dtype=torch.float32).uniform_(-1, 1)
+    torch_input = torch.empty(input_shape, dtype=dtype).uniform_(-1, 1).requires_grad_()
+    torch_output_grad = torch.empty(torch_output_shape, dtype=dtype).uniform_(-1, 1)
     return torch_input, torch_output_grad
 
 
@@ -77,6 +77,7 @@ def ttnn_norm(
     compute_kernel_options=None,
     do_backward=False,
     device=None,
+    dtype=ttnn.bfloat16,
 ):
     """
     Computes the norm of a tensor using ttnn's custom backend and optionally performs backpropagation.
@@ -96,14 +97,13 @@ def ttnn_norm(
             - `ttnn_output`: The result of the norm operation.
             - `ttnn_input_grad`: The gradient of the input tensor (if `do_backward=True`), otherwise None.
     """
-    ttnn_dtype = ttnn.bfloat16
     _, ttnn_output_shape = compute_output_shape(torch_input.shape, dim, keepdim=keepdim)
-    ttnn_input = create_ttnn_tilized_tensor(torch_input, device, ttnn_dtype)
+    ttnn_input = create_ttnn_tilized_tensor(torch_input, device, dtype)
     if do_backward:
         torch_output = torch.norm(torch_input, p=p, dim=dim, keepdim=keepdim)
-        ttnn_output = create_ttnn_tilized_tensor(torch_output, device, ttnn_dtype)
+        ttnn_output = create_ttnn_tilized_tensor(torch_output, device, dtype)
     else:
-        ttnn_output = create_ttnn_tilized_tensor(torch.empty(ttnn_output_shape), device, ttnn_dtype)
+        ttnn_output = create_ttnn_tilized_tensor(torch.empty(ttnn_output_shape), device, dtype)
         ttnn.operations.moreh.norm(
             ttnn_input,
             p=p,
@@ -114,8 +114,8 @@ def ttnn_norm(
         )
     ttnn_input_grad = None
     if do_backward:
-        ttnn_output_grad = create_ttnn_tilized_tensor(torch_output_grad, device, ttnn_dtype)
-        ttnn_input_grad = create_ttnn_tilized_tensor(torch.empty_like(torch_input), device, ttnn_dtype)
+        ttnn_output_grad = create_ttnn_tilized_tensor(torch_output_grad, device, dtype)
+        ttnn_input_grad = create_ttnn_tilized_tensor(torch.empty_like(torch_input), device, dtype)
         ttnn.operations.moreh.norm_backward(
             ttnn_input,
             ttnn_output,
@@ -131,7 +131,19 @@ def ttnn_norm(
     return ttnn_output, ttnn_input_grad
 
 
-def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compute_kernel_options=None):
+def run_moreh_norm(
+    input_shape,
+    p,
+    dim,
+    rtol,
+    atol,
+    device,
+    *,
+    keepdim=False,
+    compute_kernel_options=None,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+):
     """
     Runs the norm operation using both torch and ttnn's implementation and compares the outputs.
 
@@ -148,8 +160,11 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
     Raises:
         AssertionError: If the computed norm values from ttnn's implementation and torch are not close.
     """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
     check_dim(input_shape, dim, keepdim)
-    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim)
+    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
     expected_output, _ = torch_norm(torch_input, torch_output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=False)
     actual_output, _ = ttnn_norm(
         torch_input,
@@ -160,13 +175,25 @@ def run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=False, compu
         compute_kernel_options=compute_kernel_options,
         device=device,
         do_backward=False,
+        dtype=ttnn_dtype,
     )
     passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
     logger.debug(f"output's {out}")
     assert passing
 
 
-def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=False, compute_kernel_options=None):
+def run_moreh_norm_backward(
+    input_shape,
+    p,
+    dim,
+    rtol,
+    atol,
+    device,
+    keepdim=False,
+    compute_kernel_options=None,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+):
     """
     Runs the norm operation with backpropagation using both torch and ttnn's custom implementation and compares the gradients.
 
@@ -183,8 +210,11 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
     Raises:
         AssertionError: If the computed gradients from ttnn's implementation and torch are not close.
     """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
     check_dim(input_shape, dim, keepdim)
-    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim)
+    torch_input, torch_output_grad = make_torch_tensors(input_shape, dim, keepdim=keepdim, dtype=torch_dtype)
     _, expected_input_grad = torch_norm(torch_input, torch_output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True)
     _, actual_input_grad = ttnn_norm(
         torch_input,
@@ -195,6 +225,7 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
         compute_kernel_options=compute_kernel_options,
         device=device,
         do_backward=True,
+        dtype=ttnn_dtype,
     )
     passing, out = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
     logger.debug(f"input_grad's {out}")
@@ -247,13 +278,14 @@ def run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=Fal
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, device):
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_norm(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device):
     """
     Parametrized test for ttnn's norm operation. Compares the output of ttnn's norm with torch's norm.
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
-    run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
+    run_moreh_norm(input_shape, p, dim, rtol, atol, device, keepdim=keepdim, ttnn_dtype=ttnn_dtype)
 
 
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
@@ -364,13 +396,14 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, use_program_cache):
     ],
 )
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, keepdim, device):
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_norm_backward(input_shape, p, dim_rtol_atol, keepdim, ttnn_dtype, device):
     """
     Parametrized test for ttnn's norm backward operation. Compares the output of ttnn's norm backward with torch's norm backward.
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
-    run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=keepdim)
+    run_moreh_norm_backward(input_shape, p, dim, rtol, atol, device, keepdim=keepdim, ttnn_dtype=ttnn_dtype)
 
 
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
