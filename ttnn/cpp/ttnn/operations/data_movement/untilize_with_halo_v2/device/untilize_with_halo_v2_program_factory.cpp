@@ -212,8 +212,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     bool is_shard_orient_row_major = output_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     vector<CoreCoord> cores = grid_to_cores(all_cores.num_cores(), output_tensor.shard_spec()->grid.bounding_box().end_coord.x + 1, output_tensor.shard_spec()->grid.bounding_box().end_coord.y + 1, is_shard_orient_row_major);
+
+    auto aligned_input_nstick_nbytes = out_stick_nbytes;
+    if(out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
+        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+    }
     std::vector<std::vector<uint32_t>> reader_kernel_rt_args(all_cores.num_cores(), vector<uint32_t>(1));
-    std::fill(reader_kernel_rt_args.begin(), reader_kernel_rt_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{input_tensor.buffer()->aligned_page_size()});
+    std::fill(reader_kernel_rt_args.begin(), reader_kernel_rt_args.begin() + all_cores.num_cores(), std::vector<uint32_t>{aligned_input_nstick_nbytes});
 
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id1, cores, reader_kernel_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id0, cores, reader_kernel_rt_args);
