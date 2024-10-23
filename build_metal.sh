@@ -164,7 +164,8 @@ cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
 
 if [ "$enable_ccache" = "ON" ]; then
-    cmake_args+=("-DCMAKE_C_COMPILER_LAUNCHER=ccache" "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache")
+    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=TRUE")
+    cmake_args+=("-DENABLE_CCACHE=TRUE")
 fi
 
 if [ "$enable_time_trace" = "ON" ]; then

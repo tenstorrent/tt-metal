@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <variant>
 #include <tuple>
 #include <optional>

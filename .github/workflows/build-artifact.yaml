@@ -76,6 +76,17 @@ jobs:
       - build
       - in-service
     steps:
+      - name: Verify ccache availability
+        shell: bash
+        run: |
+          if [ ! -d "/mnt/MLPerf/ccache" ]; then
+            echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
+            exit 1
+          fi
+          if [ ! -d "$HOME/.ccache-ci" ]; then
+            echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
+            exit 1
+          fi
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dynamic env vars for build
         run: |
@@ -104,20 +115,39 @@ jobs:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
             --rm
+            --tmpfs /tmp
             -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
+            --group-add 1457
             -v ${{ github.workspace }}:${{ github.workspace }}
             -v /etc/passwd:/etc/passwd:ro
             -v /etc/shadow:/etc/shadow:ro
             -v /etc/bashrc:/etc/bashrc:ro
+            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
+            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples"
+            # /tmp is a tmpfs; more efficient than persisted storage
+            mkdir -p /tmp/ccache
+            export CCACHE_TEMPDIR=/tmp/ccache
+
+            # Zero out the stats so we can see how we did this build
+            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+            ccache -z
+
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples --enable-ccache"
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
             fi
             nice -n 19 $build_command
+            ccache -s > build/ccache.stats
+      - name: Publish Ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
       - name: 'Tar files'
         run: tar -cvf ttm_${{ matrix.arch }}.tar build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime
       - name: 'Upload Artifact'

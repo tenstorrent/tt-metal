@@ -4,6 +4,7 @@ FROM ubuntu:22.04
 ARG DEBIAN_FRONTEND=noninteractive
 ARG UBUNTU_VERSION=22.04
 ENV DOXYGEN_VERSION=1.9.6
+ENV CCACHE_TEMPDIR=/tmp/ccache
 
 RUN apt update -y && apt install software-properties-common gpg-agent -y
 
@@ -104,6 +105,13 @@ RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 11
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+
+# Ccache is not in requirements_dev.txt because 20.04's version is too old for remote_storage support.
+# When we drop 20.04, can put it in requirements_dev.txt instead of here.
+RUN wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
+    tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
+    rm /tmp/ccache.tar.xz
+RUN ccache --version
 
 RUN mkdir -p /usr/app
 

@@ -4,6 +4,7 @@ FROM ubuntu:20.04
 ARG DEBIAN_FRONTEND=noninteractive
 ENV DOXYGEN_VERSION=1.9.6
 ARG UBUNTU_VERSION=20.04
+ENV CCACHE_TEMPDIR=/tmp/ccache
 
 # Use a newer version of CMake than what is available from Canonical for 20.04
 RUN apt -y update \
@@ -80,5 +81,11 @@ RUN apt-get -y update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/app
+
+# Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
+RUN wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
+    tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
+    rm /tmp/ccache.tar.xz
+RUN ccache --version
 
 CMD ["tail", "-f", "/dev/null"]
