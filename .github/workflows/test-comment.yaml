@@ -19,5 +19,5 @@ jobs:
           ls
   trigger-tests:
     if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
-    uses: ./.github/workflows/all-post-commit-tests.yml
+    uses: ./.github/workflows/all-post-commit-tests.yaml
       build-type: Release
