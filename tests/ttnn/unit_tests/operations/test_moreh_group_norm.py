@@ -18,7 +18,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
     to_ttnn,
-    to_torch,
 )
 
 
@@ -75,21 +74,29 @@ def tt_group_norm(
     input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True, device=None, compute_kernel_config=None
 ):
     N = input.shape[0]
-    C = input.shape[1]
 
-    gamma_beta_shape = [1, C]
     mean_rstd_shape = [N, num_groups]
 
-    npu_input = to_ttnn(input, device=device)
-    npu_gamma = to_ttnn(gamma, device=device, shape=gamma_beta_shape)
-    npu_beta = to_ttnn(beta, device=device, shape=gamma_beta_shape)
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+
+    npu_input = ttnn.from_torch(input, dtype=dtype, layout=layout, device=device)
+    if gamma is not None:
+        npu_gamma = ttnn.from_torch(gamma, dtype=dtype, layout=layout, device=device)
+    else:
+        npu_gamma = None
+
+    if beta is not None:
+        npu_beta = ttnn.from_torch(beta, dtype=dtype, layout=layout, device=device)
+    else:
+        npu_beta = None
 
     npu_mean = npu_rstd = None
     if compute_mean_rstd:
         npu_mean = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
-        npu_mean = to_ttnn(npu_mean, device=device)
+        npu_mean = ttnn.from_torch(npu_mean, dtype=dtype, layout=layout, device=device)
         npu_rstd = torch.empty(mean_rstd_shape, dtype=torch.bfloat16)
-        npu_rstd = to_ttnn(npu_rstd, device=device)
+        npu_rstd = ttnn.from_torch(npu_rstd, dtype=dtype, layout=layout, device=device)
 
     # Forward
     npu_output, npu_mean, npu_rstd = ttnn.moreh_group_norm(
@@ -104,12 +111,12 @@ def tt_group_norm(
         compute_kernel_config=compute_kernel_config,
     )
 
-    tt_output = to_torch(npu_output, shape=input.shape)
+    tt_output = ttnn.to_torch(npu_output)
 
     tt_mean = tt_rstd = None
     if compute_mean_rstd:
-        tt_mean = to_torch(npu_mean, shape=mean_rstd_shape).view(N, num_groups)
-        tt_rstd = to_torch(npu_rstd, shape=mean_rstd_shape).view(N, num_groups)
+        tt_mean = ttnn.to_torch(npu_mean)
+        tt_rstd = ttnn.to_torch(npu_rstd)
 
     return tt_output, tt_mean, tt_rstd
 
@@ -135,8 +142,12 @@ def tt_group_norm_backward(
     var = ((x_view - mean) ** 2).mean(dim=-1, keepdim=False)
     rstd = (var + eps).rsqrt()
 
-    npu_output_grad = to_ttnn(output_grad, device=device)
-    npu_input = to_ttnn(input, device=device)
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+
+    npu_output_grad = ttnn.from_torch(output_grad, dtype=dtype, layout=layout, device=device)
+    npu_input = ttnn.from_torch(input, dtype=dtype, layout=layout, device=device)
+    # below codes will be modified to ttnn.from_torch after refactoring backward.
     npu_mean = to_ttnn(mean, device=device, shape=mean_rstd_shape)
     npu_rstd = to_ttnn(rstd, device=device, shape=mean_rstd_shape)
     npu_gamma = to_ttnn(gamma, device=device, shape=gamma_beta_shape)
@@ -144,17 +155,17 @@ def tt_group_norm_backward(
     npu_dx = None
     if input_requires_grad:
         npu_dx = torch.empty(input.shape, dtype=torch.bfloat16)
-        npu_dx = to_ttnn(npu_dx, device=device)
+        npu_dx = ttnn.from_torch(npu_dx, dtype=dtype, layout=layout, device=device)
 
     npu_dg = None
     if gamma_requires_grad:
         npu_dg = torch.empty(gamma_beta_shape, dtype=torch.bfloat16)
-        npu_dg = to_ttnn(npu_dg, device=device)
+        npu_dg = ttnn.from_torch(npu_dg, dtype=dtype, layout=layout, device=device)
 
     npu_db = None
     if beta_requires_grad:
         npu_db = torch.empty(gamma_beta_shape, dtype=torch.bfloat16)
-        npu_db = to_ttnn(npu_db, device=device)
+        npu_db = ttnn.from_torch(npu_db, dtype=dtype, layout=layout, device=device)
 
     # Backward
     npu_dx, npu_dg, npu_db = ttnn.operations.moreh.group_norm_backward(
@@ -170,13 +181,13 @@ def tt_group_norm_backward(
         beta_grad=npu_db,
     )
 
-    tt_input_grad = to_torch(npu_dx, shape=input.shape)
+    tt_input_grad = ttnn.to_torch(npu_dx) if npu_dx else None
 
     tt_gamma_grad = tt_beta_grad = None
     if npu_dg is not None:
-        tt_gamma_grad = to_torch(npu_dg, shape=gamma_beta_shape).view(C)
+        tt_gamma_grad = ttnn.to_torch(npu_dg).view(C)
     if npu_db is not None:
-        tt_beta_grad = to_torch(npu_db, shape=gamma_beta_shape).view(C)
+        tt_beta_grad = ttnn.to_torch(npu_db).view(C)
 
     return tt_input_grad, tt_gamma_grad, tt_beta_grad
 
