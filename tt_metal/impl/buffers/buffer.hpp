@@ -214,16 +214,12 @@ class Buffer final {
 
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
-        ALLOCATING,
         ALLOCATED,
-        DEALLOCATION_REQUESTED,
         DEALLOCATED,
     };
 
-    void allocate_impl();
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static bool prepare_deallocation(std::atomic<AllocationStatus>& status);
     static void deleter(Buffer* buffer);
     friend void DeallocateBuffer(Buffer &buffer);
 
@@ -236,7 +232,9 @@ class Buffer final {
     const std::optional<bool> bottom_up_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
-    std::atomic<DeviceAddr> address_ = 0;
+    DeviceAddr address_ = 0;
+    // Used exclusively for is_allocated() method
+    std::atomic<bool> deallocation_requested_ = false;
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
