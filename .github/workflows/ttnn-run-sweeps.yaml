@@ -144,6 +144,7 @@ on:
           - eltwise.unary_backward.floor_bw.floor_bw
           - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
+          - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
