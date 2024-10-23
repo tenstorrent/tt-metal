@@ -851,13 +851,35 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-void AllocateBuffer(Buffer *buffer, bool bottom_up) {
+DeviceAddr AllocateBuffer(const Buffer *buffer, bool bottom_up) {
     if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
         GraphTracker::instance().track_allocate(buffer, bottom_up);
-        return;
+        return 0;
     }
-    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+
+    uint32_t allocated_addr;
+    if (is_sharded(buffer->buffer_layout())) {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            buffer->num_cores());
+    } else {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            std::nullopt);
+    }
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+
     GraphTracker::instance().track_allocate(buffer, bottom_up);
+
+    return allocated_addr;
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -865,12 +887,8 @@ void DeallocateBuffer(Buffer *buffer) {
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
     }
-    EnqueueDeallocateBuffer(
-        buffer->device()->command_queue(),
-        *(buffer->device()->allocator_),
-        buffer->address(),
-        buffer->buffer_type(),
-        false);
+
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer->address(), buffer->buffer_type());
 }
 
 }  // namespace detail
@@ -1086,7 +1104,7 @@ uint32_t CreateSemaphore(
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
     return Buffer::create(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
@@ -1097,8 +1115,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
-        std::nullopt,
-        config.allocate);
+        std::nullopt);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }

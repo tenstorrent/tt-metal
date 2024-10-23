@@ -27,7 +27,7 @@ bool GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
     return true;
 }
 
-void GraphTracker::track_allocate(Buffer* buffer, bool bottom_up) {
+void GraphTracker::track_allocate(const Buffer* buffer, bool bottom_up) {
     if (processors.empty()) {
         return;
     }
@@ -73,7 +73,7 @@ void GraphTracker::track_program(Program* program) {
     }
 }
 
-bool GraphTracker::hook_allocate(Buffer* buffer, bool bottom_up) {
+bool GraphTracker::hook_allocate(const Buffer* buffer, bool bottom_up) {
     if (hook == nullptr)
         return false;
 

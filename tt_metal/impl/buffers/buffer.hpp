@@ -103,7 +103,6 @@ struct BufferConfig {
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
-    bool allocate = true;
 };
 
 typedef BufferConfig InterleavedBufferConfig;
@@ -117,7 +116,6 @@ struct ShardedBufferConfig {
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
-    bool allocate = true;
 };
 
 }  // namespace v0
@@ -149,8 +147,7 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
         const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
-        std::optional<bool> bottom_up = std::nullopt,
-        bool allocate = true);
+        std::optional<bool> bottom_up = std::nullopt);
 
     Buffer(const Buffer &other) = delete;
     Buffer &operator=(const Buffer &other) = delete;
@@ -163,7 +160,6 @@ class Buffer final {
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
-    void set_address(uint64_t addr);
 
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
@@ -217,33 +213,24 @@ class Buffer final {
         const std::optional<ShardSpecBuffer>& shard_parameter,
         std::optional<bool> bottom_up);
 
-    void allocate();
+    enum class AllocationStatus : uint8_t {
+        ALLOCATION_REQUESTED,
+        ALLOCATING,
+        ALLOCATED,
+        DEALLOCATION_REQUESTED,
+        DEALLOCATED,
+    };
+
+    void allocate_impl();
+    // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deallocateAndDelete(Buffer* buffer);
+    static void deleter(Buffer* buffer);
+
+    static bool prepare_deallocation(std::atomic<AllocationStatus>& status);
 
     friend void DeallocateBuffer(Buffer &buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
-
-    enum class AllocationStatus : uint8_t {
-        // The buffer is created in NOT_ALLOCATED state (except for 0-size buffers, which are initially ALLOCATED).
-        // The buffer can transition from NOT_ALLOCATED to ALLOCATION_REQUESTED only once in its lifetime.
-        NOT_ALLOCATED,
-        // The task is scheduled on the queue to allocate the buffer.
-        // When the task succeeds, the buffer transitions into ALLOCATED state.
-        // The scheduled allocation can be interrupted by a deallocation, which would transition the buffer to DEALLOCATION_REQUESTED,
-        // and then to DEALLOCATED states.
-        ALLOCATION_REQUESTED,
-        // The buffer is completely allocated and the address is available.
-        // The buffer can transition from ALLOCATED only to DEALLOCATION_REQUESTED.
-        ALLOCATED,
-        // The task is scheduled to deallocate the buffer.
-        // When the task succeeds, the buffer transitions into DEALLOCATED state.
-        DEALLOCATION_REQUESTED,
-        // The buffer is completely deallocated.
-        // This is the final state, no transitions from this state are possible.
-        DEALLOCATED,
-    };
 
     Device * const device_;
     const DeviceAddr size_; // Size in bytes
@@ -251,12 +238,10 @@ class Buffer final {
     const TensorMemoryLayout buffer_layout_;
     const std::optional<bool> bottom_up_;
 
-    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::NOT_ALLOCATED;
-    mutable std::condition_variable allocation_cv_;
-    mutable std::mutex allocation_mutex_;
+    std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
+    std::atomic<DeviceAddr> address_ = 0;
 
     // These members must be only accessed on the device worker thread
-    DeviceAddr address_ = 0; // Address of buffer
     DeviceAddr page_size_; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;

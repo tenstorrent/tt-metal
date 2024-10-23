@@ -116,50 +116,6 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
     return {ret_vec, ret_shard_shape};
 }
 
-std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up,
-    bool allocate) {
-    auto bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up);
-    auto buffer = std::shared_ptr<Buffer>(bufferPtr, deallocateAndDelete);
-    buffer->weak_self = buffer;
-    if (allocate) {
-        buffer->allocate();
-    }
-    return buffer;
-}
-
-Buffer::Buffer(
-    Device *device,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    const BufferType buffer_type,
-    const TensorMemoryLayout buffer_layout,
-    const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up) :
-    device_(device),
-    size_(size),
-    page_size_(page_size),
-    buffer_type_(buffer_type),
-    buffer_layout_(buffer_layout),
-    shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up),
-    buffer_page_mapping_(nullptr) {
-    TT_FATAL(this->device_ != nullptr and this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
-
-    if (size == 0) {
-        allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
-        return;
-    }
-
-    validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
-}
-
 BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     BufferPageMapping buffer_page_mapping;
 
@@ -226,70 +182,128 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     return buffer_page_mapping;
 }
 
-void Buffer::allocate() {
-    {
-        std::unique_lock lock(allocation_mutex_);
-        TT_FATAL(allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::NOT_ALLOCATED, "Can't allocate buffer after it was already allocated");
-        allocation_status_.store(AllocationStatus::ALLOCATION_REQUESTED, std::memory_order::relaxed);
+Buffer::Buffer(
+    Device *device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up) :
+    device_(device),
+    size_(size),
+    page_size_(page_size),
+    buffer_type_(buffer_type),
+    buffer_layout_(buffer_layout),
+    shard_parameters_(shard_parameters),
+    bottom_up_(bottom_up),
+    buffer_page_mapping_(nullptr) {
+    TT_FATAL(this->device_ != nullptr && this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
+
+    if (size != 0) {
+        validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
+    }
+}
+
+std::shared_ptr<Buffer> Buffer::create(
+    Device *device,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up) {
+    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up);
+    auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);
+    buffer->weak_self = buffer;
+
+    if (buffer->size_ == 0) {
+        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+        return buffer;
     }
 
-    device_->push_work([self = weak_self.lock()] {
-        std::unique_lock lock(self->allocation_mutex_);
-        if (self->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED) {
-            // The allocation was interrupted by a deallocation
+    // Faster path for single-threaded mode
+    if (buffer->device_->can_use_passthrough_scheduling()) {
+        buffer->allocate_impl();
+        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+        return buffer;
+    }
+
+    buffer->device_->push_work([buffer] {
+        auto expected_status = AllocationStatus::ALLOCATION_REQUESTED;
+        if (!buffer->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::ALLOCATING)) {
+            // Buffer was already deallocated before we got here
             return;
         }
 
-        bool bottom_up = self->bottom_up_.value_or(self->is_dram());
-        detail::AllocateBuffer(self.get(), bottom_up);
-        detail::BUFFER_MAP.insert({self->device_->id(), self->address_}, self.get());
+        buffer->allocate_impl();
 
-        self->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
-        lock.unlock();
-        self->allocation_cv_.notify_all();
+        // We need compare exchange here to handle the case of deallocation being requested before we finished allocating
+        expected_status = AllocationStatus::ALLOCATING;
+        if (buffer->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::ALLOCATED)) {
+            buffer->allocation_status_.notify_all();
+        }
     });
+
+    return buffer;
+}
+
+void Buffer::allocate_impl() {
+    bool bottom_up = bottom_up_.value_or(is_dram());
+    address_ = detail::AllocateBuffer(this, bottom_up);
+    detail::BUFFER_MAP.insert({-device_->id(), address_}, this);
+}
+
+bool Buffer::prepare_deallocation(std::atomic<AllocationStatus>& status) {
+    while (true) {
+        auto current_status = status.load();
+        switch (current_status) {
+            case AllocationStatus::ALLOCATION_REQUESTED:
+                // Allocation was requested but not started, canceling allocation, nothing else to be done
+                if (status.compare_exchange_weak(current_status, AllocationStatus::DEALLOCATED)) {
+                    status.notify_all();
+                    return false;
+                }
+                break;
+            case AllocationStatus::ALLOCATING:
+            case AllocationStatus::ALLOCATED:
+                // Allocation already started, will have to deallocate
+                if (status.compare_exchange_weak(current_status, AllocationStatus::DEALLOCATION_REQUESTED)) {
+                    status.notify_all();
+                    return true;
+                }
+                break;
+            case AllocationStatus::DEALLOCATION_REQUESTED:
+            case AllocationStatus::DEALLOCATED:
+                // Deallocation was already started, nothing to be done
+                return false;
+        }
+    }
 }
 
 void Buffer::deallocate() {
-    if (size_ == 0) {
-        // 0-size buffer, no need to deallocate
+    if (!prepare_deallocation(allocation_status_)) {
         return;
     }
 
-    {
-        std::unique_lock lock(allocation_mutex_);
-        auto status = allocation_status_.load(std::memory_order::relaxed);
-        if (status != AllocationStatus::ALLOCATED && status != AllocationStatus::ALLOCATION_REQUESTED) {
-            // Buffer isn't allocated, nothing to be done
-            return;
-        }
-        // Overwriting either ALLOCATED or ALLOCATION_REQUESTED with DEALLOCATION_REQUESTED
-        allocation_status_.store(AllocationStatus::DEALLOCATION_REQUESTED, std::memory_order::relaxed);
-    }
-
     device_->push_work([self = weak_self.lock()] {
-        // Because the status is DEALLOCATION_REQUESTED, it won't be changed by anyone else, no need to lock a mutex
-        if (!self->device_->initialized_) {
-            return;
+        if (self->device_->initialized_ && self->size_ != 0) {
+            detail::BUFFER_MAP.erase({self->device_->id(), self->address_});
+            detail::DeallocateBuffer(self.get());
         }
 
-        detail::BUFFER_MAP.erase({self->device()->id(), self->address()});
-        detail::DeallocateBuffer(self.get());
-        self->allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+        self->allocation_status_ = AllocationStatus::DEALLOCATED;
     });
 }
 
-void Buffer::deallocateAndDelete(Buffer* buffer) {
-    // This is the last reference to the buffer, no need to lock or update AllocationStatus
-    buffer->device_->push_work([buffer] {
-        // Buffer will be deleted at the end of this block
-        std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
+void Buffer::deleter(Buffer* buffer) {
+    // There is no concurrent allocations/deallocations happening, so no extra checks are required
+    if (buffer->allocation_status_ == AllocationStatus::DEALLOCATED) {
+        return;
+    }
 
-        auto status = buffer->allocation_status_.load(std::memory_order::relaxed);
-        if (status == AllocationStatus::NOT_ALLOCATED || status == AllocationStatus::ALLOCATION_REQUESTED || status == AllocationStatus::DEALLOCATED) {
-            // Buffer isn't allocated, nothing to be done
-            return;
-        }
+    buffer->device_->push_work([buffer] {
+        std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
 
         if (!buffer->device_->initialized_ || buffer->size_ == 0) {
             return;
@@ -301,30 +315,29 @@ void Buffer::deallocateAndDelete(Buffer* buffer) {
 }
 
 bool Buffer::is_allocated() const {
-    auto allocation_status = allocation_status_.load(std::memory_order::relaxed);
+    auto allocation_status = allocation_status_.load();
+
     if (device_->can_use_passthrough_scheduling()) {
         return allocation_status == AllocationStatus::ALLOCATED;
     }
-    // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED,
+
+    // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED or ALLOCATING,
     // because once the caller will try to access it, the buffer will already be fully allocated
-    return allocation_status == AllocationStatus::ALLOCATED || allocation_status == AllocationStatus::ALLOCATION_REQUESTED;
+    return allocation_status == AllocationStatus::ALLOCATION_REQUESTED
+        || allocation_status == AllocationStatus::ALLOCATING
+        || allocation_status == AllocationStatus::ALLOCATED;
 }
 
 uint32_t Buffer::address() const {
     if (device_->can_use_passthrough_scheduling()) {
-        // No locking required, because address can only be modified from the same thread
         return address_;
     }
 
-    std::unique_lock lock(allocation_mutex_);
-    allocation_cv_.wait(lock, [this] { return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED; });
-    return address_;
-}
+    // Waiting for the buffer to be allocated if the allocation is pending
+    allocation_status_.wait(AllocationStatus::ALLOCATION_REQUESTED);
+    allocation_status_.wait(AllocationStatus::ALLOCATING);
 
-void Buffer::set_address(uint64_t addr) {
-    TT_FATAL(device_->can_use_passthrough_scheduling() , "Buffer::set_address must be called in device worker thread");
-    TT_FATAL(allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::ALLOCATION_REQUESTED, "Buffer address can only be set during allocation");
-    address_ = addr;
+    return address_;
 }
 
 DeviceAddr Buffer::page_size() const {

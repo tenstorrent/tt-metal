@@ -2789,62 +2789,6 @@ void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer
         .type = EnqueueCommandType::GET_BUF_ADDR, .blocking = blocking, .shadow_buffer = buffer, .dst = dst_buf_addr});
 }
 
-void EnqueueAllocateBufferImpl(AllocBufferMetadata alloc_md) {
-    Buffer* buffer = alloc_md.buffer;
-    uint32_t allocated_addr;
-    if (is_sharded(buffer->buffer_layout())) {
-        allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
-            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            alloc_md.bottom_up,
-            buffer->num_cores());
-    } else {
-        allocated_addr = allocator::allocate_buffer(
-            *(buffer->device()->allocator_),
-            buffer->size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            alloc_md.bottom_up,
-            std::nullopt);
-    }
-    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
-    buffer->set_address(static_cast<DeviceAddr>(allocated_addr));
-}
-
-void EnqueueAllocateBuffer(CommandQueue& cq, Buffer* buffer, bool bottom_up, bool blocking) {
-    auto alloc_md = AllocBufferMetadata{
-        .buffer = buffer,
-        .allocator = *(buffer->device()->allocator_),
-        .bottom_up = bottom_up,
-    };
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ALLOCATE_BUFFER,
-        .blocking = blocking,
-        .alloc_md = alloc_md,
-    });
-}
-
-void EnqueueDeallocateBufferImpl(AllocBufferMetadata alloc_md) {
-    allocator::deallocate_buffer(alloc_md.allocator, alloc_md.device_address, alloc_md.buffer_type);
-}
-
-void EnqueueDeallocateBuffer(
-    CommandQueue& cq, Allocator& allocator, uint32_t device_address, BufferType buffer_type, bool blocking) {
-    // Need to explictly pass in relevant buffer attributes here, since the Buffer* ptr can be deallocated a this point
-    auto alloc_md = AllocBufferMetadata{
-        .allocator = allocator,
-        .buffer_type = buffer_type,
-        .device_address = device_address,
-    };
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::DEALLOCATE_BUFFER,
-        .blocking = blocking,
-        .alloc_md = alloc_md,
-    });
-}
-
 inline namespace v0 {
 
 void EnqueueReadBuffer(
@@ -3215,14 +3159,6 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
             EnqueueWriteBufferImpl(*this, command.buffer.value(), command.src.value(), command.blocking.value());
-            break;
-        case EnqueueCommandType::ALLOCATE_BUFFER:
-            TT_ASSERT(command.alloc_md.has_value(), "Must provide buffer allocation metdata!");
-            EnqueueAllocateBufferImpl(command.alloc_md.value());
-            break;
-        case EnqueueCommandType::DEALLOCATE_BUFFER:
-            TT_ASSERT(command.alloc_md.has_value(), "Must provide buffer allocation metdata!");
-            EnqueueDeallocateBufferImpl(command.alloc_md.value());
             break;
         case EnqueueCommandType::GET_BUF_ADDR:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst address!");
