@@ -17,31 +17,23 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  .start :
+  .text :
   {
     *(.start)
-  } > REGION_APP_CODE
-  code_l1 :
-  {
-    *(code_l1)
-  } > REGION_APP_CODE
-  .init :
-  {
-    KEEP (*(SORT_NONE(.init)))
-  } > REGION_APP_CODE
-  PROVIDE (__ecode_l1 = .);
-  /* TODO: add back when using iram code loading
-  .text :
-
-  {
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
-    /* .gnu.warning sections are handled specially by elf32.em.
+    /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_APP_IRAM_CODE AT > ERISC_OVERLAY*/
+  } > REGION_APP_CODE
+  .init.fini :
+  {
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
+  } > REGION_APP_CODE
 
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE
