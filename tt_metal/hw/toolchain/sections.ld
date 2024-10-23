@@ -59,9 +59,8 @@ SECTIONS
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
-    KEEP (*(.init))
-    KEEP (*(.fini))
-    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
   } > REGION_CODE
 
   l1_data :
@@ -73,7 +72,9 @@ SECTIONS
 
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = .;
+#if defined(TARGET_NCRISC)
   PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+#endif
 #endif
 
 #if defined(TYPE_KERNEL)
@@ -87,39 +88,40 @@ SECTIONS
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
+
     PROVIDE_HIDDEN (__preinit_array_start = .);
     KEEP (*(.preinit_array))
     PROVIDE_HIDDEN (__preinit_array_end = .);
     PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
-    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
     PROVIDE_HIDDEN (__init_array_end = .);
+
     PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
-    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
     PROVIDE_HIDDEN (__fini_array_end = .);
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*crtbegin?.o(.ctors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
-    KEEP (*(SORT(.ctors.*)))
-    KEEP (*(.ctors))
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*crtbegin?.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
-    KEEP (*(SORT(.dtors.*)))
-    KEEP (*(.dtors))
+
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
+
     *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
     *(.data1)
+
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     __ldm_data_end = .;
-  }
+  } > REGION_DATA
+  .ctors.dtors :
+  {
+    /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.ctors .ctors.* .dtors .dtors.*))
+    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_DATA
   .bss ALIGN(4):
   {
     __ldm_bss_start = .;
@@ -140,7 +142,6 @@ SECTIONS
 #endif
 
 #ifdef TYPE_FIRMWARE
-  /* Move to end of local memory for stack */
   .stack :
   {
     __stack_bottom = .;

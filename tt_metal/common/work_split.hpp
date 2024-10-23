@@ -9,7 +9,7 @@
 #pragma once
 
 #include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/host_api.hpp"
 
@@ -174,7 +174,7 @@ inline std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, 
     uint32_t units_per_core_group_2 = 0;
     // Evenly divided units to all target cores
     if (units_to_divide % target_num_cores == 0) {
-        core_group_1_set = all_cores.ranges();
+        core_group_1_set = std::set<CoreRange>(all_cores.ranges().begin(), all_cores.ranges().end());
         // Uneven division of units across cores
         // This case should only be hit when there are more units of work than a full grid of cores
         // which is implicitly assumed in the following logic

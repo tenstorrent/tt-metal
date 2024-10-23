@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "detail/tt_metal.hpp"
 #include "host_api.hpp"
 #include "impl/device/device.hpp"

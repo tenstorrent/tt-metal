@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "tt_metal/impl/buffers/circular_buffer_types.hpp"
 
