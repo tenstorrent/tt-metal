@@ -251,7 +251,7 @@ std::shared_ptr<Buffer> Buffer::create(
 void Buffer::allocate_impl() {
     bool bottom_up = bottom_up_.value_or(is_dram());
     address_ = detail::AllocateBuffer(this, bottom_up);
-    detail::BUFFER_MAP.insert({-device_->id(), address_}, this);
+    detail::BUFFER_MAP.insert({device_->id(), address_}, this);
 }
 
 bool Buffer::prepare_deallocation(std::atomic<AllocationStatus>& status) {
@@ -286,26 +286,18 @@ void Buffer::deallocate() {
         return;
     }
 
-    if (device_->can_use_passthrough_scheduling()) {
-        deallocate_impl();
-    } else {
-        device_->push_work([self = weak_self.lock()] {
-            self->deallocate_impl();
-        });
-    }
-}
+    device_->push_work([self = weak_self.lock()] {
+        auto expected_status = AllocationStatus::DEALLOCATION_REQUESTED;
+        if (!self->allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::DEALLOCATED)) {
+            // Buffer was already deallocated, nothing to do
+            return;
+        }
 
-void Buffer::deallocate_impl() {
-    auto expected_status = AllocationStatus::DEALLOCATION_REQUESTED;
-    if (!allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::DEALLOCATED)) {
-        // Buffer was already deallocated, nothing to do
-        return;
-    }
-
-    if (device_->initialized_ && size_ != 0) {
-        detail::BUFFER_MAP.erase({device_->id(), address_});
-        detail::DeallocateBuffer(this);
-    }
+        if (self->device_->initialized_ && self->size_ != 0) {
+            detail::BUFFER_MAP.erase({self->device_->id(), self->address_});
+            detail::DeallocateBuffer(self.get());
+        }
+    });
 }
 
 void Buffer::deleter(Buffer* buffer) {

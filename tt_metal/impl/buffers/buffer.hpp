@@ -224,7 +224,6 @@ class Buffer final {
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     static bool prepare_deallocation(std::atomic<AllocationStatus>& status);
-    void deallocate_impl();
     static void deleter(Buffer* buffer);
     friend void DeallocateBuffer(Buffer &buffer);
 

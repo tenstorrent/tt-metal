@@ -82,14 +82,14 @@ class WorkExecutor {
     WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
 
     WorkExecutor(WorkExecutor&& other) {
-        worker_state = other.worker_state.load();
+        worker_state = std::move(other.worker_state);
         cpu_core_for_worker = std::move(other.managed_device_id);
         managed_device_id = std::move(other.managed_device_id);
     }
 
     WorkExecutor& operator=(WorkExecutor &&other) {
         if (this != &other) {
-            worker_state = other.worker_state.load();
+            worker_state = std::move(other.worker_state);
             managed_device_id = std::move(other.managed_device_id);
             cpu_core_for_worker = std::move(other.cpu_core_for_worker);
         }
@@ -231,7 +231,7 @@ class WorkExecutor {
 
    private:
     std::thread worker_thread;
-    std::atomic<WorkerState> worker_state;
+    WorkerState worker_state;
     int cpu_core_for_worker;
     int managed_device_id;
     std::condition_variable cv;
