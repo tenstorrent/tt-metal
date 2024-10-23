@@ -18,7 +18,6 @@ jobs:
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
           { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal
-          { name: "t3k ttfabric perf ubench tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_perf_ubench_tests, timeout: 30}, #Miaorong Wang TODO: owner id
         ]
     name: ${{ matrix.test-group.name }}
     env:
