@@ -11,9 +11,11 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, skip_for_wormhole_b0
 
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
+
+MAX_SEQ_LEN = 128 * 1024
 
 
 def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
@@ -29,17 +31,29 @@ class TtLlamaRotary(torch.nn.Module):
         self,
         device,
         head_dim: int,
+        mode: str,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
         self.head_dim = head_dim
         self.device = device
+        self.mode = mode
 
         tile_width = 32
 
         self.transformation_mat = ttnn.from_torch(
             get_rot_transformation_mat(dhead=tile_width), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
         )
+
+        if mode == "decode":
+            # Generate the tensor needed for ttnn.Embedding
+            cos_matrix, sin_matrix = compute_gather_cos_sin(
+                dhead=head_dim, end=MAX_SEQ_LEN * 2, position_ids=torch.arange(MAX_SEQ_LEN)
+            )
+
+            self.cos_matrix = ttnn.from_torch(cos_matrix, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype)
+
+            self.sin_matrix = ttnn.from_torch(sin_matrix, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype)
 
     def apply_rotary(self, x, cos, sin):
         # n_head = 8 for Q
@@ -59,7 +73,29 @@ class TtLlamaRotary(torch.nn.Module):
 
         return rotary_output
 
+    def prepare_decode_cos_sin(self, position_ids):
+        assert isinstance(position_ids, torch.Tensor), "Position ids must be a torch tensor"
+
+        position_ids = position_ids.unsqueeze(-1)  # [batch, 1]
+        position_ids = ttnn.from_torch(
+            position_ids, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+        )
+
+        cos = ttnn.embedding(position_ids, self.cos_matrix)  # [batch, head_dim, head_dim]
+        sin = ttnn.embedding(position_ids, self.sin_matrix)  # [batch, head_dim, head_dim]
+
+        cos = ttnn.reshape(cos, [1, 1, position_ids.shape[0], self.head_dim])
+        sin = ttnn.reshape(sin, [1, 1, position_ids.shape[0], self.head_dim])
+
+        cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
+        sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
+
+        # TODO: interleaved to sharded?
+
+        return cos, sin
+
     def forward(self, xq, xk, cos, sin):
+        breakpoint()
         xq = self.apply_rotary(xq, cos, sin)
         xk = self.apply_rotary(xk, cos, sin)
         return xq, xk
@@ -113,6 +149,8 @@ def run_test_rotary_embedding_llama(
 ):
     # Prepare input
     torch.manual_seed(0)
+    mode = "decode" if seq_len == 1 else "prefill"
+
     inp = [
         (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
@@ -139,13 +177,28 @@ def run_test_rotary_embedding_llama(
     pytorch_out = (torch_xq, torch_xk)
 
     # TT hardware / Modified PyTorch execution -------------------------------------------------------------
-    tt_model = TtLlamaRotary(device, head_dim, datatype)
+    tt_model = TtLlamaRotary(device, head_dim, mode, datatype)
 
-    cos, sin = compute_gather_cos_sin(
-        dhead=head_dim, end=max_seq_len * 2, position_ids=torch.arange(start_pos, start_pos + seq_len)
-    )
+    if mode == "decode":
+        cos, sin = tt_model.prepare_decode_cos_sin(torch.arange(batch))
+
+        # Inputs must be [1, batch, nh, dhead]
+        inp[0] = inp[0].permute(2, 0, 1, 3)
+        inp[1] = inp[1].permute(2, 0, 1, 3)
+
+    else:
+        cos, sin = compute_gather_cos_sin(
+            dhead=head_dim,
+            end=max_seq_len * 2,
+            position_ids=torch.arange(
+                start_pos, start_pos + seq_len
+            ),  # TODO: In decode mode, position ids can be different for each user
+        )
     tt_inp = [inp[0], inp[1], cos, sin]
-    tt_inp = [ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT) for i in tt_inp]
+    tt_inp = [
+        i if isinstance(i, ttnn.Tensor) else ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+        for i in tt_inp
+    ]
 
     tt_out = tt_model(*tt_inp)
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
@@ -191,6 +244,7 @@ def run_test_rotary_embedding_llama(
         (1, 8192),
         (1, 16384),
         (1, 128 * 1024),
+        (32, 1),
     ),
     ids=(
         "prefill_32",
@@ -203,6 +257,7 @@ def run_test_rotary_embedding_llama(
         "prefill_8k",
         "prefill_16k",
         "prefill_128k",
+        "decode_32",
     ),
 )
 @pytest.mark.parametrize(
@@ -240,7 +295,7 @@ def test_rotary_embedding_llama(
     run_test_rotary_embedding_llama(device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
 
     # shift input/output tensor by creating very small tensor between loop
-    inp = torch.rand(1, 1, 32, 32)
+    inp = torch.randn(1, 1, 32, 32)
     test_tensor = (
         ttnn.Tensor(
             inp.reshape(-1).tolist(),
@@ -253,6 +308,7 @@ def test_rotary_embedding_llama(
     )
 
 
+@skip_for_wormhole_b0()
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -298,7 +354,7 @@ def test_rotary_embedding_llama_with_program_cache(
         )
 
         # shift input/output tensor by creating very small tensor between loop
-        inp = torch.rand(1, 1, 32, 32)
+        inp = torch.randn(1, 1, 32, 32)
         test_tensor = (
             ttnn.Tensor(
                 inp.reshape(-1).tolist(),
