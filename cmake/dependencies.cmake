@@ -16,7 +16,7 @@ target_link_libraries(span INTERFACE Boost::core)
 # yaml-cpp
 ############################################################################################################################
 
-cpmaddpackage(
+CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
     GIT_TAG 0.8.0
@@ -40,7 +40,7 @@ endif()
 # googletest
 ############################################################################################################################
 
-cpmaddpackage(
+CPMAddPackage(
     NAME googletest
     GITHUB_REPOSITORY google/googletest
     GIT_TAG v1.13.0
@@ -59,16 +59,16 @@ endif()
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
 
-cpmaddpackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
+CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-cpmaddpackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.6)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.6)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-cpmaddpackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)

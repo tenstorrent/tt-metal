@@ -1,7 +1,7 @@
 include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
 
 function(fetch_boost_library BOOST_PROJECT_NAME)
-    cpmaddpackage(
+    CPMAddPackage(
         NAME boost_${BOOST_PROJECT_NAME}
         GITHUB_REPOSITORY boostorg/${BOOST_PROJECT_NAME}
         GIT_TAG boost-1.85.0
