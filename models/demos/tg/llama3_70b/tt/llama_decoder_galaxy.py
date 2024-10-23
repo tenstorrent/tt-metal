@@ -161,13 +161,11 @@ class TtLlamaDecoder_galaxy:
             ln_sharded_stats_memcfg=self.decoder_config["LN_SHARDED_STATS_MEMCFG"],
         )
 
-        attn_norm_out = ttnn.to_memory_config(attn_norm_out, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
-        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
+        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
 
-        output = xs
         output = ttnn.add(
-            output,
+            xs,
             attn_outs,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
@@ -186,6 +184,7 @@ class TtLlamaDecoder_galaxy:
         ffn_norm_out = ttnn.to_memory_config(ffn_norm_out, memory_config=self.decoder_config["MLP_ACT_MEMCFG"])
         ffn_out = self.mlp(ffn_norm_out, mode="decode")
         ffn_norm_out.deallocate(True)
+        ffn_out = ttnn.to_memory_config(ffn_out, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
         ### residual add
         output = ttnn.add(
             output,
