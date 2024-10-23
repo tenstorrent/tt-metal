@@ -35,7 +35,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_lm_head_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     model_args.n_layers = 1
