@@ -339,8 +339,8 @@ void Tensor::deallocate(bool force) {
                                 });
 
                             for (auto worker : this->workers) {
-                                worker->push_work(std::make_shared<std::function<void()>>(
-                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); }));
+                                worker->push_work(
+                                    [worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); });
                             }
                         }
                     } else {
