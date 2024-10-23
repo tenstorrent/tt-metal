@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 #include "common/core_coord.h"
@@ -158,19 +157,26 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
     protected:
      static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
      static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
+
      static const uint32_t MIN_KERNEL_RUNTIME_MICROSECONDS = 100;
      static const uint32_t MAX_KERNEL_RUNTIME_MICROSECONDS = 20000;
+
      static const uint32_t MIN_NUM_RUNTIME_ARGS = 0;
      static const uint32_t MAX_NUM_RUNTIME_ARGS = max_runtime_args;
      static const uint32_t UNIQUE_RUNTIME_ARGS_VAL_OFFSET = 50;
      static const uint32_t COMMON_RUNTIME_ARGS_VAL_OFFSET = 100;
+
      static const uint32_t MIN_NUM_SEMS = 0;
      static const uint32_t MAX_NUM_SEMS = NUM_SEMAPHORES;
      static const uint32_t SEM_VAL = 1;
+
      static const uint32_t MIN_NUM_CBS = 0;
      static const uint32_t MAX_NUM_CBS = NUM_CIRCULAR_BUFFERS;
-     static const uint32_t CB_TOTAL_SIZE = 1024;
-     static const uint32_t CB_PAGE_SIZE = 16;
+     static const uint32_t MIN_CB_PAGE_SIZE = 16;
+     static const uint32_t MAX_CB_PAGE_SIZE = 64;
+     static const uint32_t MIN_CB_TOTAL_SIZE = MAX_CB_PAGE_SIZE;
+     static const uint32_t MAX_CB_TOTAL_SIZE = 2048;
+
      static const uint32_t NUM_PROGRAMS = 75;
 
      Device *device_;
@@ -180,9 +186,9 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
          this->device_ = this->devices_[0];
 
-         this->seed_ = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
-         log_info(tt::LogTest, "Using seed: {}", this->seed_);
-         srand(this->seed_);
+         const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
+         log_info(tt::LogTest, "Using seed: {}", seed);
+         srand(seed);
      }
 
      void create_kernel(
@@ -208,21 +214,21 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              const vector<uint32_t> sem_ids =
                  this->generate_semaphores(program, cores, kernel_core_type, min_num_sems, max_num_sems);
 
-             vector<uint32_t> cb_indices;
+             vector<uint32_t> cb_page_sizes;
             if (!create_eth_config) {
-                cb_indices = this->generate_circular_buffers(program, cores, min_num_cbs, max_num_cbs);
+                cb_page_sizes = this->generate_circular_buffers(program, cores, min_num_cbs, max_num_cbs);
             }
 
              const auto [unique_rt_args, common_rt_args] =
-                 this->generate_runtime_args(sem_ids, cb_indices, min_num_rt_args, max_num_rt_args);
-             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - cb_indices.size();
+                 this->generate_runtime_args(sem_ids, cb_page_sizes, min_num_rt_args, max_num_rt_args);
+             const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - cb_page_sizes.size();
 
              KernelHandle kernel_id = this->create_kernel(
                  program,
                  cores,
                  create_eth_config,
                  sem_ids.size(),
-                 cb_indices.size(),
+                 cb_page_sizes.size(),
                  num_unique_rt_args,
                  common_rt_args.size(),
                  min_kernel_size_bytes,
@@ -255,33 +261,33 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          const uint32_t min = MIN_NUM_CBS,
          const uint32_t max = MAX_NUM_CBS) {
          const uint32_t num_cbs = this->generate_random_num(min, max);
-         vector<uint32_t> cb_indices;
+         vector<uint32_t> cb_page_sizes;
          for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
-            CircularBufferConfig config(CB_TOTAL_SIZE, {{cb_idx, tt::DataFormat::Float16_b}});
-            config.set_page_size(cb_idx, CB_PAGE_SIZE);
-            CreateCircularBuffer(program, cores, config);
-            cb_indices.push_back(cb_idx);
+             const uint32_t cb_page_size = this->generate_random_num(MIN_CB_PAGE_SIZE, MAX_CB_PAGE_SIZE, 16);
+             const uint32_t cb_total_size =
+                 this->generate_random_num(MIN_CB_TOTAL_SIZE, MAX_CB_TOTAL_SIZE, cb_page_size);
+             CircularBufferConfig config = CircularBufferConfig(cb_total_size, {{cb_idx, tt::DataFormat::Float16_b}})
+                                               .set_page_size(cb_idx, cb_page_size);
+             CreateCircularBuffer(program, cores, config);
+             cb_page_sizes.push_back(cb_page_size / 16);
          }
-         return cb_indices;
+         return cb_page_sizes;
      }
 
      pair<vector<uint32_t>, vector<uint32_t>> generate_runtime_args(
          const vector<uint32_t> &sem_ids,
-         const vector<uint32_t> &cb_indices,
+         const vector<uint32_t> &cb_page_sizes,
          const uint32_t min = MIN_NUM_RUNTIME_ARGS,
          const uint32_t max = MAX_NUM_RUNTIME_ARGS) {
          const uint32_t num_sems = sem_ids.size();
-         const uint32_t num_cbs = cb_indices.size();
+         const uint32_t num_cbs = cb_page_sizes.size();
          TT_FATAL(
              max >= num_sems + num_cbs,
              "Max number of runtime args to generate must be >= number of semaphores + number of circular buffers "
              "created");
-         TT_FATAL(
-             min >= num_sems + num_cbs,
-             "Min number of runtime args to generate must be >= number of semaphores + number of circular buffers "
-             "created");
+
          const uint32_t max_num_unique_rt_args = max - num_sems - num_cbs;
-         const uint32_t min_num_unique_rt_args = max - num_sems - num_cbs;
+         const uint32_t min_num_unique_rt_args = static_cast<uint32_t>(std::max(static_cast<int>(min - num_sems - num_cbs), 0));
          const uint32_t num_unique_rt_args = this->generate_random_num(min_num_unique_rt_args, max_num_unique_rt_args);
 
          const uint32_t max_num_common_rt_args = max_num_unique_rt_args - num_unique_rt_args;
@@ -291,14 +297,12 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              num_unique_rt_args, num_common_rt_args, UNIQUE_RUNTIME_ARGS_VAL_OFFSET, COMMON_RUNTIME_ARGS_VAL_OFFSET);
 
          unique_rt_args.insert(unique_rt_args.end(), sem_ids.begin(), sem_ids.end());
-         unique_rt_args.insert(unique_rt_args.end(), cb_indices.begin(), cb_indices.end());
+         unique_rt_args.insert(unique_rt_args.end(), cb_page_sizes.begin(), cb_page_sizes.end());
 
          return {unique_rt_args, common_rt_args};
      }
 
     private:
-     uint32_t seed_;
-
      KernelHandle create_kernel(
          Program &program,
          const CoreRangeSet &cores,
@@ -357,8 +361,19 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
 
      // Generates a random number within the given bounds (inclusive) that is divisible by divisible_by
      uint32_t generate_random_num(const uint32_t min, const uint32_t max, const uint32_t divisible_by = 1) {
-        TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
-        return min + (rand() % ((max - min) / divisible_by + 1)) * divisible_by;
+         TT_FATAL(max >= min, "max: {}, min: {} - max must be >= min", max, min);
+
+         const uint32_t adjusted_min = ((min + divisible_by - 1) / divisible_by) * divisible_by;
+         const uint32_t adjusted_max = (max / divisible_by) * divisible_by;
+
+         TT_FATAL(
+             adjusted_min <= adjusted_max,
+             "There are no numbers between {} and {} that are divisible by {}",
+             min,
+             max,
+             divisible_by);
+
+         return adjusted_min + (rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by;
      }
 
      DataMovementProcessor get_processor() {
