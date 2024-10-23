@@ -136,11 +136,6 @@ SECTIONS
     __ldm_bss_end = .;
   } > REGION_DATA
 
-  local_data_noinit (NOLOAD) :
-  {
-    *(local_data_noinit)
-  } > REGION_DATA
-
 #ifdef TYPE_FIRMWARE
   . = ALIGN(MEM_ALIGN);
   __fw_export_ldm_end = .;
