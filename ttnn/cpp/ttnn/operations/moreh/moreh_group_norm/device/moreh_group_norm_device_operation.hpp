@@ -30,6 +30,50 @@ struct MorehGroupNormOperation {
     using shape_return_value_t = std::vector<std::optional<SimpleShape>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
+    struct MorehGroupNorm2DFactory {
+        struct shared_variables_t {
+            KernelHandle reader_kernels_id;
+            KernelHandle writer_kernels_id;
+            uint32_t num_cores_to_be_used;
+            std::size_t num_cores_y;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& outputs);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& outputs);
+    };
+
+    struct MorehGroupNorm3DFactory {
+        struct shared_variables_t {
+            KernelHandle reader_kernels_id;
+            KernelHandle writer_kernels_id;
+            uint32_t num_cores_to_be_used;
+            std::size_t num_cores_y;
+        };
+
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& outputs);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& outputs);
+    };
+
     struct MorehGroupNormFactory {
         struct shared_variables_t {
             KernelHandle reader_kernels_id;
@@ -52,7 +96,7 @@ struct MorehGroupNormOperation {
             tensor_return_value_t& outputs);
     };
 
-    using program_factory_t = std::variant<MorehGroupNormFactory>;
+    using program_factory_t = std::variant<MorehGroupNorm2DFactory, MorehGroupNorm3DFactory, MorehGroupNormFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);

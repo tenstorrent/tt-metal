@@ -203,6 +203,33 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     return compute_kernel_id;
 }
 
+[[maybe_unused]] KernelHandle CreateComputeKernel(
+    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeConfig config) {
+    KernelHandle compute_kernel_id{0};
+    if (arg.num_tile_per_core_group > 0) {
+        compute_kernel_id = CreateKernel(
+            program,
+            file_name,
+            arg.core_spec,
+            config);
+    }
+    return compute_kernel_id;
+}
+
+
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
+    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeConfig config)
+{
+    std::vector<KernelHandle> compute_kernel_ids{};
+    KernelHandle compute_kernel_id{};
+    for (auto arg : args) {
+        config.compile_args = arg.compile_args;
+        compute_kernel_id = CreateComputeKernel(program, file_name, arg, config);
+        compute_kernel_ids.push_back(compute_kernel_id);
+    }
+    return compute_kernel_ids;
+}
+
 [[maybe_unused]] std::vector<CBHandle> CreateCircularBuffer(
     Program &program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_range,

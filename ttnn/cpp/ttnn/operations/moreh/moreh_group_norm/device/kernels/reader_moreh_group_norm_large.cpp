@@ -23,25 +23,23 @@ void kernel_main() {
     const auto tile_offset = get_arg_val<uint32_t>(i++);
     const auto num_rows_per_core = get_arg_val<uint32_t>(i++);
     const auto num_inner_tiles = get_arg_val<uint32_t>(i++);
-    const auto num_channels = get_arg_val<uint32_t>(i++);
+    const auto c_inner_tiles = get_arg_val<uint32_t>(i++);
 
-    const auto origin_h = get_arg_val<uint32_t>(i++);
-    const auto origin_w = get_arg_val<uint32_t>(i++);
+    const auto N = get_arg_val<uint32_t>(i++);
+    const auto C = get_arg_val<uint32_t>(i++);
+    const auto H = get_arg_val<uint32_t>(i++);
+    const auto W = get_arg_val<uint32_t>(i++);
+    const auto num_groups = get_arg_val<uint32_t>(i++);
     const auto block_size = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t TILE_H = 32;
-    constexpr uint32_t TILE_W = 32;
-
-    const auto Ht = (origin_h + TILE_H - 1) / TILE_H;
-    const auto Wt = (origin_w + TILE_W - 1) / TILE_W;
+    const auto Ht = div_up(H, TILE_HEIGHT);
+    const auto Wt = div_up(W, TILE_WIDTH);
 
     const auto HtWt = Ht * Wt;
 
-    const auto C = num_channels;
-
-    uint32_t cb_id{0};
+    uint32_t cb_id = tt::CB::c_in0;
     const auto cb_id_input = cb_id++;
     const auto cb_id_scaler = cb_id++;
     const auto cb_id_eps = cb_id++;
@@ -49,15 +47,17 @@ void kernel_main() {
     const auto cb_id_beta = cb_id++;
     const auto cb_id_mask_h = cb_id++;
     const auto cb_id_mask_w = cb_id++;
+    const auto cb_zeros = cb_id++;
 
     fill_cb_with_value(cb_id_scaler, scaler);
     fill_cb_with_value(cb_id_eps, eps);
+    fill_cb_with_zeros(cb_zeros);
 
-    const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? origin_h % TILE_H : TILE_H;
+    const bool do_mask_h = (H % TILE_HEIGHT) != 0;
+    const auto mask_h = do_mask_h ? H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const bool do_mask_w = (origin_w % TILE_W) != 0;
-    const auto mask_w = do_mask_w ? origin_w % TILE_W : TILE_W;
+    const bool do_mask_w = (W % TILE_WIDTH) != 0;
+    const auto mask_w = do_mask_w ? W % TILE_WIDTH : TILE_WIDTH;
 
     if (do_mask_h) {
         generate_mask_h(cb_id_mask_h, mask_h);
@@ -99,33 +99,69 @@ void kernel_main() {
     const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
     uint32_t input_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
-        cb_reserve_back(cb_id_input, num_inner_tiles);
-        for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; ++inner_idx) {
-            cb_reserve_back(cb_id_input, num_inner_tiles);
-            input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx;
-            if (input_is_dram) {
-                noc_async_read_tile(
-                    input_tile_idx, dram_input_addrg, input_l1_write_ptr + inner_idx * input_tile_bytes);
-            } else {
-                noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + inner_idx * input_tile_bytes);
-            }
-        }  // inner_idx loop
-        noc_async_read_barrier();
-        cb_push_back(cb_id_input, num_inner_tiles);
-
-        // input (N, C, H, W)
-        // input_tile_idx = n * C * Ht * Wt + c * Ht * Wt + h * Wt + w
-        // n * C + c = input_tile_idx / (Ht * Wt)
-        // c = (input_tile_idx / (Ht * Wt)) % C
-        // gamma (1, 1, 1, C)
+        // For E[x]
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
+            cb_reserve_back(cb_id_input, block_size);
+            for (uint32_t r = 0; r < block_size; r++) {
+                input_tile_idx = (tile_offset + outer_idx) * num_inner_tiles + inner_idx + r;
+                if (input_is_dram) {
+                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                } else {
+                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_input, block_size);
+        }  // inner_idx loop
+
+        // For Var[x]
+        for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
+            cb_reserve_back(cb_id_input, block_size);
+            for (uint32_t r = 0; r < block_size; r++) {
+                input_tile_idx = (tile_offset + outer_idx) * num_inner_tiles + inner_idx + r;
+                if (input_is_dram) {
+                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                } else {
+                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_input, block_size);
+        }  // inner_idx loop
+
+        // For (x - E[x]) * (1.0/(sqrt(E[(x-E[x])^2] + eps)))
+        for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
+            cb_reserve_back(cb_id_input, block_size);
+            for (uint32_t r = 0; r < block_size; r++) {
+                input_tile_idx = (tile_offset + outer_idx) * num_inner_tiles + inner_idx + r;
+                if (input_is_dram) {
+                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                } else {
+                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_id_input, block_size);
+
+            // input (N, C, H, W)
+            // gamma (1, C)
             if (gamma_has_value) {
+                // unit_idx = n * num_groups
+                uint32_t unit_idx = outer_idx + tile_offset;
+                uint32_t n = unit_idx / num_groups;
+                uint32_t group_idx = unit_idx % num_groups;
+
+                uint32_t c_per_groups = C / num_groups;
+                uint32_t c_offset = group_idx * c_per_groups;
+
                 uint32_t gamma_tile_idx;
                 const auto gamma_l1_write_ptr = get_write_ptr(cb_id_gamma);
                 cb_reserve_back(cb_id_gamma, block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
-                    input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                    gamma_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
+                    input_tile_idx = inner_idx + r;
+                    uint32_t c = (input_tile_idx / c_inner_tiles) + c_offset;
+                    gamma_tile_idx = c / TILE_WIDTH;
+
                     if (gamma_is_dram) {
                         noc_async_read_tile(
                             gamma_tile_idx, dram_gamma_addrg, gamma_l1_write_ptr + r * gamma_tile_bytes);
@@ -137,9 +173,10 @@ void kernel_main() {
 
                 uint32_t tilized_gamma_idx_in_tile;
                 for (uint32_t q = 0; q < block_size; q++) {
-                    input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + q;
-                    tilized_gamma_idx_in_tile =
-                        get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
+                    input_tile_idx = inner_idx + q;
+                    uint32_t c = (input_tile_idx / c_inner_tiles) + c_offset;
+                    tilized_gamma_idx_in_tile = get_tilized_idx(0, c);
+
                     if (tilized_gamma_idx_in_tile != 0) {
                         auto gamma_ptr = reinterpret_cast<uint16_t *>(gamma_l1_write_ptr + q * gamma_tile_bytes);
                         gamma_ptr[0] = gamma_ptr[tilized_gamma_idx_in_tile];
@@ -148,14 +185,23 @@ void kernel_main() {
                 cb_push_back(cb_id_gamma, block_size);
             }
 
-            // beta (1, 1, 1, C)
+            // beta (1, C)
             if (beta_has_value) {
+                // unit_idx = n * num_groups
+                uint32_t unit_idx = outer_idx + tile_offset;
+                uint32_t n = unit_idx / num_groups;
+                uint32_t group_idx = unit_idx % num_groups;
+
+                uint32_t c_per_groups = C / num_groups;
+                uint32_t c_offset = group_idx * c_per_groups;
+
                 uint32_t beta_tile_idx;
                 const auto beta_l1_write_ptr = get_write_ptr(cb_id_beta);
                 cb_reserve_back(cb_id_beta, block_size);
                 for (uint32_t r = 0; r < block_size; r++) {
-                    input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                    beta_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
+                    input_tile_idx = inner_idx + r;
+                    uint32_t c = (input_tile_idx / c_inner_tiles) + c_offset;
+                    beta_tile_idx = c / TILE_WIDTH;
                     if (beta_is_dram) {
                         noc_async_read_tile(beta_tile_idx, dram_beta_addrg, beta_l1_write_ptr + r * beta_tile_bytes);
                     } else {
@@ -166,9 +212,9 @@ void kernel_main() {
 
                 uint32_t tilized_beta_idx_in_tile;
                 for (uint32_t q = 0; q < block_size; q++) {
-                    input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + q;
-                    tilized_beta_idx_in_tile =
-                        get_tilized_gamma_beta_idx_in_tile(input_tile_idx, HtWt, C, TILE_H, TILE_W);
+                    input_tile_idx = inner_idx + q;
+                    uint32_t c = (input_tile_idx / c_inner_tiles) + c_offset;
+                    tilized_beta_idx_in_tile = get_tilized_idx(0, c);
                     if (tilized_beta_idx_in_tile != 0) {
                         auto beta_ptr = reinterpret_cast<uint16_t *>(beta_l1_write_ptr + q * beta_tile_bytes);
                         beta_ptr[0] = beta_ptr[tilized_beta_idx_in_tile];

@@ -23,50 +23,59 @@ void MorehGroupNormOperation::validate_tensors(
 
     using namespace tt::operations::primary;
 
-    check_tensor(input, "moreh_group_norm", "input");
+    check_tensor(input, "Moreh group norm", "input");
 
-    check_tensor(output, "moreh_group_norm", "output");
-    check_tensor(mean, "moreh_group_norm", "mean");
-    check_tensor(rstd, "moreh_group_norm", "rstd");
+    check_tensor(output, "Moreh group norm", "output");
+    check_tensor(mean, "Moreh group norm", "mean");
+    check_tensor(rstd, "Moreh group norm", "rstd");
 
-    check_tensor(gamma, "moreh_group_norm", "gamma");
-    check_tensor(beta, "moreh_group_norm", "beta");
+    check_tensor(gamma, "Moreh group norm", "gamma");
+    check_tensor(beta, "Moreh group norm", "beta");
 
-    // input (N, C, H, W)
-    auto C = input.get_shape().value[1];
-    TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
-    // output (N, C, H, W)
+    // input (N, C, *)
+    auto C = input.get_logical_shape()[1];
+    TT_FATAL(C % num_groups == 0, "Moreh group norm: input_shape[1] must be divisible by num_groups.");
+    // output (N, C, *)
     if (output.has_value()) {
-        C = output.value().get_shape().value[1];
-        TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
+        C = output.value().get_logical_shape()[1];
+        TT_FATAL(C % num_groups == 0, "Moreh group norm: output_shape[1] must be divisible by num_groups.");
     }
-    // gamma (1, 1, 1, C)
+    // gamma (1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_shape().value.without_padding()[-1];
-        TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
+        C = gamma.value().get_logical_shape()[-1];
+        TT_FATAL(C % num_groups == 0, "Moreh group norm: gamma_shape[-1] must be divisible by num_groups.");
     }
-    // beta (1, 1, 1, C)
+    // beta (1, C)
     if (beta.has_value()) {
-        C = beta.value().get_shape().value.without_padding()[-1];
-        TT_FATAL(C % num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
+        C = beta.value().get_logical_shape()[-1];
+        TT_FATAL(C % num_groups == 0, "Moreh group norm: beta_shape[-1] must be divisible by num_groups.");
     }
 
-    // mean (1, 1, N, num_groups)
+    // mean (N, num_groups)
     if (mean.has_value()) {
         TT_FATAL(
-            mean.value().get_shape().value.without_padding()[-1] == num_groups,
-            "mean_shape[-1] must match num_groups.");
+            mean.value().get_logical_shape()[-1] == num_groups,
+            "Moreh group norm: mean_shape[-1] must match num_groups.");
     }
-    // rstd (1, 1, N, num_groups)
+    // rstd (N, num_groups)
     if (rstd.has_value()) {
         TT_FATAL(
-            rstd.value().get_shape().value.without_padding()[-1] == num_groups,
-            "rstd_shape[-1] must match num_groups.");
+            rstd.value().get_logical_shape()[-1] == num_groups,
+            "Moreh group norm: rstd_shape[-1] must match num_groups.");
     }
 }
 
 MorehGroupNormOperation::program_factory_t MorehGroupNormOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    auto rank = input.get_logical_shape().rank();
+    if (rank == 2) {
+        return MorehGroupNorm2DFactory();
+    }
+    if (rank == 3) {
+        return MorehGroupNorm3DFactory();
+    }
+
     return MorehGroupNormFactory();
 }
 
@@ -83,17 +92,15 @@ void MorehGroupNormOperation::validate_on_program_cache_hit(
 MorehGroupNormOperation::shape_return_value_t MorehGroupNormOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
-    // mean, rstd (1, 1, N, num_groups)
+    // output shape
     const auto output_shape = tensor_args.input.get_logical_shape();
+
+    // mean, rstd (N, num_groups)
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    std::vector<uint32_t> mean_rstd_origin_shape{
-        1,
-        1,
-        N,
-        num_groups};
 
-    SimpleShape mean_rstd_shape(std::move(mean_rstd_origin_shape));
+    SimpleShape mean_rstd_shape({N, num_groups});
+
     return {output_shape, mean_rstd_shape, mean_rstd_shape};
 }
 

@@ -26,6 +26,14 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+
+constexpr uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
+
+constexpr uint32_t round_down(uint32_t a, uint32_t b) { return a / b * b; }
+
+constexpr uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
 
 
 // Deprecated
@@ -143,6 +151,14 @@ ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32
         reconfig_data_format(icb0, icb1);
     #endif
     reduce_init_delta<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
+}
+
+ALWI void transpose_wh_init_short_with_dt(uint32_t icb)
+{
+    #if defined FP32_DEST_ACC_EN
+        reconfig_data_format_srca(icb);
+    #endif
+    transpose_wh_init_short(icb);
 }
 
 
