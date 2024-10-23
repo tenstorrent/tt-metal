@@ -253,18 +253,17 @@ class TtLlamaAttention_galaxy:
             self.qkv,
             program_config=self.attention_config["FUSED_QKV_MM_PROGCFG"],
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_QKV"],
         )
         xs.deallocate(True)
 
-        # TODO: Use sharded all_reduce when PCC issue is fixed in this particular configuration
-        # fused_query_key_value = tt_sharded_all_reduce(
-        #     fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0])
-        # )
-
-        fused_query_key_value = tt_all_reduce(
-            fused_query_key_value, self.mesh_device, cluster_axis=1, num_links=2, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        fused_query_key_value = tt_sharded_all_reduce(
+            fused_query_key_value,
+            self.mesh_device,
+            cluster_axis=1,
+            num_links=2,
+            memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0]),
         )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
