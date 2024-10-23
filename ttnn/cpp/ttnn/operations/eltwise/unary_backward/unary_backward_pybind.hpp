@@ -520,9 +520,9 @@ void bind_unary_backward_optional_float_params_with_default(
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor"),
-            py::kw_only(),
             py::arg(parameter_name_a.c_str()) = parameter_a_value,
             py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::kw_only(),
             py::arg("memory_config") = std::nullopt});
 }
 
