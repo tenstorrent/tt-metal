@@ -64,7 +64,7 @@ ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& sh
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
             if (tensor_shape_with_padding[-1] == shape_with_padding[-1]) {
-                return rm_tensor.reshape(shape);
+                reshaped_rm_tensor =  rm_tensor.reshape(shape);
             }
             //Different page width, going to use device kernel that does transpose
             else {
