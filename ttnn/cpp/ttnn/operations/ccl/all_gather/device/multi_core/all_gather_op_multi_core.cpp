@@ -738,7 +738,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     auto &sender_edm_builder = is_buffer_in_clockwise_direction(b) ? clockwise_edm_builders.at(i) : counter_clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding sender EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
-                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_id, 1, sender_worker_coords);
+                        sender_edm_builder.add_sender_channel(sender_worker_writer_semaphore_id, (num_full_chunks_per_worker.at(b) + rem_pages_per_worker.at(b)) > 0 ? 1 : 0, sender_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);
@@ -758,7 +758,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                     auto &receiver_edm_builder = is_buffer_in_clockwise_direction(b) ? counter_clockwise_edm_builders.at(i) : clockwise_edm_builders.at(i);
                     log_trace(tt::LogOp, "Adding receiver EDM channel");
                     EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
-                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_id, 1, receiver_worker_coords);
+                        receiver_edm_builder.add_receiver_channel(receiver_worker_semaphore_id, (num_full_chunks_per_worker.at(b) + rem_pages_per_worker.at(b)) > 0 ? 1 : 0, receiver_worker_coords);
                     if (is_channel_shrinkable.at(b) && largest_packets_per_channel.at(b) > 0) {
                         TT_ASSERT(largest_packets_per_channel.at(b) > 0);
                         log_trace(tt::LogOp, "\tsetting channel_max_size to {} for channel {}", largest_packets_per_channel.at(b), b);

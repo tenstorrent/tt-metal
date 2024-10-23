@@ -146,6 +146,7 @@ class ChannelBuffer final {
             }
         } else {
             ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
+            DPRINT << "CHANNEL BUFFER: " << eth_transaction_channel << " is not active\n";
             goto_state(STATE::DONE);
         }
     }

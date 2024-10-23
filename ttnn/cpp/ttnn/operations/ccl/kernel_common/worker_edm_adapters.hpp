@@ -91,7 +91,6 @@ struct WorkerToEdmSender{
         buffer_size_bytes(buffer_size_bytes),
         buffer_index(0)
     {
-        ASSERT(buffer_size_bytes > 0);
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {

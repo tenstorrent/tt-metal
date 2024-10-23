@@ -171,5 +171,7 @@ void kernel_main() {
         }
     }
 
-    sender.close();
+    if (num_transfers > 0 && (num_full_chunks > 0 || rem_num_pages > 0)) {
+        sender.close();
+    }
 }

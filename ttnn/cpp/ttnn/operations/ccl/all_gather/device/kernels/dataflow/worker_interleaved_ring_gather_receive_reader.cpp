@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+#include "risc_common.h"
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
@@ -37,13 +39,20 @@ void kernel_main() {
         (num_full_chunks > 0 ? num_pages_per_full_chunk : rem_num_pages) * page_size,
         receiver_read_sem_addr);
 
+    uint32_t myyx = (my_y[0] << 16) | my_x[0];
     bool last_message = false;
+    DPRINT << "kernel" << myyx << "\n";
     for (uint32_t i = 0; i < num_transfers; ++i) {
         if (num_full_chunks > 0) {
             for (uint32_t c = 0; c < num_full_chunks; ++c) {
                 reader.wait_for_payload_available();
                 if constexpr (edm_termination_mode == ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED) {
                     last_message = (i == num_transfers - 1 && c == num_full_chunks - 1 && rem_num_pages == 0);
+                }
+                if (last_message) {
+                    DPRINT << "fetch_payload_blocking last_message" << myyx << "\n";
+                } else {
+                    DPRINT << "fetch_payload_blocking" << myyx << "\n";
                 }
                 reader.fetch_payload_blocking(cb_id_in0, num_pages_per_full_chunk, page_size, last_message);
             }
@@ -53,6 +62,11 @@ void kernel_main() {
                 last_message = (i == num_transfers - 1);
             }
             reader.wait_for_payload_available();
+                if (last_message) {
+                    DPRINT << "fetch_payload_blocking last_message " << myyx << "\n";
+                } else {
+                    DPRINT << "fetch_payload_blocking" << myyx << "\n";
+                }
             reader.fetch_payload_blocking(cb_id_in0, rem_num_pages, page_size, last_message);
             ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
             ASSERT(half_cb_n_pages > rem_num_pages);
@@ -60,5 +74,9 @@ void kernel_main() {
         }
     }
 
-    reader.close();
+    if (num_transfers > 0 && (num_full_chunks > 0 || rem_num_pages > 0)) {
+        DPRINT << "kernel" << myyx << " close\n";
+        reader.close();
+    }
+    DPRINT << "kernel" << myyx << " DONE\n";
 }
