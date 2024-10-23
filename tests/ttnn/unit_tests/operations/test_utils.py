@@ -12,11 +12,9 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-compute_kernel_options = [
-    False,  # for grayskull
-]
+compute_kernel_options = [False]
 compute_kernel_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0:
+if is_wormhole_b0():
     compute_kernel_options.append(True)
     compute_kernel_ids.append("fp32_dest_acc_en=True")
 
@@ -34,7 +32,7 @@ def get_compute_kernel_options(compute_kernel_options):
             packer_l1_acc=packer_l1_acc,
         )
     else:
-        # Grayskull doesn't support fp32 but test passing a GS config is ok
+        # Grayskull doesn't support FP32, but passing a Grayskull config in the test is OK.
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
