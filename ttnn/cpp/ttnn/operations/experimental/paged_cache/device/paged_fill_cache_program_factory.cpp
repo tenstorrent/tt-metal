@@ -57,7 +57,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(const Tensor& cache_
     bool row_major;
     uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
 
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     row_major = true;
     std::tie(num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size,  num_blocks_of_work, row_major);

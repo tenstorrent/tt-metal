@@ -24,7 +24,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 using namespace tt::tt_metal;
 
-pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
+std::pair<vector<uint32_t>, vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(const tt::tt_metal::LegacyShape& conv_activation_shape, ttnn::operations::sliding_window::SlidingWindowConfig sliding_window_config, uint32_t act_block_h_ntiles) {
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;  // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
@@ -71,8 +71,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 auto& a = input_tensors.at(0);
                 auto& b = input_tensors.at(1);
                 auto& bias = optional_input_tensors.at(0);
-                //TT_ASSERT(!untilize_out, "Optimized conv only supports tiled out");
-                TT_ASSERT(b.get_layout() == Layout::TILE); // Weights should already be formatted
+                TT_FATAL(b.get_layout() == Layout::TILE, "Weights should be in TILE layout."); // Weights should already be formatted
                 const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
                 auto padded_a_shape = ttnn::Shape(std::array<uint32_t,4>{ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
                 FormatParams input_a_format_params = {.pad_shape=padded_a_shape.value, .pad_value=0.0, .target_layout=Layout::ROW_MAJOR};
@@ -98,8 +97,8 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
 void OptimizedConvNew::validate(const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    // TODO: ...
-    TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Error");
+    TT_FATAL(input_tensor_a.memory_config().is_sharded(), "Activation tensor should be sharded.");
+    TT_FATAL(!input_tensor_b.memory_config().is_sharded(), "Weights tensor should not be sharded.");
     if (this->untilize_out) {
         TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
     }
@@ -190,7 +189,8 @@ std::vector<Tensor> OptimizedConvNew::create_output_tensors(const std::vector<Te
             log_debug(tt::LogOp, "Parallelization config grid size: {}", this->parallelization_config.grid_size.str());
             uint32_t num_cores_x = this->parallelization_config.grid_size.x;
             uint32_t num_cores_y = this->parallelization_config.grid_size.y;
-            CoreRangeSet shard_grid = CoreRangeSet({{{0, 0}, {num_cores_x - 1, num_cores_y - 1}}});
+            CoreRangeSet shard_grid =
+                CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
             log_debug(tt::LogOp, "Calculated shard_grid: {}", shard_grid.str());
             std::array<uint32_t, 2> shard_shape = {this->parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT, this->parallelization_config.per_core_out_matrix_width_ntiles * TILE_WIDTH};
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
@@ -212,7 +212,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    TT_ASSERT(input_tensor_a.memory_config().is_sharded()); // TODO: move this check to validate_input_tensors
     return multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a, input_tensor_b, input_tensor_bias,
         sliding_window_config,

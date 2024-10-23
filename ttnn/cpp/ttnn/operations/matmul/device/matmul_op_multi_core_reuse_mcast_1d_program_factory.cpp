@@ -146,10 +146,10 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         in0_mcast_receiver_num_cores,
         num_cores);  // should always be number of cores in receiver grid up to number of active cores
 
-    CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid({});
-    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid({});
-    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid({});
-    CoreRangeSet in0_mcast_receivers({});
+    CoreRangeSet in0_mcast_cores_with_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_in_receiver_grid;
+    CoreRangeSet in0_mcast_cores_without_work_and_not_in_receiver_grid;
+    CoreRangeSet in0_mcast_receivers;
     std::vector<uint32_t> in0_mcast_noc_x;
     std::vector<uint32_t> in0_mcast_noc_y;
     if (in0_is_sharded) {
@@ -987,7 +987,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
     CoreRange in1_mcast_sender(start_core, start_core);
-    CoreRangeSet in1_mcast_receivers({});
+    CoreRangeSet in1_mcast_receivers;
     if (in1_mcast_receiver_num_cores > 1) {
         auto receiver_start_core = start_core.x != (compute_with_storage_grid_size.x - 1)
                                        ? CoreCoord{start_core.x + 1, start_core.y}

@@ -9,7 +9,7 @@
 #include <optional>
 
 #include "common/bfloat16.hpp"
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/common/base.hpp"

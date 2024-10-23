@@ -862,7 +862,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRange mcast_sender_cores(top_left_core, top_left_core);  // If single core, this kernel doesn't do mcasting
-    CoreRangeSet mcast_receiver_cores{{}};
+    CoreRangeSet mcast_receiver_cores;
     uint32_t weights_mcast_sender_semaphore_id{};
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
@@ -872,10 +872,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         // 2D mcast
         if (transpose_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
-            mcast_receiver_cores = {{CoreRange(CoreCoord(1, 0), bottom_right_core)}};
+            mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
         } else {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
-            mcast_receiver_cores = {{CoreRange(CoreCoord(0, 1), bottom_right_core)}};
+            mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
         }
         weights_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);

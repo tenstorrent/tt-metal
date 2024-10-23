@@ -72,7 +72,9 @@ SECTIONS
 
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = .;
+#if defined(TARGET_NCRISC)
   PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+#endif
 #endif
 
 #if defined(TYPE_KERNEL)
