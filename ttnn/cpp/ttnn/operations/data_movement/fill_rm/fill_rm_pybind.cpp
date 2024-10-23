@@ -192,30 +192,69 @@ void bind_full_op(py::module& module) {
         R"doc(
             Creates a tensor of shape (N, C, H, W) filled with the specified value.
 
-            This is a wrapper for `fill_rm` that sets `hOnes` and `wOnes` to `0`,
-            resulting in a tensor entirely filled with the given `fill_value`.
+            This is a wrapper for `fill_rm` that accepts a shape as a vector of integers
+            and fills the entire tensor with the given `fill_value`.
 
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
             | Argument | Description                                                           | Data type             | Valid range            | Required |
             +==========+=======================================================================+=======================+========================+==========+
-            | N        | Batch count of output tensor                                          | int                   | N > 0                  | Yes      |
+            | shape     | Shape of the tensor as a vector of 4 integers [N, C, H, W]           | std::vector<int>      | Length <= 4            | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | C        | Channel count of output tensor                                        | int                   | C > 0                  | Yes      |
+            | fill_value| Value to fill the entire tensor with                                 | float                 |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | H        | Height count of output tensor                                         | int                   | H > 0                  | Yes      |
+            | device    | Device to allocate tensor on                                         | float                 |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
-            | W        | Width count of output tensor                                          | int                   | W > 0                  | Yes      |
+
+            Args:
+                shape (list of int): The shape of the tensor in the form of [N, C, H, W].
+                fill_value (float): Value to fill the entire tensor.
+                device (ttnn.Device): Device to allocate the tensor on.
+
+            Returns:
+                ttnn.Tensor: The output tensor filled with `fill_value`.
+        )doc",
+        "full_tensor_op",
+        ttnn::full.base_name());
+
+    using OperationType = decltype(ttnn::full);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::full,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const std::vector<uint32_t>& shape,
+               const float fill_value,
+               ttnn::Device* device,
+               const std::optional<MemoryConfig>& memory_config,
+               uint8_t queue_id) {
+                   return self(queue_id, shape, fill_value, device, memory_config);
+               },
+            py::arg("shape"),
+            py::arg("fill_value"),
+            py::arg("device"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
+
+void bind_fill_op(py::module& module) {
+    auto doc = fmt::format(
+        R"doc(
+            Fills a tensor with the specified value.
+
+            This is a wrapper for `fill_rm` that sets `hOnes` and `wOnes` to `0` and passes in N,C,H,W as the tensor shape,
+            returning the tensor filled with the given `fill_value`.
+
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
+            | Argument | Description                                                           | Data type             | Valid range            | Required |
+            +==========+=======================================================================+=======================+========================+==========+
             | fill_value| Value to fill the entire tensor with                                 | float                 |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
             | any      | Any input tensor with desired device and data types for output tensor | tt_lib.tensor.Tensor  |                        | Yes      |
             +----------+-----------------------------------------------------------------------+-----------------------+------------------------+----------+
 
             Args:
-                N (number): Batch count of output tensor.
-                C (number): Channel count of output tensor.
-                H (number): Height count of output tensor.
-                W (number): Width count of output tensor.
                 fill_value (number): Value to fill the entire tensor.
                 any (ttnn.tensor): Any input tensor with desired device and data types for output tensor.
 
@@ -226,29 +265,21 @@ void bind_full_op(py::module& module) {
             Returns:
                 ttnn.Tensor: the output tensor filled with `fill_value`.
         )doc",
-        ttnn::full.base_name());
+        ttnn::fill.base_name());
 
-    using OperationType = decltype(ttnn::full);
+    using OperationType = decltype(ttnn::fill);
     ttnn::bind_registered_operation(
         module,
-        ttnn::full,
+        ttnn::fill,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
-               uint32_t N,
-               uint32_t C,
-               uint32_t H,
-               uint32_t W,
                const float fill_value,
                const Tensor& any,
                const std::optional<MemoryConfig>& memory_config,
                uint8_t queue_id) {
-                   return self(queue_id, N, C, H, W, fill_value, any, memory_config);
+                   return self(queue_id, fill_value, any, memory_config);
                },
-            py::arg("N"),
-            py::arg("C"),
-            py::arg("H"),
-            py::arg("W"),
             py::arg("fill_value"),
             py::arg("any"),
             py::kw_only(),
@@ -261,6 +292,7 @@ void bind_fill_rm(py::module& module) {
    detail::bind_fill_rm_op(module);
    detail::bind_fill_ones_rm_op(module);
    detail::bind_full_op(module);
+   detail::bind_fill_op(module);
 }
 
 }  // namespace ttnn::operations::data_movement::detail
