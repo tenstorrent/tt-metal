@@ -17,7 +17,6 @@
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 #include "llrt_common/tiles.hpp"
 #include "llrt/tt_memory.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "jit_build/build.hpp"
 #include "dev_msgs.h"
 // clang-format on

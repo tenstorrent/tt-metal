@@ -10,7 +10,6 @@
 #include <limits>
 #include <stdexcept>
 
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "tensix.h"
 #include "tt_elffile.hpp"
 #include "tt_metal/common/assert.hpp"
