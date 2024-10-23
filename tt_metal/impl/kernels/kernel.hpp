@@ -187,7 +187,7 @@ class EthernetKernel : public Kernel {
    public:
     EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM);
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
     ~EthernetKernel() {}

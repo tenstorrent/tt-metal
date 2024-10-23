@@ -64,6 +64,7 @@ struct ComputeConfig {
 struct EthernetConfig {
     Eth eth_mode = Eth::SENDER;
     NOC noc = NOC::NOC_0;
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

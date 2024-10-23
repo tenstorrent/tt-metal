@@ -332,7 +332,8 @@ void EthernetKernel::generate_binaries(Device *device, JitBuildOptions &build_op
         this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
     );
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    jit_build(device->build_kernel_state(erisc_core_type, dm_class_idx, 0), this);
+    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    jit_build(device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id), this);
 }
 
 void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
@@ -380,12 +381,13 @@ void EthernetKernel::read_binaries(Device *device) {
         this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
     );
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    const JitBuildState &build_state = device->build_kernel_state(erisc_core_type, dm_class_idx, 0);
-    int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
+    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    const JitBuildState &build_state = device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id);
+    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
-    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), erisc_id + 5, ll_api::memory::PackSpans::PACK, relo_type);
+    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), risc_id, ll_api::memory::PackSpans::PACK, relo_type);
    binaries.push_back(binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
