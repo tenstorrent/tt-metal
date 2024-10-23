@@ -231,6 +231,9 @@ on:
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - max_pool2d.short.max_pool2d_short_sweep
+          - eltwise.binary_backward.min_bw.min_bw
+          - eltwise.binary_backward.max_bw.max_bw
+
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
