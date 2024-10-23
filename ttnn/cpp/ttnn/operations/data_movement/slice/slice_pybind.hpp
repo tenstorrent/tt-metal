@@ -16,8 +16,7 @@ namespace py = pybind11;
 
 void bind_slice(py::module& module) {
     auto doc =
-        R"doc(slice(input_tensor: ttnn.Tensor, slice_start: List[int[tensor rank], slice_end: List[int[tensor rank], slice_end: List[int[tensor rank], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
-
+        R"doc(
             Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
 
             Args:
@@ -28,7 +27,7 @@ void bind_slice(py::module& module) {
 
             Keyword Args:
                 memory_config Memory Config of the output tensor
-                queue_id (Optional[uint8]) command queue id
+                queue_id (uint8, optional) command queue id
 
             Returns:
                 ttnn.Tensor: the output tensor.
