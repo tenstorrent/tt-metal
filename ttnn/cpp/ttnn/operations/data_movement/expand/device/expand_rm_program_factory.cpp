@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "common/core_coord.h"
 #include "common/tt_backend_api_types.hpp"
 #include "common/work_split.hpp"
 #include "expand_device_operation.hpp"
@@ -23,9 +22,6 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-
-    auto output_mem_config = operation_attributes.memory_config;
-    auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Device Setup
     auto* device = input.device();
@@ -145,18 +141,19 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
         all_cores,
         WriterDataMovementConfig(writer_compile_runtime_args));
 
-    auto rows_offset = 0;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    uint32_t rows_offset = 0;
+    uint32_t group1_cores = core_group_1.num_cores();
+    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
 
-        uint32_t num_copies_this_core = 0;
+    uint32_t num_copies_this_core;
+    for (auto core : cores) {
         if (core_group_1.core_coord_in_core_ranges(core)) {
             num_copies_this_core = num_copies_per_core_group_1;
         } else if (core_group_2.core_coord_in_core_ranges(core)) {
             num_copies_this_core = num_copies_per_core_group_2;
         }
 
-        tt::tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             reader_id,
             core,
@@ -168,7 +165,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
                 input.buffer()->page_size(),
             });
 
-        tt::tt_metal::SetRuntimeArgs(
+        SetRuntimeArgs(
             program,
             writer_id,
             core,
@@ -183,7 +180,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
         // Buffer page size is exactly one row in ROW_MAJOR mode
         rows_offset += num_copies_this_core * n_rows;
     }
-    return {std::move(program), {reader_id, writer_id, num_cores, num_cores_y}};
+    return {std::move(program), {reader_id, writer_id, cores}};
 }
 
 void ExpandOperation::ExpandRowMajorFactory::override_runtime_arguments(
@@ -194,18 +191,18 @@ void ExpandOperation::ExpandRowMajorFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& cores = cached_program.shared_variables.cores;
 
     auto input = tensor_args.input;
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (const auto& core : cores) {
         {
+            // reader
             auto runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = input.buffer()->address();
         }
         {
+            // writer
             auto runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = output.buffer()->address();
         }

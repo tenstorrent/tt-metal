@@ -69,6 +69,7 @@ void py_module(py::module& module) {
     detail::py_bind_bcast(module);
     detail::py_bind_copy(module);
     detail::py_bind_move(module);
+    detail::py_bind_expand(module);
     py_bind_interleaved_to_sharded(module);
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);
@@ -79,7 +80,6 @@ void py_module(py::module& module) {
     py_bind_sharded_to_interleaved_partial(module);
     py_bind_squeeze(module);
     py_bind_unsqueeze(module);
-    expand::bind_expand_operation(module);
 }
 }  // namespace data_movement
 }  // namespace operations

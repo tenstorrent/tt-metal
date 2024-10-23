@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
-#include "risc_attribs.h"
-#include "tensix.h"
 
 void kernel_main() {
     std::uint32_t mem_buffer_src_addr = get_arg_val<uint32_t>(0);
@@ -45,14 +43,8 @@ void kernel_main() {
         auto tmp_buf_ptr = reinterpret_cast<char *>(tmp_buf);
 
         for (uint32_t k = 0; k < horz_expand_count; k++) {
-#pragma unroll
-            for (uint32_t j = 0; j < element_per_row; j++) {
-#pragma unroll
-                for (uint32_t i = 0; i < datasize_bytes; i++) {
-                    l1_ptr[k * element_per_row * datasize_bytes + j * datasize_bytes + i] =
-                        tmp_buf_ptr[j * datasize_bytes + i];
-                }
-            }
+            memcpy(l1_ptr, tmp_buf_ptr, element_per_row * datasize_bytes);
+            l1_ptr += element_per_row * datasize_bytes;
         }
 
         cb_push_back(io_cb_id, 1);

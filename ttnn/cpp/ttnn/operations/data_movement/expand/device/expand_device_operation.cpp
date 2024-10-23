@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -17,8 +16,7 @@ ExpandOperation::program_factory_t ExpandOperation::select_program_factory(
 
     switch (input.get_layout()) {
         case Layout::ROW_MAJOR: return ExpandRowMajorFactory{};
-        // case Layout::TILE: return ExpandTileFactory{};
-        default: TT_FATAL(false, "Unsupported input layout");
+        default: TT_THROW("Expand: Unsupported input layout");
     }
 }
 
@@ -30,15 +28,16 @@ void validate(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
-    TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Input tensor layout must be ROW_MAJOR");
+    TT_FATAL(input.get_layout() == Layout::ROW_MAJOR, "Expand: Input tensor layout must be ROW_MAJOR");
+    TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "Expand: Input tensor need to be on device");
+    TT_FATAL(tensor_args.input.buffer() != nullptr, "Expand: Input tensor need to be allocated in buffers on device");
     if (output.has_value()) {
-        // TT_FATAL(output.value().get_layout() == Layout::ROW_MAJOR, "Output tensor layout must be ROW_MAJOR");
         TT_FATAL(
-            output->get_shape().logical_shape().as_vector() == operation_attributes.output_shape,
-            "Output shape must match operation attributes");
-        TT_FATAL(input.get_layout() == output->get_layout(), "Input and output must have same layout");
-        TT_FATAL(input.get_dtype() == output->get_dtype(), "Input and output must have same dtype");
-        TT_FATAL(input.device() == output->device(), "Input and output must be on the same device");
+            output->get_shape().logical_shape().view() == operation_attributes.output_shape,
+            "Expand: Output shape must match operation attributes");
+        TT_FATAL(input.get_layout() == output->get_layout(), "Expand: Input and output must have same layout");
+        TT_FATAL(input.get_dtype() == output->get_dtype(), "Expand: Input and output must have same dtype");
+        TT_FATAL(input.device() == output->device(), "Expand: Input and output must be on the same device");
     }
 }
 
@@ -54,9 +53,7 @@ void ExpandOperation::validate_on_program_cache_hit(
 
 ExpandOperation::shape_return_value_t ExpandOperation::compute_output_shapes(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto to_return = Shape{operation_attributes.output_shape};
-
-    return to_return.logical_shape();
+    return SimpleShape{operation_attributes.output_shape};
 };
 
 ExpandOperation::tensor_return_value_t ExpandOperation::create_output_tensors(
@@ -76,14 +73,9 @@ ExpandOperation::tensor_return_value_t ExpandOperation::create_output_tensors(
 
 std::tuple<ExpandOperation::operation_attributes_t, ExpandOperation::tensor_args_t> ExpandOperation::invoke(
     const Tensor& input,
-    const std::vector<uint32_t>& output_shape,
+    const SmallVector<uint32_t>& output_shape,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    return {
-        {output_shape,
-         memory_config.value_or(input.memory_config()),
-         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config)},
-        {input, output}};
+    const std::optional<MemoryConfig>& memory_config) {
+    return {{output_shape, memory_config.value_or(input.memory_config())}, {input, output}};
 }
 }  // namespace ttnn::operations::expand
