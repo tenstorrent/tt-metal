@@ -27,7 +27,7 @@ parameters = {
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    },
+    }
 }
 
 
@@ -35,8 +35,8 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "ROW_MAJOR_LAYOUT is not supported"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_dtype"] == ttnn.bfloat8_b:
+        return True, "ROW_MAJOR_LAYOUT and ttnn.bfloat8_b are not supported"
     return False, None
 
 
@@ -56,10 +56,10 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
+        partial(torch_random, low=-0.9, high=0.9, dtype=torch.float32), input_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.tanh)
+    golden_function = ttnn.get_golden_function(ttnn.atanh)
     torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
@@ -71,7 +71,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.tanh(input_tensor, memory_config=output_memory_config)
+    result = ttnn.atanh(input_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
