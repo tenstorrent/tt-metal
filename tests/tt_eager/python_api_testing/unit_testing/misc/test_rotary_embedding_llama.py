@@ -95,7 +95,6 @@ class TtLlamaRotary(torch.nn.Module):
         return cos, sin
 
     def forward(self, xq, xk, cos, sin):
-        breakpoint()
         xq = self.apply_rotary(xq, cos, sin)
         xk = self.apply_rotary(xk, cos, sin)
         return xq, xk
@@ -155,15 +154,26 @@ def run_test_rotary_embedding_llama(
         (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
         (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
     ]
+
+    if mode == "decode":
+        # Inputs must be [1, nh, batch, dhead]
+        inp[0] = inp[0].permute(2, 1, 0, 3)
+        inp[1] = inp[1].permute(2, 1, 0, 3)
+
     freqs_cis = precompute_freqs_cis(
         # Note that self.params.max_seq_len is multiplied by 2 because the token limit for the Llama 2 generation of models is 4096.
         # Adding this multiplier instead of using 4096 directly allows for dynamism of token lengths while training or fine-tuning.
         head_dim,
-        max_seq_len * 2,
+        MAX_SEQ_LEN * 2 if mode == "decode" else max_seq_len * 2,
     )  # torch.Size([8192, 64])
 
     start_pos = 0  # Must pick non-zero start pos to get non-zero freqs_cis
-    freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
+
+    if mode == "decode":
+        idxs = torch.arange(batch)  # TODO: Update to check other indices as well
+        freqs_cis = freqs_cis[idxs]
+    else:
+        freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
     # PyTorch Ground Truth output --------------------------------------------------------------------
     torch_xq = inp[0].transpose(1, 2)
@@ -180,19 +190,12 @@ def run_test_rotary_embedding_llama(
     tt_model = TtLlamaRotary(device, head_dim, mode, datatype)
 
     if mode == "decode":
-        cos, sin = tt_model.prepare_decode_cos_sin(torch.arange(batch))
-
-        # Inputs must be [1, batch, nh, dhead]
-        inp[0] = inp[0].permute(2, 0, 1, 3)
-        inp[1] = inp[1].permute(2, 0, 1, 3)
-
+        cos, sin = tt_model.prepare_decode_cos_sin(torch.arange(batch))  # TODO: Update to check other indices as well
     else:
         cos, sin = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
-            position_ids=torch.arange(
-                start_pos, start_pos + seq_len
-            ),  # TODO: In decode mode, position ids can be different for each user
+            position_ids=torch.arange(start_pos, start_pos + seq_len),
         )
     tt_inp = [inp[0], inp[1], cos, sin]
     tt_inp = [
