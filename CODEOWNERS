@@ -2,7 +2,6 @@
 # precedence.
 
 .github/ @tt-rkim @ttmchiou @TT-billteng @blozano-tt @afuller-TT
-.github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
 
 /infra/ @tt-rkim
 
