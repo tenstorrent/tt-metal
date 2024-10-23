@@ -97,10 +97,15 @@ class default_setup(metaclass=MergeMetaclass):
 
 class test_timestamped_events(default_setup):
     timerAnalysis = {
-        "Events": {
+        "erisc_events": {
             "across": "device",
             "type": "event",
             "marker": {"risc": "ERISC"},
+        },
+        "all_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "ANY"},
         },
     }
     detectOps = False

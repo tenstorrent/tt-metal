@@ -233,16 +233,23 @@ def test_profiler_host_device_sync():
 
 
 def test_timestamped_events():
-    OP_COUNT = 26
+    OP_COUNT = 2
     RISC_COUNT = 5
-    ZONE_COUNT = 125
+    ZONE_COUNT = 100
+    ERISC_COUNTS = [0, 1, 5]
+    TENSIX_COUNTS = [72, 64, 56]
+
+    COMBO_COUNTS = []
+    for T in TENSIX_COUNTS:
+        for E in ERISC_COUNTS:
+            COMBO_COUNTS.append((T, E))
+
     REF_COUNT_DICT = {
         "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
-        "wormhole_b0": [
-            72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
-            64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
-            56 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
-        ],
+        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in COMBO_COUNTS],
+    }
+    REF_ERISC_COUNT = {
+        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -250,19 +257,14 @@ def test_timestamped_events():
 
     devicesData = run_device_profiler_test(setup=True)
 
-    stats = len(devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["Events"])
-    print(stats)
-    # statName = "Marker Repeat"
-    # statNameEth = "Marker Repeat ETH"
+    if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["erisc_events"]
+        )
+        assert eventCount in REF_ERISC_COUNT[ENV_VAR_ARCH_NAME], "Wrong erisc event count"
 
-    # assert statName in stats.keys(), "Wrong device analysis format"
-
-    # if statNameEth in stats.keys():
-    # assert (
-    # stats[statName]["stats"]["Count"] - stats[statNameEth]["stats"]["Count"]
-    # in REF_COUNT_DICT[ENV_VAR_ARCH_NAME]
-    # ), "Wrong Marker Repeat count"
-    # assert stats[statNameEth]["stats"]["Count"] > 0, "Wrong Eth Marker Repeat count"
-    # assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
-    # else:
-    # assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
+    if ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys():
+        eventCount = len(
+            devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
+        )
+        assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
