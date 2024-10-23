@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "common/constants.hpp"
-#include "common/core_coord.h"
-#include "common/tt_backend_api_types.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
