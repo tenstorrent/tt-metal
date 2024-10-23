@@ -136,11 +136,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
 
-#if defined(COMPILE_FOR_ERISC)
-// ERISC needs to place this function in a specific section
-__attribute__((section("code_l1")))
-#endif  // defined(COMPILE_FOR_ERISC)
-void risc_init() {
+inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
