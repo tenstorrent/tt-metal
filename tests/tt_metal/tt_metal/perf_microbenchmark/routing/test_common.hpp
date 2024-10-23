@@ -1,7 +1,7 @@
 #pragma once
 
 #include "tt_metal/third_party/json/json.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 static inline std::string to_string(pkt_dest_size_choices_t choice) {
     switch (choice) {
