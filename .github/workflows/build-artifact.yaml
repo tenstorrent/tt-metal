@@ -135,7 +135,7 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples --enable-ccache"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
