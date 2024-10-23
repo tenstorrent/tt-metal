@@ -107,7 +107,7 @@ def run_max_pool(
             output_height=out_h,
             output_width=out_w,
             output_channels=in_c,
-            device=device,
+            compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=False,
         )
@@ -632,7 +632,7 @@ def test_pool_core_nondivis(
             output_height=out_h,
             output_width=out_w,
             output_channels=in_c,
-            device=device,
+            compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=True,
         )
