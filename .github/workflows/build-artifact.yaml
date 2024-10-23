@@ -80,11 +80,11 @@ jobs:
         shell: bash
         run: |
           if [ ! -d "/mnt/MLPerf/ccache" ]; then
-            echo "::error::NFS drive is not mounted; build machine not properly provisioned."
+            echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
             exit 1
           fi
           if [ ! -d "$HOME/.ccache-ci" ]; then
-            echo "::error::Ccache is not properly provisioned."
+            echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
@@ -136,7 +136,6 @@ jobs:
             ccache -z
 
             build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-tests --build-programming-examples --enable-ccache"
-            cmake --version
             echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
