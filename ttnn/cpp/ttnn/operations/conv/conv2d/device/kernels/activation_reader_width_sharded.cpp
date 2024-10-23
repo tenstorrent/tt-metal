@@ -87,9 +87,6 @@ void kernel_main() {
     //Y lookup.
     tt_l1_ptr uint32_t *act_mcast_y_lookup  = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-
-   DPRINT<<"L3  "<<act_mcast_dest_noc_start_x<<" "<<act_mcast_dest_noc_start_y<<"  "<<act_mcast_dest_noc_end_x<<"  "<<act_mcast_dest_noc_end_y<<"  "<<act_mcast_sender_size_bytes<<"  "<<num_output_cores<<ENDL();
-
     //Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y) ;
 
@@ -153,8 +150,6 @@ void kernel_main() {
         cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
         if(this_core_id < num_input_cores) {
             uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-            // DPRINT<<"L1 Write Addr "<<l1_write_addr_act<<"\n";
-
 
             for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
                 uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
@@ -202,7 +197,6 @@ void kernel_main() {
                 // // num_dests will source, since we are copying to a different local CB as well
                 uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
-                DPRINT<<"Core "<<this_core_id<<" MCast Write "<<ENDL();
                 noc_async_write_multicast_loopback_src(tilized_act_start_address, act_multicast_data_addr, act_mcast_sender_size_bytes, num_mcast_cores , false, false);
 
                 // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc even though cmd bufs are different
@@ -230,7 +224,6 @@ void kernel_main() {
                 noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
                 // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                DPRINT<<"Core "<<this_core_id<<" waiting for act semaphore, sender "<<sender_x<<" "<<sender_y<<ENDL();
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
 
