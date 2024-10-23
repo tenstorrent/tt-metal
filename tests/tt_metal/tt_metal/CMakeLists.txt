@@ -1,8 +1,12 @@
-
 add_library(test_metal_common_libs INTERFACE)
-target_link_libraries(test_metal_common_libs INTERFACE tt_metal test_common_libs)
+target_link_libraries(
+    test_metal_common_libs
+    INTERFACE
+        tt_metal
+        test_common_libs
+)
 
-set (TT_METAL_TESTS_SRCS
+set(TT_METAL_TESTS_SRCS
     test_bmm.cpp
     test_add_two_ints.cpp
     # test_compile_args.cpp         <- not tested in run_tt_metal.py
@@ -36,19 +40,26 @@ set (TT_METAL_TESTS_SRCS
     test_create_kernel_from_string.cpp
 )
 
-foreach (TEST_SRC ${TT_METAL_TESTS_SRCS})
+foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     get_filename_component(TEST ${TEST_SRC} NAME_WE)
     add_executable(${TEST} ${CMAKE_CURRENT_SOURCE_DIR}/${TEST_SRC})
     target_link_libraries(${TEST} PUBLIC test_metal_common_libs)
-    target_include_directories(${TEST} PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/common
-        ${PROJECT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}
+    target_include_directories(
+        ${TEST}
+        PRIVATE
+            ${UMD_HOME}
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            ${PROJECT_SOURCE_DIR}/tests
+            ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal)
+    set_target_properties(
+        ${TEST}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
@@ -59,12 +70,14 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chi
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 
-add_custom_target(metal_tests DEPENDS
-    ${METAL_TEST_TARGETS}
-    unit_tests
-    unit_tests_fast_dispatch
-    unit_tests_fast_dispatch_single_chip_multi_queue
-    unit_tests_frequent
-    metal_perf_microbenchmark_tests
-    unit_tests_galaxy
+add_custom_target(
+    metal_tests
+    DEPENDS
+        ${METAL_TEST_TARGETS}
+        unit_tests
+        unit_tests_fast_dispatch
+        unit_tests_fast_dispatch_single_chip_multi_queue
+        unit_tests_frequent
+        metal_perf_microbenchmark_tests
+        unit_tests_galaxy
 )
