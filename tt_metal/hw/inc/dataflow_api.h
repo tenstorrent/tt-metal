@@ -84,17 +84,9 @@ template <bool DRAM>
 FORCE_INLINE
 uint32_t get_bank_offset_index(uint32_t id) {
     if constexpr (DRAM) {   // DRAM
-#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
         return udivsi3_const_divisor<NUM_DRAM_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_DRAM_BANKS;
-#endif
     } else {                // L1
-#ifdef IS_NOT_POW2_NUM_L1_BANKS
         return udivsi3_const_divisor<NUM_L1_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_L1_BANKS;
-#endif
     }
 }
 
@@ -102,17 +94,9 @@ template <bool DRAM>
 FORCE_INLINE
 uint32_t get_bank_index(uint32_t id, uint32_t bank_offset_index) {
     if constexpr (DRAM) {   // DRAM
-#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
         return id - bank_offset_index * NUM_DRAM_BANKS;
-#else
-        return id & (NUM_DRAM_BANKS - 1);
-#endif
     } else {                // L1
-#ifdef IS_NOT_POW2_NUM_L1_BANKS
         return id - bank_offset_index * NUM_L1_BANKS;
-#else
-        return id & (NUM_L1_BANKS - 1);
-#endif
     }
 }
 
