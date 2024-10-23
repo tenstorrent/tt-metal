@@ -19,7 +19,8 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    constexpr int loop_size = 2;
+    constexpr int loop_size = 200;
+    constexpr int enqueue_times = 2;
     std::map<string, string> kernel_defines = {
         {"LOOP_COUNT", std::to_string(loop_count)},
         {"LOOP_SIZE", std::to_string(loop_size)}
@@ -49,7 +50,7 @@ void RunFillUpAllBuffers(tt_metal::Device *device, int loop_count, bool fast_dis
 
     if (fast_dispatch)
     {
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < enqueue_times; i++)
         {
             program.set_runtime_id(i);
             EnqueueProgram(device->command_queue(), program, false);
@@ -75,7 +76,7 @@ int main(int argc, char **argv) {
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
 
-        constexpr int device_loop_count = 2;
+        constexpr int device_loop_count = 150;
 
         RunFillUpAllBuffers(device, device_loop_count, USE_FAST_DISPATCH);
         tt_metal::detail::DumpDeviceProfileResults(device);
