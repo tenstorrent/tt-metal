@@ -255,6 +255,7 @@ on:
           - data_movement.repeat.repeat_pytorch2
           - data_movement.split.split_pytorch2
           - data_movement.unsqueeze.unsqueeze_pytorch2
+          - data_movement.squeeze.squeeze_pytorch2
           - data_movement.embedding.embedding_pytorch2
           - data_movement.view.view_pytorch2
   schedule:
