@@ -428,7 +428,7 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
+    TT_ASSERT((buffer.size == 0 && page_size == 0) || buffer.size() % page_size == 0);
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_ASSERT(page_size % bytes_per_page_entry == 0);
@@ -462,12 +462,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_FATAL(page_size % bytes_per_page_entry == 0,
@@ -531,12 +526,7 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());

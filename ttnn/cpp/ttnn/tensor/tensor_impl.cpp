@@ -82,11 +82,10 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 } break;
                 default: TT_ASSERT(false && "Unsupported data type!");
             }
-            TT_ASSERT(total_size_bytes % page_size == 0);
+            TT_ASSERT(page_size == 0 ? total_size_bytes == 0 : total_size_bytes % page_size == 0);
         } break;
         default: TT_ASSERT(false && "Unsupported layout to write to device");
     }
-    TT_ASSERT(page_size != 0);
     return page_size;
 }
 

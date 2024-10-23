@@ -28,7 +28,6 @@ void validate_buffer_size_and_page_size(
     const BufferType &buffer_type,
     const TensorMemoryLayout &buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters) {
-    TT_FATAL(page_size != 0, "Buffer page size should be larger than 0 bytes!");
     if (size == 0) {
         return;
     }
@@ -59,7 +58,7 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
     const std::array<uint32_t, 2> &page_shape,
     const std::array<uint32_t, 2> &shard_shape,
     const std::array<uint32_t, 2> &tensor2d_size) {
-    std::array<uint32_t, 2> shard_in_pages = {shard_shape[0] / page_shape[0], shard_shape[1] / page_shape[1]};
+    std::array<uint32_t, 2> shard_in_pages = {page_shape[0] == 0 ? 0 : shard_shape[0] / page_shape[0], page_shape[1] == 0 ? 0 : shard_shape[1] / page_shape[1]};
     std::vector<std::vector<uint32_t>> ret_vec(num_shards);
     std::vector<std::array<uint32_t, 2>> ret_shard_shape(num_shards, shard_in_pages);
 
@@ -84,7 +83,7 @@ inline std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uin
     } else if (layout == TensorMemoryLayout::WIDTH_SHARDED or layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t i_offset = 0;
         uint32_t j_offset = 0;
-        uint32_t num_shard_columns = div_up(tensor2d_size[1], shard_in_pages[1]);
+        uint32_t num_shard_columns = shard_in_pages[1] == 0 ? 0 : div_up(tensor2d_size[1], shard_in_pages[1]);
         uint32_t shard_in_row = 0;
 
         for (uint32_t shard_idx = 0; shard_idx < num_shards; shard_idx++) {
@@ -333,13 +332,13 @@ DeviceAddr Buffer::page_size() const {
 }
 
 void Buffer::set_page_size(DeviceAddr page_size) {
-    TT_FATAL(size_ % page_size == 0, "buffer size must be divisible by new page size");
+    TT_FATAL(page_size == 0 ? size_ == 0 : size_ % page_size == 0, "buffer size must be divisible by new page size");
     page_size_ = page_size;
     this->buffer_page_mapping_ = nullptr;
 }
 
 uint32_t Buffer::num_pages() const {
-    return this->size() / this->page_size();
+    return page_size() == 0 ? 0 : size() / page_size();
 }
 
 uint32_t Buffer::num_dev_pages() const {
@@ -464,8 +463,8 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto width_in_pages = tensor_shard_spec.shape[0] / page_shape[0];
-    auto height_in_pages = tensor_shard_spec.shape[1] / page_shape[1];
+    auto width_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
+    auto height_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
     return {width_in_pages, height_in_pages};
 }
 
