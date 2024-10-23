@@ -48,9 +48,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     const bool is_paged_attention = page_table_tensor.has_value();
 
-    const auto q_shape = input_tensor_q.get_legacy_shape();
-    const auto q_shape_unpadded = input_tensor_q.get_shape();
-    const auto k_shape = input_tensor_k.get_legacy_shape();
+    const auto q_shape = input_tensor_q.get_padded_shape();
+    const auto q_shape_unpadded = input_tensor_q.get_logical_shape();
+    const auto k_shape = input_tensor_k.get_padded_shape();
     // Use k_shape for S and DH since Q might be different for decode
     uint32_t B = q_shape[1], PNH = q_shape[2], S = k_shape[2], DH = k_shape[3];
 
@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         uint32_t block_size = k_shape[2];
         page_block_size_t = block_size / TILE_HEIGHT;
         // get real S using the page_table_tensor
-        S = page_table_tensor.value().get_legacy_shape()[-1]*S;
+        S = page_table_tensor.value().get_padded_shape()[-1]*S;
     }
     uint32_t Bkv = k_shape[0];
     uint32_t St = S/TILE_HEIGHT;
