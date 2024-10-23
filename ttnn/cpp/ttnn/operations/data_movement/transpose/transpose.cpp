@@ -56,13 +56,14 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     bool pad_c = false;
     bool tiled_only = false;
     bool pad_n = false;
-    constexpr uint32_t ROW_MAJOR_STICK_WIDTH = tt::constants::FACE_WIDTH; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
+    constexpr uint32_t FACE_WIDTH = tt::constants::FACE_WIDTH; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
+    auto BUFFER_ALIGNMENT = a.buffer()->alignment(); // Need stick width to be read alignment (currently 32 for DRAM and 16 for L1)
     uint32_t W = a.get_padded_shape()[-1];
     uint32_t H = a.get_padded_shape()[-2];
     switch (transpose_dim) {
         case TransposeOpDim::HC:
             tiled_only = a.get_layout() == Layout::TILE;
-            if ((!tiled_only) && ((W * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0)) { // for some reason this is a constraint on the RM transpose_hw kernel
+            if ((!tiled_only) && ((W * a.element_size()) % BUFFER_ALIGNMENT != 0)) { //
                 tiled_only = true;
             }
             pad_c = tiled_only && a.get_padded_shape()[1] % tt::constants::TILE_HEIGHT != 0;
@@ -78,7 +79,7 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             tiled_only = true; // CN only has a tiled implementation at the moment
             break;
         case TransposeOpDim::WH: // THIS NEEDS TO BE FIXED
-            if (((W * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0) || ((H * a.element_size()) % ROW_MAJOR_STICK_WIDTH != 0)) {
+            if (((W * a.element_size()) % FACE_WIDTH != 0) || ((H * a.element_size()) % FACE_WIDTH != 0)) {
                 tiled_only = true;
             }
             else if (a.device()->arch() == tt::ARCH::GRAYSKULL) {
@@ -107,15 +108,17 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             }
             // run the transpose
             b = operation::run(Transpose{transpose_dim, output_mem_config}, {b}).at(0);
-            // slice back to original shape
-            if (b.get_logical_shape()[1] != b.get_padded_shape()[1] || b.get_logical_shape()[0] != b.get_padded_shape()[0]) {
-                std::array<uint32_t, 4> begins = {0, 0, 0, 0};
-                std::array<uint32_t, 4> ends = {b.get_logical_shape()[0], b.get_logical_shape()[1], b.get_padded_shape()[2], b.get_padded_shape()[3]};
-                std::array<uint32_t, 4> step = {1, 1, 1, 1};
-                return ttnn::slice(b, begins, ends, step);
-            }
+            auto logical_shape = b.get_logical_shape();
+            auto padded_shape = b.get_padded_shape();
             // back to original layout
             b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (Device *)nullptr);
+            // slice back to original shape
+            if (logical_shape != padded_shape) {
+                std::array<uint32_t, 4> begins = {0, 0, 0, 0};
+                std::array<uint32_t, 4> ends = {logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
+                std::array<uint32_t, 4> step = {1, 1, 1, 1};
+                b = ttnn::slice(b, begins, ends, step);
+            }
             return b;
         }
         return operation::run(Transpose{transpose_dim, output_mem_config}, {a}).at(0);
@@ -145,6 +148,20 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     }
 }
 
+ttnn::Tensor transpose_nd(
+    const ttnn::Tensor& input_tensor,
+    const uint32_t dim1,
+    const uint32_t dim2,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    std::vector<int64_t> permutation;
+    permutation.reserve(input_tensor.get_shape().rank());
+    for (uint32_t i = 0; i < input_tensor.get_shape().rank(); ++i) {
+        permutation.push_back(i);
+    }
+    std::swap(permutation[dim1], permutation[dim2]);
+    return ttnn::permute(input_tensor, permutation, memory_config_arg);
+}
+
 } //detail namespace
 
 ttnn::Tensor ExecuteTranspose::invoke(
@@ -164,6 +181,8 @@ ttnn::Tensor ExecuteTranspose::invoke(
         uint32_t rank_diff = 4 - initial_rank;
         normalized_dim1 += rank_diff;
         normalized_dim2 += rank_diff;
+    } else if (initial_rank > 4) {
+        return detail::transpose_nd(input_tensor, normalized_dim1, normalized_dim2, memory_config_arg);
     }
 
     bool wh = (normalized_dim2 == 2 && normalized_dim1 == 0) || (normalized_dim2 == 0 && normalized_dim1 == 2);
