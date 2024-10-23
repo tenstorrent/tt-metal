@@ -8,12 +8,14 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/expand/device/expand_device_operation.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 namespace ttnn::operations::expand {
 
-std::vector<uint32_t> infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
+auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
     auto input_shape = input.get_shape();
-    auto output_shape = std::vector<uint32_t>(sizes.size());
+    auto output_shape = SmallVector<uint32_t>(sizes.size());
     TT_FATAL(
         input_shape.size() <= sizes.size(),
         "Input tensor shape {}({}) must be at least as large as the expansion size {}({}), which it is not",
@@ -61,18 +63,22 @@ Tensor Expand::invoke(
     const std::vector<int32_t>& sizes,
 
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<MemoryConfig>& memory_config) {
     auto output_shape = infer_size(input, sizes);
 
     // Convert tile tensor to row major (lmfao)
     if (input.get_layout() == Layout::TILE) {
+        // untilize/tilize is way too inaccurate for us to even remotely use.
         Tensor rm_input_dev = core::to_device(
             tensor_impl::to_layout_wrapper(input.cpu(true), Layout::ROW_MAJOR), input.device(), std::nullopt);
 
-        return ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt, compute_kernel_config);
+        Tensor rm_output_dev = ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt);
+        return core::to_device(
+            tensor_impl::to_layout_wrapper(rm_output_dev.cpu(true).pad_to_tile(0), Layout::TILE),
+            rm_output_dev.device(),
+            std::nullopt);
     }
 
-    return ttnn::prim::expand(input, output_shape, output, memory_config, compute_kernel_config);
+    return ttnn::prim::expand(input, output_shape, output, memory_config);
 }
 }  // namespace ttnn::operations::expand

@@ -8,6 +8,6 @@
 
 namespace py = pybind11;
 
-namespace ttnn::operations::expand {
-void bind_expand_operation(py::module& module);
-}  // namespace ttnn::operations::moreh::expand
+namespace ttnn::operations::data_movement::detail {
+void py_bind_expand(py::module& module);
+}  // namespace ttnn::operations::data_movement::detail
