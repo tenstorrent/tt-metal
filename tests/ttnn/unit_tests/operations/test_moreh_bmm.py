@@ -32,36 +32,30 @@ def get_tensors(
     torch_dtype=torch.float32,
     ttnn_dtype=ttnn.bfloat16,
 ):
-    torch_input = torch.rand(input_shape, dtype=torch_dtype)
-    torch_mat2 = torch.rand(mat2_shape, dtype=torch_dtype)
-    torch_output = torch.rand(output_shape, dtype=torch_dtype)
-
-    ttnn_input = create_ttnn_tilized_tensor(torch_input, device, ttnn_dtype)
-    ttnn_mat2 = create_ttnn_tilized_tensor(torch_mat2, device, ttnn_dtype)
-    ttnn_output = create_ttnn_tilized_tensor(torch_output, device, ttnn_dtype)
-
-    ttnn_output_grad = torch_output_grad = ttnn_input_grad = ttnn_mat2_grad = None
-    if require_input_grad or require_mat2_grad:
-        torch_output_grad = torch.rand(output_shape, dtype=torch_dtype)
-        ttnn_output_grad = create_ttnn_tilized_tensor(torch_output_grad, device, ttnn_dtype)
-        if require_input_grad:
-            torch_input_grad = torch.full(input_shape, float("nan"), dtype=torch_dtype)
-            ttnn_input_grad = create_ttnn_tilized_tensor(torch_input_grad, device, ttnn_dtype)
-        if require_mat2_grad:
-            torch_mat2_grad = torch.full(mat2_shape, float("nan"), dtype=torch_dtype)
-            ttnn_mat2_grad = create_ttnn_tilized_tensor(torch_mat2_grad, device, ttnn_dtype)
-
-    return (
-        ttnn_input,
-        ttnn_mat2,
-        ttnn_output,
-        ttnn_output_grad,
-        ttnn_input_grad,
-        ttnn_mat2_grad,
-        torch_input,
-        torch_mat2,
-        torch_output_grad,
-    )
+    """
+    Returns tensors for input, mat2, output, and their gradients (if required), both in ttnn and torch:
+    0. ttnn - tilized input tensor
+    1. ttnn - tilized mat2 tensor
+    2. ttnn - tilized output tensor
+    3. ttnn - tilized output gradient tensor (if required), otherwise None
+    4. ttnn - tilized input gradient tensor (if required), otherwise None
+    5. ttnn - tilized mat2 gradient tensor (if required), otherwise None
+    6. torch input tensor
+    7. torch mat2 tensor
+    8. torch output gradient tensor (if required), otherwise None
+    """
+    tensors = [
+        torch.rand(input_shape, dtype=torch_dtype),
+        torch.rand(mat2_shape, dtype=torch_dtype),
+        torch.rand(output_shape, dtype=torch_dtype),
+        torch.rand(output_shape, dtype=torch_dtype) if (require_input_grad or require_mat2_grad) else None,
+        torch.full(input_shape, float("nan"), dtype=torch_dtype) if require_input_grad else None,
+        torch.full(mat2_shape, float("nan"), dtype=torch_dtype) if require_mat2_grad else None,
+    ]
+    ttnn_tensors = [
+        create_ttnn_tilized_tensor(tensor, device, ttnn_dtype) if tensor is not None else None for tensor in tensors
+    ]
+    return (*ttnn_tensors, tensors[0], tensors[1], tensors[3])
 
 
 def run_moreh_bmm(
