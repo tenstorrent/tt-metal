@@ -58,7 +58,7 @@ struct address_map {
 
   static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
 
-  static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3232;
+  static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3344;
   static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
   static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
   static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;

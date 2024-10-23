@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "core_config.h"
+
 // DataFormat comes from tt_backend_api_types.hpp for SW, and tensix_types.h for HW...
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
@@ -40,9 +42,14 @@ enum DebugPrintHartIndex : unsigned int {
     DPRINT_RISCV_INDEX_TR2 = 3,
     DPRINT_RISCV_INDEX_BR  = 4,
     DPRINT_RISCV_INDEX_ER  = 0,
+    DPRINT_RISCV_INDEX_ER1 = 1,
 };
 #define DPRINT_NRISCVS 5
+#ifdef ARCH_BLACKHOLE
+#define DPRINT_NRISCVS_ETH 2
+#else
 #define DPRINT_NRISCVS_ETH 1
+#endif
 
 #define DPRINT_TYPES                 \
     DPRINT_PREFIX(CSTR)              \

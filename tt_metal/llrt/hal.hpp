@@ -157,6 +157,8 @@ class Hal {
     uint32_t get_alignment(HalMemType memory_type) const;
 
     bool get_supports_cbs(uint32_t programmable_core_type_index) const;
+
+    uint32_t get_num_risc_processors() const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const {

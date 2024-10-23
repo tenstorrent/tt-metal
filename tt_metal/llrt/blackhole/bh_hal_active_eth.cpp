@@ -54,13 +54,14 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[utils::underlying_type<HalL1MemAddrType>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
 
-    std::vector<std::vector<uint8_t>> processor_classes(NumEthDispatchClasses);
+    // TODO (abhullar): This should be NumEthDispatchClasses
+    std::vector<std::vector<uint8_t>> processor_classes(1);
     std::vector<uint8_t> processor_types{0};
-    for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+    for (uint8_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
         processor_classes[processor_class_idx] = processor_types;
     }
 
-    return {HalProgrammableCoreType::IDLE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
+    return {HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH, processor_classes, mem_map_bases, mem_map_sizes, false};
 }
 
 }  // namespace tt_metal

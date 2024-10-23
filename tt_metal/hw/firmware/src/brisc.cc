@@ -291,7 +291,7 @@ inline void deassert_ncrisc_trisc() {
 inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
 #ifdef NCRISC_HAS_IRAM
     WAYPOINT("INW");
-    while (mailboxes->slave_sync.ncrisc != RUN_SYNC_MSG_DONE);
+    while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE);
     WAYPOINT("IND");
 #endif
 }
@@ -320,7 +320,7 @@ inline void run_triscs(dispatch_core_processor_masks enables) {
 
 inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
 
         l1_to_ncrisc_iram_copy_wait();
 
@@ -350,7 +350,7 @@ int main() {
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
-    mailboxes->slave_sync.ncrisc = RUN_SYNC_MSG_GO;
+    mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
     // When NCRISC has IRAM, it needs to be halted before data can be copied from L1 to IRAM
     // This routine allows us to resume NCRISC after the copy is done
