@@ -15,6 +15,8 @@ on:
           - CI
   push:
     branches: ["main"]
+  issue_comment:
+    types: [created]
 
 permissions:
   actions: read
@@ -26,9 +28,11 @@ permissions:
 
 jobs:
   static-checks:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
   build-wheels:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-artifact
     strategy:
       matrix:
@@ -43,22 +47,26 @@ jobs:
       from-precompiled: true
     secrets: inherit
   test-wheels:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-wheels
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       from-precompiled: true
     secrets: inherit
   build-docker-image-2004:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
       os: ubuntu-20.04-amd64
   build-docker-image-2204:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
       os: ubuntu-22.04-amd64
   build-artifact:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
@@ -66,6 +74,7 @@ jobs:
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
@@ -75,6 +84,7 @@ jobs:
     secrets: inherit
   # UMD Unit Tests
   umd-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -90,6 +100,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -106,6 +117,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-wheels
     secrets: inherit
     strategy:
@@ -122,6 +134,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-wheels
     secrets: inherit
     strategy:
@@ -138,6 +151,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-wheels
     secrets: inherit
     strategy:
@@ -154,6 +168,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD C++ Unit Tests
   cpp-unit-tests:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -169,14 +184,17 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   profiler-regression:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-artifact-profiler
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
   build-docs:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
   build:
+    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && github.event.comment.body == '/run-tests') }}
     needs: [build-artifact, build-docker-image-2204]
     uses: ./.github/workflows/build.yaml
     secrets: inherit
