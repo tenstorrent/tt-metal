@@ -145,7 +145,7 @@ if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     # 16 TX -> 4 x 4:1 Mux -> 4:1 Mux -> 1:4 Demux -> 4 x 1:4 Demux -> 16 RX
     TT_METAL_THREADCOUNT=64 ./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level
 
-    echo "LOG_METAL: Running ttfabric perf ubench test now..."
+    echo "Running tt-fabric perf ubench test now..."
     for max_packet_size_words in 256 512 1024 2048; do
         run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
         run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
