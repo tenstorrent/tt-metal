@@ -29,7 +29,7 @@ jobs:
       - name: Run Pre-commit and Fix Issues
         uses: pre-commit/action@v3.0.1
         with:
-          extra_args: "--from-ref origin/main --to-ref HEAD"
+          extra_args: "--from-ref ${{ event.pull_request.base.ref }} --to-ref HEAD"
         continue-on-error: false
 
   check-spdx-licenses:
