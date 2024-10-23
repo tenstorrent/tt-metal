@@ -537,16 +537,18 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Define command shortcuts
     command_shortcuts = {
         "demo": "pytest models/demos/llama3/demo/demo.py -k instruct_weights-1",
-        "demo1": "pytest models/demos/llama3/demo/demo.py -k single_layer",
+        "demo_1layer": "pytest models/demos/llama3/demo/demo.py -k single_layer",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
+        "rmsnorm": "pytest models/demos/llama3/tests/test_llama_rms_norm.py",
+        "embedding": "pytest models/demos/llama3/tests/test_llama_embedding.py",
         "decoder": "pytest models/demos/llama3/tests/test_llama_decoder.py",
         "decoder-prefill": "pytest models/demos/llama3/tests/test_llama_decoder_prefill.py",
         "lm-head": "pytest models/demos/llama3/tests/test_lm_head.py",
         "model": "pytest models/demos/llama3/tests/test_llama_model.py -k full",
-        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
         "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
+        "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py",
         "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
         "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
         "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
@@ -566,6 +568,12 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     command_input = entry["command_input"]
     if command_input in command_shortcuts:
         command_input = command_shortcuts[command_input]
+    else:  # If command is invalid, set status to "Error" and return a message to the user with the full list of commands
+        entry["status"] = "Error"
+        entry["output"] = f"Warning: '{command_input}' is not a valid command. Valid commands are: " + ", ".join(
+            command_shortcuts.keys()
+        )
+        screen_needs_update.set()
 
     # Prepare the command
     cmd_list = shlex.split(command_input)
@@ -574,6 +582,12 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     log_filename = get_log_filename(entry["device"], entry["model"], command_input)
     os.makedirs("logs", exist_ok=True)
     entry["log_file"] = open(os.path.join("logs", log_filename), "w")
+
+    # If the command is invalid, write the output to the log file and return before trying to run the bad command
+    if entry["status"] == "Error":
+        entry["log_file"].write(entry["output"] + "\n")
+        entry["log_file"].flush()
+        return
 
     # Start the subprocess
     entry["process"] = subprocess.Popen(
