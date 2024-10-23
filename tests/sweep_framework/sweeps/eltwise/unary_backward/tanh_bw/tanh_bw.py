@@ -26,9 +26,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "xfail": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -39,10 +39,11 @@ parameters = {
 }
 
 
-# Invalidate vector is called during the generation phase where each vector will be passed in.
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
     ):
@@ -104,3 +105,5 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+

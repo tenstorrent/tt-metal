@@ -8,7 +8,8 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, gen_rand_exclude_range
+
+from tests.sweep_framework.utils import gen_shapes, gen_rand_exclude_range, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -26,9 +27,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
         "approximate": ["none"],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16],
@@ -84,6 +85,9 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    if input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        input_shape = sanitize_shape_rm(input_shape)
+
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
     )(input_shape)
@@ -96,9 +100,6 @@ def run(
 
     golden_function = ttnn.get_golden_function(ttnn.bias_gelu_bw)
     torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, scalar, value=approximate)[0]
-    # intermediate_result = torch.nn.functional.gelu(torch.add(torch_input_tensor_a, scalar), approximate=approximate)
-    # intermediate_result.backward(gradient=torch_grad_tensor)
-    # torch_output_tensor = torch_input_tensor_a.grad
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
@@ -123,6 +124,4 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
-    info_string = f"Dtypes - grad:{grad_dtype}, input:{input_a_dtype}. Approximation:{approximate}"
-
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf, info_string]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
