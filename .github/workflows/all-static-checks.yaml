@@ -6,12 +6,9 @@ on:
   pull_request:
     branches:
       - "main"
-  issue_comment:
-    types: [created]
 
 jobs:
   check-spdx-licenses:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,20 +22,17 @@ jobs:
       - name: Check SPDX licenses
         run: python -m check_copyright --verbose --dry-run --config ./check_copyright_config.yaml .
   check-metal-kernel-count:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
   check-black:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: psf/black@23.10.1
   check-doc:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +41,6 @@ jobs:
       - name: Run checks on docs
         run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
   check-forbidden-imports:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,7 +51,6 @@ jobs:
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
   check-sweeps-workflow:
-    if: ${{ github.event_name != 'issue_comment' || (github.event.issue.pull_request && contains(github.event.comment.body, '/run-tests')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
