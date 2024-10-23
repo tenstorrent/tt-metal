@@ -500,7 +500,7 @@ def test_softmin_bfp8(shape_dim_strategy, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
 
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    x = torch.rand(size=shape).to(torch.bfloat16)
 
     dev_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -508,10 +508,10 @@ def test_softmin_bfp8(shape_dim_strategy, device):
     tt_npu = ttnn.operations.moreh.softmin(dev_x, dim, strategy=strategy)
 
     assert list(tt_npu.shape.with_tile_padding()) == list(tt_cpu.shape)
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+    tt_npu = ttnn.to_torch(tt_npu)
 
     rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
+    passing, out = comp_allclose_and_pcc(tt_cpu, tt_npu, rtol=rtol, atol=atol)
     logger.debug(out)
     assert passing
 
@@ -532,21 +532,21 @@ def test_softmin_backward_bfp8(shape_dim_strategy, device):
     shape, dim, strategy = shape_dim_strategy
     torch.manual_seed(0)
 
-    x = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16).requires_grad_(True)
+    x = torch.rand(size=shape).to(torch.bfloat16).requires_grad_(True)
 
     y = F.softmin(x, dim)
     dev_y = ttnn.from_torch(y, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    dy = torch.randint(low=0, high=4, size=shape).to(torch.bfloat16)
+    dy = torch.rand(size=shape).to(torch.bfloat16)
     dev_dy = ttnn.from_torch(dy, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     y.backward(dy)
     tt_npu = ttnn.operations.moreh.softmin_backward(dev_y, dev_dy, dim, strategy=strategy)
 
     assert list(tt_npu.shape.with_tile_padding()) == list(x.grad.shape)
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+    tt_npu = ttnn.to_torch(tt_npu)
 
     rtol = atol = 0.05
-    passing, out = comp_allclose_and_pcc(x.grad, tt_dev, rtol=rtol, atol=atol)
+    passing, out = comp_allclose_and_pcc(x.grad, tt_npu, rtol=rtol, atol=atol)
     logger.debug(out)
     assert passing

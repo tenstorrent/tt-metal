@@ -55,9 +55,6 @@ def run_moreh_dot_test(input_shape, npu_dtype, device, optional_output=False):
     torch_other = torch.reshape(torch_other, (torch_other.shape[-1],))
     torch_out = torch.matmul(torch_input, torch_other)
 
-    if optional_output == True:
-        print(tt_out)
-        print(torch_out)
     # test for equivalance
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out[0][0][0][0], pcc=0.999, rtol=rtol, atol=atol)
