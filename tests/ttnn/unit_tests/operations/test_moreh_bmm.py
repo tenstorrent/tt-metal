@@ -123,8 +123,8 @@ def run_moreh_bmm(
     rtol = atol = 0.1
     pcc = 0.998 if compute_kernel_options else 0.97
     passing, output_pcc = comp_allclose_and_pcc(output, actual_output, pcc=pcc, rtol=rtol, atol=atol)
-    logger.debug(f"Out passing={passing}")
-    logger.debug(f"Output pcc={output_pcc}")
+    logger.info(f"Out passing={passing}")
+    logger.info(f"Output pcc={output_pcc}")
     assert passing
 
 
@@ -193,15 +193,15 @@ def run_moreh_bmm_backward(
     if require_input_grad:
         actual_input_grad = ttnn.to_torch(ttnn_input_grad)
         passing, output_pcc = comp_allclose_and_pcc(input.grad, actual_input_grad, pcc=pcc, rtol=rtol, atol=atol)
-        logger.debug(f"input_grad passing={passing}")
-        logger.debug(f"input_grad pcc={output_pcc}")
+        logger.info(f"input_grad passing={passing}")
+        logger.info(f"input_grad pcc={output_pcc}")
         assert passing
 
     if require_mat2_grad:
         actual_mat2_grad = ttnn.to_torch(ttnn_mat2_grad)
         passing, output_pcc = comp_allclose_and_pcc(mat2.grad, actual_mat2_grad, pcc=pcc, rtol=rtol, atol=atol)
-        logger.debug(f"mat2_grad passing={passing}")
-        logger.debug(f"mat2_grad pcc={output_pcc}")
+        logger.info(f"mat2_grad passing={passing}")
+        logger.info(f"mat2_grad pcc={output_pcc}")
         assert passing
 
 

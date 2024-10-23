@@ -178,7 +178,7 @@ def run_moreh_norm(
         dtype=ttnn_dtype,
     )
     passing, out = comp_allclose(expected_output, actual_output, rtol=rtol, atol=atol)
-    logger.debug(f"output's {out}")
+    logger.info(f"output's {out}")
     assert passing
 
 
@@ -228,7 +228,7 @@ def run_moreh_norm_backward(
         dtype=ttnn_dtype,
     )
     passing, out = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
-    logger.debug(f"input_grad's {out}")
+    logger.info(f"input_grad's {out}")
     assert passing
 
 
