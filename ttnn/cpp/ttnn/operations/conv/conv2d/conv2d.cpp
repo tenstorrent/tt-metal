@@ -850,6 +850,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         conv_config.deallocate_activation = true;
     }
     auto output_parallel_config = parallel_config;
+    if(!conv_config.shard_layout.has_value())
+    {
+        conv_config.shard_layout = parallel_config.shard_scheme;
+    }
     if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED)
     {
         output_parallel_config = {
