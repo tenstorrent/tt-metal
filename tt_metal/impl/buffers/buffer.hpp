@@ -221,6 +221,7 @@ class Buffer final {
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     static void deleter(Buffer* buffer);
+    void deallocate_impl();
     friend void DeallocateBuffer(Buffer &buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;

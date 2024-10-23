@@ -237,31 +237,29 @@ std::shared_ptr<Buffer> Buffer::create(
 void Buffer::deallocate() {
     deallocation_requested_.store(true, std::memory_order::relaxed);
     device_->push_work([self = weak_self.lock()] {
-        if (self->allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::ALLOCATED) {
-            return;
-        }
-
-        if (self->device_->initialized_ && self->size_ != 0) {
-            // address_ is only modified from this thread, no sync required
-            detail::BUFFER_MAP.erase({self->device_->id(), self->address_});
-            detail::DeallocateBuffer(self.get());
-        }
-
-        self->allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+        self->deallocate_impl();
     });
 }
 
 void Buffer::deleter(Buffer* buffer) {
     buffer->device_->push_work([buffer] {
         std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
-
-        if (!buffer->device_->initialized_ || buffer->size_ == 0) {
-            return;
-        }
-
-        detail::BUFFER_MAP.erase({buffer->device_->id(), buffer->address_});
-        detail::DeallocateBuffer(buffer);
+        buffer->deallocate_impl();
     });
+}
+
+void Buffer::deallocate_impl() {
+    if (allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+        return;
+    }
+
+    if (device_->initialized_ && size_ != 0) {
+        // address_ is only modified from this thread, no sync required
+        detail::BUFFER_MAP.erase({device_->id(), address_});
+        detail::DeallocateBuffer(this);
+    }
+
+    allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
 }
 
 bool Buffer::is_allocated() const {
