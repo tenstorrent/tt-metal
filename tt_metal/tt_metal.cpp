@@ -113,11 +113,18 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    Program &program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup *kernel_group,
+    Device *device,
+    const CoreCoord &logical_core) {
 
+    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            // Need the individual offsets of each bin
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
+                kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
 }
@@ -756,7 +763,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
