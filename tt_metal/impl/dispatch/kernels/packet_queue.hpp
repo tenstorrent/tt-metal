@@ -846,6 +846,7 @@ public:
             (num_words == 0)) {
             return;
         } else if (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) {
+            while(eth_txq_is_busy());
             internal_::eth_send_packet(0, src_addr/PACKET_WORD_SIZE_BYTES, dest_addr/PACKET_WORD_SIZE_BYTES, num_words);
         } else {
             uint64_t noc_dest_addr = NOC_XY_ADDR(this->remote_x, this->remote_y, dest_addr);
