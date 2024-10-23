@@ -286,14 +286,26 @@ void Buffer::deallocate() {
         return;
     }
 
-    device_->push_work([self = weak_self.lock()] {
-        if (self->device_->initialized_ && self->size_ != 0) {
-            detail::BUFFER_MAP.erase({self->device_->id(), self->address_});
-            detail::DeallocateBuffer(self.get());
-        }
+    if (device_->can_use_passthrough_scheduling()) {
+        deallocate_impl();
+    } else {
+        device_->push_work([self = weak_self.lock()] {
+            self->deallocate_impl();
+        });
+    }
+}
 
-        self->allocation_status_ = AllocationStatus::DEALLOCATED;
-    });
+void Buffer::deallocate_impl() {
+    auto expected_status = AllocationStatus::DEALLOCATION_REQUESTED;
+    if (!allocation_status_.compare_exchange_strong(expected_status, AllocationStatus::DEALLOCATED)) {
+        // Buffer was already deallocated, nothing to do
+        return;
+    }
+
+    if (device_->initialized_ && size_ != 0) {
+        detail::BUFFER_MAP.erase({device_->id(), address_});
+        detail::DeallocateBuffer(this);
+    }
 }
 
 void Buffer::deleter(Buffer* buffer) {

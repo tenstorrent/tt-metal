@@ -224,10 +224,9 @@ class Buffer final {
     void allocate_impl();
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
-    static void deleter(Buffer* buffer);
-
     static bool prepare_deallocation(std::atomic<AllocationStatus>& status);
-
+    void deallocate_impl();
+    static void deleter(Buffer* buffer);
     friend void DeallocateBuffer(Buffer &buffer);
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
