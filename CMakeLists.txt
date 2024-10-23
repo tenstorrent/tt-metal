@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 cmake_policy(VERSION 3.16)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
-if (NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
@@ -11,13 +11,13 @@ endif()
 ############################################
 include(cmake/compilers.cmake)
 
-if (DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
+if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     message(STATUS "Setting C and C++ compiler from environment variables")
     set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
     set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
 endif()
 
-if (CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
+if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
     message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
 else()
@@ -26,14 +26,19 @@ else()
 endif()
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
-    message(FATAL_ERROR "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!")
+    message(
+        FATAL_ERROR
+        "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
+    )
 endif()
 
-project(Metalium
-        VERSION 0.50.0
-        DESCRIPTION "Tenstorrent Metalium"
-        HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
-        LANGUAGES CXX
+project(
+    Metalium
+    VERSION 0.50.0
+    DESCRIPTION "Tenstorrent Metalium"
+    HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
+    LANGUAGES
+        CXX
 )
 include(CTest)
 
@@ -49,7 +54,12 @@ CHECK_COMPILERS()
 #   Will default to Release build unless manually set with -DCMAKE_BUILD_TYPE
 ############################################################################################################################
 # Define valid build types
-set(VALID_BUILD_TYPES Debug Release RelWithDebInfo CI)
+set(VALID_BUILD_TYPES
+    Debug
+    Release
+    RelWithDebInfo
+    CI
+)
 
 if(NOT CMAKE_BUILD_TYPE)
     message(STATUS "Setting build type to 'Release' as none was specified.")
@@ -110,7 +120,10 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(STATUS "Adding compile option: -ftime-trace")
         add_compile_options("-ftime-trace")
     else()
-        message(FATAL "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
+        message(
+            FATAL
+            "ENABLE_BUILD_TIME_TRACE is only supported with Clang"
+        )
     endif()
 endif()
 
@@ -140,12 +153,17 @@ include(${PROJECT_SOURCE_DIR}/cmake/dependencies.cmake)
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
-    find_package (Python3 COMPONENTS Interpreter Development)
+    find_package(
+        Python3
+        COMPONENTS
+            Interpreter
+            Development
+    )
     message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
-if (NOT NUMA_LIBRARY)
+if(NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
 
@@ -162,10 +180,18 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
     find_library(LIBC++ c++)
     find_library(LIBC++ABI c++abi)
     if(NOT LIBC++ OR NOT LIBC++ABI)
-        message(FATAL_ERROR "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH")
+        message(
+            FATAL_ERROR
+            "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
+        )
     endif()
 
-    target_link_libraries(stdlib INTERFACE ${LIBC++} ${LIBC++ABI})
+    target_link_libraries(
+        stdlib
+        INTERFACE
+            ${LIBC++}
+            ${LIBC++ABI}
+    )
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
 else()
     target_link_libraries(stdlib INTERFACE stdc++)
@@ -173,8 +199,16 @@ else()
 endif()
 
 add_library(metal_common_libs INTERFACE)
-target_link_libraries(metal_common_libs INTERFACE
-    dl z pthread atomic hwloc numa stdlib # system libraries, hwloc has no cmake support, find_package won't find it
+target_link_libraries(
+    metal_common_libs
+    INTERFACE
+        dl
+        z
+        pthread
+        atomic
+        hwloc
+        numa
+        stdlib # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -183,68 +217,113 @@ target_link_libraries(metal_common_libs INTERFACE
 add_library(linker_flags INTERFACE)
 
 add_library(compiler_warnings INTERFACE)
-target_compile_options(compiler_warnings INTERFACE -Werror -Wdelete-non-virtual-dtor -Wreturn-type -Wswitch -Wuninitialized -Wno-unused-parameter)
+target_compile_options(
+    compiler_warnings
+    INTERFACE
+        -Werror
+        -Wdelete-non-virtual-dtor
+        -Wreturn-type
+        -Wswitch
+        -Wuninitialized
+        -Wno-unused-parameter
+)
 
 # add additional compile warning flags depending on the compiler
 ADJUST_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
-target_link_libraries(compiler_flags INTERFACE linker_flags compiler_warnings stdlib)
-target_compile_options(compiler_flags INTERFACE -mavx2 -fPIC -DFMT_HEADER_ONLY -fvisibility-inlines-hidden -fno-lto)
+target_link_libraries(
+    compiler_flags
+    INTERFACE
+        linker_flags
+        compiler_warnings
+        stdlib
+)
+target_compile_options(
+    compiler_flags
+    INTERFACE
+        -mavx2
+        -fPIC
+        -DFMT_HEADER_ONLY
+        -fvisibility-inlines-hidden
+        -fno-lto
+)
 
 if(ENABLE_CODE_TIMERS)
     target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
 endif()
 if(ENABLE_TRACY)
-    target_compile_options(compiler_flags INTERFACE -DTRACY_ENABLE -fno-omit-frame-pointer)
+    target_compile_options(
+        compiler_flags
+        INTERFACE
+            -DTRACY_ENABLE
+            -fno-omit-frame-pointer
+    )
     target_link_options(linker_flags INTERFACE -rdynamic)
 endif()
 target_compile_options(
     compiler_flags
-    INTERFACE $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
-              $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
-              $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
-              $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>)
+    INTERFACE
+        $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
+        $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
+        $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
+        $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>
+)
 target_link_options(
     linker_flags
     INTERFACE
-    $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
-    $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
-    $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
-    $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>)
+        $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
+        $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
+        $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
+        $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>
+)
 
 string(TOUPPER $ENV{ARCH_NAME} ARCH_NAME_DEF)
 target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-target_include_directories(metal_header_directories SYSTEM INTERFACE ${reflect_SOURCE_DIR} ${flatbuffers_include_dir} ${nng_include_dir})
+target_include_directories(
+    metal_header_directories
+    SYSTEM
+    INTERFACE
+        ${reflect_SOURCE_DIR}
+        ${flatbuffers_include_dir}
+        ${nng_include_dir}
+)
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
 
-if ("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(metal_header_directories INTERFACE tt_metal/hw/inc/wormhole
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-        ${UMD_HOME}/device/wormhole
-        ${UMD_HOME}/src/firmware/riscv/wormhole
+if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
+    target_include_directories(
+        metal_header_directories
+        INTERFACE
+            tt_metal/hw/inc/wormhole
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+            ${UMD_HOME}/device/wormhole
+            ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
     target_compile_options(compiler_flags INTERFACE -DDISABLE_ISSUE_3487_FIX)
-    target_include_directories(metal_header_directories INTERFACE
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
-        ${UMD_HOME}/device/$ENV{ARCH_NAME}
-        ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
+    target_include_directories(
+        metal_header_directories
+        INTERFACE
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/$ENV{ARCH_NAME}
+            ${UMD_HOME}/device/$ENV{ARCH_NAME}
+            ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
     )
 endif()
 
 if(WITH_PYTHON_BINDINGS)
     # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
     add_library(pch_pybinds INTERFACE)
-    target_precompile_headers(pch_pybinds INTERFACE
-        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-        ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
+    target_precompile_headers(
+        pch_pybinds
+        INTERFACE
+            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
+            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
+            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
     )
 endif()
 
@@ -270,28 +349,42 @@ endif(TT_METAL_BUILD_TESTS OR TTNN_BUILD_TESTS)
 # Install for build artifacts that will upload build/lib
 include(GNUInstallDirs)
 
-install(TARGETS tt_metal
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT dev
+install(
+    TARGETS
+        tt_metal
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
 )
-install(TARGETS ttnn
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    COMPONENT dev
+install(
+    TARGETS
+        ttnn
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
-    install(TARGETS ttnn
-    DESTINATION ${PROJECT_SOURCE_DIR}/ttnn/ttnn
-    COMPONENT tt_pybinds
+    install(
+        TARGETS
+            ttnn
+            DESTINATION
+            ${PROJECT_SOURCE_DIR}/ttnn/ttnn
+            COMPONENT
+            tt_pybinds
     )
 endif()
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
-add_custom_target(clean-built
-   COMMAND ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
-   COMMENT "Cleaning `built` directory"
+add_custom_target(
+    clean-built
+    COMMAND
+        ${CMAKE_COMMAND} -E remove_directory ${PROJECT_SOURCE_DIR}/built
+    COMMENT "Cleaning `built` directory"
 )
 
 # Debian Package
