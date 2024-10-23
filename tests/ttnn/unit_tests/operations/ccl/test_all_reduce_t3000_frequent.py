@@ -18,6 +18,8 @@ def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links
     num_l1_banks = 64
     if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
+    if input_shape[3] == 32 and input_dtype == ttnn.bfloat8_b:
+        return True, "This combination is not supported for now"
 
     return False, ""
 
@@ -101,6 +103,7 @@ def run_all_reduce_test(
 
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
     # Generate input tensors
+
     tt_input_tensors = []
     input_tensors = []
 
@@ -136,12 +139,10 @@ def run_all_reduce_test(
             ttnn.synchronize_device(mesh_device.get_device(device_id))
         logger.info(f"Done iteration {i}")
 
-    golden_canonical_out_tensor = torch.zeros(per_chip_output_shape).bfloat16()
-    for i, t in enumerate(input_tensors):
-        golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t.view(per_chip_output_shape)).bfloat16()
-
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
+    golden_canonical_out_tensor = torch.sum(unchunked_input_tensor, 0, keepdim=True)
+    golden_canonical_out_tensor = golden_canonical_out_tensor.view(per_chip_output_shape)
     # Compare
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
@@ -181,14 +182,14 @@ def run_all_reduce_test(
         ([1, 1, 32, 8192]),
         ([1, 1, 32, 1024]),
         ([1, 1, 32, 2048]),
-        # ([1, 1, 4096, 32]), #Skipped due to hang
-        # ([1, 1, 8192, 32]),
-        # ([1, 1, 1024, 32]),
-        # ([1, 1, 2048, 32]),
+        ([1, 1, 4096, 32]),
+        ([1, 1, 8192, 32]),
+        ([1, 1, 1024, 32]),
+        ([1, 1, 2048, 32]),
         ([4, 1, 32, 4096]),
         ([8, 1, 32, 1024]),
-        # ([1, 4, 1024, 32]),
-        # ([2, 4, 2048, 32]),
+        ([1, 4, 1024, 32]),
+        ([2, 4, 2048, 32]),
     ],
 )
 @pytest.mark.parametrize(

@@ -69,7 +69,7 @@ Tensor all_reduce(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
-    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "This op is only supported for Fast Dispatch");
+    TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
     TT_FATAL(topology == ttnn::ccl::Topology::Ring, "All Reduce op is currently supported only on Ring topology");
 
     auto devices = input_tensor.get_workers();
@@ -88,43 +88,69 @@ Tensor all_reduce(
             auto rank = shape.rank();
             uint32_t num_devices = devices.size();
 
-            uint32_t merged_dim_size = 1;
-            for (uint32_t i = 0; i <= rank - 3; ++i) {
-                merged_dim_size *= shape[i];
-            }
-
             uint32_t all_reduce_dim = -1;
+            bool optimized_version = false;
             for (uint32_t i = 0; i < rank; ++i) {
                 if(shape[i] % num_devices == 0){
                     all_reduce_dim = i;
+                    optimized_version = true;
                 }
             }
-            TT_FATAL(all_reduce_dim != -1, "Atleast one dim should be divisible by num_devices {}", num_devices);
+            if(shape[3] == tt::constants::TILE_WIDTH){
+                optimized_version = false; // Reduce scatter hangs for this shape
+            }
+            if (input_tensor.get_layout() == ttnn::TILE_LAYOUT){
+                if ((all_reduce_dim == 2 && shape[all_reduce_dim] % tt::constants::TILE_HEIGHT != 0) ||
+                    (all_reduce_dim == 3 && shape[all_reduce_dim] % tt::constants::TILE_WIDTH != 0)) {
+                    optimized_version = false;
+                }
+            }
 
-            std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
 
-            auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+            if(optimized_version){
+                const auto& reduced_tensor = operation::run(
+                    create_reduce_scatter_struct(
+                        input_tensor,
+                        binary_op_type,
+                        all_reduce_dim,
+                        num_links,
+                        output_mem_config,
+                        user_defined_num_workers,
+                        user_defined_num_buffers_per_channel,
+                        devices,
+                        topology),
+                    {input_tensor});
 
-            const auto& reduced_tensor = operation::run(
-                create_reduce_scatter_struct(
-                    reshaped_tensor,
-                    binary_op_type,
-                    all_reduce_dim,
-                    num_links,
-                    output_mem_config,
-                    user_defined_num_workers,
-                    user_defined_num_buffers_per_channel,
-                    devices,
-                    topology),
-                {reshaped_tensor});
+                const auto& gathered_tensor = operation::run(
+                    create_all_gather_struct(reduced_tensor.at(0), all_reduce_dim, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                    {reduced_tensor.at(0)});
 
-            const auto& gathered_tensor = operation::run(
-                create_all_gather_struct(reduced_tensor.at(0), all_reduce_dim, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
-                {reduced_tensor.at(0)});
+                auto final_output = gathered_tensor.at(0);
+                return {final_output};
+            }
+            else{
+                log_warning(
+                    tt::LogOp,
+                    "Falling back to unoptimized version (all_gather + local reduce) as the input tensor shape {} is not handled by optimized version", shape);
 
-            auto final_output = ttnn::reshape(gathered_tensor.at(0), shape);
+                uint32_t merged_dim_size = 1;
+                for (uint32_t i = 0; i <= rank - 3; ++i) {
+                    merged_dim_size *= shape[i];
+                }
 
-            return {final_output};
+                std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
+                auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
+
+                const auto& gathered_tensor = operation::run(
+                    create_all_gather_struct(reshaped_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                    {reshaped_tensor});
+
+                auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);
+                auto final_output = ttnn::reshape(sum_tensor, shape);
+                return {final_output};
+
+            }
+
             },
      {input_tensor},
      output_tensors);
