@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,16 +11,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.whisper.reference import torch_functional_whisper
 from models.demos.wormhole.whisper.tt import ttnn_optimized_functional_whisper
-from models.utility_functions import torch_random, is_grayskull, is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import torch_random, is_grayskull, is_wormhole_b0, skip_for_grayskull, run_for_wormhole_b0
 
 MODEL_NAME = "openai/whisper-base"
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("use_key_value_states", [False, True])
 def test_whisper_attention(
@@ -30,6 +30,10 @@ def test_whisper_attention(
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
         embed_dim=config.d_model, num_heads=config.encoder_attention_heads, dropout=config.attention_dropout
     ).eval()
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
+
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
     tt_model_name = f"ttnn_{model_name}_optimized"
 
@@ -102,11 +106,11 @@ def test_whisper_attention(
     assert_with_pcc(torch_output, output, 0.99)
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size, sequence_size, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -114,6 +118,10 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size, sequence
     model = model
 
     embed_dim = config.d_model
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
+
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
     parameters = preprocess_model_parameters(
@@ -160,16 +168,19 @@ def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size, sequence
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("feature_size", [80])
 @pytest.mark.parametrize("sequence_length", [3000])
 def test_encoder(mesh_device, ttnn_model, model_name, batch_size, feature_size, sequence_length, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config)
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
 
     torch_input_features = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.float32)
 
@@ -239,17 +250,21 @@ def test_encoder(mesh_device, ttnn_model, model_name, batch_size, feature_size, 
     assert_with_pcc(torch_output, output, 0.99)
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_decoder_layer(mesh_device, reset_seeds, ttnn_model, model_name, batch_size, sequence_size):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
     num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
+
     torch_hidden_states = torch_random((batch_size, 2, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
     torch_encoder_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
@@ -317,17 +332,19 @@ def test_decoder_layer(mesh_device, reset_seeds, ttnn_model, model_name, batch_s
     assert_with_pcc(torch_output, output, 0.99)
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [1500])
 def test_decoder(mesh_device, ttnn_model, model_name, batch_size, sequence_size, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
-
     embed_dim = config.d_model
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
 
     torch_encoder_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
@@ -405,15 +422,19 @@ def test_decoder(mesh_device, ttnn_model, model_name, batch_size, sequence_size,
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@skip_for_grayskull()
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 def test_ttnn_whisper(tmp_path, mesh_device, model_name, ttnn_model, batch_size, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     feature_extractor = transformers.AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+
+    mesh_device_flag = is_wormhole_b0() and ttnn.GetNumAvailableDevices() == 2
+    batch_size = batch_size * 2 if mesh_device_flag else batch_size
+
     inputs = feature_extractor(
         [ds[i]["audio"]["array"] for i in range(batch_size)], sampling_rate=16000, return_tensors="pt"
     )
@@ -485,4 +506,4 @@ def test_ttnn_whisper(tmp_path, mesh_device, model_name, ttnn_model, batch_size,
 
     last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
 
-    assert_with_pcc(torch_last_hidden_state, last_hidden_state, 0.857)
+    assert_with_pcc(torch_last_hidden_state, last_hidden_state, 0.97)
