@@ -452,22 +452,31 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     Tensor in_rsqrt = ttnn::square(input, output_mem_config);
     in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = std::nanf("");
-    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan = input.device()->sfpu_nan();
+    float t_inf = ttnn::sfpu_pos_inf(input.get_dtype());
+    auto arch_env = detect_arch();
+    if(arch_env == tt::ARCH::WORMHOLE_B0){
+        std::cout<<"Arch = WORMHOLE_B0";
+    }else{
+        std::cout<<"Not WH_B0";
+    }
+    std::cout<<"\nDevice : "<<input.device();
+    std::cout<<"\nNan : "<<t_nan;
+    std::cout<<"\nInf : "<<t_inf;
     Tensor cond_result = ttnn::logical_or(
-        ttnn::lt(input, ttnn::full_like(input, -1.0f), std::nullopt, output_mem_config),
-        ttnn::gt(input, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
+        ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_a = ttnn::where(ttnn::eqz(cond_result, output_mem_config), t_nan, grad_a, output_mem_config);
-    cond_result = ttnn::logical_or(
-        ttnn::eq(input, ttnn::full_like(input, -1.0f), std::nullopt, output_mem_config),
-        ttnn::eq(input, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
+    grad_a = ttnn::where( ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
+    cond_result = ttnn::logical_and(
+        ttnn::gt(input, -1.0f, std::nullopt, output_mem_config),
+        ttnn::lt(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
     grad_a = ttnn::where(
-        ttnn::eq(cond_result, ttnn::full_like(input, 1.0f), std::nullopt, output_mem_config),
-        t_inf,
+        ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config),
+        t_nan,
         grad_a,
         output_mem_config);
     grad_tensor.emplace_back(grad_a);

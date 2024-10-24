@@ -325,13 +325,21 @@ def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.acos_bw, golden_function=_golden_function)
 
 
-def _golden_function_acosh(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function_acosh(grad_tensor, input_tensor, *args, device, **kwargs):
     import torch
 
     input_tensor.retain_grad()
     pyt_y = torch.acosh(input_tensor)
     pyt_y.backward(gradient=grad_tensor)
-    return [input_tensor.grad]
+    result = input_tensor.grad
+    return [
+        torch.nan_to_num(
+            result,
+            nan=device.sfpu_nan(),
+            posinf=ttnn.sfpu_pos_inf(input_tensor.get_dtype()),
+            neginf=-ttnn.sfpu_neg_inf(input_tensor.get_dtype()),
+        )
+    ]
 
 
 ttnn.attach_golden_function(ttnn.acosh_bw, golden_function=_golden_function_acosh)
