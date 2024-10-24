@@ -39,7 +39,7 @@ parameters = {
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["grad_dtype"] == ttnn.bfloat8_b:
-        return True, "ttnn.bfloat8_b are not supported"
+        return True, "ttnn.bfloat8_b is not supported"
     return False, None
 
 
