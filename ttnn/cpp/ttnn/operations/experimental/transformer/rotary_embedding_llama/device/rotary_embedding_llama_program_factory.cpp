@@ -488,11 +488,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
         tt_metal::ComputeConfig{.math_fidelity=math_fidelity, .fp32_dest_acc_en=fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
     auto override_runtime_arguments_callback = [
-        input_cb_index,
-        cos_cb_index,
-        sin_cb_index,
-        trans_mat_cb_index,
-        output_cb_index
+        cb_input,
+        cb_cos,
+        cb_sin,
+        cb_trans_mat,
+        cb_output
     ](  const void *operation,
         Program &program,
         const std::vector<Tensor>& input_tensors,
@@ -506,11 +506,11 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
         auto dst_buffer = output_tensors.at(0).buffer();
 
         // Update the CB globally allocated addresses here
-        UpdateDynamicCircularBufferAddress(program, input_cb_index, *src_buffer);
-        UpdateDynamicCircularBufferAddress(program, cos_cb_index, *cos_buffer);
-        UpdateDynamicCircularBufferAddress(program, sin_cb_index, *sin_buffer);
-        UpdateDynamicCircularBufferAddress(program, trans_mat_cb_index, *trans_mat_buffer);
-        UpdateDynamicCircularBufferAddress(program, output_cb_index, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_input, *src_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_cos, *cos_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_sin, *sin_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_trans_mat, *trans_mat_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 
     };
 

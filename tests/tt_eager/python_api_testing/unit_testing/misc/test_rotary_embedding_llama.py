@@ -11,7 +11,7 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
@@ -231,7 +231,7 @@ def run_test_rotary_embedding_llama(
             .grid_size()
         )
         input_mem_config = ttnn.create_sharded_memory_config(
-            shape=(1, batch, ttnn.TILE_SIZE, head_dim),  # TODO: Check if ttnn.TILE_SIZE is max in n_heads
+            shape=(1, batch, ttnn.TILE_SIZE, head_dim),
             core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -374,7 +374,6 @@ def test_rotary_embedding_llama(
     )
 
 
-@skip_for_wormhole_b0()
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -423,6 +422,8 @@ def test_rotary_embedding_llama_with_program_cache(
 
     max_seq_len = max(4096, seq_len)
 
+    mode = "decode" if seq_len == 1 else "prefill"
+
     cache_tensors = []
     for _ in range(3):
         run_test_rotary_embedding_llama(
@@ -444,4 +445,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
         cache_tensors.append(test_tensor)
 
-    assert device.num_program_cache_entries() == 2
+    if mode == "decode":
+        assert device.num_program_cache_entries() == 5  # 2 * Rope + embedding + reshape + to_layout
+    else:
+        assert device.num_program_cache_entries() == 2  # 2 * Rope
