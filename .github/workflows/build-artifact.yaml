@@ -77,9 +77,9 @@ jobs:
       - in-service
     steps:
       - name: Verify ccache availability
-        shell: bash
+        # shell: bash
         run: |
-          Confirm theory: does GHA have set -e active by default when bash shell is chosen?
+          Confirm theory: does GHA have set -e active by default when bash shell is NOT chosen?
           if [ ! -d "/mnt/MLPerf/ccache" ]; then
             echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
             exit 1
