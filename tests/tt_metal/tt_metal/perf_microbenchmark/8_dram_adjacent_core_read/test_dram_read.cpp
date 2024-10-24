@@ -222,12 +222,15 @@ bool validation(
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
     constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
+    constexpr uint32_t BH_DRAM_BANDWIDTH_GB_PER_SEC = 512;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        dram_bandwidth_gb_per_sec = BH_DRAM_BANDWIDTH_GB_PER_SEC;
     }
     return dram_bandwidth_gb_per_sec;
 }
@@ -327,10 +330,11 @@ void get_dram_reader_core_coords_grayskull(
     all_cores_ordered = adj_core_logical_realloc;
 }
 
-void get_dram_reader_core_coords_wormhole_b0(
+void get_dram_reader_core_coords(
     tt_metal::Device* device, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
-    // hardcoded for wh_b0
-    uint32_t full_grid_size_y = 12;
+
+    uint32_t full_grid_size_x = device->grid_size().x;
+    uint32_t full_grid_size_y = device->grid_size().y;
     uint32_t x_step = 3;
 
     // get all the logical coord
@@ -624,7 +628,7 @@ int main(int argc, char **argv) {
         tt_metal::Device *device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0, "device must be wh_b0");
+        TT_ASSERT(device->arch() == ARCH::WORMHOLE_B0 or device->arch() == ARCH::BLACKHOLE, "device must be wh_b0 or bh");
 
         int clock_freq_mhz = get_tt_npu_clock(device);
 
@@ -634,10 +638,10 @@ int main(int argc, char **argv) {
 
         CoreRangeSet all_cores;
         std::vector<CoreCoord> all_cores_list;
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-            get_dram_reader_core_coords_wormhole_b0(device, all_cores, all_cores_list);
-        } else {
+        if (device->arch() == tt::ARCH::GRAYSKULL) {
             get_dram_reader_core_coords_grayskull(device, all_cores, all_cores_list);
+        } else {
+            get_dram_reader_core_coords(device, all_cores, all_cores_list);
         }
 
         uint32_t num_tiles_per_core = num_tiles / num_cores;
