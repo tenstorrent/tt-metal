@@ -353,7 +353,7 @@ class TtLlamaAttention_galaxy:
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=0,  # unused
-            k_chunk_size=0,  # unused
+            k_chunk_size=512,  # unused
         )
 
         attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
