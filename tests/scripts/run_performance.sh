@@ -17,6 +17,8 @@ run_perf_models_other() {
 
     if [ "$tt_arch" == "wormhole_b0" ]; then
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -119,6 +121,8 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/metal_BERT_large_11/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/falcon7b_common/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests -m $test_marker
     fi
 
     ## Merge all the generated reports
