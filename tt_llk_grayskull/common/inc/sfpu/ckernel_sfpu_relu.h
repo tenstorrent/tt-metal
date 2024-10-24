@@ -7,6 +7,7 @@
 #include "ckernel_defs.h"
 #include "ckernel.h"
 #include "noc_nonblocking_api.h"
+#include "ckernel_sfpu_converter.h"
 
 #include "sfpi.h"
 
@@ -17,14 +18,13 @@ namespace ckernel
 namespace sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_lrelu_(uint slope)
-{
-    // SFPU microcode
-    vFloat s = s2vFloat16b(slope);
+template <bool APPROXIMATION_MODE>
+inline void _calculate_lrelu_(const int iterations, uint slope) {
+    
+    vFloat s = Converter::to_float(slope);
 
     #pragma GCC unroll 0
-    for (int d=0; d<4; d++) {
+    for (int d=0; d<iterations; d++) {
         vFloat v = dst_reg[0];
 
         v_if (v < 0.0f) {
