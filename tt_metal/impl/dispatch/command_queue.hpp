@@ -478,9 +478,6 @@ using CompletionReaderQueue = LockFreeQueue<CompletionReaderVariant>;
 struct AllocBufferMetadata {
     Buffer* buffer;
     std::reference_wrapper<Allocator> allocator;
-    BufferType buffer_type;
-    uint32_t device_address;
-    bool bottom_up;
 };
 
 struct RuntimeArgsMetadata {
