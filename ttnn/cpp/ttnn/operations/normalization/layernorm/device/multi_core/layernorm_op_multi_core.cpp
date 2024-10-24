@@ -425,6 +425,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (fp32_dest_acc_en) {
         TT_ASSERT(subblock_wt <= 4, "subblock width must less than 4 in fp32 mode");
     }
+    else {
+        TT_ASSERT(subblock_wt <= 8, "subblock width must less than 8");
+    }
 
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
