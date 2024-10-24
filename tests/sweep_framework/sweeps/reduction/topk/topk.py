@@ -95,6 +95,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
+    # topk golden function is not working, missing import torch
     # golden_function = ttnn.get_golden_function(ttnn.topk)
     # torch_output_values, torch_output_indices =golden_function(
     #    torch_input_tensor_a, k, dim=dim, largest=largest, sorted=True

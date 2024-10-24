@@ -80,7 +80,8 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_output_tensor = torch.argmax(torch_input_tensor_a, dim=dim)
+    golden_function = ttnn.get_golden_function(ttnn.argmax)
+    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
