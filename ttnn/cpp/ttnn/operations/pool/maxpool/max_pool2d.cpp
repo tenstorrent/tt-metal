@@ -61,7 +61,7 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
                                             output_shape[1],
                                             output_shape[2],
                                             channels,
-                                            input_tensor.device(),
+                                            input_tensor.device()->compute_with_storage_grid_size(),
                                             ShardOrientation::ROW_MAJOR,
                                             false);
         num_cores_nhw = conv::conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);

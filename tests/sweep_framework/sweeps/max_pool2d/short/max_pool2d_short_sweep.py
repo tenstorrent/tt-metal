@@ -132,7 +132,7 @@ def run(
         output_height=out_h,
         output_width=out_w,
         output_channels=in_c,
-        device=device,
+        compute_grid_size=device.compute_with_storage_grid_size(),
         is_out_tiled=False,
     )
     sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
