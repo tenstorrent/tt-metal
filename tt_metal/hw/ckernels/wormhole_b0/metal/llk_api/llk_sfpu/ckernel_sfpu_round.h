@@ -26,24 +26,22 @@ inline vFloat round_even(vFloat v) {
     return v;
 }
 
+static float pow_unsigned(float x, uint n) {
+    if (n == 0)
+        return 1.0f;
+
+    if ((n & 1) == 0)
+        return pow_unsigned(x * x, n >> 1);
+
+    return x * pow_unsigned(x * x, n >> 1);
+}
+
 template <bool APPROXIMATE, int ITERATIONS = 8>
 void calculate_round(const int decimals) {
-    const auto powu = [](vFloat base, uint exp) {
-        vFloat result = 1.0f;
-
-        while (exp > 0) {
-            if (exp & 1)
-                result *= base;
-            base *= base;
-            exp >>= 1;
-        }
-        return result;
-    };
-
-    const auto exp10i = [powu](int exp) {
-        if (exp < 0)
-            return powu(0.1f, -exp);
-        return powu(10.0f, exp);
+    const auto exp10i = [](int n) {
+        if (n < 0)
+            return pow_unsigned(0.1f, -n);
+        return pow_unsigned(10.0f, 0);
     };
 
     const vFloat coeff = exp10i(decimals);
