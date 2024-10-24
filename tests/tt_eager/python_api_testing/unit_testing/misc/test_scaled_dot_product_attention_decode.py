@@ -483,6 +483,7 @@ def test_sdpa_decode(
         )
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
