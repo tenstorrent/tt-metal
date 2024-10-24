@@ -12,6 +12,12 @@ To build and execute, you may use the following commands. Note that we include t
     ./build_metal.sh --build-tests
     ./build/programming_examples/hello_world_compute_kernel
 ```
+Printing from device kernels is disabled by default, it can be enabled with
+```bash
+    TT_METAL_DPRINT_CORES=0,0 ./build/programming_examples/hello_world_compute_kernel
+```
+With this assignment, we allow messages to be printed from core (0,0). For more information about device side print, please see [Kernel Debug Print](https://docs.tenstorrent.com/tt-metalium/latest/tools/kernel_print.html). 
+
 ## Device setup
 
 ``` cpp
