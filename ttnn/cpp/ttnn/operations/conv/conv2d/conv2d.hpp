@@ -127,7 +127,7 @@ std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_hei
 OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
 
 template<typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -145,7 +145,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t groups);
 
 template<typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_tensor_if_required(
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,

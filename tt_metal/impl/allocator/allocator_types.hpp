@@ -9,7 +9,6 @@
 #include <functional>
 #include "common/core_coord.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "dev_mem_map.h"
 
 namespace tt::tt_metal {

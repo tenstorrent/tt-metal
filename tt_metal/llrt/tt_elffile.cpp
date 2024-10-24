@@ -236,9 +236,14 @@ void ElfFile::Impl::LoadImage() {
     // We care about the location of some sections.
     for (auto const &section : GetShdrs())
         if ((section.sh_flags & SHF_ALLOC || section.sh_type == SHT_RELA || section.sh_type == SHT_SYMTAB) &&
-                (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1) ||
-            section.sh_offset + section.sh_size > GetContents().size())
-            TT_THROW("{}: section {} is misaligned", path_, GetName(section));
+                (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1))
+            TT_THROW(
+                "{}: section {} is misaligned [{x},+{x})@{x}",
+                path_,
+                GetName(section),
+                section.sh_addr,
+                section.sh_size,
+                section.sh_offset);
 
     GetSegments().reserve(hdr.e_phnum);
     int textIx = -1;
@@ -248,13 +253,31 @@ void ElfFile::Impl::LoadImage() {
             continue;
         if (phdr.p_type != PT_LOAD)
             continue;
+
+        log_debug(
+            tt::LogLLRuntime,
+            "{}: loadable segment {}: [{x},+{x}/{x})@{x}",
+            path_,
+            unsigned(GetSegments().size()),
+            phdr.p_vaddr,
+            phdr.p_filesz,
+            phdr.p_memsz,
+            phdr.p_offset);
+
         if (!phdr.p_memsz)
             // Have observed zero-sized segments, ignore them
             continue;
 
         // Require loadable segments to be nicely aligned
         if ((phdr.p_offset | phdr.p_vaddr) & (sizeof(word_t) - 1))
-            TT_THROW("{}: loadable segment {} is misaligned", path_, unsigned(GetSegments().size()));
+            TT_THROW(
+                "{}: loadable segment {} is misaligned, [{x},+{x}/{x})@{x}",
+                path_,
+                unsigned(GetSegments().size()),
+                phdr.p_vaddr,
+                phdr.p_filesz,
+                phdr.p_memsz,
+                phdr.p_offset);
 
         auto contents = GetContents(phdr);
         // We require the entry point to be the start of the text segment,

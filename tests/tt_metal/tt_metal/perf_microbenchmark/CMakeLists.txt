@@ -1,4 +1,3 @@
-
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
     dispatch/test_bw_and_latency.cpp
@@ -41,30 +40,37 @@ set(PERF_MICROBENCH_TESTS_SRCS
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
 )
 
-foreach (TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
+foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
     get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
     get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
     # test_rw_buffer have two versions >:/ can we remove one?
-    if (${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
+    if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
         set(TEST_TARGET "test_rw_buffer_old")
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
-    if (${TEST_TARGET} MATCHES "test_dram_read")
+    if(${TEST_TARGET} MATCHES "test_dram_read")
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()
 
-    target_include_directories(${TEST_TARGET} PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
-        ${PROJECT_SOURCE_DIR}/tt_metal/common
-        ${PROJECT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}
+    target_include_directories(
+        ${TEST_TARGET}
+        PRIVATE
+            ${UMD_HOME}
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
+            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            ${PROJECT_SOURCE_DIR}/tests
+            ${CMAKE_CURRENT_SOURCE_DIR}
     )
-    set_target_properties(${TEST_TARGET} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR})
+    set_target_properties(
+        ${TEST_TARGET}
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
+    )
     target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
     list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
 endforeach()

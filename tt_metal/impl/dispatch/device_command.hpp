@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"

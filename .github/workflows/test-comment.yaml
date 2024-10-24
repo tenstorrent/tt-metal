@@ -1,0 +1,23 @@
+
+name: "All post-commit tests via comment"
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test
+        run: |
+          echo "Testing..."
+          ls
+  trigger-tests:
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    secrets: inherit

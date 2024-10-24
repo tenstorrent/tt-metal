@@ -8,6 +8,7 @@ from loguru import logger
 from itertools import product
 import torch
 import ttnn
+import math
 
 
 def sanitize_shape_rm(input_shape):
@@ -137,3 +138,17 @@ def gen_with_zeroes(size, probabilityzeroes=0.5, low=-100, high=100, dtype=torch
     ridx = torch.randperm(element_count)  # a random permutation of the entries
     mask = torch.reshape(raw[ridx], size)
     return mask
+
+
+# at the moment, topk only works on last dim
+# last dim must be a multiple of 64 and a pow of 2
+def santize_topk_shape(input_shape):
+    num_dims = len(input_shape)
+    last_dim = input_shape[num_dims - 1]
+    if not (last_dim & (last_dim - 1) == 0) and last_dim != 0:
+        last_dim = 2 ** math.ceil(math.log2(last_dim))
+        last_dim = last_dim + last_dim % 64
+
+    input_shape[num_dims - 1] = last_dim
+
+    return input_shape
