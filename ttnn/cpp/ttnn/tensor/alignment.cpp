@@ -12,10 +12,6 @@ bool Alignment::operator==(const std::vector<uint32_t> &other) const {
     return this->m_value == other;
 }
 
-size_t Alignment::size() const {
-    return this->m_value.size();
-}
-
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &alignment) {
     os << "Alignment([";
     for (size_t i = 0; i < alignment.size(); ++i) {

@@ -15,6 +15,7 @@ public:
     using tt::tt_metal::VectorBase::cbegin;
     using tt::tt_metal::VectorBase::cend;
     using tt::tt_metal::VectorBase::as_vector;
+    using tt::tt_metal::VectorBase::size;
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -24,9 +25,6 @@ public:
 
     bool operator==(const Alignment &other) const;
     bool operator==(const std::vector<uint32_t> &other) const;
-
-    [[nodiscard]] size_t size() const;
-
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
