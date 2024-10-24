@@ -48,27 +48,23 @@ SECTIONS
 
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE
-  .sdata2         :
+
+  .data :
   {
-    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_KERNEL_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_KERNEL_DATA
-  /* Adjust the address for the data segment.  We want to adjust up to
-     the same address within the page on the next page up.  */
-  . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_KERNEL_DATA
-  .dynamic        : { *(.dynamic) } > REGION_APP_KERNEL_DATA
-  . = DATA_SEGMENT_RELRO_END (0, .);
-  .data           :
-  {
-    . = ALIGN(16);
-    *(.data .data.* .gnu.linkonce.d.*)
+    *(.dynamic)
+    *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
-    SORT(CONSTRUCTORS)
+    *(.sdata .sdata.* .gnu.linkonce.s.*)
+    *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
+    *(.data .data.* .gnu.linkonce.d.*)
+    *(.data1)
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
+    . = ALIGN(4);
   } > REGION_APP_KERNEL_DATA
 
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
+
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  __l1_bss_start = .;
   .sbss           :
   {
     *(.dynsbss)
@@ -76,7 +72,6 @@ SECTIONS
     *(.scommon)
   } > REGION_APP_KERNEL_DATA
   . = ALIGN(4);
-  __l1_bss_end = .;
 
   .bss            :
   {

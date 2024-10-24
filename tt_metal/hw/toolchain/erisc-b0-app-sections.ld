@@ -54,7 +54,6 @@ SECTIONS
   .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  __l1_bss_start = .;
   .sbss           :
   {
     *(.dynsbss)
@@ -62,7 +61,6 @@ SECTIONS
     *(.scommon)
   } > REGION_APP_DATA
   . = ALIGN(4);
-  __l1_bss_end = .;
 
   .bss            :
   {
