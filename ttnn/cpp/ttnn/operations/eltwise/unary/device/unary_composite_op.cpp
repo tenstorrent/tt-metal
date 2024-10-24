@@ -71,6 +71,10 @@ Tensor _power(uint8_t queue_id, const Tensor& input, uint32_t exponent, const st
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor t_one = ttnn::full_like(input_a, 1.0f);
    Tensor t_result(input_a);
    {
@@ -101,6 +105,10 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
 
 // asinh(x) = log(x + sqrt(x^2 + 1))
 Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor ln_res(input_a);
    {
        Tensor x_abs = ttnn::abs(input_a, output_mem_config);
@@ -119,6 +127,10 @@ Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
 
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+   TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor comp_result(input_a);
    {
        Tensor nr_term(input_a);
