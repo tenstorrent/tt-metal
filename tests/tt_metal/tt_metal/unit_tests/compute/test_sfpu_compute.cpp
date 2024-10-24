@@ -5,28 +5,35 @@
 #include <gtest/gtest.h>
 #include <math.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "device_fixture.hpp"
+#include "test_golden_impls.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+
+// Limits of SFPU input value range. These values are chosen because they
+// cover the domains of all SFPU functions used in the test
+#define GOLDEN_BOT_LIMIT    (-7.0f)
+#define GOLDEN_TOP_LIMIT    (7.0f)
+// Small values around zero for domains which have to exclude zeroes, like
+// log or reciprocal
+#define GOLDEN_NEG_EPSILON  (-0.0001f)
+#define GOLDEN_POS_EPSILON  (0.0001f)
+// Min/max values of the randomly-generated input block height/width
+#define MIN_BLOCK_DIM       (1)
+#define MAX_BLOCK_DIM       (10)
+// Number of dimensions randomly generated, can be expanded up to 4,
+// making an input a full tensor rather than a matrix
+#define NUM_DIMS            (2)
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
-
+// Internal sfpu_op is mapped to proper SFPU function calls
 const map<string, std::map<string, string>> sfpu_op_to_op_name = {
-    // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
@@ -37,62 +44,65 @@ const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
 };
 
-tt::test_utils::df::bfloat16 sfpu_function(const string& op_name, const tt::test_utils::df::bfloat16& input) {
-    if (op_name == "relu") {
-        return tt::test_utils::df::bfloat16(fmaxf(input.to_float(), 0.0f));
-    } else if (op_name == "exponential") {
-        return tt::test_utils::df::bfloat16(std::exp(input.to_float()));
+// Function that generates different input ranges depending on the SFPU op specified
+vector<uint32_t> generate_random_sfpu_vector(
+    const float lower,
+    const float upper,
+    const size_t num_bytes,
+    const string& op_name,
+    const tt::DataFormat data_format,
+    const int seed) {
+    if ((op_name == "sqrt") || (op_name == "log")) {
+        // sqrt and log have values between (0, upper]
+        return unit_tests::compute::generate_random_vector_generalized(GOLDEN_POS_EPSILON, upper, num_bytes, data_format, seed);
     } else if (op_name == "reciprocal") {
-        return tt::test_utils::df::bfloat16(1 / input.to_float());
-    } else if (op_name == "gelu") {
-        static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
-        auto x = input.to_float();
-        auto x3 = x * x * x;
-        float result = x * 0.5 * (1.0 + tanhf(alpha * (x + 0.044715 * x3)));
-        return tt::test_utils::df::bfloat16(result);
-    } else if (op_name == "sqrt") {
-        return tt::test_utils::df::bfloat16(sqrtf(input.to_float()));
-    } else if (op_name == "sigmoid") {
-        auto x = input.to_float();
-        float result = 1 / (1 + std::exp(-x));
-        return tt::test_utils::df::bfloat16(result);
-    } else if (op_name == "log") {
-        return tt::test_utils::df::bfloat16(logf(input.to_float()));
-    } else if (op_name == "tanh") {
-        return tt::test_utils::df::bfloat16(std::tanh(input.to_float()));
+        // For reciprocal, exclude zeroes and use (lower, upper) range
+        return unit_tests::compute::generate_random_vector_generalized(lower, upper, num_bytes, data_format, seed, true, GOLDEN_NEG_EPSILON, GOLDEN_POS_EPSILON);
     } else {
-        TT_THROW("Unsupported op_name in test");
-        return tt::test_utils::df::bfloat16(0.0f);
-    }
-}
-vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const string& op_name, const int seed) {
-    if ((op_name == "sqrt") or (op_name == "log")) {
-        return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(0.0001f, 4.0f, numel, seed);
-    } else if ((op_name == "exponential") or (op_name == "gelu") or (op_name == "reciprocal")) {
-        auto possible_values = vector<tt::test_utils::df::bfloat16>({-1.0f, -0.5f, 0.5f, 1.0f});
-        return generate_packed_random_vector_from_vector<uint32_t, tt::test_utils::df::bfloat16>(possible_values, numel, seed);
-    } else {
-        return generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(-1.0f, 1.0f, numel, seed);
+        // For all other operations, allow zeroes and use (lower, upper) range
+        return unit_tests::compute::generate_random_vector_generalized(lower, upper, num_bytes, data_format, seed);
     }
 }
 
-bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::vector<uint32_t>& vec_b, const string& op_name) {
-    if (op_name == "tanh") {
-        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.175f, 0.1f); });
-    } else if ((op_name == "gelu") or (op_name == "relu")) {
-        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.15f); });
-    } else if ((op_name == "exponential")) {
-        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.1f, 0.1f); });
-    } else if ((op_name == "log")) {
-        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.03f, 0.02f); });
+// Function that performs SFPU ops on float values.
+// It is used to generate golden
+float sfpu_function(const string& op_name, const float& input) {
+    if (op_name == "relu") {
+        return fmaxf(input, 0.0f);
+    } else if (op_name == "exponential") {
+        return std::exp(input);
+    } else if (op_name == "reciprocal") {
+        return 1 / input;
+    } else if (op_name == "gelu") {
+        static constexpr float alpha = M_2_SQRTPI * M_SQRT1_2;
+        auto x3 = input * input * input;
+        return input * 0.5 * (1.0 + tanhf(alpha * (input + 0.044715 * x3)));
+    } else if (op_name == "sqrt") {
+        return sqrtf(input);
+    } else if (op_name == "sigmoid") {
+        return 1 / (1 + std::exp(-input));
+    } else if (op_name == "log") {
+        return input ? logf(input) : 0.0f;
+    } else if (op_name == "tanh") {
+        return std::tanh(input);
     } else {
-        return is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
-            vec_a, vec_b, [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) { return is_close(a, b, 0.06f, 0.006f); });
+        TT_THROW("Unsupported op_name!");
+        return 0.0f;
     }
+}
+
+// Function that compares SFPU output and golden. Different tollerances are needed for different ops
+bool is_close_packed_sfpu_output(const vector<float>& vec_a, const vector<float>& vec_b, const string& op_name) {
+    for (int i = 0; i < vec_a.size(); i++) {
+        if (op_name == "tanh") {
+            return is_close<float>(vec_a[i], vec_b[i], 0.175f, 0.1f);
+        } else if ((op_name == "sqrt") or (op_name == "reciprocal") or (op_name == "exponential")) {
+            return is_close<float>(vec_a[i], vec_b[i], 0.06f, 0.002);
+        } else {
+            return is_close<float>(vec_a[i], vec_b[i], 0.01f, 0.025f);
+        }
+    }
+    return false;
 }
 
 }  // namespace unit_tests::sfpu_util
@@ -100,13 +110,14 @@ bool is_close_packed_sfpu_output(const std::vector<uint32_t>& vec_a, const std::
 namespace unit_tests::compute::sfpu {
 
 struct SfpuConfig {
-    size_t num_tiles = 0;
-    size_t tile_byte_size = 0;
+    size_t r_tile_dim = 0;
+    size_t c_tile_dim = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
     std::string sfpu_op = "";
     bool approx_mode = true;
+    bool fp32_dest_acc_en = true;
 };
 
 /// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
@@ -114,62 +125,81 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
-    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
-    tt_metal::Program program = tt_metal::CreateProgram();
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-                    .device=device,
-                    .size = byte_size,
-                    .page_size = byte_size,
-                    .buffer_type = tt::tt_metal::BufferType::DRAM
-        };
+bool run_sfpu_test(tt_metal::Device* device, const SfpuConfig& test_config) {
+    size_t num_tiles = test_config.r_tile_dim * test_config.c_tile_dim;
+    const size_t input_byte_size = num_tiles * tile_size(test_config.l1_input_data_format);
+    const size_t output_byte_size = num_tiles * tile_size(test_config.l1_output_data_format);
 
-    auto input_dram_buffer = CreateBuffer(dram_config);
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    // Create input/output buffers
+    tt::tt_metal::InterleavedBufferConfig input_dram_config{
+                    .device = device,
+                    .size = input_byte_size,
+                    .page_size = input_byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+    };
+
+    tt::tt_metal::InterleavedBufferConfig output_dram_config{
+                    .device = device,
+                    .size = output_byte_size,
+                    .page_size = output_byte_size,
+                    .buffer_type = tt::tt_metal::BufferType::DRAM
+    };
+
+    auto input_dram_buffer = CreateBuffer(input_dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
     auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto output_dram_buffer = CreateBuffer(output_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
     auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     vector<uint32_t> compute_kernel_args = {
-        uint32_t(test_config.num_tiles),  // per_core_block_cnt
-        1                            // per_core_block_cnt
+        uint32_t(test_config.c_tile_dim),  // per_core_block_cnt
+        uint32_t(test_config.r_tile_dim)   // per_core_block_dim
     };
 
-    // Input
-    std::vector<uint32_t> packed_input = sfpu_util::generate_packed_sfpu_input(
-        byte_size / tt::test_utils::df::bfloat16::SIZEOF, test_config.sfpu_op, std::chrono::system_clock::now().time_since_epoch().count());
+    // Create packed input
+    vector<uint32_t> packed_input = sfpu_util::generate_random_sfpu_vector(
+        GOLDEN_BOT_LIMIT,
+        GOLDEN_TOP_LIMIT,
+        input_byte_size,
+        test_config.sfpu_op,
+        test_config.l1_input_data_format,
+        std::chrono::system_clock::now().time_since_epoch().count()
+    );
 
-    // Golden output
-    auto input = unpack_vector<tt::test_utils::df::bfloat16, uint32_t>(packed_input);
-    std::vector<tt::test_utils::df::bfloat16> golden(input.size());
-    std::transform(input.begin(), input.end(), golden.begin(), [&](const tt::test_utils::df::bfloat16& val) {
+    // Unpack input to prepare for golden
+    vector<float> unpacked_input = unit_tests::compute::unpack_generalized(test_config.l1_input_data_format, packed_input);
+
+    // Golden output, a float vector
+    vector<float> golden(unpacked_input.size());
+    std::transform(unpacked_input.begin(), unpacked_input.end(), golden.begin(), [&](const float& val) {
         return sfpu_util::sfpu_function(test_config.sfpu_op, val);
     });
-    std::vector<uint32_t> packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
 
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {
         (uint32_t)input_dram_byte_address,
         (uint32_t)input_dram_noc_xy.x,
         (uint32_t)input_dram_noc_xy.y,
-        (uint32_t)test_config.num_tiles,
+        (uint32_t)num_tiles,
     };
 
     vector<uint32_t> writer_rt_args = {
         (uint32_t)output_dram_byte_address,
         (uint32_t)output_dram_noc_xy.x,
         (uint32_t)output_dram_noc_xy.y,
-        (uint32_t)test_config.num_tiles,
+        (uint32_t)num_tiles,
     };
 
     for (const CoreRange& core_range : test_config.cores.ranges()) {
-        tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
-            .set_page_size(0, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_input_cb_config = tt_metal::CircularBufferConfig(input_byte_size, {{0, test_config.l1_input_data_format}})
+            .set_page_size(0, tile_size(test_config.l1_input_data_format));
         auto l1_input_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_input_cb_config);
 
-        tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
-            .set_page_size(16, test_config.tile_byte_size);
+        tt_metal::CircularBufferConfig l1_output_cb_config = tt_metal::CircularBufferConfig(output_byte_size, {{16, test_config.l1_output_data_format}})
+            .set_page_size(16, tile_size(test_config.l1_output_data_format));
         auto l1_output_cb = tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
 
         auto reader_kernel = tt_metal::CreateKernel(
@@ -198,11 +228,16 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
         sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"]="1";
 
+        if (test_config.fp32_dest_acc_en) {
+            sfpu_defines["DEST_ACCUM_EN"] = "1";
+        }
+
         auto sfpu_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/compute/eltwise_sfpu.cpp",
             test_config.cores,
             tt_metal::ComputeConfig{
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .math_approx_mode = test_config.approx_mode,
                 .compile_args = compute_kernel_args,
                 .defines = sfpu_defines});
@@ -214,258 +249,251 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
         }
     }
 
-    std::vector<uint32_t> dest_buffer_data;
+    vector<uint32_t> packed_output;
     tt_metal::detail::WriteToBuffer(input_dram_buffer, packed_input);
     tt_metal::detail::LaunchProgram(device, program);
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    tt_metal::detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
-    return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    // Unpack SFPU output to float vector
+    vector<float> unpacked_output = unit_tests::compute::unpack_generalized(test_config.l1_output_data_format, packed_output);
+
+    return sfpu_util::is_close_packed_sfpu_output(golden, unpacked_output, test_config.sfpu_op);
 }
 
 }  // namespace unit_tests::compute::sfpu
+
 class SingleCoreSingleDeviceSfpuParameterizedFixture : public DeviceFixture,
-                                                       public testing::WithParamInterface<std::tuple<size_t, string>> {
+                                                       public testing::WithParamInterface<std::tuple<std::tuple<tt::DataFormat, tt::DataFormat>, std::string>> {
 };
+
 TEST_P(SingleCoreSingleDeviceSfpuParameterizedFixture, SfpuCompute) {
-    size_t num_tiles = std::get<0>(GetParam());
+    // Generate random width and height of the input block
+    // Can be easily expanded to all dimensions of tensor
+    vector<uint32_t> random_shape = generate_uniform_random_vector<uint32_t>(
+        MIN_BLOCK_DIM,
+        MAX_BLOCK_DIM,
+        NUM_DIMS,
+        std::chrono::system_clock::now().time_since_epoch().count() // Seed
+    );
+    size_t r_tile_dim = random_shape[0];
+    size_t c_tile_dim = random_shape[1];
+
+    // Extract the tuple of input/output formats and the sfpu_op
+    auto formats = std::get<0>(GetParam());
     string sfpu_op = std::get<1>(GetParam());
+
+    // Extract input and output formats from the tuple
+    tt::DataFormat input_format = std::get<0>(formats);
+    tt::DataFormat output_format = std::get<1>(formats);
 
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .num_tiles = num_tiles,
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .sfpu_op = sfpu_op,
-        .approx_mode = false};
-    log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
+    for (bool approx_mode: {true, false}) {
+        for (bool fp32_dest_acc_en : {true, false}) {
+            // FP32 dest acc not possible for GS
+            if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
+            unit_tests::compute::sfpu::SfpuConfig test_config = {
+                .r_tile_dim = r_tile_dim,
+                .c_tile_dim = c_tile_dim,
+                .l1_input_data_format = input_format,
+                .l1_output_data_format = output_format,
+                .cores = core_range_set,
+                .sfpu_op = sfpu_op,
+                .approx_mode = approx_mode,
+                .fp32_dest_acc_en = fp32_dest_acc_en
+            };
+            log_info("SFPU_OP={}, r_tile_dim={}, c_tile_dim={}, approx_mode={}, fp32_dest_acc_en={} input_format={} output_format={}",
+                sfpu_op,
+                r_tile_dim,
+                c_tile_dim,
+                approx_mode,
+                fp32_dest_acc_en,
+                input_format,
+                output_format);
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_sfpu_test(devices_.at(id), test_config));
+            }
+        }
     }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     SingleCoreSfpuCompute,
     SingleCoreSingleDeviceSfpuParameterizedFixture,
-    ::testing::Values(
-        std::make_tuple(1, "relu"),
-        std::make_tuple(1, "exponential"),
-        std::make_tuple(1, "reciprocal"),
-        std::make_tuple(1, "gelu"),
-        std::make_tuple(1, "sqrt"),
-        std::make_tuple(1, "sigmoid"),
-        std::make_tuple(1, "log"),
-        std::make_tuple(1, "tanh"),
-        std::make_tuple(4, "relu"),
-        std::make_tuple(4, "exponential"),
-        std::make_tuple(4, "reciprocal"),
-        std::make_tuple(4, "gelu"),
-        std::make_tuple(4, "sqrt"),
-        std::make_tuple(4, "sigmoid"),
-        std::make_tuple(4, "log"),
-        std::make_tuple(4, "tanh")));
-class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
-    : public DeviceFixture,
-      public testing::WithParamInterface<std::tuple<size_t, string>> {};
+    ::testing::Combine(
+        ::testing::Values(
+            std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Float16_b),
+            std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Float32),
+            std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Float16_b),
+            std::make_tuple(tt::DataFormat::Bfp4_b, tt::DataFormat::Float16_b),
+            std::make_tuple(tt::DataFormat::Bfp8_b, tt::DataFormat::Float32)
+        ),
+        ::testing::Values(
+            "gelu",
+            "relu",
+            "sqrt",
+            "exponential",
+            "log",
+            "reciprocal",
+            "tanh",
+            "sigmoid"
+        )
+    ));
 
-TEST_P(SingleCoreSingleDeviceSfpuParameterizedApproxFixture, SfpuCompute) {
-    size_t num_tiles = std::get<0>(GetParam());
-    string sfpu_op = std::get<1>(GetParam());
+// TEST_F(DeviceFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCompute) {
+//     CoreRange core_range({0, 0}, {1, 0});
+//     CoreRangeSet core_range_set({core_range});
+//     unit_tests::compute::sfpu::SfpuConfig test_config = {
+//         .tile_byte_size = 2 * 32 * 32,
+//         .l1_input_data_format = tt::DataFormat::Float16_b,
+//         .l1_output_data_format = tt::DataFormat::Float16_b,
+//         .cores = core_range_set,
+//         .approx_mode = true};
 
-    if (((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "relu")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "exponential")) or
-        ((arch_ == tt::ARCH::WORMHOLE_B0) and (sfpu_op == "log"))) {
-        GTEST_SKIP();
-    } else {
-        CoreRange core_range({0, 0}, {0, 0});
-        CoreRangeSet core_range_set({core_range});
-        unit_tests::compute::sfpu::SfpuConfig test_config = {
-            .num_tiles = num_tiles,
-            .tile_byte_size = 2 * 32 * 32,
-            .l1_input_data_format = tt::DataFormat::Float16_b,
-            .l1_output_data_format = tt::DataFormat::Float16_b,
-            .cores = core_range_set,
-            .sfpu_op = sfpu_op,
-            .approx_mode = true};
-        log_info("Testing SFPU_OP={} num_tiles={}", sfpu_op, num_tiles);
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(id), test_config));
-        }
-    }
-}
-INSTANTIATE_TEST_SUITE_P(
-    SingleCoreSfpuCompute,
-    SingleCoreSingleDeviceSfpuParameterizedApproxFixture,
-    ::testing::Values(
-        std::make_tuple(1, "relu"),
-        std::make_tuple(1, "exponential"),
-        std::make_tuple(1, "reciprocal"),
-        std::make_tuple(1, "gelu"),
-        std::make_tuple(1, "sqrt"),
-        std::make_tuple(1, "sigmoid"),
-        std::make_tuple(1, "log"),
-        std::make_tuple(1, "tanh"),
-        std::make_tuple(4, "relu"),
-        std::make_tuple(4, "exponential"),
-        std::make_tuple(4, "reciprocal"),
-        std::make_tuple(4, "gelu"),
-        std::make_tuple(4, "sqrt"),
-        std::make_tuple(4, "sigmoid"),
-        std::make_tuple(4, "log"),
-        std::make_tuple(4, "tanh")));
+//     auto arch = this->arch_;
 
-TEST_F(DeviceFixture, DISABLED_MultiContinguousCoreSingleTileSfpuApproxCompute) {
-    CoreRange core_range({0, 0}, {1, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .approx_mode = true};
+//     if (arch != tt::ARCH::GRAYSKULL) {
+//         GTEST_SKIP();
+//     }
 
-    auto arch = this->arch_;
+//     CoreRangeSet core_set({core_range});
+//     test_config.cores = core_set;
 
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+//     test_config.r_tile_dim = random_shape[0];
+//     test_config.c_tile_dim = random_shape[1];
+//     test_config.sfpu_op = "relu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "exponential";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "reciprocal";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "gelu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sqrt";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sigmoid";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "log";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "tanh";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+// }
 
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
+// TEST_F(DeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxCompute) {
+//     CoreRange core_range({0, 0}, {1, 0});
+//     CoreRangeSet core_range_set({core_range});
+//     unit_tests::compute::sfpu::SfpuConfig test_config = {
+//         .tile_byte_size = 2 * 32 * 32,
+//         .l1_input_data_format = tt::DataFormat::Float16_b,
+//         .l1_output_data_format = tt::DataFormat::Float16_b,
+//         .cores = core_range_set,
+//         .approx_mode = true};
 
-    test_config.num_tiles = 1;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
+//     auto arch = this->arch_;
 
-TEST_F(DeviceFixture, DISABLED_MultiContinguousCoreMultiTileSfpuApproxCompute) {
-    CoreRange core_range({0, 0}, {1, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .approx_mode = true};
+//     if (arch != tt::ARCH::GRAYSKULL) {
+//         GTEST_SKIP();
+//     }
 
-    auto arch = this->arch_;
+//     CoreRangeSet core_set({core_range});
+//     test_config.cores = core_set;
 
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+//     test_config.r_tile_dim = random_shape[0];
+//     test_config.c_tile_dim = random_shape[1];
 
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
+//     test_config.sfpu_op = "relu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "exponential";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "reciprocal";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "gelu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sqrt";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sigmoid";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "log";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "tanh";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+// }
+// TEST_F(DeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
+//     unit_tests::compute::sfpu::SfpuConfig test_config = {
+//         .tile_byte_size = 2 * 32 * 32,
+//         .l1_input_data_format = tt::DataFormat::Float16_b,
+//         .l1_output_data_format = tt::DataFormat::Float16_b,
+//         .cores = {{}},
+//         .approx_mode = true};
 
-    test_config.num_tiles = 4;
+//     auto arch = this->arch_;
 
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
-TEST_F(DeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = CoreRangeSet(),
-        .approx_mode = true};
+//     if (arch != tt::ARCH::GRAYSKULL) {
+//         GTEST_SKIP();
+//     }
 
-    auto arch = this->arch_;
+//     int chip_id = 0;
+//     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
+//     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
+//     CoreRangeSet core_set({core_range});
+//     test_config.cores = core_set;
 
-    int chip_id = 0;
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
-    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
+//     test_config.r_tile_dim = random_shape[0];
+//     test_config.c_tile_dim = random_shape[1];
+//     test_config.sfpu_op = "relu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "exponential";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "reciprocal";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "gelu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sqrt";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sigmoid";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "log";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "tanh";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+// }
+// TEST_F(DeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
+//     unit_tests::compute::sfpu::SfpuConfig test_config = {
+//         .tile_byte_size = 2 * 32 * 32,
+//         .l1_input_data_format = tt::DataFormat::Float16_b,
+//         .l1_output_data_format = tt::DataFormat::Float16_b,
+//         .cores = {{}},
+//         .approx_mode = true};
 
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
+//     auto arch = this->arch_;
 
-    test_config.num_tiles = 1;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
-TEST_F(DeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
-    unit_tests::compute::sfpu::SfpuConfig test_config = {
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = CoreRangeSet(),
-        .approx_mode = true};
+//     if (arch != tt::ARCH::GRAYSKULL) {
+//         GTEST_SKIP();
+//     }
 
-    auto arch = this->arch_;
+//     int chip_id = 0;
+//     CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
+//     CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
 
-    if (arch != tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
-
-    int chip_id = 0;
-    CoreCoord worker_grid_size = this->devices_.at(0)->logical_grid_size();
-    CoreRange core_range({0, 0}, {worker_grid_size.x - 2, worker_grid_size.y - 2});
-
-    CoreRangeSet core_set({core_range});
-    test_config.cores = core_set;
-    test_config.num_tiles = 4;
-    test_config.sfpu_op = "relu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "exponential";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "reciprocal";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "gelu";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sqrt";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "sigmoid";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "log";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-    test_config.sfpu_op = "tanh";
-    EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
-}
+//     CoreRangeSet core_set({core_range});
+//     test_config.cores = core_set;
+//     test_config.r_tile_dim = random_shape[0];
+//     test_config.c_tile_dim = random_shape[1];
+//     test_config.sfpu_op = "relu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "exponential";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "reciprocal";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "gelu";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sqrt";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "sigmoid";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "log";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+//     test_config.sfpu_op = "tanh";
+//     EXPECT_TRUE(run_sfpu_test(devices_.at(0), test_config));
+// }

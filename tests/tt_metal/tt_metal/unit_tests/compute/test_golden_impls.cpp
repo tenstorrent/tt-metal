@@ -2,16 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-
 #include "test_golden_impls.hpp"
-#include "common/test_tiles.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tests/tt_metal/test_utils/packing.hpp"
-
 
 namespace unit_tests::compute {
 
@@ -243,5 +234,127 @@ std::vector<uint32_t> gold_standard_tilize_w_elwadd(const std::vector<uint32_t> 
     return tt::test_utils::pack_vector<uint32_t, bfloat16>(result_vec);
 }
 
+// A pointer to the appropriate function for generating random packed vector depending on the data format
+using RandomVectorGenerator = std::function<vector<uint32_t>(uint32_t num_bytes, bool is_exp_a, int max_float, int seed, float offset)>;
+// A pointer to the appropriate function for unpacking the vector from the given data format to float vec
+using VectorUnpacker = std::function<vector<float>(const std::vector<uint32_t> &packed_input, bool row_major_output, bool is_exp_a)>;
+
+
+std::vector<uint32_t> generate_random_vector_generalized(
+    const float lower,
+    const float upper,
+    const size_t num_bytes,
+    const tt::DataFormat data_format,
+    const int seed,
+    bool exclude_zeroes,
+    float golden_neg_epsilon,
+    float golden_pos_epsilon) {
+
+    RandomVectorGenerator vector_generator;
+
+    // Select the appropriate vector generator based on the data format
+    switch (data_format) {
+        case tt::DataFormat::Float16_b:
+            vector_generator = [&](uint32_t num_bytes, bool is_exp_a, int max_float, int seed, float offset) {
+                return create_random_vector_of_bfloat16(num_bytes, max_float, seed, offset);
+            };
+            break;
+        case tt::DataFormat::Float32:
+            vector_generator = [&](uint32_t num_bytes, bool is_exp_a, int max_float, int seed, float offset) {
+                auto rand_float = std::bind(std::uniform_real_distribution<float>(0, max_float), std::mt19937(seed));
+                vector<uint32_t> vec(num_bytes/sizeof(uint32_t), 0);
+                for (int i = 0; i < vec.size(); i++) {
+                    float num_float = rand_float() + offset;
+                    std::memcpy(&vec[i], &num_float, sizeof(float));
+                }
+                return vec;
+            };
+            break;
+        case tt::DataFormat::Bfp8_b:
+            vector_generator = [&](uint32_t num_bytes,bool is_exp_a, int max_float, int seed, float offset) {
+                return create_random_vector_of_bfp8(num_bytes, is_exp_a, max_float, seed, offset);
+            };
+            break;
+        case tt::DataFormat::Bfp4_b:
+            vector_generator = [&](uint32_t num_bytes,bool is_exp_a, int max_float, int seed, float offset) {
+                return create_random_vector_of_bfp4(num_bytes, is_exp_a, max_float, seed, offset);
+            };
+            break;
+        default:
+            TT_THROW("Unsupported DataFormat!");
+            return {};
+    }
+
+    if (exclude_zeroes) {
+        if (lower < 0 && upper > 0) {
+            vector<uint32_t> vec;
+
+            // Split into negative and positive parts, avoiding zero
+            auto negative_part = vector_generator(
+                num_bytes / 2,
+                false,
+                std::abs(lower - golden_neg_epsilon),
+                seed,
+                lower);
+            auto positive_part = vector_generator(
+                num_bytes - num_bytes / 2,
+                false,
+                upper - golden_pos_epsilon,
+                seed + 1, // Use a different seed for the positive part
+                golden_pos_epsilon);
+
+            // Combine both parts
+            vec.insert(vec.end(), negative_part.begin(), negative_part.end());
+            vec.insert(vec.end(), positive_part.begin(), positive_part.end());
+            return vec;
+        } else {
+            TT_THROW("Cannot create a vector without zeroes with selected input value range!");
+        }
+    } else {
+        // Use the generic generator for the entire range
+        return vector_generator(num_bytes, false, upper - lower, seed, lower);
+    }
+}
+
+std::vector<float> unpack_generalized(const tt::DataFormat data_format, const std::vector<uint32_t>& packed_input) {
+    VectorUnpacker unpacker_function;
+
+    // Select the appropriate vector generator based on the data format
+    switch (data_format) {
+        case tt::DataFormat::Float16_b:
+            unpacker_function = [&](const std::vector<uint32_t> &packed_input, bool row_major_output, bool is_exp_a) {
+                vector<bfloat16> vec = unpack_uint32_vec_into_bfloat16_vec(packed_input);
+                vector<float> vec_float(vec.size());
+                for (int i = 0; i < vec.size(); i++) {
+                    vec_float[i] = vec[i].to_float();
+                }
+                return vec_float;
+            };
+            break;
+        case tt::DataFormat::Float32:
+            unpacker_function = [&](const std::vector<uint32_t> &packed_input, bool row_major_output, bool is_exp_a) {
+                vector<float> vec(packed_input.size(), 0);
+                for (int i = 0; i < packed_input.size(); i++) {
+                    std::memcpy(&vec[i], &packed_input[i], sizeof(uint32_t));
+                }
+                return vec;
+            };
+            break;
+        case tt::DataFormat::Bfp8_b:
+            unpacker_function = [&](const std::vector<uint32_t> &packed_input, bool row_major_output, bool is_exp_a) {
+                return unpack_bfp8_tiles_into_float_vec(packed_input, row_major_output, is_exp_a);
+            };
+            break;
+        case tt::DataFormat::Bfp4_b:
+            unpacker_function = [&](const std::vector<uint32_t> &packed_input, bool row_major_output, bool is_exp_a) {
+                return unpack_bfp4_tiles_into_float_vec(packed_input, row_major_output, is_exp_a);
+            };
+            break;
+        default:
+            TT_THROW("Unsupported DataFormat!");
+            return {};
+    }
+    return unpacker_function(packed_input, true, false);
+}
 
 }   // unit_tests::compute
