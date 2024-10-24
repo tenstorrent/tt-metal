@@ -130,10 +130,7 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(STATUS "Adding compile option: -ftime-trace")
         add_compile_options("-ftime-trace")
     else()
-        message(
-            FATAL
-            "ENABLE_BUILD_TIME_TRACE is only supported with Clang"
-        )
+        message(FATAL_ERROR "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
     endif()
 endif()
 
@@ -198,7 +195,6 @@ target_link_libraries(
 )
 
 # Note on flags:
-#   DFMT_HEADER_ONLY must be for every target or else they won't interact with the header only fmt as intended
 #   ttnn and tt_lib will break if built with LTO, so leaving -fno-lto in compile options
 add_library(linker_flags INTERFACE)
 
@@ -229,7 +225,6 @@ target_compile_options(
     INTERFACE
         -mavx2
         -fPIC
-        -DFMT_HEADER_ONLY
         -fvisibility-inlines-hidden
         -fno-lto
 )
