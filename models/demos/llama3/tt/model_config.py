@@ -74,6 +74,7 @@ class TtModelArgs:
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.is_large_model = False
+        self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
@@ -117,22 +118,30 @@ class TtModelArgs:
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
 
+        # Set the model name based on the checkpoint directory being loaded
+        if "3.2-1B" in LLAMA_DIR:
+            local_params = "LLAMA3_2_1B_PARAMS"
+            self.model_name = "3.2-1B"
+        elif "3.2-3B" in LLAMA_DIR:
+            local_params = "LLAMA3_2_3B_PARAMS"
+            self.model_name = "3.2-3B"
+        elif "3.1-8B" in LLAMA_DIR:
+            local_params = "LLAMA3_1_8B_PARAMS"
+            self.model_name = "3.1-8B"
+        elif "3.2-11B" in LLAMA_DIR:
+            local_params = "LLAMA3_2_11B_PARAMS"
+            self.model_name = "3.2-11B"
+        elif "3.1-70B" in LLAMA_DIR:
+            local_params = "LLAMA3_1_70B_PARAMS"
+            self.model_name = "3.1-70B"
+            self.is_large_model = True
+        else:
+            raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+
+        # Load model params
         if not dummy_weights:
             self._set_llama_params(self.DEFAULT_CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            if "3.2-1B" in LLAMA_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in LLAMA_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in LLAMA_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in LLAMA_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in LLAMA_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-                self.is_large_model = True
-            else:
-                raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
         self.n_local_heads = self.n_heads // self.num_devices
