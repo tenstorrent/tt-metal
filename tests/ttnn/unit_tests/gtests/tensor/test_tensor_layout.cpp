@@ -2,11 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
+#include <host_api.hpp>
+#include <ttnn/tensor/tensor.hpp>
 
-#include "ttnn/tensor/tensor_layout.hpp"
+#include "gtest/gtest.h"
 #include "tt_metal/common/logger.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/tensor/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
+
+#include "common_tensor_test_utils.hpp"
 
 namespace {
 const tt::tt_metal::MemoryConfig DefaultMemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
@@ -21,6 +26,7 @@ struct Expected {
     tt::tt_metal::Size physical_size;
     Alignment alignment;
     Strides strides;
+    bool tensor_creation_works = true;
 };
 
 struct TensorLayoutTestParams {
@@ -40,6 +46,10 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     EXPECT_EQ(layout.get_alignment(), params.expected.alignment);
     EXPECT_EQ(layout.get_physical_shape(params.inputs.shape), params.expected.physical_size);
     EXPECT_EQ(layout.get_strides(params.inputs.shape), params.expected.strides);
+
+    if(params.expected.tensor_creation_works) {
+        test_utils::test_tensor_on_device(params.inputs.shape, layout);
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -154,7 +164,8 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {1, 2},
                 .alignment = Alignment({2}),
-                .strides = Strides({})
+                .strides = Strides({}),
+                .tensor_creation_works = false
             }
         },
 
@@ -168,25 +179,27 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
-                .strides = Strides({})
+                .strides = Strides({}),
+                .tensor_creation_works = false
             }
         },
 
         // Rank 0, Tile
         TensorLayoutTestParams{
             Inputs{
-                .shape = ttnn::SimpleShape{1},
+                .shape = ttnn::SimpleShape{},
                 .data_type = DataType::BFLOAT16,
                 .layout = Layout::TILE
             },
             Expected{
                 .physical_size = {32, 32},
                 .alignment = Alignment({32, 32}),
-                .strides = Strides({1})
+                .strides = Strides({}),
+                .tensor_creation_works = false
             }
         },
 
-        // Rank 1, RM
+        // Rank 1, RM, bfloat16
         TensorLayoutTestParams{
             Inputs{
                 .shape = ttnn::SimpleShape{1},
@@ -196,7 +209,23 @@ INSTANTIATE_TEST_SUITE_P(
             Expected{
                 .physical_size = {1, 2},
                 .alignment = Alignment({2}),
-                .strides = Strides({1})
+                .strides = Strides({1}),
+                .tensor_creation_works = false
+            }
+        },
+
+        // Rank 1, RM, uint32
+        TensorLayoutTestParams{
+            Inputs{
+                .shape = ttnn::SimpleShape{1},
+                .data_type = DataType::UINT32,
+                .layout = Layout::ROW_MAJOR
+            },
+            Expected{
+                .physical_size = {1, 1},
+                .alignment = Alignment({1}),
+                .strides = Strides({1}),
+                .tensor_creation_works = false
             }
         },
 
@@ -230,6 +259,8 @@ TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     const auto& params = GetParam();
     TensorLayout layout = TensorLayout::fromLegacyPaddedShape(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.padded_shape);
     EXPECT_EQ(layout.get_padded_shape(params.shape), params.padded_shape);
+
+    test_utils::test_tensor_on_device(params.shape, layout);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -325,6 +356,8 @@ TEST_P(TensorLayoutLegacyPaddingFromAlignmentTests, Tensor_LagacyPaddingFromAlig
     const auto& params = GetParam();
     TensorLayout layout = TensorLayout(DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.alignment);
     EXPECT_EQ(layout.get_padded_shape(params.shape), params.padded_shape);
+
+    test_utils::test_tensor_on_device(params.shape, layout);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -442,3 +475,26 @@ INSTANTIATE_TEST_SUITE_P(
         }
     )
 );
+
+
+TEST(TensorLayoutTests, TensorLayout_TinyTiles) {
+    using namespace tt::tt_metal;
+
+    const tt::tt_metal::MemoryConfig DefaultMemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt};
+    {
+        TensorLayout layout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, Tile({16, 32})), DefaultMemoryConfig);
+        ttnn::SimpleShape shape({2, 3, 10, 16});
+        EXPECT_EQ(layout.get_packed_buffer_size_bytes(shape), 3264); // 32 * 16 * 3 * 2 + (32 * 16 * 3 * 2)/16
+
+        //test_utils::test_tensor_on_device(shape, layout);
+    }
+
+    {
+        ttnn::SimpleShape shape({8, 4, 256, 256});
+        Tile tile({16, 16});
+        TensorLayout layout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), DefaultMemoryConfig);
+        EXPECT_EQ(layout.get_packed_buffer_size_bytes(shape), 2228224); // 256 * 256 * 4 * 8 + (256 * 256 * 4 * 8)/16
+
+        //test_utils::test_tensor_on_device(shape, layout);
+    }
+}

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <span>
 
 namespace tt::tt_metal {
 
@@ -12,11 +13,11 @@ namespace tt::tt_metal {
 class VectorBase {
 public:
     VectorBase() = default;
-    explicit VectorBase(const std::vector<uint32_t>& shape) : m_value(shape) {}
-    explicit VectorBase(std::vector<uint32_t>&& shape) : m_value(std::move(shape)) {}
-    explicit VectorBase(std::initializer_list<uint32_t> ilist) : m_value(ilist) {}
+    explicit VectorBase(const std::vector<uint32_t>& shape) : m_value(shape) { init(); }
+    explicit VectorBase(std::vector<uint32_t>&& shape) : m_value(std::move(shape)) { init(); }
+    explicit VectorBase(std::initializer_list<uint32_t> ilist) : m_value(ilist) { init(); }
     template<std::size_t N>
-    explicit VectorBase(const std::array<uint32_t, N>& arr) : m_value(arr.begin(), arr.end()) {}
+    explicit VectorBase(const std::array<uint32_t, N>& arr) : m_value(arr.begin(), arr.end()) { init(); }
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -31,12 +32,18 @@ public:
     uint32_t &operator[](int32_t index);
 
 
-    auto cbegin() const { return this->m_value.cbegin(); }
+    auto cbegin() const { return this->m_value.cbegin() + (m_value.size() - m_original_size); }
     auto cend() const { return this->m_value.cend(); }
 
-    [[nodiscard]] const std::vector<uint32_t>& as_vector() const { return this->m_value; }
+    std::span<const uint32_t> view() const;
+
+    [[deprecated("Use view() instead")]]
+    std::vector<uint32_t> as_vector() const;
 
 protected:
+    void init();
+
+    size_t m_original_size = 0;
     std::vector<uint32_t> m_value;
 };
 

@@ -431,6 +431,8 @@ std::string to_string(const BufferType& buffer, const tt::tt_metal::LegacyShape&
         }
     } else if (layout == Layout::TILE) {
         switch (shape.rank()) {
+            case 0: print_datum(ss, buffer[0]); break;
+            case 1: ss << "Unsupported Rank (1) for printing tensor with TILE_LAYOUT!";
             case 2: to_string_tile<BufferType, 2>(ss, buffer, shape, 0, 0); break;
             case 3: to_string_tile<BufferType, 3>(ss, buffer, shape, 0, 0); break;
             case 4: to_string_tile<BufferType, 4>(ss, buffer, shape, 0, 0); break;

@@ -13,7 +13,7 @@ bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
 }
 
 size_t SimpleShape::rank() const {
-    return this->m_value.size();
+    return this->m_original_size;
 }
 
 uint64_t SimpleShape::volume() const {
