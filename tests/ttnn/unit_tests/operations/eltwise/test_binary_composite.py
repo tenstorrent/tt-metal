@@ -469,8 +469,8 @@ def test_remainder_ttnn(input_shapes, scalar, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        # (torch.Size([1, 1, 320, 384])),
-        # (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
     ),
 )
 @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
@@ -483,6 +483,29 @@ def test_binary_fmod_ttnn(input_shapes, device):
     golden_tensor = golden_function(in_data1, in_data2)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod")
+# Input with more than two decimal places experience precision loss.
+def test_binary_fmod_decimal_ttnn(input_shapes, device):
+    in_data1 = torch.randn(input_shapes, dtype=torch.bfloat16) * 9
+    input_tensor1 = ttnn.Tensor(in_data1, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    in_data2 = torch.rand(input_shapes, dtype=torch.bfloat16) - 2
+    input_tensor2 = ttnn.Tensor(in_data2, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    output_tensor = ttnn.fmod(input_tensor1, input_tensor2)
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    golden_tensor = golden_function(in_data1, in_data2)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor], 0.98)
     assert comp_pass
 
 
