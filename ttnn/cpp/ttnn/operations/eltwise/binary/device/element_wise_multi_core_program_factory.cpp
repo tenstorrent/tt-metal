@@ -342,7 +342,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = GetNextAvailableCircularBufferIndex(program);
     uint32_t num_input_tiles = src0_sharded ? num_tiles_per_shard : 2 * max_block_size;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
@@ -352,7 +352,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = GetNextAvailableCircularBufferIndex(program);
     num_input_tiles = src1_sharded ? num_tiles_per_shard : 2 * max_block_size;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})

@@ -214,7 +214,11 @@ KernelGroup::KernelGroup(
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
+    // #7493
+    // instead of...
     this->launch_msg.kernel_config.max_cb_index = last_cb_index + 1;
+    // possibly use this after the reach arounds are complete
+    // this->launch_msg.kernel_config.max_cb_index = program.num_circular_buffers();
     this->go_msg.signal = RUN_MSG_GO;
 }
 
@@ -376,6 +380,8 @@ void Program::CircularBufferAllocator::mark_address(uint64_t address, uint64_t s
 CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
+    // #7493
+    circular_buffer->set_cb_enum(static_cast<CB>(this->circular_buffers_.size()));
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {

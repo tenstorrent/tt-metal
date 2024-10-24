@@ -191,6 +191,17 @@ CBHandle CreateCircularBuffer(
 const CircularBufferConfig &GetCircularBufferConfig(Program &program, CBHandle cb_handle);
 
 /**
+ * Gets the next available index that can be used to reference a circular buffer.
+ *
+ * Return value: const uint32_t
+ *
+ * | Argument  | Description                                                    | Type                         | Valid Range | Required |
+ * |-----------|----------------------------------------------------------------|------------------------------|-------------|----------|
+ * | program   | The program containing the circular buffer                     | Program &                    |             | Yes      |
+*/
+const uint32_t GetNextAvailableCircularBufferIndex(Program &program);
+
+/**
  * Update the total size of the circular buffer at the given circular buffer handle. Updating a program-local circular buffer requires all circular buffers in the program to be reallocated.
  *
  * Return value: void
