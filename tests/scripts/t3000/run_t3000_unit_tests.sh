@@ -237,7 +237,6 @@ run_t3000_tests() {
 
   # Run unet shallow tests
   run_t3000_unet_shallow_tests
-
 }
 
 fail=0
