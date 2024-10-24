@@ -2,6 +2,7 @@
 
 ## Contents
 
+-[Introduction](#introduction)
 - [1. Metal Trace](#1-metal-trace)
   - [1.1 Overview](#11-overview)
   - [1.2 APIs](#12-apis)
@@ -21,6 +22,12 @@
     - [3.3.1 Trace with Non-Persistent L1 Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1](#331-trace-with-non-persistent-l1-input-ops-and-output-readback-on-cq-0-input-writes-on-cq-1)
     - [3.3.2 Trace with Non-Persistent L1 Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1](#332-trace-with-non-persistent-l1-input-ops-on-cq-0-input-writes-and-output-readback-on-cq-1)
 
+## Introduction
+
+This document describes different techniques for optimizing model performance, specifically how to reduce the overhead between individual operations and between model forward pass invocations. Specifically, [Metal Trace](#1-metal-trace) can be used to remove the host overhead of executing ops, reducing the gap between op invocations, whereas [Multiple Command Queues](#2-multiple-command-queues) can be used to reduce the overhead between model forward passes by overlapping the cost of IO transfers with operation execution, as illustrated in the following figure.
+<!-- ![Metal_Trace_Multi_CQ_Use_Cases](images/Metal_Trace_Multi_CQ_Use_Cases.png){width=15 height=15} -->
+<img src="images/Metal_Trace_Multi_CQ_Use_Cases.png" style="width:1000px;"/>
+
 ## 1. Metal Trace
 
 ### 1.1 Overview
@@ -30,12 +37,12 @@ Metal Trace is a performance optimization feature that aims to remove the host o
 This feature works by recording the commands for dispatching operations into a DRAM buffer, and replaying these commands when executing a trace. This means that all of the operation’s parameters are statically saved, the input/output tensor shapes, addresses, etc. do not change. This makes using trace for entire generative models more difficult since these models have a changing sequence length, but statically sized inputs/outputs such as for image or sequence classification work well with metal trace. Tracing generative models can still be done using a variety of different techniques, such as using multiple traces, but is not currently covered in this document.
 
 The following figure shows the runtime of a model execution that is host-bound. We see that the host is not able to run and dispatch commands to the device ahead of time, and the device is stuck stalling waiting for the host in order to receive commands to run operations, which is why there are large gaps between operations on the device.
-<!-- ![image1](images/image1.png){width=15 height=15} -->
-<img src="images/image1.png" style="width:1000px;"/>
+<!-- ![Host-Bound_Model_Tracy](images/Host-Bound_Model_Tracy.png){width=15 height=15} -->
+<img src="images/Host-Bound_Model_Tracy.png" style="width:1000px;"/>
 
 With trace, we can eliminate a large portion of these gaps. In the figure below we now execute the model using trace. We see that the host finishes dispatching the model almost immediately and is just waiting for the device to finish for most of the time. On the device, we see that the gaps between ops is much smaller
-<!-- ![image2](images/image2.png){width=15 height=15} -->
-<img src="images/image2.png" style="width:1000px;"/>
+<!-- ![Metal_Trace_Tracy](images/Metal_Trace_Tracy.png){width=15 height=15} -->
+<img src="images/Metal_Trace_Tracy.png" style="width:1000px;"/>
 
 ### 1.2 APIs
 In order to use trace, we need to use the following trace apis:
@@ -145,12 +152,12 @@ host_output_tensor = output_tensor.cpu(blocking=False)
 Metal supports multiple command queues for fast dispatch, up to two queues. These command queues are independent of each other and allow for us to dispatch commands on a device in parallel. Both command queues support any dispatch command, so we use either for I/O data transfers or launching programs on either command queue. As these queues are independent of each other, to coordinate and guarantee command order such as having one queue be used to write the input and the other queue be used to run operations on that input, we need to use events to synchronize between the queues. A common setup for multiple command queues is to have one only responsible for writing inputs, while the other command queue is used for dispatching programs and reading back the output, which is what will be described in this document. This is useful where we are device bound and our input tensor takes a long time to write, and allows us to overlap dispatching of the next input tensor with the execution of the previous model run. Other setups are also possible, such as having one command queue for both writes and reads, while the other is used for only dispatching programs, or potentially having both command queues running different programs concurrently.
 
 The figure below shows an example of where we can see the benefits of using an independent queue for writing inputs. We see a large gap between each run of the model, as well as the host being stalled waiting to be able to finish writing the next tensor.
-<!-- ![image3](images/image4.png){width=15 height=15} -->
-<img src="images/image3.png" style="width:1000px;"/>
+<!-- ![IO-Bound_Model_Tracy](images/IO-Bound_Model_Tracy.png){width=15 height=15} -->
+<img src="images/IO-Bound_Model_Tracy.png" style="width:1000px;"/>
 
 Using a second command queue only for writes enables us to eliminate the gap between model executions, and allows the host to go ahead of the device and enqueue commands for subsequent models runs before we have finished executing our current run.
-<!-- ![image4](images/image4.png){width=15 height=15} -->
-<img src="images/image4.png" style="width:1000px;"/>
+<!-- ![Multi_CQ_Tracy](images/Multi_CQ_Tracy.png){width=15 height=15} -->
+<img src="images/Multi_CQ_Tracy.png" style="width:1000px;"/>
 
 ### 2.2 APIs
 
@@ -189,8 +196,8 @@ Normally for performance we try to allocate tensors in L1, but many models are n
 For using 2 command queues where one is just for writes, and one for running programs and reading, we will need to create and use 2 events.
 The first event we use is an event to signal that the write has completed on command queue 1. This event will be waited on by command queue 0 so that it only executes operations after the write has completed. The second event we have is for signaling that command queue 0 has consumed the input tensor, and that it is okay for command queue 1 to overwrite it with new data. This is waited on by command queue 1 before it writes the next input.
 
-<!-- ![image6](images/image6.png){width=15 height=15} -->
-<img src="images/image6.png" style="width:1000px;"/>
+<!-- ![Ops_Reads_CQ0_Writes_CQ1](images/Ops_Reads_CQ0_Writes_CQ1.png){width=15 height=15} -->
+<img src="images/Ops_Reads_CQ0_Writes_CQ1.png" style="width:1000px;"/>
 
 ```py
 # This example uses 1 CQ for only writing inputs (CQ 1), and one CQ for executing programs/reading back the output (CQ 0)
@@ -237,8 +244,8 @@ When putting reads and writes on the same CQ, we don't want to just write our in
 Instead we can restructure the loop so that we write the first input outside the loop. Then in the loop we run the model, and then enqueue the next write before we enqueue the readback of the current output.
 This way CQ1 will always have started/finished writing the next input and allows overlapping the read of the current output with the next iteration of the model.
 
-<!-- ![image7](images/image7.png){width=15 height=15} -->
-<img src="images/image7.png" style="width:1000px;"/>
+<!-- ![Ops_CQ0_Reads_Writes_CQ1](images/Ops_CQ0_Reads_Writes_CQ1.png){width=15 height=15} -->
+<img src="images/Ops_CQ0_Reads_Writes_CQ1.png" style="width:1000px;"/>
 
 ```py
 # This example uses 1 CQ for writing inputs and reading outputs (CQ 1), and one CQ for executing programs (CQ 0)
@@ -330,8 +337,8 @@ ttnn.record_event(1, read_event)
 This section assumes that you are familiar with the contents and apis described in [Metal Trace](#metal-trace) and [Multiple Command Queues](#multiple-command-queues).
 
 By combining these two optimizations, we can achieve higher end-to-end performance where host is running well ahead of device and enqueuing for many subsequent iterations ahead, and device is continuously executing operations with little to no latency between them. This can be seen in the following figure where host has enqueued 10 iterations before device has finished 1 iteration, and there is little to no gap between the device operations and model execution iterations.
-<!-- ![image5](images/image5.png){width=15 height=15} -->
-<img src="images/image5.png" style="width:1000px;"/>
+<!-- ![Metal_Trace_Multi_CQ_Tracy](images/Metal_Trace_Multi_CQ_Tracy.png){width=15 height=15} -->
+<img src="images/Metal_Trace_Multi_CQ_Tracy.png" style="width:1000px;"/>
 
 When combining these two optimizations, there are a few things we need to be aware of / change:
 

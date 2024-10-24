@@ -6,7 +6,6 @@
 
 #include "llrt.hpp"
 #include "hal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
 #include "jit_build/settings.hpp"
