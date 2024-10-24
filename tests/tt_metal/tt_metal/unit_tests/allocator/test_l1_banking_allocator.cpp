@@ -35,7 +35,7 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
 
     uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(device);
 
-    std::vector<std::unique_ptr<Buffer>> buffers;
+    std::vector<std::shared_ptr<Buffer>> buffers;
     int alloc_size_idx = 0;
     uint32_t total_buffer_size = 0;
     while (total_size_bytes < alloc_limit) {
@@ -44,7 +44,7 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
         if (total_buffer_size + buffer_size >= alloc_limit) {
             break;
         }
-        std::unique_ptr<tt::tt_metal::Buffer> buffer = std::make_unique<tt::tt_metal::Buffer>(device, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
+        auto buffer = tt::tt_metal::Buffer::create(device, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
         buffers.emplace_back(std::move(buffer));
         total_buffer_size += buffer_size;
         EXPECT_EQ(buffers.back()->address(), device->l1_size_per_core() - total_buffer_size);

@@ -3266,12 +3266,8 @@ CommandQueue &Device::command_queue(size_t cq_id) {
     return *sw_command_queues_[cq_id];
 }
 
-void Device::push_work(std::function<void()>&& work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
-}
-
-void Device::push_work(std::shared_ptr<std::function<void()>> work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
+bool Device::can_use_passthrough_scheduling() const {
+    return this->work_executor.use_passthrough();
 }
 
 void Device::synchronize() {
