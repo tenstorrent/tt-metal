@@ -177,6 +177,30 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
      static const uint32_t MIN_CB_TOTAL_SIZE = MAX_CB_PAGE_SIZE;
      static const uint32_t MAX_CB_TOTAL_SIZE = 2048;
 
+     struct KernelProperties {
+         uint32_t min_kernel_size_bytes;
+         uint32_t max_kernel_size_bytes;
+         uint32_t min_kernel_runtime_microseconds;
+         uint32_t max_kernel_runtime_microseconds;
+         uint32_t min_num_rt_args;
+         uint32_t max_num_rt_args;
+         uint32_t min_num_sems;
+         uint32_t max_num_sems;
+         uint32_t min_num_cbs;
+         uint32_t max_num_cbs;
+         KernelProperties() :
+             min_kernel_size_bytes(MIN_KERNEL_SIZE_BYTES),
+             max_kernel_size_bytes(MAX_KERNEL_SIZE_BYTES),
+             min_kernel_runtime_microseconds(MIN_KERNEL_RUNTIME_MICROSECONDS),
+             max_kernel_runtime_microseconds(MAX_KERNEL_RUNTIME_MICROSECONDS),
+             min_num_rt_args(MIN_NUM_RUNTIME_ARGS),
+             max_num_rt_args(MAX_NUM_RUNTIME_ARGS),
+             min_num_sems(MIN_NUM_SEMS),
+             max_num_sems(MAX_NUM_SEMS),
+             min_num_cbs(MIN_NUM_CBS),
+             max_num_cbs(MAX_NUM_CBS) {}
+     };
+
      static const uint32_t NUM_PROGRAMS = 75;
 
      Device *device_;
@@ -195,16 +219,7 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          Program &program,
          const CoreType kernel_core_type,
          const bool simple_kernel = false,
-         const uint32_t min_num_sems = MIN_NUM_SEMS,
-         const uint32_t max_num_sems = MAX_NUM_SEMS,
-         const uint32_t min_num_cbs = MIN_NUM_CBS,
-         const uint32_t max_num_cbs = MAX_NUM_CBS,
-         const uint32_t min_num_rt_args = MIN_NUM_RUNTIME_ARGS,
-         const uint32_t max_num_rt_args = MAX_NUM_RUNTIME_ARGS,
-         const uint32_t min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES,
-         const uint32_t max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES,
-         const uint32_t min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS,
-         const uint32_t max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS) {
+         const KernelProperties& kernel_properties = KernelProperties()) {
          CoreRangeSet cores = this->get_cores(kernel_core_type);
          const bool create_eth_config = kernel_core_type == CoreType::ETH;
 
@@ -212,15 +227,15 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
              this->create_kernel(program, cores, create_eth_config, 0, 0, 0, 0);
          } else {
              const vector<uint32_t> sem_ids =
-                 this->generate_semaphores(program, cores, kernel_core_type, min_num_sems, max_num_sems);
+                 this->generate_semaphores(program, cores, kernel_core_type, kernel_properties.min_num_sems, kernel_properties.max_num_sems);
 
              vector<uint32_t> cb_page_sizes;
             if (!create_eth_config) {
-                cb_page_sizes = this->generate_circular_buffers(program, cores, min_num_cbs, max_num_cbs);
+                cb_page_sizes = this->generate_circular_buffers(program, cores, kernel_properties.min_num_cbs, kernel_properties.max_num_cbs);
             }
 
              const auto [unique_rt_args, common_rt_args] =
-                 this->generate_runtime_args(sem_ids, cb_page_sizes, min_num_rt_args, max_num_rt_args);
+                 this->generate_runtime_args(sem_ids, cb_page_sizes, kernel_properties.min_num_rt_args, kernel_properties.max_num_rt_args);
              const uint32_t num_unique_rt_args = unique_rt_args.size() - sem_ids.size() - cb_page_sizes.size();
 
              KernelHandle kernel_id = this->create_kernel(
@@ -231,10 +246,10 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
                  cb_page_sizes.size(),
                  num_unique_rt_args,
                  common_rt_args.size(),
-                 min_kernel_size_bytes,
-                 max_kernel_size_bytes,
-                 min_kernel_runtime_microseconds,
-                 max_kernel_runtime_microseconds);
+                 kernel_properties.min_kernel_size_bytes,
+                 kernel_properties.max_kernel_size_bytes,
+                 kernel_properties.min_kernel_runtime_microseconds,
+                 kernel_properties.max_kernel_runtime_microseconds);
              SetRuntimeArgs(program, kernel_id, cores, unique_rt_args);
              SetCommonRuntimeArgs(program, kernel_id, common_rt_args);
          }
@@ -300,6 +315,37 @@ class RandomProgramFixture : public CommandQueueSingleCardFixture {
          unique_rt_args.insert(unique_rt_args.end(), cb_page_sizes.begin(), cb_page_sizes.end());
 
          return {unique_rt_args, common_rt_args};
+     }
+
+    KernelProperties get_small_kernel_properties() {
+        KernelProperties small_kernel_properties;
+        small_kernel_properties.min_kernel_size_bytes = MIN_KERNEL_SIZE_BYTES;
+        small_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (2.0 / 10);
+        small_kernel_properties.min_kernel_runtime_microseconds = MIN_KERNEL_RUNTIME_MICROSECONDS;
+        small_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (2.0 / 10);
+        small_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS * (3.0 / 10);
+        small_kernel_properties.min_num_sems = MIN_NUM_SEMS;
+        small_kernel_properties.max_num_sems = MAX_NUM_SEMS * (3.0 / 10);
+        small_kernel_properties.min_num_cbs = MIN_NUM_CBS;
+        small_kernel_properties.max_num_cbs = MAX_NUM_CBS * (3.0 / 10);
+        small_kernel_properties.min_num_rt_args =
+            small_kernel_properties.max_num_sems + small_kernel_properties.max_num_cbs;
+        return small_kernel_properties;
+     }
+
+     KernelProperties get_large_kernel_properties() {
+         KernelProperties large_kernel_properties;
+         large_kernel_properties.min_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES * (9.0 / 10);
+         large_kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES;
+         large_kernel_properties.min_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS * (9.0 / 10);
+         large_kernel_properties.max_kernel_runtime_microseconds = MAX_KERNEL_RUNTIME_MICROSECONDS;
+         large_kernel_properties.min_num_rt_args = MAX_NUM_RUNTIME_ARGS * (9.0 / 10);
+         large_kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS;
+         large_kernel_properties.min_num_sems = MAX_NUM_SEMS * (8.0 / 10);
+         large_kernel_properties.max_num_sems = MAX_NUM_SEMS;
+         large_kernel_properties.min_num_cbs = MAX_NUM_CBS * (8.0 / 10);
+         large_kernel_properties.max_num_cbs = MAX_NUM_CBS;
+         return large_kernel_properties;
      }
 
     private:
