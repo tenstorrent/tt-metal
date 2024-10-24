@@ -15,7 +15,7 @@ from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 def run_pow_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100)
     y = random.uniform(0, 10)
 
     try:
