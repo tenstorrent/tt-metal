@@ -193,7 +193,6 @@ static const std::string python_fully_qualified_name(const std::string& cpp_full
 template <typename operation_t>
 concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<operation_t>;
 
-
 // Composite operation allows any code to be executed
 template<typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
