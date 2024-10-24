@@ -8,6 +8,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_val,
+    data_gen_with_range_dtype,
     compare_pcc,
 )
 from models.utility_functions import (
@@ -172,6 +173,28 @@ def test_bw_unary_div_0_default(input_shapes, scalar, device):
 def test_bw_unary_div_default(input_shapes, scalar, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+
+    tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar)
+
+    golden_function = ttnn.get_golden_function(ttnn.div_bw)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
+
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("scalar", [0.05, 1.0, 0.5, 0.12, 0.0, -0.05, -1.0, -0.5, -0.12])
+def test_bw_unary_div_bf8b(input_shapes, scalar, device):
+    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b)
+    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -1, 1, device, False, False, ttnn.bfloat8_b)
 
     tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, scalar)
 
