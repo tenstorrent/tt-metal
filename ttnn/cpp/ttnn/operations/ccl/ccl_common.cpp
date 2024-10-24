@@ -720,10 +720,14 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     std::size_t worker_index
 ) {
     static_assert(std::is_same_v<TensorSlice::ords_t, tt_xy_pair>, "generate_slice_sequence_on_dim not yet implemented for type not of tt_xy_pair");
-    TT_ASSERT(fracture_dim == 3);
     // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some cases
     // so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
-    fracture_dim -= 2;
+    if (fracture_dim == 3) {
+        fracture_dim -= 2;
+    } else {
+        // dims are
+        fracture_dim = 0;
+    }
 
     TT_ASSERT(worker_slice_shape.y == 1);
 
@@ -739,11 +743,11 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     bool forward_direction = start_slice_index > end_slice_index_exclusive; // only for debug
     auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
     if (forward_direction) {
-        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
-        log_trace(tt::LogOp, "worker_index {}", worker_index);
+        log_info(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
+        log_info(tt::LogOp, "worker_index {}", worker_index);
     }
 
-    auto worker_slice_start_offset = fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} : TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
+    auto worker_slice_start_offset = /*fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} :*/ TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
 
     auto generate_slice = [forward_direction,incr, &slices, &tensor_shape, &slice_shape, &worker_slice_shape, tensor_slice_offset, &worker_slice_start_offset, fracture_dim, dim_start_offset, slice_size_on_dim](std::int64_t i){
         auto tensor_slice_offset_adjusted = tensor_slice_offset;
@@ -763,7 +767,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
 
         auto const& tensor_slice = TensorSlice(tensor_shape, slice_shape, tensor_slice_offset_adjusted, worker_slice_shape, worker_slice_start_offset, fracture_dim);
         if (forward_direction) {
-        log_trace(
+        log_info(
             tt::LogOp,
             "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: (y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: {}\n\tslice_size_on_dim: {}\n",
             i,
