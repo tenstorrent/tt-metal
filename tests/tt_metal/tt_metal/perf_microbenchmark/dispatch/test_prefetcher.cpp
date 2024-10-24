@@ -12,7 +12,6 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"

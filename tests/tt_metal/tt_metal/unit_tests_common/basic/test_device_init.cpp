@@ -10,7 +10,6 @@
 
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"

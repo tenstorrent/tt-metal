@@ -12,7 +12,7 @@
 
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/hostdevcommon/common_runtime_address_map.h" // NUM_CIRCULAR_BUFFERS
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 

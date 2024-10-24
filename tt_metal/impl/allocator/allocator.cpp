@@ -7,7 +7,6 @@
 #include <magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
