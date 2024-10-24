@@ -10,6 +10,8 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
+#include "tt_metal/common/core_coord.hpp"
+
 #include "gtest/gtest.h"
 
 #include <iostream>
@@ -37,7 +39,7 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program &program, Dev
             BufferType::L1,
             TensorMemoryLayout::WIDTH_SHARDED,
             ShardSpecBuffer(
-                CoreRangeSet({worker_core}),
+                CoreRangeSet(CoreRange(worker_core)),
                 {cb_n_pages,cb_n_pages},
                 ShardOrientation::ROW_MAJOR,
                 false,
