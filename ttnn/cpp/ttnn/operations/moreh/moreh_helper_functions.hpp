@@ -117,6 +117,12 @@ struct ComputeKernelConfig {
 [[maybe_unused]] KernelHandle CreateComputeKernel(
     Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeKernelConfig config);
 
+[[maybe_unused]] KernelHandle CreateComputeKernel(
+    Program &program, const std::string &file_name, ComputeKernelArg arg, ComputeConfig config);
+
+[[maybe_unused]] std::vector<KernelHandle> CreateComputeKernel(
+    Program &program, const std::string &file_name, std::vector<ComputeKernelArg> args, ComputeConfig config);
+
 struct CircularBufferArg {
     uint32_t buffer_index;
     uint32_t num_tiles;

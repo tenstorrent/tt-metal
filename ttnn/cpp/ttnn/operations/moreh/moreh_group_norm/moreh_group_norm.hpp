@@ -45,4 +45,4 @@ namespace ttnn {
 constexpr auto moreh_group_norm = ttnn::register_operation_with_auto_launch_op<
     "ttnn::moreh_group_norm",
     ttnn::operations::moreh::moreh_group_norm::MorehGroupNorm>();
-}
+}  // namespace ttnn

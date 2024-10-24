@@ -14,6 +14,13 @@ constexpr std::uint32_t TILE_HEIGHT = 32;
 constexpr std::uint32_t TILE_WIDTH = 32;
 constexpr std::uint32_t NOC_MINIMUM_READ_SIZE = 32;  // 32 Bytes
 
+
+constexpr uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
+
+constexpr uint32_t round_down(uint32_t a, uint32_t b) { return a / b * b; }
+
+constexpr uint32_t round_up(uint32_t a, uint32_t b) { return b * div_up(a, b); }
+
 static inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
@@ -148,6 +155,25 @@ FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num
     cb_push_back(cb_id, 1);
 }
 
+
+FORCE_INLINE void fill_cb_with_zeros(uint32_t cb_id, int32_t num_of_elems = 1024) {
+    Scalar zero;
+    zero.f = 0.0f;
+
+    cb_reserve_back(cb_id, 1);
+    const DataFormat data_format = get_dataformat(cb_id);
+    switch((uint)data_format & 0x1F) {
+        case ((uint8_t)DataFormat::Float32):
+            process_data<uint32_t>(cb_id, zero.u, num_of_elems);
+            break;
+        case ((uint8_t)DataFormat::Float16_b):
+        default:
+            process_data<uint16_t>(cb_id, zero.u, num_of_elems);
+            break;
+    }
+    cb_push_back(cb_id, 1);
+}
+
 FORCE_INLINE uint32_t get_tilized_idx(uint32_t h_idx, uint32_t w_idx, uint32_t tile_height, uint32_t tile_width) {
     const auto half_tile_height = tile_height / 2;
     const auto half_tile_width = tile_width / 2;
@@ -166,20 +192,6 @@ FORCE_INLINE uint32_t get_tilized_idx(uint32_t h_idx, uint32_t w_idx, uint32_t t
 
     return (h_idx % half_tile_height) * half_tile_width + (w_idx % half_tile_width) +
            half_tile_height * (tile_width + half_tile_width);
-}
-
-FORCE_INLINE uint32_t get_gamma_beta_tile_idx(uint32_t input_tile_idx, uint32_t HtWt, uint32_t C, uint32_t tile_width) {
-    const auto c_idx = (input_tile_idx / HtWt) % C;
-    const auto tile_idx = c_idx / tile_width;
-    return tile_idx;
-}
-
-FORCE_INLINE uint32_t get_tilized_gamma_beta_idx_in_tile(
-    uint32_t input_tile_idx, uint32_t HtWt, uint32_t C, uint32_t tile_height, uint32_t tile_width) {
-    const auto c_idx = (input_tile_idx / HtWt) % C;
-    const auto w_idx_in_tile = c_idx % tile_width;
-    const auto tilized_idx_in_tile = get_tilized_idx(0, w_idx_in_tile, tile_height, tile_width);
-    return tilized_idx_in_tile;
 }
 
 FORCE_INLINE void generate_mask_h(uint32_t cb_mask, uint32_t mask_h) {

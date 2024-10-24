@@ -16,6 +16,38 @@ import pytest
 from ttnn.device import Arch
 
 
+def find_mismatched_indices_and_values(tensor1, tensor2, rtol, atol):
+    if tensor1.shape != tensor2.shape:
+        raise ValueError("Tensors must have the same shape")
+
+    # compute difference tensor
+    difference = torch.abs(tensor1 - tensor2) > atol + rtol * torch.abs(tensor2)
+
+    # find diff idx
+    mismatched_indices = torch.nonzero(difference, as_tuple=False)
+
+    # get different value
+    mismatched_idx_and_values = [
+        (idx.tolist(), tensor1[tuple(idx)].item(), tensor2[tuple(idx)].item()) for idx in mismatched_indices
+    ]
+
+    return mismatched_idx_and_values
+
+
+def print_mismatched_elements(golden, calculated, rtol, atol):
+    index_and_values = find_mismatched_indices_and_values(golden, calculated, rtol=rtol, atol=atol)
+
+    MAX_PRINT_CNT = 10
+    mismatched_cnt = len(index_and_values)
+    logger.debug("Number of different elements {}", mismatched_cnt)
+    display_cnt = min(MAX_PRINT_CNT, mismatched_cnt)
+    for i in range(display_cnt):
+        logger.debug("Different idx and values {}", index_and_values[i])
+
+    if len(index_and_values) > MAX_PRINT_CNT:
+        logger.debug("More indices are mismatched and only MAX_PRINT_CNT={} Displayed.", MAX_PRINT_CNT)
+
+
 ### Math operations ###
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
@@ -576,10 +608,16 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
 
     atol_delta = torch.max(torch.abs(golden - calculated)).item()
     rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
-    return (
+
+    res = (
         torch.allclose(golden, calculated, rtol, atol, True),
         f"Max ATOL Delta: {atol_delta}, Max RTOL Delta: {rtol_delta}",
     )
+
+    if not res[0]:
+        print_mismatched_elements(golden, calculated, rtol=rtol, atol=atol)
+
+    return res
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
@@ -650,6 +688,9 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
         passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
         passing &= passing_pcc
         output += f", {output_pcc}"
+
+    if not passing_allclose:
+        print_mismatched_elements(golden, calculated, rtol=rtol, atol=atol)
 
     return passing, output
 

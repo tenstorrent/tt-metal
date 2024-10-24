@@ -61,36 +61,33 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t TILE_H = 32;
-    constexpr uint32_t TILE_W = 32;
-
-    const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
+    const auto start_mean_rstd_idx = tile_offset;
 
     const auto output_l1_read_ptr = get_read_ptr(cb_id_output);
     uint32_t output_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
-        // mean, rstd (1, 1, N, num_groups)
+        // mean, rstd (N, num_groups)
         // mean_rstd_tile_idx = n * num_groups + g
         const auto mean_rstd_idx = start_mean_rstd_idx + outer_idx;
         const auto mean_rstd_n_idx = mean_rstd_idx / num_groups;
         const auto mean_rstd_g_idx = mean_rstd_idx % num_groups;
 
-        const auto mean_rstd_tile_h_idx = mean_rstd_n_idx / TILE_H;
-        const auto mean_rstd_tile_w_idx = mean_rstd_g_idx / TILE_W;
+        const auto mean_rstd_tile_h_idx = mean_rstd_n_idx / TILE_HEIGHT;
+        const auto mean_rstd_tile_w_idx = mean_rstd_g_idx / TILE_WIDTH;
 
-        const auto mean_rstd_h_idx_in_tile = mean_rstd_n_idx % TILE_H;
-        const auto mean_rstd_w_idx_in_tile = mean_rstd_g_idx % TILE_W;
+        const auto mean_rstd_h_idx_in_tile = mean_rstd_n_idx % TILE_HEIGHT;
+        const auto mean_rstd_w_idx_in_tile = mean_rstd_g_idx % TILE_WIDTH;
 
-        const auto mean_rstd_Wt = (num_groups + TILE_W - 1) / TILE_W;
+        const auto mean_rstd_Wt = (num_groups + TILE_WIDTH - 1) / TILE_WIDTH;
 
         const auto mean_rstd_tile_idx = mean_rstd_tile_h_idx * mean_rstd_Wt + mean_rstd_tile_w_idx;
 
         const auto tilized_mean_rstd_idx_in_tile =
-            get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_H, TILE_W);
+            get_tilized_idx(mean_rstd_h_idx_in_tile, mean_rstd_w_idx_in_tile, TILE_HEIGHT, TILE_WIDTH);
 
-        // mean (1, 1, N, num_groups)
+        // mean (N, num_groups)
         if (mean_has_value) {
-            const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
+            const auto mean_dtype_bytes = mean_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
             const auto mean_l1_read_ptr = get_read_ptr(cb_id_mean);
             cb_wait_front(cb_id_mean, onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
@@ -107,9 +104,9 @@ void kernel_main() {
             cb_pop_front(cb_id_mean, onetile);
         }
 
-        // rstd (1, 1, N, num_groups)
+        // rstd (N, num_groups)
         if (rstd_has_value) {
-            const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
+            const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
             const auto rstd_l1_read_ptr = get_read_ptr(cb_id_rstd);
             cb_wait_front(cb_id_rstd, onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
@@ -130,7 +127,7 @@ void kernel_main() {
             // output (N, C, H, W)
             cb_wait_front(cb_id_output, block_size);
             for (uint32_t r = 0; r < block_size; r++) {
-                output_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
+                output_tile_idx = (tile_offset + outer_idx) * num_inner_tiles + inner_idx + r;
                 if (output_is_dram) {
                     noc_async_write_tile(
                         output_tile_idx, dram_output_addrg, output_l1_read_ptr + r * output_tile_bytes);
