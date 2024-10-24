@@ -13,9 +13,11 @@
 * This file contains addresses that are visible to both host and device compiled code.
 */
 
-// TODO: move this to the memory manager, make configurable through the API
+// Kernel config buffer is WIP
+// Size is presently based on the old sizes of the RTAs + CB config + Sems
+// plus some extra space freed up in the mem map
 constexpr static std::uint32_t L1_KERNEL_CONFIG_BASE = MEM_MAP_END;
-constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
+constexpr static std::uint32_t L1_KERNEL_CONFIG_SIZE = 4 * 1024 + 256 + 128 + 512;
 
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 constexpr static std::uint32_t UINT32_WORDS_PER_CIRCULAR_BUFFER_CONFIG = 4;
