@@ -90,7 +90,7 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
     end_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this] (const std::any& val) mutable {ptr->end_function_process_tensor(val);};
 
 }
-void GraphProcessor::track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
+void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) {
     const std::lock_guard<std::mutex> lock(mutex);
     auto buf_id = add_buffer(buffer);
 
@@ -299,7 +299,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     return tensor_counter;
 }
 
-int GraphProcessor::add_buffer(tt::tt_metal::Buffer* buffer) {
+int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     auto buffer_alloc_id = reinterpret_cast<std::uintptr_t>(buffer);
     auto counter = id_to_counter.count(buffer_alloc_id) > 0 ? id_to_counter[buffer_alloc_id] : graph.size();
     if (id_to_counter.count(buffer_alloc_id) == 0) {
@@ -478,7 +478,7 @@ nlohmann::json GraphProcessor::end_graph_capture() {
         return res;
 }
 
-bool ProcessorHooks::hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {
+bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) {
     return do_block;
 }
 

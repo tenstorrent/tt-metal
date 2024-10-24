@@ -761,7 +761,7 @@ void Program::populate_dispatch_data(Device *device) {
 
     if (binaries_data.size() > 0) {
         // We allocate program binaries top down to minimize fragmentation with other buffers in DRAM, which are typically allocated bottom up
-        this->kernels_buffer = std::make_shared<Buffer>(
+        this->kernels_buffer = Buffer::create(
             device, binaries_data.size() * sizeof(uint32_t), HostMemDeviceCommand::PROGRAM_PAGE_SIZE, BufferType::DRAM, TensorMemoryLayout::INTERLEAVED, std::nullopt, false);
 
         this->program_transfer_info.binary_data = binaries_data;

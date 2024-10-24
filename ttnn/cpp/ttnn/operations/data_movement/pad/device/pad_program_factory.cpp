@@ -182,7 +182,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
     TT_ASSERT(unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     Device *device = a.device();
-    auto dst_buffer_l1 = Buffer(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
+    auto dst_buffer_l1 = Buffer::create(device, padded_row_size_nbytes, padded_row_size_nbytes, BufferType::L1);
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -243,7 +243,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
         tt::log_debug("pad_value_const_tensor_addr: {}", pad_value_const_tensor_addr);
         tt::log_debug("pad_value_const_buffer_nbytes: {}", pad_value_const_buffer_nbytes);
         tt::log_debug("packed_pad_value: {}", packed_pad_value);
-        tt::log_debug("dst_buffer_l1_addr: {}", dst_buffer_l1.address());
+        tt::log_debug("dst_buffer_l1_addr: {}", dst_buffer_l1->address());
     }
     #endif
 
@@ -263,7 +263,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
                                        pad_value_const_tensor_addr,
                                        pad_value_const_buffer_nbytes,
                                        packed_pad_value,
-                                       dst_buffer_l1.address()};
+                                       dst_buffer_l1->address()};
     tt::tt_metal::SetRuntimeArgs(program,
                    reader_kernel_id,
                    core,

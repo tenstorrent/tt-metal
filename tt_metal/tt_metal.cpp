@@ -378,7 +378,7 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
+    TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_ASSERT(page_size % bytes_per_page_entry == 0);
@@ -412,12 +412,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_FATAL(page_size % bytes_per_page_entry == 0,
@@ -481,12 +476,7 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
@@ -811,13 +801,35 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-void AllocateBuffer(Buffer *buffer, bool bottom_up) {
+DeviceAddr AllocateBuffer(const Buffer *buffer, bool bottom_up) {
     if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
         GraphTracker::instance().track_allocate(buffer, bottom_up);
-        return;
+        return 0;
     }
-    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+
+    uint32_t allocated_addr;
+    if (is_sharded(buffer->buffer_layout())) {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            buffer->num_cores());
+    } else {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            std::nullopt);
+    }
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+
     GraphTracker::instance().track_allocate(buffer, bottom_up);
+
+    return allocated_addr;
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -825,12 +837,8 @@ void DeallocateBuffer(Buffer *buffer) {
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
     }
-    EnqueueDeallocateBuffer(
-        buffer->device()->command_queue(),
-        *(buffer->device()->allocator_),
-        buffer->address(),
-        buffer->buffer_type(),
-        false);
+
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer->address(), buffer->buffer_type());
 }
 
 }  // namespace detail
@@ -1045,20 +1053,19 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return std::make_shared<Buffer>(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
+    return Buffer::create(
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
-        std::nullopt,
-        config.allocate);
+        std::nullopt);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }

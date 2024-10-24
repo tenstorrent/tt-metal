@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        tt_metal::Buffer input_buffer(
+        auto input_buffer = Buffer::create(
             device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
@@ -212,7 +212,7 @@ int main(int argc, char **argv) {
             num_tiles_per_core_group_1,
             num_tiles_per_core_group_2,
             kernel,
-            input_buffer.address(),
+            input_buffer->address(),
             num_reqs_at_a_time,
             single_tile_size,
             tile_format);
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
-            tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+            tt_metal::detail::WriteToBuffer(*input_buffer, input_vec);
         } else {
             for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -276,7 +276,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass = validation(
             device,
-            input_buffer,
+            *input_buffer,
             input_vec,
             num_cores,
             num_cores_y,

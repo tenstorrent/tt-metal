@@ -32,12 +32,11 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
     Tensor input_tensor = Tensor(input_storage, input_shape, dtype, Layout::TILE);
-    tt::log_debug("input_data: \n {}", input_tensor.write_to_string());
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -65,6 +64,10 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})}
+        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({2, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0})}
     )
 );

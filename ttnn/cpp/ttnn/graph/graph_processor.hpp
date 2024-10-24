@@ -22,7 +22,7 @@ namespace ttnn::graph {
 
     public:
         ProcessorHooks() = default;
-        bool hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        bool hook_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) override;
 
         bool hook_deallocate(tt::tt_metal::Buffer* buffer) override;
 
@@ -40,7 +40,7 @@ namespace ttnn::graph {
         GraphProcessor(tt::tt_metal::IGraphProcessor::RunMode mode);
         ~GraphProcessor() override;
 
-        void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        void track_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) override;
 
         void track_deallocate(tt::tt_metal::Buffer* buffer) override;
 
@@ -80,7 +80,7 @@ namespace ttnn::graph {
         std::unordered_map<std::type_index, ProcessFunc> end_function_any_map;
 
         int add_tensor(const Tensor& t);
-        int add_buffer(tt::tt_metal::Buffer* buffer);
+        int add_buffer(const tt::tt_metal::Buffer* buffer);
 
         void begin_function_process_ref_vector(const std::any& any_val);
         void begin_function_process_ref_vector_optional(const std::any& any_val);

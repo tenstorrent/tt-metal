@@ -257,8 +257,11 @@ class Device {
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
-    void push_work(std::function<void()>&& work, bool blocking = false);
-    void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
+    bool can_use_passthrough_scheduling() const;
+    template<typename F>
+    void push_work(F&& work, bool blocking = false) {
+        this->work_executor.push_work(std::forward<F>(work), blocking);
+    }
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);

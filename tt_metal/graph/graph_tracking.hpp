@@ -28,7 +28,7 @@ inline namespace v0 {
 
         IGraphProcessor() = default;
 
-        virtual void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) {};
+        virtual void track_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) {};
 
         virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
 
@@ -54,7 +54,7 @@ inline namespace v0 {
     class IGraphHooks {
     public:
         IGraphHooks() = default;
-        virtual bool hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) = 0;
+        virtual bool hook_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) = 0;
 
         virtual bool hook_deallocate(tt::tt_metal::Buffer* buffer) = 0;
 
@@ -77,7 +77,7 @@ inline namespace v0 {
 
         bool add_hook(const std::shared_ptr<IGraphHooks>& hook);
 
-        void track_allocate(Buffer* buffer, bool bottom_up);
+        void track_allocate(const Buffer* buffer, bool bottom_up);
 
         void track_deallocate(Buffer* buffer);
 
@@ -118,7 +118,7 @@ inline namespace v0 {
             }
         }
 
-        bool hook_allocate(Buffer* buffer, bool bottom_up);
+        bool hook_allocate(const Buffer* buffer, bool bottom_up);
 
         bool hook_deallocate(Buffer* buffer);
 

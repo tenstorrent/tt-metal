@@ -52,7 +52,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
                 t0_host_data[i] = bfloat16(static_cast<float>(2 + j));
             }
             // Allocate and write buffer
-            auto t0_input_buffer = ttnn::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+            auto t0_input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
             auto t0_input_storage = tt::tt_metal::DeviceStorage{t0_input_buffer};
             Tensor t0_input_tensor = Tensor(t0_input_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
             ttnn::write_buffer(t0_io_cq, t0_input_tensor, {t0_host_data});
@@ -71,7 +71,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
             for (int i = 0; i < tensor_buf_size; i++) {
                 t1_host_data[i] = bfloat16(static_cast<float>(4 + j));
             }
-            auto t1_input_buffer = ttnn::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+            auto t1_input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
             auto t1_input_storage = tt::tt_metal::DeviceStorage{t1_input_buffer};
             Tensor t1_input_tensor = Tensor(t1_input_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
 
@@ -118,7 +118,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
 
     ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
     auto host_data = std::shared_ptr<bfloat16 []>(new bfloat16[tensor_buf_size]);
-    auto allocated_buffer = ttnn::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+    auto allocated_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(tensor_buf_size * datum_size_bytes, device, tensor_shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
     auto allocated_storage = tt::tt_metal::DeviceStorage{allocated_buffer};
     auto allocated_tensor = Tensor(allocated_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[tensor_buf_size]);

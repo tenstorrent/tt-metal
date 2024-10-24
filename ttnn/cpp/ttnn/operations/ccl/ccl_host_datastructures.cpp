@@ -48,7 +48,7 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(std::size_t num_edm_channels,
 
     log_trace(tt::LogOp, "Buffer size: {}", buffer_size);
 
-    TT_ASSERT(buffer_size > 0 && buffer_size % page_size == 0);
+    TT_ASSERT(page_size == 0 ? buffer_size == 0 : buffer_size % page_size == 0);
     return buffer_size;
 }
 

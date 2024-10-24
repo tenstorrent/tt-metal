@@ -45,7 +45,6 @@ uint32_t element_size_bytes(DataType dtype) {
 }
 
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
-    uint32_t W = shape[-1];
     uint32_t page_size = 0;
     const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
     const auto bfloat8b_tile_HW = tile.has_value() ? tile_HW + 64 : constants::BFLOAT8_B_TILE_HW;
@@ -53,6 +52,7 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
     switch (layout) {
         case Layout::ROW_MAJOR: {
             uint32_t size_of_element = element_size_bytes(dtype);
+            uint32_t W = shape.rank() == 0 ? 1 : shape[-1];
             page_size = W * size_of_element;
         } break;
         case Layout::TILE: {
@@ -82,11 +82,10 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 } break;
                 default: TT_ASSERT(false && "Unsupported data type!");
             }
-            TT_ASSERT(total_size_bytes % page_size == 0);
+            TT_ASSERT(page_size == 0 ? total_size_bytes == 0 : total_size_bytes % page_size == 0);
         } break;
         default: TT_ASSERT(false && "Unsupported layout to write to device");
     }
-    TT_ASSERT(page_size != 0);
     return page_size;
 }
 
@@ -191,12 +190,12 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
+    return Buffer::create(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
     size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
+    return Buffer::create(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
@@ -212,7 +211,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
 
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
 }
 
