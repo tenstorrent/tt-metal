@@ -54,55 +54,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
         self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
 
-    def forward(self, x):
-        return self.forward_tt(x)
-        if os.environ.get("MLP") == "tt":
-            return self.forward_tt(x)
-        else:
-            return self.forward_pt(x)
-
-    def forward_pt(self, x):
-        x = ttnn.to_torch(
-            x, device=self.mesh_device, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        ).float()
-        x = x[0]
-
-        c_fc_weight = ttnn.to_torch(
-            self.c_fc_weight, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-        ).float()
-        c_fc_bias = ttnn.to_torch(
-            self.c_fc_bias, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-        ).float()[:1]
-        c_proj_weight = ttnn.to_torch(
-            self.c_proj_weight, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-2)
-        ).float()
-        c_proj_bias = ttnn.to_torch(
-            self.c_proj_bias, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        ).float()
-        c_proj_bias = c_proj_bias[:1]
-
-        # hidden = (torch.matmul(x, c_fc_weight).bfloat16().float() + c_fc_bias).bfloat16().float()
-        # hidden = torch.nn.functional.gelu(hidden).bfloat16().float()
-        # hidden = (torch.matmul(hidden, c_proj_weight).bfloat16().float() + c_proj_bias).bfloat16().float()
-        # hidden = hidden.view(1, 1, 5120, -1)
-        x = x.bfloat16().float()
-        hidden = torch.nn.functional.linear(x, c_fc_weight.T, c_fc_bias).bfloat16().float()
-        hidden = torch.nn.functional.gelu(hidden).bfloat16().float()
-        hidden = torch.nn.functional.linear(hidden, c_proj_weight.T).bfloat16().float()
-        hidden += c_proj_bias
-        hidden = hidden.view(1, 1, 4224, -1)
-
-        hidden = ttnn.from_torch(
-            hidden,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        return hidden
-
-    def forward_tt(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -112,8 +64,8 @@ class TtLlamaImageFeedForward(LightweightModule):
         seq_len = x.shape[-2]
 
         # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = 1056
-        # MAX_MM_SEQ_LEN = 1024
+        MAX_MM_SEQ_LEN = self.args.VISION_MAX_MM_SEQ
+
         x_in = x
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
@@ -131,9 +83,9 @@ class TtLlamaImageFeedForward(LightweightModule):
             dtype=ttnn.bfloat16,
             program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
+            activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
-        c_fc_out = ttnn.gelu(c_fc_out, fast_and_approximate_mode=False)
+
         c_proj_out = ttnn.linear(
             c_fc_out,
             self.c_proj_weight,
@@ -144,7 +96,6 @@ class TtLlamaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # if seq_len >= 1024:  # Reshape back to intended shape
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
