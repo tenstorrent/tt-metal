@@ -50,7 +50,7 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     return device_tensor;
 }
 
-ttnn::Tensor row_major_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     const auto layout = tensor.get_layout();
     auto shape_with_padding = shape.padded_shape();
     auto tensor_shape = tensor.get_shape();
@@ -124,7 +124,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
 
     // Catch-all
     // Do the reshape in row-major
-    return detail::row_major_reshape(tensor, shape);
+    return detail::convert_tensor_to_rm_reshape_convert_back_to_orig_layout(tensor, shape);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
