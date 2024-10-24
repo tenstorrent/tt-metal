@@ -6,6 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
+import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
 
@@ -18,7 +19,7 @@ def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links
     num_l1_banks = 64
     if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
-    if input_shape[3] == 32 and input_dtype == ttnn.bfloat8_b:
+    if (input_shape[2] == 32 or input_shape[3] == 32) and input_dtype == ttnn.bfloat8_b:
         return True, "This combination is not supported for now"
 
     return False, ""
@@ -107,16 +108,14 @@ def run_all_reduce_test(
     tt_input_tensors = []
     input_tensors = []
 
-    numel = per_chip_output_shape[0] * per_chip_output_shape[1] * per_chip_output_shape[2] * per_chip_output_shape[3]
+    numel = math.prod(per_chip_output_shape)
     if debug:
         input_tensors[-1] = torch.arange(numel).reshape(per_chip_output_shape).bfloat16()
     for i in range(num_devices):
         input_tensor = torch.rand(per_chip_output_shape).bfloat16()
-        tt_input_tensors.append(
-            ttnn.Tensor(input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
-        )
+        t = ttnn.from_torch(input_tensor, input_dtype, layout=layout)
+        t = t.to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
+        tt_input_tensors.append(t)
         input_tensor = input_tensor.view(1, -1, input_tensor.shape[2], input_tensor.shape[3])
         input_tensors.append(input_tensor)
 
@@ -146,7 +145,7 @@ def run_all_reduce_test(
     # Compare
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = ttnn.to_torch(t)
 
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
