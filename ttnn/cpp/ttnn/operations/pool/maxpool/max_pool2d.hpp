@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/operations/pool/generic/device/pool_op.hpp"
 
 #include "device/max_pool2d_device_op.hpp"
 

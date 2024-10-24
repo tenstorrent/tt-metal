@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "max_pool2d.hpp"
-
+#include "generic_pools.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
@@ -14,17 +13,28 @@
 namespace ttnn {
 namespace operations::pool {
 
-Tensor MaxPool2DOp::invoke(uint8_t queue_id,
-                           const Tensor& input_tensor,
-                           uint32_t batch_size,
-                           uint32_t input_h, uint32_t input_w,
-                           uint32_t channels,
-                           std::array<uint32_t, 2> kernel_size,
-                           std::array<uint32_t, 2> stride,
-                           std::array<uint32_t, 2> padding,
-                           std::array<uint32_t, 2> dilation,
-                           const std::optional<const MemoryConfig> memory_config,
-                           const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
+namespace {
+
+float get_pool_pad_value(Pool2DType pool_type) {
+    switch (pool_type) {
+        case Pool2DType::MAX_POOL2D: return -std::numeric_limits<float>::infinity();
+    }
+}
+
+}  // namespace
+
+template <Pool2DType pool_type>
+Tensor Pool2DOp<pool_type>::invoke(uint8_t queue_id,
+                                    const Tensor& input_tensor,
+                                    uint32_t batch_size,
+                                    uint32_t input_h, uint32_t input_w,
+                                    uint32_t channels,
+                                    std::array<uint32_t, 2> kernel_size,
+                                    std::array<uint32_t, 2> stride,
+                                    std::array<uint32_t, 2> padding,
+                                    std::array<uint32_t, 2> dilation,
+                                    const std::optional<const MemoryConfig> memory_config,
+                                    const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
@@ -107,12 +117,12 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
     };
 
     // call the halo uop
-    uint32_t neg_inf_pad_val = 0xf7ff;
+    const float pad_value = get_pool_pad_value(pool_type);
     auto haloed_tensor = ttnn::halo(
         queue_id,
         input_tensor_sharded,
         sliding_window_config,
-        neg_inf_pad_val,
+        *reinterpret_cast<const uint32_t*>(&pad_value) >> 16,
         false,
         parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
         0,
@@ -133,6 +143,8 @@ Tensor MaxPool2DOp::invoke(uint8_t queue_id,
 
     return output_tensor;
 }
+
+template class Pool2DOp<Pool2DType::MAX_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
