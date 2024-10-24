@@ -16,6 +16,23 @@ namespace tt {
 
 namespace tt_metal {
 
+#if defined(TRACY_ENABLE)
+
+std::unordered_map<int, std::string> global_mempool_names;
+std::mutex global_mempool_names_mutex;
+
+static const char * get_buffer_location_name (BufferType buffer_type, int device_id) {
+    std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
+    int name_combo = (int)buffer_type * 1000 + device_id;
+    if (global_mempool_names.find(name_combo) == global_mempool_names.end())
+    {
+        std::string global_mempool_name = fmt::format("Device {} {}", device_id, magic_enum::enum_name(buffer_type));
+        global_mempool_names.emplace(name_combo, global_mempool_name);
+    }
+    return global_mempool_names[name_combo].c_str();
+}
+#endif
+
 bool is_sharded(const TensorMemoryLayout &layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||
@@ -329,6 +346,12 @@ bool Buffer::is_dram() const {
 }
 bool Buffer::is_trace() const {
     return buffer_type() == BufferType::TRACE;
+
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyAllocN(reinterpret_cast<void const *>(this->address_), this->size_,get_buffer_location_name(this->buffer_type() , this->device_->id()) );
+    }
+#endif
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -426,6 +449,11 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
     auto width_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
     auto height_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
     return {width_in_pages, height_in_pages};
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(reinterpret_cast<void const *>(this->address_), get_buffer_location_name(this->buffer_type() , this->device_->id()));
+    }
+#endif
 }
 
 DeviceAddr ShardSpecBuffer::size() const {
