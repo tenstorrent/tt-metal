@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common/constants.hpp"
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 using namespace tt;
 
@@ -12,17 +13,15 @@ void kernel_main() {
     constexpr uint32_t intermed1_cb_id = get_compile_time_arg_val(2);
     constexpr bool output_is_dram = get_compile_time_arg_val(3) == 1;
 
-    uint32_t out_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    auto out_addr = get_arg_val<uint32_t>(0);
+    auto start_id = get_arg_val<uint32_t>(1);
+    auto num_tiles = get_arg_val<uint32_t>(2);
     uint32_t end_id = start_id + num_tiles;
 
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
         .bank_base_address = out_addr,
         .page_size = get_tile_size(intermed1_cb_id),
         .data_format = get_dataformat(intermed1_cb_id)};
-
-    uint32_t max_uint = 4294967295;
 
     cb_reserve_back(intermed1_cb_id, 1);
     uint32_t intermed1_cb_write_ptr = get_write_ptr(intermed1_cb_id);
@@ -34,14 +33,14 @@ void kernel_main() {
         uint32_t intermed_cb_read_ptr = get_read_ptr(intermed_cb_id);
         uint32_t in_cb_read_ptr = get_read_ptr(in_cb_id);
 
-        uint8_t *in_cb_addr = reinterpret_cast<uint8_t *>(in_cb_read_ptr);
-        uint32_t *intermed_cb_addr = reinterpret_cast<uint32_t *>(intermed_cb_read_ptr);
-        uint8_t *intermed1_cb_addr = reinterpret_cast<uint8_t *>(intermed1_cb_write_ptr);
+        auto in_cb_addr = reinterpret_cast<uint8_t *>(in_cb_read_ptr);
+        auto intermed_cb_addr = reinterpret_cast<float *>(intermed_cb_read_ptr);
+        auto intermed1_cb_addr = reinterpret_cast<uint8_t *>(intermed1_cb_write_ptr);
 
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
-                uint32_t rand_uint32 = *intermed_cb_addr;
-                float rand_float = static_cast<float>(rand_uint32) / max_uint;
+                float rand_float = *intermed_cb_addr;
+                DPRINT << rand_float << " ";
 
                 float input = 0;
 #ifdef INPUT_DTYPE_FLOAT32

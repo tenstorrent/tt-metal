@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "bernoulli_device_operation.hpp"
 #include "common/constants.hpp"
-#include "common/core_coord.h"
-#include "common/tt_backend_api_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -48,11 +46,11 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
             .set_page_size(in_cb_id, in_dtype_tile_size);
     CBHandle cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_in_config);
 
-    const uint32_t uint32_tile_size = tile_size(tt::DataFormat::UInt32);
+    const uint32_t float32_tile_size = tile_size(tt::DataFormat::Float32);
     constexpr uint32_t intermed_cb_id = CB::c_intermed0;
     CircularBufferConfig cb_intermed_config =
-        CircularBufferConfig(num_tiles * uint32_tile_size, {{intermed_cb_id, tt::DataFormat::UInt32}})
-            .set_page_size(intermed_cb_id, uint32_tile_size);
+        CircularBufferConfig(num_tiles * float32_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
+            .set_page_size(intermed_cb_id, float32_tile_size);
     CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
     auto out_data_format = datatype_to_dataformat_converter(output.dtype());
