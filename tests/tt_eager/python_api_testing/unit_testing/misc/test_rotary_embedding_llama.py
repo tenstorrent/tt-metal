@@ -39,12 +39,6 @@ class TtLlamaRotary(torch.nn.Module):
         self.device = device
         self.mode = mode
 
-        tile_width = 32
-
-        self.transformation_mat = ttnn.from_torch(
-            get_rot_transformation_mat(dhead=tile_width), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
-        )
-
         if mode == "decode":
             # Generate the tensor needed for ttnn.Embedding
             cos_matrix, sin_matrix = compute_gather_cos_sin(
@@ -52,8 +46,24 @@ class TtLlamaRotary(torch.nn.Module):
             )
 
             self.cos_matrix = ttnn.from_torch(cos_matrix, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype)
-
             self.sin_matrix = ttnn.from_torch(sin_matrix, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype)
+
+            trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
+                1, 1, 64, 1
+            )  # Repeat for a maximum of 64 cores
+            trans_mat_mem_config = ttnn.create_sharded_memory_config(
+                shape=(1, 1, ttnn.TILE_SIZE * 64, ttnn.TILE_SIZE),
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            self.transformation_mat = ttnn.from_torch(
+                trans_mat, device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype, memory_config=trans_mat_mem_config
+            )
+        else:
+            self.transformation_mat = ttnn.from_torch(
+                get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
+            )
 
     def apply_rotary(self, x, cos, sin):
         # n_head = 8 for Q
@@ -87,10 +97,18 @@ class TtLlamaRotary(torch.nn.Module):
         cos = ttnn.reshape(cos, [1, 1, position_ids.shape[0], self.head_dim])
         sin = ttnn.reshape(sin, [1, 1, position_ids.shape[0], self.head_dim])
 
-        cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
-        sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, cos.shape[2], self.head_dim),  # mesh_cols = 4
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
 
-        # TODO: interleaved to sharded?
+        cos = ttnn.interleaved_to_sharded(cos, mem_config)
+        sin = ttnn.interleaved_to_sharded(sin, mem_config)
+
+        # cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
+        # sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
 
         return cos, sin
 
@@ -150,15 +168,16 @@ def run_test_rotary_embedding_llama(
     torch.manual_seed(0)
     mode = "decode" if seq_len == 1 else "prefill"
 
-    inp = [
-        (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
-        (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
-    ]
-
     if mode == "decode":
-        # Inputs must be [1, nh, batch, dhead]
-        inp[0] = inp[0].permute(2, 1, 0, 3)
-        inp[1] = inp[1].permute(2, 1, 0, 3)
+        inp = [
+            (torch.rand(1, n_heads, batch, head_dim) * 2) - 1,
+            (torch.rand(1, n_kv_heads, batch, head_dim) * 2) - 1,
+        ]
+    else:
+        inp = [
+            (torch.rand(batch, n_heads, seq_len, head_dim) * 2) - 1,
+            (torch.rand(batch, n_kv_heads, seq_len, head_dim) * 2) - 1,
+        ]
 
     freqs_cis = precompute_freqs_cis(
         # Note that self.params.max_seq_len is multiplied by 2 because the token limit for the Llama 2 generation of models is 4096.
@@ -191,20 +210,39 @@ def run_test_rotary_embedding_llama(
 
     if mode == "decode":
         cos, sin = tt_model.prepare_decode_cos_sin(torch.arange(batch))  # TODO: Update to check other indices as well
+
+        # Input must be [1, batch, nh, dhead]
+        inp[0] = inp[0].permute(0, 2, 1, 3)
+        inp[1] = inp[1].permute(0, 2, 1, 3)
+
+        mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, batch, ttnn.TILE_SIZE, head_dim),  # TODO: Check if ttnn.TILE_SIZE is max in n_heads
+            core_grid=ttnn.CoreGrid(y=4, x=8),  # TODO: Make core grid general
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
     else:
         cos, sin = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
             position_ids=torch.arange(start_pos, start_pos + seq_len),
         )
+
+        mem_config = None
     tt_inp = [inp[0], inp[1], cos, sin]
     tt_inp = [
-        i if isinstance(i, ttnn.Tensor) else ttnn.from_torch(i, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+        i
+        if isinstance(i, ttnn.Tensor)
+        else ttnn.from_torch(i, device=device, dtype=datatype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
         for i in tt_inp
     ]
 
     tt_out = tt_model(*tt_inp)
     tt_out = [ttnn.to_torch(tt_out_tensor) for tt_out_tensor in tt_out]
+
+    if mode == "decode":  # Swap back the n_head and batch dimensions
+        tt_out = [x.permute(0, 2, 1, 3) for x in tt_out]
 
     # check outputs ----------------------------------------------------------------------
     assert len(pytorch_out) == len(tt_out), "Lengths of pytorch and tt outputs do not match!"
@@ -248,6 +286,8 @@ def run_test_rotary_embedding_llama(
         (1, 16384),
         (1, 128 * 1024),
         (32, 1),
+        (16, 1),
+        # (1024, 1),
     ),
     ids=(
         "prefill_32",
@@ -261,6 +301,8 @@ def run_test_rotary_embedding_llama(
         "prefill_16k",
         "prefill_128k",
         "decode_32",
+        "decode_16",
+        # "decode_1024",
     ),
 )
 @pytest.mark.parametrize(
