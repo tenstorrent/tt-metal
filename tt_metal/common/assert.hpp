@@ -31,6 +31,7 @@ std::ostream& operator<<(std::ostream& os, tt::OStreamJoin<A, B> const& join) {
 }
 }  // namespace tt
 
+force a build failure.  Right here.  Right now.
 namespace tt::assert {
 
 static std::string demangle(const char* str) {

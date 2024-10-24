@@ -77,8 +77,9 @@ jobs:
       - in-service
     steps:
       - name: Verify ccache availability
-        shell: bash
+        # shell: bash
         run: |
+          Confirm theory: does GHA have set -e active by default when bash shell is NOT chosen?
           if [ ! -d "/mnt/MLPerf/ccache" ]; then
             echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
             exit 1
@@ -127,6 +128,10 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
+            Confirm theory: does GHA have set -e active by default when no shell is set?
+
+            # set -euo pipefail # basic bash hygiene
+
             # /tmp is a tmpfs; more efficient than persisted storage
             mkdir -p /tmp/ccache
             export CCACHE_TEMPDIR=/tmp/ccache
