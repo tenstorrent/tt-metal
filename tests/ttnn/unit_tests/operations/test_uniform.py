@@ -94,9 +94,9 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
         )
 
 
-# fmt: off
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("shape",
+@pytest.mark.parametrize(
+    "shape",
     [
         [32, 32],
         [64, 64],
@@ -105,20 +105,8 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
         [1024, 1024],
     ],
 )
-@pytest.mark.parametrize("rand_range",
-    [
-        [0, 1],
-        [2.1, 9],
-        [-5.1, 1.2]
-    ]
-)
-@pytest.mark.parametrize("dtype",
-    [
-        "bfloat16",
-        "float32"
-    ]
-)
-# fmt: on
+@pytest.mark.parametrize("rand_range", [[0, 1], [2.1, 9], [-5.1, 1.2]])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_uniform(shape, rand_range, dtype, device):
     torch.manual_seed(0)
     run_uniform(shape, rand_range, dtype, device)

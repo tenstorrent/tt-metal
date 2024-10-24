@@ -10,6 +10,7 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
+#include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
@@ -148,6 +149,9 @@ void py_module(py::module& module) {
 
     auto m_uniform = module.def_submodule("uniform", "uniform operations");
     uniform::bind_uniform_operation(m_uniform);
+
+    auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
+    bernoulli::bind_bernoulli_operation(m_bernoulli);
 }
 }  // namespace operations
 
