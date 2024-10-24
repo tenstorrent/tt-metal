@@ -12,6 +12,8 @@ namespace tt::tt_metal {
 // Container wrapper that allows negative indexing
 class VectorBase {
 public:
+    using Container = std::vector<uint32_t>;
+
     VectorBase() = default;
     explicit VectorBase(const std::vector<uint32_t>& shape) : m_value(shape) { init(); }
     explicit VectorBase(std::vector<uint32_t>&& shape) : m_value(std::move(shape)) { init(); }
@@ -31,9 +33,8 @@ public:
     uint32_t operator[](int32_t index) const;
     uint32_t &operator[](int32_t index);
 
-
-    auto cbegin() const { return this->m_value.cbegin() + (m_value.size() - m_original_size); }
-    auto cend() const { return this->m_value.cend(); }
+    Container::const_iterator cbegin() const;
+    Container::const_iterator cend() const;
 
     std::span<const uint32_t> view() const;
 
@@ -44,7 +45,7 @@ protected:
     void init();
 
     size_t m_original_size = 0;
-    std::vector<uint32_t> m_value;
+    Container m_value;
 };
 
 }

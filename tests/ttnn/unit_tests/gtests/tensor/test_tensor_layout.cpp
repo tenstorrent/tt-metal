@@ -485,8 +485,6 @@ TEST(TensorLayoutTests, TensorLayout_TinyTiles) {
         TensorLayout layout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, Tile({16, 32})), DefaultMemoryConfig);
         ttnn::SimpleShape shape({2, 3, 10, 16});
         EXPECT_EQ(layout.get_packed_buffer_size_bytes(shape), 3264); // 32 * 16 * 3 * 2 + (32 * 16 * 3 * 2)/16
-
-        //test_utils::test_tensor_on_device(shape, layout);
     }
 
     {
@@ -494,7 +492,5 @@ TEST(TensorLayoutTests, TensorLayout_TinyTiles) {
         Tile tile({16, 16});
         TensorLayout layout(DataType::BFLOAT8_B, PageConfig(Layout::TILE, tile), DefaultMemoryConfig);
         EXPECT_EQ(layout.get_packed_buffer_size_bytes(shape), 2228224); // 256 * 256 * 4 * 8 + (256 * 256 * 4 * 8)/16
-
-        //test_utils::test_tensor_on_device(shape, layout);
     }
 }

@@ -34,9 +34,8 @@ void VectorBase::init() {
     m_original_size = m_value.size();
     const size_t min_internal_size = 4;
     if(m_original_size < min_internal_size) {
-        std::vector<uint32_t> new_value(min_internal_size, 1);
-        std::copy(m_value.begin(), m_value.end(), new_value.begin() + (min_internal_size - m_original_size));
-        m_value = std::move(new_value);
+        std::vector<uint32_t> ones(min_internal_size - m_original_size, 1);
+        m_value.insert(m_value.begin(), ones.begin(), ones.end());
     }
 }
 
@@ -64,6 +63,14 @@ uint32_t VectorBase::operator[](int32_t index) const {
 uint32_t& VectorBase::operator[](int32_t index) {
     auto norm_index = normalized_index(index, m_original_size, m_value.size());
     return m_value[norm_index];
+}
+
+VectorBase::Container::const_iterator VectorBase::cbegin() const {
+    return this->m_value.cbegin() + (m_value.size() - m_original_size);
+}
+
+VectorBase::Container::const_iterator VectorBase::cend() const {
+    return this->m_value.cend();
 }
 
 }
