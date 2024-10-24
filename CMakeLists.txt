@@ -151,7 +151,6 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-include(dependencies)
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
@@ -168,9 +167,6 @@ find_library(NUMA_LIBRARY NAMES numa)
 if(NOT NUMA_LIBRARY)
     message(FATAL_ERROR "NUMA library not found")
 endif()
-
-# Bring in UMD and all it's dependencies
-add_subdirectory(tt_metal/third_party/umd)
 
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
@@ -195,10 +191,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
             ${LIBC++ABI}
     )
     target_compile_options(stdlib INTERFACE -stdlib=libc++)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
 else()
     target_link_libraries(stdlib INTERFACE stdc++)
     target_compile_options(stdlib INTERFACE -fsized-deallocation)
 endif()
+
+# Bring in UMD and all it's dependencies
+include(dependencies)
+add_subdirectory(tt_metal/third_party/umd)
 
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
