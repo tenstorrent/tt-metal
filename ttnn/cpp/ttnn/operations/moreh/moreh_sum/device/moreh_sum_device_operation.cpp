@@ -42,8 +42,10 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    tt::operations::primary::check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
-    tt::operations::primary::check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
+    tt::operations::primary::check_tensor(
+        input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32, DataType::BFLOAT8_B});
+    tt::operations::primary::check_tensor(
+        output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32, DataType::BFLOAT8_B});
 
     tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
 

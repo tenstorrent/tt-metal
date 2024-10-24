@@ -4,8 +4,8 @@
 
 #include "moreh_matmul_device_operation.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul {
@@ -23,10 +23,10 @@ void MorehMatmulOperation::validate_inputs(
     const auto &output = tensor_args.output;
 
     // validate tensor
-    tt::operations::primary::check_tensor(input, "moreh_matmul", "input");
-    tt::operations::primary::check_tensor(other, "moreh_matmul", "other");
-    tt::operations::primary::check_tensor(output, "moreh_matmul", "output");
-    tt::operations::primary::check_tensor(bias, "moreh_matmul", "bias");
+    tt::operations::primary::check_tensor(input, "moreh_matmul", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    tt::operations::primary::check_tensor(other, "moreh_matmul", "other", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    tt::operations::primary::check_tensor(output, "moreh_matmul", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    tt::operations::primary::check_tensor(bias, "moreh_matmul", "bias", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // check matrix dims
     const auto &input_shape = input.get_shape().value.without_padding();
