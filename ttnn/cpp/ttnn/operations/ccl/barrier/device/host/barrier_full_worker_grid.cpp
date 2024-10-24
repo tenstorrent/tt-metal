@@ -17,16 +17,14 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
-namespace ttnn {
-namespace ccl {
-namespace barrier::detail {
+namespace ttnn::ccl::barrier::detail {
 
 
 static std::tuple<KernelHandle,KernelHandle,KernelHandle> schedule_kernel_compile(
     tt::tt_metal::Program& program,
-    CoreCoord sender_core,
-    CoreCoord receiver_core,
-    CoreCoord sem_init_core
+    const CoreCoord sender_core,
+    const CoreCoord receiver_core,
+    const CoreCoord sem_init_core
 ) {
     //This just creates a command of what needs to be compiled
     static std::string const& receiver_code = "ttnn/cpp/ttnn/operations/ccl/barrier/device/kernels/barrier_receiver.cpp";
@@ -38,22 +36,18 @@ static std::tuple<KernelHandle,KernelHandle,KernelHandle> schedule_kernel_compil
         receiver_code,
         receiver_core,
         tt::tt_metal::EthernetConfig {
-                .noc = tt::tt_metal::NOC::RISCV_0_default,
                 .compile_args = {}});
     KernelHandle sender_kernel_id = tt::tt_metal::CreateKernel(
         program,
         sender_code,
         sender_core,
         tt::tt_metal::EthernetConfig {
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
                 .compile_args = {}});
     KernelHandle sem_init_id = tt::tt_metal::CreateKernel(
         program,
         sem_init_code,
         sem_init_core,
         tt::tt_metal::DataMovementConfig {
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
                 .compile_args = {}});
     return {receiver_kernel_id, sender_kernel_id,sem_init_id};
 }
@@ -68,8 +62,8 @@ static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32
     CoreCoord const& sem_init_core
     ) {
 
-    uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
-    uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
+    const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
+    const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     constexpr uint32_t start_semaphore_address =      eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + EriscDatamoverConfig::eth_word_size_bytes;
     constexpr uint32_t erisc_semaphore_address =      eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes*2);
     constexpr uint32_t erisc_buffer_address=          eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes*3);
@@ -122,7 +116,6 @@ operation::ProgramWithCallbacks barrier_with_workers(
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     //Configure operational parameters
-    //ttnn::ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode =ttnn::ccl::EriscDataMoverBufferSharingMode::ROUND_ROBIN;
     auto const& op_config =ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     //Get the configuration file, works for both sharded or unsharded
     const std::unique_ptr<ttnn::ccl::CclOpTensorConfig> input_tensor_config =
@@ -168,6 +161,4 @@ operation::ProgramWithCallbacks barrier_with_workers(
     return { .program = std::move(program)};
 }
 
-} //barrier_detail namespace end
-} //ccl namespace end
-} //ttnn namespace end
+} //ttnn::ccl::barrier::detail namespace

@@ -5,6 +5,7 @@
 #include "ethernet/dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include <array>
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
 #define MIN_WAIT 100000
 
 FORCE_INLINE void perform_rs_loop(
@@ -69,11 +70,6 @@ FORCE_INLINE void perform_loop(
     send_eth_receiver_channel_done(eth_channel_syncs);
 }
 
-FORCE_INLINE void eth_setup_handshake(const uint32_t handshake_register_address) {
-    eth_wait_for_bytes(16,MIN_WAIT);
-    eth_receiver_channel_done(0);
-}
-
 void kernel_main() {
     uint32_t arg_idx = 0;
     //Get the runtime arguments
@@ -81,12 +77,12 @@ void kernel_main() {
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    uint64_t channel_sem_addr = get_noc_addr(eth_noc_x, eth_noc_y, get_arg_val<uint32_t>(arg_idx++));
+    const uint64_t channel_sem_addr = get_noc_addr(eth_noc_x, eth_noc_y, get_arg_val<uint32_t>(arg_idx++));
     volatile uint32_t* start_semaphore = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t channels_addrs = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t host_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t host_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    uint64_t host_semaphore_addr = get_noc_addr(host_noc_x, host_noc_y, get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    const uint64_t host_semaphore_addr = get_noc_addr(host_noc_x, host_noc_y, get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
 
 
     const uint32_t transfer_size = 16;
@@ -95,13 +91,9 @@ void kernel_main() {
     channels_syncs_addrs->bytes_sent = 0;
     channels_syncs_addrs->receiver_ack = 0;
     //Semaphore is mapped to sender core
+    erisc::datamover::handshake::receiver_side_start(handshake_addr);
+    erisc::datamover::handshake::receiver_side_finish(handshake_addr);
 
-    eth_setup_handshake(handshake_addr);
-    // We reuse the handshake address to send back acks to the sender core.
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[0] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[1] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[2] = 0;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(handshake_addr)[3] = 0;
     *start_semaphore = 0;
 
     noc_semaphore_inc(host_semaphore_addr, 1);

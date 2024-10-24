@@ -5,6 +5,7 @@
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include <array>
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
 #define MIN_WAIT 100000
 
 struct addr_sem_pair {
@@ -15,11 +16,6 @@ struct addr_sem_pair {
 
 static constexpr bool DISABLE_CONTEXT_SWITCHING = true;
 static constexpr uint8_t NUM_CHANNELS = 8;
-
-FORCE_INLINE void eth_setup_handshake(uint32_t handshake_register_address) {
-    eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-    eth_wait_for_receiver_done(MIN_WAIT);
-}
 
 FORCE_INLINE
 void eth_send_bytes_over_channel_payload_only(
@@ -55,6 +51,7 @@ void kernel_main() {
     uint32_t arg_idx = 0;
     const bool is_ring_start = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
+    erisc::datamover::handshake::sender_side_start(handshake_addr);
     uint32_t channels_addrs = get_arg_val<uint32_t>(arg_idx++);
     volatile uint32_t *sem_addr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t host_noc_x = get_arg_val<uint32_t>(arg_idx++);
@@ -67,7 +64,7 @@ void kernel_main() {
     channels_syncs_addrs->bytes_sent = 0;
     channels_syncs_addrs->receiver_ack = 0;
     *sem_addr = 0;
-    eth_setup_handshake(handshake_addr);
+    erisc::datamover::handshake::sender_side_finish(handshake_addr);
     noc_semaphore_inc(host_semaphore_addr, 1);
 
     //Ensure every core has completed their previous tasks
