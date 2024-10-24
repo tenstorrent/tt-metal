@@ -34,7 +34,9 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
+    tt::tt_metal::TensorLayout tensor_layout(dtype, PageConfig(Layout::TILE), mem_cfg);
+    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(input_shape));
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device( device, input_shape, tensor_layout);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
