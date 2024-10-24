@@ -356,12 +356,12 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
 
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
-    const uint32_t cos_single_tile_size = TILE_WIDTH * sizeof(bfloat16); // tt_metal::detail::TileSize(cos_cb_data_format);
+    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
     std::cout << "cos_single_tile_size: " << cos_single_tile_size << std::endl;
 
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
-    const uint32_t sin_single_tile_size = TILE_WIDTH * sizeof(bfloat16); // tt_metal::detail::TileSize(sin_cb_data_format);
+    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
     const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.get_dtype());
     const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);

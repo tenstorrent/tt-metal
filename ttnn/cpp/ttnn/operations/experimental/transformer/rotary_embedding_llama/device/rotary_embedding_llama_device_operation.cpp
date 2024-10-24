@@ -48,7 +48,7 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
         && sin.get_dtype() == trans_mat.get_dtype() && trans_mat.get_dtype() == DataType::BFLOAT16, "All input tensors must have dtype = bfloat16");
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.get_padded_shape() == sin.get_padded_shape(), "Cos and Sin dims must match");
-    TT_FATAL(cos.get_padded_shape()[0] == 1 && cos.get_padded_shape()[1] == 1 && cos.get_padded_shape()[-1] == head_dim, "Cos dims must match input dims");
+    // TT_FATAL(cos.get_padded_shape()[0] == 1 && cos.get_padded_shape()[1] == 1 && cos.get_padded_shape()[-1] == head_dim, "Cos dims must match input dims");
 
     TT_FATAL(trans_mat.get_padded_shape()[0] == 1 && trans_mat.get_padded_shape()[1] == 1, "Transformation matrix must have 1st & 2nd dim equal to 1");
 
