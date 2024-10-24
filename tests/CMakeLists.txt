@@ -8,7 +8,7 @@ target_link_libraries(
         gtest
         gtest_main
         magic_enum
-        fmt
+        fmt::fmt-header-only
         span
 )
 

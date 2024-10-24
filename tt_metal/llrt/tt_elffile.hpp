@@ -31,7 +31,7 @@ class ElfFile {
         offset_t bss = 0;                  // words of BSS
 
        public:
-        constexpr Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
+         inline Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
             contents(contents), address(addr), bss(bss) {}
     };
 

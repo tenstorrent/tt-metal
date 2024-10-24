@@ -566,7 +566,7 @@ constexpr auto build_sharded_addr_gen(
 
 template <TensorMemoryLayout layout>
 struct DeviceShardSpecTypeGetter {
-    using type = nullptr_t;
+    using type = std::nullptr_t;
 };
 template <>
 struct DeviceShardSpecTypeGetter<TensorMemoryLayout::WIDTH_SHARDED> {

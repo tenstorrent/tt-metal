@@ -39,6 +39,33 @@ project(
     LANGUAGES
         CXX
 )
+
+# Adjust compiler and linker flags needed by this project
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
+    find_library(LIBC++ c++)
+    find_library(LIBC++ABI c++abi)
+    if(NOT LIBC++ OR NOT LIBC++ABI)
+        message(
+            FATAL_ERROR
+            "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
+        )
+    endif()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -stdlib=libc++ -lc++abi")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
+endif()
+
+set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
+set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include(CTest)
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
@@ -76,14 +103,6 @@ if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
@@ -122,10 +141,7 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(STATUS "Adding compile option: -ftime-trace")
         add_compile_options("-ftime-trace")
     else()
-        message(
-            FATAL
-            "ENABLE_BUILD_TIME_TRACE is only supported with Clang"
-        )
+        message(FATAL_ERROR "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
     endif()
 endif()
 
@@ -172,34 +188,6 @@ endif()
 # Bring in UMD and all it's dependencies
 add_subdirectory(tt_metal/third_party/umd)
 
-############################################################################################################################
-# Constructing interface libs for common compiler flags, header directories, and libraries
-#   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
-#   in order to propogate to the rest of tt_metal, tt_eager, etc.
-############################################################################################################################
-add_library(stdlib INTERFACE)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
-    find_library(LIBC++ c++)
-    find_library(LIBC++ABI c++abi)
-    if(NOT LIBC++ OR NOT LIBC++ABI)
-        message(
-            FATAL_ERROR
-            "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
-        )
-    endif()
-
-    target_link_libraries(
-        stdlib
-        INTERFACE
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(stdlib INTERFACE -stdlib=libc++)
-else()
-    target_link_libraries(stdlib INTERFACE stdc++)
-    target_compile_options(stdlib INTERFACE -fsized-deallocation)
-endif()
-
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
     metal_common_libs
@@ -210,11 +198,9 @@ target_link_libraries(
         atomic
         hwloc
         numa
-        stdlib # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
-#   DFMT_HEADER_ONLY must be for every target or else they won't interact with the header only fmt as intended
 #   ttnn and tt_lib will break if built with LTO, so leaving -fno-lto in compile options
 add_library(linker_flags INTERFACE)
 
@@ -239,14 +225,12 @@ target_link_libraries(
     INTERFACE
         linker_flags
         compiler_warnings
-        stdlib
 )
 target_compile_options(
     compiler_flags
     INTERFACE
         -mavx2
         -fPIC
-        -DFMT_HEADER_ONLY
         -fvisibility-inlines-hidden
         -fno-lto
 )
