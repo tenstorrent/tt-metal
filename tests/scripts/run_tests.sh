@@ -379,7 +379,7 @@ set_up_chdir() {
     # The user might have multiple entries in their PYTHONPATH so we should try to find the right one
     IFS=':' read -ra ENTRIES <<< "$PYTHONPATH"
     for ENTRY in "${ENTRIES[@]}"; do
-      if [[ $ENTRY == *"tt-metal" ]]; then
+      if [[ $ENTRY == *"third-metal" ]]; then
         cd $ENTRY
         return
       fi
