@@ -64,11 +64,11 @@ def Conv1d(
         conv_config=conv_config,
     )
 
-    if return_output_size and return_prepared_device_weights:
+    if return_output_length and return_prepared_device_weights:
         return output_tensor_new, output_length_new, weight_tensor_on_dev_new, bias_tensor_on_dev_new
     elif return_prepared_device_weights:
         return output_tensor_new, weight_tensor_on_dev_new, bias_tensor_on_dev_new
-    elif return_output_size:
+    elif return_output_length:
         return output_tensor_new, output_length_new
     else:
         return output_tensor_new
