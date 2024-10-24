@@ -73,7 +73,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
     //Constraint in device kernel
     uint32_t ROW_MAJOR_WIDTH = 8;
     ttnn::Tensor reshaped_rm_tensor;
-    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0) and tensor_shape.rank() == 4) {
+    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0) and tensor_shape.rank() == 4 and shape.rank() <= 4) {
         auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
