@@ -124,41 +124,6 @@ ParallelConfig determine_parallel_config(
         .shard_scheme = shard_layout,
         .shard_orientation = shard_orientation };
 
-    auto calculate_grid = [&](uint32_t num_cores_nhw) {
-        if (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_nhw, device_grid_size_coord, true);
-            return grid;
-
-        } else if(shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t num_cores_channels = find_closest_common_largest_divisor(
-                conv_out_2d_matrix_width_ntiles, std::ceil((double)input_channels / (double)tt::constants::TILE_WIDTH), max_num_cores);
-            log_debug(LogOp, "Num cores for Width Sharding : {}", num_cores_channels);
-            CoreRangeSet grid = num_cores_to_corerange_set(num_cores_channels, device_grid_size_coord, true);
-            return grid;
-
-        } else if(shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            uint32_t total_cores_for_channels =
-                block_shard_orientation == ShardOrientation::COL_MAJOR ? device_grid_size[1] : device_grid_size[0];
-            uint32_t num_cores_channels = find_closest_common_largest_divisor(
-                    conv_out_2d_matrix_width_ntiles, is_out_tiled ? std::ceil((double)input_channels / (double)32) : input_channels, total_cores_for_channels);
-            uint32_t cores_x =
-                block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_channels;
-            uint32_t cores_y =
-                block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_channels : num_cores_nhw;
-            CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
-            CoreRangeSet grid = CoreRangeSet({core_range});
-            return grid;
-
-        } else {
-           TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
-            return CoreRangeSet({});
-        }
-    };
-
-    uint32_t num_cores_nhw = calculate_num_cores_nhw();
-    const CoreRangeSet& grid = calculate_grid(num_cores_nhw);
-    auto shard_orientation = shard_layout == TensorMemoryLayout::BLOCK_SHARDED ? block_shard_orientation : ShardOrientation::ROW_MAJOR;
-    ParallelConfig pconfig = {.grid = grid, .shard_scheme = shard_layout, .shard_orientation = shard_orientation};
     return pconfig;
 }
 
@@ -817,10 +782,10 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
         }
         return matmul_config;
     } else {
-        TT_ASSERT(conv_blocking_config.act_block_w_ntiles % grid_size_along_c == 0);
+        TT_ASSERT(conv_blocking_config.act_block_w_ntiles != 0);
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
             .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
-            .in0_block_w = conv_blocking_config.act_block_w_ntiles / grid_size_along_c,
+            .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
             .per_core_M = div_up(conv_parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT),
