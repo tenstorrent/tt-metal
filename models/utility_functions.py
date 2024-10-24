@@ -27,21 +27,25 @@ def find_mismatched_indices_and_values(tensor1, tensor2, rtol, atol):
     mismatched_indices = torch.nonzero(difference, as_tuple=False)
 
     # get different value
-    mismatched_values = [
+    mismatched_idx_and_values = [
         (idx.tolist(), tensor1[tuple(idx)].item(), tensor2[tuple(idx)].item()) for idx in mismatched_indices
     ]
 
-    return mismatched_indices, mismatched_values
+    return mismatched_idx_and_values
 
 
 def print_mismatched_elements(golden, calculated, rtol, atol):
-    indicies, values = find_mismatched_indices_and_values(golden, calculated, rtol=rtol, atol=atol)
+    index_and_values = find_mismatched_indices_and_values(golden, calculated, rtol=rtol, atol=atol)
 
     MAX_PRINT_CNT = 10
-    logger.debug("Number of different elements {}", len(indicies))
-    cnt = min(MAX_PRINT_CNT, len(indicies))
-    for i in range(cnt):
-        logger.debug("Different idx and values {}", values[i])
+    mismatched_cnt = len(index_and_values)
+    logger.debug("Number of different elements {}", mismatched_cnt)
+    display_cnt = min(MAX_PRINT_CNT, mismatched_cnt)
+    for i in range(display_cnt):
+        logger.debug("Different idx and values {}", index_and_values[i])
+
+    if len(index_and_values) > MAX_PRINT_CNT:
+        logger.debug("More indices are mismatched and only MAX_PRINT_CNT={} Displayed.", MAX_PRINT_CNT)
 
 
 ### Math operations ###
