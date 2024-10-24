@@ -3,4 +3,4 @@
 Finish
 ======
 
-.. doxygenfunction:: Finish(CommandQueue& cq)
+.. doxygenfunction:: tt::tt_metal::v0::Finish(CommandQueue& cq)
