@@ -98,6 +98,7 @@ SECTIONS
   {
     *(l1_memory)
     *(l1_memory_const) /* gcc complains about const and non-const data in the same segment. */
+    ASSERT(SIZEOF(l1_memory) == 0, "l1_memory has contents");
   } > ETH_L1
 
   /* Stabs debugging sections.  */
