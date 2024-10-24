@@ -397,12 +397,21 @@ constexpr bool implements_get_parallelization_strategy() {
 template <typename ConcreteOperation>
 auto default_create_output_tensors(
     const ConcreteOperation& operation,
-    const Tensors& input_tensors) -> ProgramOutputTensors<ConcreteOperation> {
-    const auto& device = input_tensors.at(0).device();
-    const auto& output_specs = operation.compute_output_specs(input_tensors);
-
+    const Tensors& input_tensors,
+    const OptionalTensors& optional_output_tensors) -> ProgramOutputTensors<ConcreteOperation> {
     using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
     OutputTensors output_tensors;
+
+    if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
+        output_tensors.reserve(optional_output_tensors.size());
+        for (const auto& optional_output_tensor : optional_output_tensors) {
+            TT_FATAL(optional_output_tensor.has_value(), "If using optional output tensors, all output tensors must have a value");
+            output_tensors.emplace_back(optional_output_tensor.value());
+        }
+        return output_tensors;
+    }
+    const auto& device = input_tensors.at(0).device();
+    const auto& output_specs = operation.compute_output_specs(input_tensors);
     output_tensors.reserve(output_specs.size());
     for (const auto& [output_shape, output_layout] : output_specs) {
         output_tensors.emplace_back(create_device_tensor(
@@ -538,14 +547,6 @@ struct DeviceOperation final {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "You cannot implement both validate and validate_with_output_tensors");
-                } else if constexpr (
-                    (detail::implements_validate_with_output_tensors<T>() or
-                     detail::implements_validate_with_output_tensors_and_optional_input_tensors<T>()) and
-                    not detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
-                    static_assert(
-                        tt::stl::concepts::always_false_v<T>,
-                        "Operation doesn't implement create_output_tensors with an optional output tensors argument "
-                        "when using validate_with_output_tensors");
                 } else if constexpr (detail::implements_validate<T>() and not detail::implements_create_program<T>()) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
@@ -583,11 +584,13 @@ struct DeviceOperation final {
         compute_output_shapes_impl_{
             [](const storage_t& storage, const Tensors& input_tensors) -> const ComputedShapes {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                if constexpr (detail::implements_compute_output_shapes<T>() and
-                    not detail::implements_compute_output_specs<T>()) {
+                if constexpr (detail::implements_compute_output_shapes<T>() and detail::implements_compute_output_specs<T>()) {
+                    static_assert(
+                        tt::stl::concepts::always_false_v<T>,
+                        "Operation cannot implement both compute_output_shapes and compute_output_specs");
+                } else if constexpr (detail::implements_compute_output_shapes<T>()) {
                     return operation.compute_output_shapes(input_tensors);
-                } else if constexpr (detail::implements_compute_output_specs<T>() and
-                    not detail::implements_compute_output_shapes<T>()) {
+                } else if constexpr (detail::implements_compute_output_specs<T>()) {
                     return operation.compute_output_specs(input_tensors);
                 } else {
                     static_assert(
@@ -601,11 +604,21 @@ struct DeviceOperation final {
                const OptionalTensors& output_tensors) -> const OutputTensors {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
+                    static_assert(
+                        detail::implements_compute_output_shapes<T>(),
+                        "Operation must implement compute_output_shapes if it implements create_output_tensors");
                     return operation.create_output_tensors(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_output_tensors<T>()) {
+                    static_assert(
+                        detail::implements_compute_output_shapes<T>(),
+                        "Operation must implement compute_output_shapes if it implements create_output_tensors");
                     return operation.create_output_tensors(input_tensors);
+                } else if constexpr (detail::implements_compute_output_specs<T>()) {
+                    return detail::default_create_output_tensors(operation, input_tensors, output_tensors);
                 } else {
-                    return detail::default_create_output_tensors(operation, input_tensors);
+                    static_assert(
+                        tt::stl::concepts::always_false_v<T>,
+                        "Operation must implement either create_output_tensors or compute_output_specs");
                 }
             }},
         create_program_impl_{
