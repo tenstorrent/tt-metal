@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.unit_tests.operations.test_all_gather import is_unsupported_case_t3k
 
 
 def run_normal(
@@ -43,6 +44,7 @@ def run_normal(
         tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(device.get_devices()[i], mem_config))
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     for i in range(num_iters):
+        # Run barrier many times in a loop
         ttnn.barrier(
             input_tensor_mesh,
             memory_config=mem_config,
@@ -76,6 +78,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(num_iter):
+        # Alternate between barrier and all gather in a loop
         tt_out_tensor = ttnn.all_gather(
             input_tensor_mesh,
             dim,
@@ -288,7 +291,13 @@ def test_barrier_sharded(
         orientation,
         False,
     )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+    mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+    # Check if the case is supported for all gather
+    (is_known_failure, message) = is_unsupported_case_t3k(
+        input_shape, dim, mem_config, num_devices, num_links, input_dtype, tensor_mem_layout
+    )
+    if is_known_failure:
+        pytest.skip(f"Skipping unsupported case {message}.")
     output_shard_shape = list(input_shard_shape)
     if dim == 3:
         output_shard_shape[1] *= num_devices
@@ -300,9 +309,6 @@ def test_barrier_sharded(
         orientation,
         False,
     )
-    output_mem_config = ttnn.MemoryConfig(
-        tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
-    )
 
     if num_devices < 2:
         pytest.skip("Requires multiple devices to run")
@@ -311,7 +317,7 @@ def test_barrier_sharded(
 
     for i, t in enumerate(input_tensors):
         tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(t3k_mesh_device.get_devices()[i], input_mem_config)
+            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(t3k_mesh_device.get_devices()[i], mem_config)
         )
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
@@ -323,26 +329,26 @@ def test_barrier_sharded(
             input_tensor_mesh,
             dim,
             num_links,
-            output_mem_config,
+            mem_config,
             n_worker,
             n_buffer,
             num_iter,
         )
     else:
-        ## Run the actual allgather operation
+        ## Alternate between barrier and all gather in a loop
         for i in range(num_iter):
             tt_out_tensor = ttnn.all_gather(
                 input_tensor_mesh,
                 dim,
                 num_links=num_links,
-                memory_config=output_mem_config,
+                memory_config=mem_config,
                 num_workers=n_worker,
                 num_buffers_per_channel=n_buffer,
                 topology=all_gather_topology,
             )
             ttnn.barrier(
                 input_tensor_mesh,
-                memory_config=output_mem_config,
+                memory_config=mem_config,
                 topology=all_gather_topology,
             )
         ## Wait for completion

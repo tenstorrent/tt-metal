@@ -463,12 +463,6 @@ void eth_receiver_done() {
  */
 
 FORCE_INLINE
-void eth_receiver_channel_done(uint32_t channel) {
-    // assert(channel < 4);
-    send_eth_receiver_channel_done(&(erisc_info->channels[channel]));
-}
-
-FORCE_INLINE
 void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
     channel_sync->bytes_sent = 0;
     channel_sync->receiver_ack = 0;
@@ -477,6 +471,12 @@ void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
         ((uint32_t)(channel_sync)) >> 4,
         ((uint32_t)(channel_sync)) >> 4,
         1);
+}
+
+FORCE_INLINE
+void eth_receiver_channel_done(uint32_t channel) {
+    // assert(channel < 4);
+    send_eth_receiver_channel_done(&(erisc_info->channels[channel]));
 }
 
 /**
