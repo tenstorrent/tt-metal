@@ -109,7 +109,6 @@ template struct ExecuteUnary<UnaryOpType::NEZ>;
 template struct ExecuteUnary<UnaryOpType::RECIP>;
 template struct ExecuteUnary<UnaryOpType::RELU>;
 template struct ExecuteUnary<UnaryOpType::RELU6>;
-template struct ExecuteUnary<UnaryOpType::ROUND>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID>;
 template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
@@ -373,6 +372,7 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::ROUND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_AND, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_OR, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32_t>;

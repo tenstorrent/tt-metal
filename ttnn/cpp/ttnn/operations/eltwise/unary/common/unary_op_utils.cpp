@@ -145,6 +145,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "left_shift_tile_init();",
                 fmt::format("left_shift_tile({}, {}u);", idst, std::to_string((uint)param0))};
             break;
+        case UnaryOpType::ROUND:
+            op_init_and_name = {
+                "round_tile_init();",
+                fmt::format("round_tile({}, {});", idst, (int)param0)};
+            break;
         case UnaryOpType::REMAINDER:
             op_init_and_name = {
                 "remainder_tile_init();",
@@ -273,7 +278,6 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
             break;
         case UnaryOpType::FLOOR: op_init_and_name = {"floor_tile_init();", fmt::format("floor_tile({});", idst)}; break;
         case UnaryOpType::CEIL: op_init_and_name = {"ceil_tile_init();", fmt::format("ceil_tile({});", idst)}; break;
-        case UnaryOpType::ROUND: op_init_and_name = {"round_tile_init();", fmt::format("round_tile({});", idst)}; break;
         case UnaryOpType::SIN: op_init_and_name = {"sin_tile_init();", fmt::format("sin_tile({});", idst)}; break;
         case UnaryOpType::COS: op_init_and_name = {"cos_tile_init();", fmt::format("cos_tile({});", idst)}; break;
         case UnaryOpType::ISFINITE:

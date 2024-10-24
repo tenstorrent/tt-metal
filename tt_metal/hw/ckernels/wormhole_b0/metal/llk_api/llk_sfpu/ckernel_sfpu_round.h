@@ -27,9 +27,31 @@ inline vFloat round_even(vFloat v) {
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
-void calculate_round() {
+void calculate_round(const int decimals) {
+    const auto powu = [](vFloat base, uint exp) {
+        vFloat result = 1.0f;
+
+        while (exp > 0) {
+            if (exp & 1)
+                result *= base;
+            base *= base;
+            exp >>= 1;
+        }
+        return result;
+    };
+
+    const auto exp10i = [powu](int exp) {
+        if (exp < 0)
+            return powu(0.1f, -exp);
+        return powu(10.0f, exp);
+    };
+
+    const vFloat coeff = exp10i(decimals);
+    const vFloat inverse = exp10i(-decimals);
+
     for (int _ = 0; _ < ITERATIONS; ++_) {
-        *dst_reg = round_even(*dst_reg);
+        vFloat v = dst_reg[0];
+        dst_reg[0] = inverse * round_even(v * coeff);
         ++dst_reg;
     }
 }
