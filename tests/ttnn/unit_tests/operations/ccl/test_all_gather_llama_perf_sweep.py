@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull, get_devices_for_t3000
 import itertools
 from ttnn import ShardTensorToMesh
-from tests.ttnn.unit_tests.operations.test_all_gather import run_all_gather_sharded
+from tests.ttnn.unit_tests.operations.ccl.test_all_gather import run_all_gather_sharded
 
 
 @pytest.mark.timeout(120)
