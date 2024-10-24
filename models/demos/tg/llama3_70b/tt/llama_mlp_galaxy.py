@@ -184,8 +184,6 @@ class TtLlamaMLP_galaxy:
             memory_config=self.mlp_config["FF2_OUT_GATHERED_MEMCFG"],
         )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, self.mlp_config["FF1_ACT_MEMCFG"])
-
         return hidden_states
 
     def prefill_forward(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:

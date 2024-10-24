@@ -34,7 +34,7 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
+void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 

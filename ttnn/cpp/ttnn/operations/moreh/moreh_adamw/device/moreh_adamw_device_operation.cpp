@@ -150,4 +150,26 @@ MorehAdamWDeviceOperation::invoke(
             max_exp_avg_sq_out}};
 }
 
+tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    return operation::hash_operation<MorehAdamWDeviceOperation>(
+        operation_attributes.beta1,
+        operation_attributes.beta2,
+        operation_attributes.eps,
+        operation_attributes.amsgrad,
+        operation_attributes.weight_decay,
+        operation_attributes.memory_config,
+        operation_attributes.compute_kernel_config,
+        tensor_args.param_in.memory_config(),
+        tensor_args.param_in.dtype(),
+        tensor_args.grad.memory_config(),
+        tensor_args.grad.dtype(),
+        tensor_args.exp_avg_in.memory_config(),
+        tensor_args.exp_avg_in.dtype(),
+        tensor_args.exp_avg_sq_in.memory_config(),
+        tensor_args.exp_avg_sq_in.dtype(),
+        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().memory_config()
+                                                  : MemoryConfig{},
+        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().dtype() : DataType::INVALID);
+}
 }  // namespace ttnn::operations::moreh::moreh_adamw

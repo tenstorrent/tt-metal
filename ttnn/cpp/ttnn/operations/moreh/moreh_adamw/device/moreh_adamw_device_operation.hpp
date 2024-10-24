@@ -49,6 +49,10 @@ struct MorehAdamWDeviceOperation {
         struct shared_variables_t {
             KernelHandle unary_reader_kernel_id;
             KernelHandle unary_writer_kernel_id;
+            KernelHandle compute_kernel_group1_id;
+            KernelHandle compute_kernel_group2_id;
+            CoreRangeSet core_group_1;
+            CoreRangeSet core_group_2;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -102,8 +106,9 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& max_exp_avg_sq_out,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config);
-};
 
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as
