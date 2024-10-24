@@ -1646,19 +1646,65 @@ void py_module(py::module& module) {
 
 
     // Unary ops with dim parameter
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::glu, "dim", "Dimension to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply glu function on second tensor followed by mul op with first tensor");
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::reglu, "dim", "Dimension to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply relu function on second tensor followed by mul op with first tensor",
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::glu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication with the first tensor.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
            +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+           Last dimension of input tensor should be divisible by 64.
+
         )doc");
 
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::geglu, "dim", "Dimension to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply gelu function on second tensor followed by mul op with first tensor");
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::swiglu, "dim", "Dimension to split input tensor. Supported dimension -1 or 3", "Split the tensor into two, apply silu function on second tensor followed by mul op with first tensor");
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::reglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform multiplication with the first tensor.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+           Last dimension of input tensor should be divisible by 64.
+
+        )doc");
+
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::geglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+           Last dimension of input tensor should be divisible by 64.
+
+        )doc");
+
+    detail::bind_unary_operation_with_dim_parameter(module, ttnn::swiglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform multiplication with the first tensor.",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+           Last dimension of input tensor should be divisible by 64.
+
+        )doc");
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
