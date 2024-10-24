@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 25
+        default: 35
   workflow_dispatch:
     inputs:
       arch:
@@ -33,7 +33,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 25
+        default: 35
 jobs:
   unit-tests-slow-dispatch:
     name: ${{ inputs.arch }} ${{ inputs.runner-label }}
@@ -47,6 +47,7 @@ jobs:
       TT_METAL_SLOW_DISPATCH_MODE: 1
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      DEVICE_NAME: ${{ inputs.runner-label }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/prepare-metal-run
