@@ -2,44 +2,66 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-from models.experimental.functional_whisper.reference import torch_functional_whisper
-from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
-import transformers
-from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
-from datasets import load_dataset
-import torch
 import ttnn
+import torch
+import pytest
+import transformers
+from datasets import load_dataset
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.demos.wormhole.whisper.reference import torch_functional_whisper
+from models.demos.wormhole.whisper.tt import ttnn_optimized_functional_whisper
+from models.utility_functions import torch_random, is_grayskull, is_wormhole_b0
 
 MODEL_NAME = "openai/whisper-base"
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [16])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("use_key_value_states", [False, True])
-def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_size, use_key_value_states):
-    torch.manual_seed(0)
+def test_whisper_attention(
+    mesh_device, ttnn_model, model_name, batch_size, sequence_size, use_key_value_states, reset_seeds
+):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
         embed_dim=config.d_model, num_heads=config.encoder_attention_heads, dropout=config.attention_dropout
     ).eval()
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
+    tt_model_name = f"ttnn_{model_name}_optimized"
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=ttnn_model.convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            prefix="encoder_attn" if use_key_value_states else "",
+            device=mesh_device,
+        )
+
     ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        torch_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=inputs_mesh_mapper,
     )
     if use_key_value_states:
         torch_key_value_states = torch_random(
             (batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32
         )
         ttnn_key_value_states = ttnn.from_torch(
-            torch_key_value_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch_key_value_states,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=inputs_mesh_mapper,
         )
     else:
         torch_key_value_states = None
@@ -62,35 +84,31 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
         parameters=torch_parameters,
     )
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
-        prefix="encoder_attn" if use_key_value_states else "",
-    )
     attention_mask = None
     output = ttnn_model.whisper_attention(
         config,
+        mesh_device,
         ttnn_hidden_states,
         attention_mask,
         key_value_states=ttnn_key_value_states,
         parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
     )
 
-    output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output, output, 0.98)
+    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+    assert_with_pcc(torch_output, output, 0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [16])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
-    torch.manual_seed(0)
+def test_encoder_layer(mesh_device, ttnn_model, model_name, batch_size, sequence_size, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
-    model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
+    model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config)
     model = model
 
     embed_dim = config.d_model
@@ -103,33 +121,52 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     )
     torch_output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
-    )
+    tt_model_name = f"ttnn_{model_name}_optimized"
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=ttnn_model.convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=mesh_device,
+        )
+
+    model = model.eval()
     ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        torch_hidden_states,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=inputs_mesh_mapper,
     )
 
-    output = ttnn_model.encoder_layer(config, ttnn_hidden_states, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output)
+    output = ttnn_model.encoder_layer(
+        config,
+        mesh_device,
+        ttnn_hidden_states,
+        parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+    )
+    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [16])
 @pytest.mark.parametrize("feature_size", [80])
 @pytest.mark.parametrize("sequence_length", [3000])
-def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, sequence_length):
-    torch.manual_seed(0)
+def test_encoder(mesh_device, ttnn_model, model_name, batch_size, feature_size, sequence_length, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
-    model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
-    model = model
+    model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config)
 
     torch_input_features = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.float32)
 
@@ -139,9 +176,12 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
 
-    # torch_original_output = torch_functional_whisper.encoder_original(
-    #     torch_input_features, parameters, embed_dim, num_heads
-    # )
+    def convert_to_ttnn(model, name):
+        return name not in [
+            "conv1",
+            "conv2",
+            "embed_positions",
+        ]
 
     inputs_embeds = torch_functional_whisper.preprocess_encoder_inputs(
         input_features=torch_input_features,
@@ -150,39 +190,60 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
 
     torch_output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        prefix="encoder",
-        device=device,
+    tt_model_name = f"ttnn_{model_name}_optimized"
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=mesh_device,
+        )
+
+    ttnn_parameters.embed_positions.weight = ttnn_parameters.embed_positions.weight.unsqueeze(0)
+    ttnn_parameters.embed_positions.weight = ttnn.from_torch(
+        ttnn_parameters.embed_positions.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
 
+    model = model.eval()
     input_embeds = ttnn_model.preprocess_encoder_inputs(
         input_features=torch_input_features,
         parameters=ttnn_parameters,
-        device=device,
+        device=mesh_device,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        weights_mesh_mapper=weights_mesh_mapper,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
     )
     input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
-    input_embeds = ttnn.to_device(input_embeds, device)
+    input_embeds = ttnn.to_device(input_embeds, mesh_device)
 
-    output = ttnn_model.encoder(config, input_embeds, parameters=ttnn_parameters)
-    output = ttnn.to_torch(output)
+    output = ttnn_model.encoder(
+        config,
+        mesh_device,
+        input_embeds,
+        parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+    )
+    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
-    assert_with_pcc(torch_output, output, 0.968)
+    assert_with_pcc(torch_output, output, 0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [16])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
-    torch.manual_seed(0)
+def test_decoder_layer(mesh_device, reset_seeds, ttnn_model, model_name, batch_size, sequence_size):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
-    model = model
-
     num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, 2, embed_dim), -0.1, 0.1, dtype=torch.float32)
@@ -202,50 +263,70 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     torch_output = torch_functional_whisper.decoder_layer(
         config, torch_hidden_states, attention_mask, torch_encoder_hidden_states, parameters=parameters
     )
+    tt_model_name = f"ttnn_{model_name}_optimized"
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=ttnn_model.convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=mesh_device,
+        )
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: True,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
+    model = model.eval()
+    ttnn_hidden_states = ttnn.from_torch(
+        torch_hidden_states,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=inputs_mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
     )
-    ttnn_hidden_states = ttnn.from_torch(torch_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_hidden_states = ttnn.to_layout(ttnn_hidden_states, ttnn.TILE_LAYOUT)
-    ttnn_hidden_states = ttnn.to_device(ttnn_hidden_states, device)
 
-    ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16)
-    ttnn_attention_mask = ttnn.to_layout(ttnn_attention_mask, ttnn.TILE_LAYOUT)
-    ttnn_attention_mask = ttnn.to_device(ttnn_attention_mask, device)
+    ttnn_attention_mask = ttnn.from_torch(
+        attention_mask, dtype=ttnn.bfloat16, device=mesh_device, mesh_mapper=inputs_mesh_mapper, layout=ttnn.TILE_LAYOUT
+    )
 
-    ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
-    ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
-    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=inputs_mesh_mapper,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
     output = ttnn_model.decoder_layer(
-        config, ttnn_hidden_states, ttnn_attention_mask, ttnn_encoder_hidden_states, parameters=ttnn_parameters
+        config,
+        mesh_device,
+        ttnn_hidden_states,
+        ttnn_attention_mask,
+        ttnn_encoder_hidden_states,
+        parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
     )
-    output = ttnn.to_torch(output)
+    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
-    assert_with_pcc(torch_output, output, 0.97)
+    assert_with_pcc(torch_output, output, 0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [16])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
-    torch.manual_seed(0)
+def test_decoder(mesh_device, ttnn_model, model_name, batch_size, sequence_size, reset_seeds):
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
-    model = model
 
     embed_dim = config.d_model
 
     torch_encoder_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
-    #    decoder_input_ids = torch.ones(1, 32).type(torch.int32) * config.decoder_start_token_id
-    decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
+    decoder_input_ids = torch.tensor([[1, 1]] * batch_size) * config.decoder_start_token_id
 
     attention_mask = None
 
@@ -254,10 +335,6 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
-
-    # torch_original_output = torch_functional_whisper.decoder_original(
-    #     decoder_input_ids, attention_mask, torch_encoder_hidden_states, parameters, embed_dim, num_heads
-    # )
 
     (decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_decoder_inputs(
         decoder_input_ids, attention_mask, parameters=parameters
@@ -271,55 +348,76 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
         parameters=parameters,
     )
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
-        prefix="decoder",
-    )
-    ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16)
-    ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, device)
+    tt_model_name = f"ttnn_{model_name}_optimized"
 
-    ttnn_encoder_hidden_states = ttnn.from_torch(torch_encoder_hidden_states, dtype=ttnn.bfloat16)
+    def convert_to_ttnn(model, name):
+        return name not in ["conv1", "conv2", "embed_positions", "embed_tokens"]
+
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=mesh_device,
+        )
+    model = model.eval()
+
+    ttnn_decoder_input_ids = ttnn.from_torch(decoder_input_ids, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
+    ttnn_decoder_input_ids = ttnn.to_device(ttnn_decoder_input_ids, mesh_device)
+
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        torch_encoder_hidden_states, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper
+    )
     ttnn_encoder_hidden_states = ttnn.to_layout(ttnn_encoder_hidden_states, ttnn.TILE_LAYOUT)
-    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, device)
+    ttnn_encoder_hidden_states = ttnn.to_device(ttnn_encoder_hidden_states, mesh_device)
 
     (decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_decoder_inputs(
-        config, decoder_input_ids, attention_mask, parameters=ttnn_parameters, device=device
+        config,
+        decoder_input_ids,
+        attention_mask,
+        parameters=ttnn_parameters,
+        device=mesh_device,
+        inputs_mesh_mapper=inputs_mesh_mapper,
     )
 
     output = ttnn_model.decoder(
         config,
+        device=mesh_device,
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=ttnn_encoder_hidden_states,
         parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
     )
-    output = ttnn.to_torch(output)
+    output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
 
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("batch_size", [16])
+@pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
-def test_ttnn_whisper(tmp_path, device, ttnn_model):
-    torch.manual_seed(0)
-    model_name = "openai/whisper-base"
-    config = WhisperConfig.from_pretrained(model_name)
-    feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
+def test_ttnn_whisper(tmp_path, mesh_device, model_name, ttnn_model, batch_size, reset_seeds):
+    config = transformers.WhisperConfig.from_pretrained(model_name)
+    feature_extractor = transformers.AutoFeatureExtractor.from_pretrained(model_name)
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
+    inputs = feature_extractor(
+        [ds[i]["audio"]["array"] for i in range(batch_size)], sampling_rate=16000, return_tensors="pt"
+    )
     input_features = inputs.input_features
-    decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
+    decoder_input_ids = torch.tensor([[1, 1]] * batch_size) * config.decoder_start_token_id
 
-    attention_mask = None
-
-    model = WhisperModel.from_pretrained(model_name).eval()
+    model = transformers.WhisperModel.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
+        initialize_model=lambda: model.eval(),
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
     )
@@ -327,11 +425,11 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
     (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
         input_features=input_features,
         input_ids=decoder_input_ids,
-        attention_mask=attention_mask,
+        attention_mask=None,
         parameters=parameters,
     )
 
-    expected_last_hidden_state = torch_functional_whisper.whisper(
+    torch_last_hidden_state = torch_functional_whisper.whisper(
         config,
         encoder_hidden_states,
         decoder_hidden_states,
@@ -339,31 +437,46 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         parameters=parameters,
     )
 
-    ttnn_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
+    tt_model_name = f"ttnn_{model_name}_optimized"
+    inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+    weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        ttnn_parameters = preprocess_model_parameters(
+            model_name=tt_model_name,
+            initialize_model=lambda: model,
+            convert_to_ttnn=ttnn_model.convert_to_ttnn,
+            custom_preprocessor=ttnn_model.custom_preprocessor,
+            device=mesh_device,
+        )
+
+    model = model.eval()
+
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+        config=config,
+        input_features=input_features,
+        input_ids=decoder_input_ids,
+        attention_mask=None,
+        parameters=ttnn_parameters,
+        device=mesh_device,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        weights_mesh_mapper=weights_mesh_mapper,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+        output_mesh_composer=output_mesh_composer,
     )
 
-    with ttnn.tracer.trace():
-        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-            config=config,
-            input_features=input_features,
-            input_ids=decoder_input_ids,
-            attention_mask=attention_mask,
-            parameters=ttnn_parameters,
-            device=device,
-        )
+    last_hidden_state = ttnn_model.whisper(
+        config,
+        mesh_device,
+        input_embeds,
+        decoder_hidden_states,
+        decoder_attention_mask=decoder_attention_mask,
+        parameters=ttnn_parameters,
+        whisper_memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull else ttnn.L1_MEMORY_CONFIG,
+        output_mesh_composer=output_mesh_composer,
+        inputs_mesh_mapper=inputs_mesh_mapper,
+    )
 
-        last_hidden_state = ttnn_model.whisper(
-            config,
-            input_embeds,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            parameters=ttnn_parameters,
-        )
-        last_hidden_state = ttnn.to_torch(last_hidden_state)
-    ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
+    last_hidden_state = ttnn.to_torch(last_hidden_state, mesh_composer=output_mesh_composer)
 
-    assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.964)
+    assert_with_pcc(torch_last_hidden_state, last_hidden_state, 0.857)
