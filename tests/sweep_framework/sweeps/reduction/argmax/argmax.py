@@ -31,7 +31,7 @@ parameters = {
         + gen_shapes([1, 1], [128, 128], [1, 1], 128),
         "dim": [0, 1, 2, 3, None],
         "input_a_dtype": [ttnn.bfloat16],
-        "input_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -51,6 +51,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["dim"] is not None:
         if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
+    if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
+        return True, "Tiled layout not supported"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
