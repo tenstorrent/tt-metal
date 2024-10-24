@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
+#include "ckernel_sfpu_converter.h"
 
 #include "sfpi.h"
 
@@ -17,11 +18,10 @@ namespace ckernel
 namespace sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE>
 inline void _calculate_lrelu_(const int iterations, uint slope)
 {
-    // SFPU microcode
-    vFloat s = s2vFloat16b(slope);
+    vFloat s = Converter::to_float(slope);
 
     #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++) {
