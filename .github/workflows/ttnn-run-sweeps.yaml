@@ -14,6 +14,9 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
+          - creation.zeros.zeros
+          - creation.empty.empty
+          - creation.zeros_like.zeros_like
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
