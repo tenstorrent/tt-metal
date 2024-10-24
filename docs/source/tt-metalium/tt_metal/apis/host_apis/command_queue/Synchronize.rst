@@ -3,4 +3,4 @@
 Synchronize
 ===========
 
-.. doxygenfunction:: Synchronize
+.. doxygenfunction:: tt::tt_metal::v0::Synchronize

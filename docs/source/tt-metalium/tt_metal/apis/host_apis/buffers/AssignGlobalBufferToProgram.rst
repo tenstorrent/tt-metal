@@ -1,5 +1,5 @@
 
 AssignGlobalBufferToProgram
-===========================
+===============================
 
-.. doxygenfunction:: AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program)
+.. doxygenfunction:: tt::tt_metal::v0::AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program)

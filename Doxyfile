@@ -499,7 +499,12 @@ NUM_PROC_THREADS       = 1
 # normally produced when WARNINGS is set to YES.
 # The default value is: NO.
 
-EXTRACT_ALL            = NO
+EXTRACT_ALL            = YES
+
+EXTRACT_NAMESPACES     = YES
+
+INLINE_NAMESPACES = YES
+
 
 # If the EXTRACT_PRIVATE tag is set to YES, all private members of a class will
 # be included in the documentation.
@@ -946,7 +951,17 @@ INPUT                  = tt_metal/hw/inc/dataflow_api.h \
                          tt_metal/include/compute_kernel_api/transpose_wh.h \
                          tt_metal/include/compute_kernel_api/untilize.h \
                          tt_metal/include/compute_kernel_api.h \
-                         tt_metal/impl/kernels/kernel_args.hpp
+                         tt_metal/impl/kernels/kernel_args.hpp \
+                         tt_metal/include/tt_metal/metal.hpp \
+                         tt_metal/include/tt_metal/types.hpp \
+                         tt_metal/include/tt_metal/buffer.hpp \
+                         tt_metal/include/tt_metal/command_queue.hpp \
+                         tt_metal/include/tt_metal/device.hpp \
+                         tt_metal/include/tt_metal/event.hpp \
+                         tt_metal/include/tt_metal/kernel.hpp \
+                         tt_metal/include/tt_metal/program.hpp \
+                         tt_metal/include/tt_metal/trace.hpp
+
 
 # This tag can be used to specify the character encoding of the source files
 # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses
