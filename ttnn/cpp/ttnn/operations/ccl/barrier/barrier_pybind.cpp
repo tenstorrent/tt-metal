@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,17 +45,14 @@ void py_bind_barrier(pybind11::module& module) {
         ttnn::barrier,
         R"doc(
 
-        Performs a hop latency test on multi-device :attr:`input_tensor` across all devices.
+        Performs a barrier operation among all the devices covered in the input multi-device tensor to reduce skew between chips upon completion of the operation
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
-            num_samples(uint): the number of samples
-            max_concurrent_samples(uint): the maximum number of concurrent samples
-            sample_page_size(uint): the page size of the test
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options is currently only Ring`.
+            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options is currently only Ring, defaults to Ring`.
 
 
         Returns:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -108,7 +108,6 @@ def run_with_trace(
             num_buffers_per_channel=n_buffer,
             topology=all_gather_topology,
         )
-
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
@@ -1381,7 +1380,7 @@ def run_all_gather_sharded_t3k(
     ),
 )
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 72000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 139360}], indirect=True)
 def test_all_gather_sharded_post_commit(
     t3k_mesh_device,
     num_devices,
@@ -1402,12 +1401,12 @@ def test_all_gather_sharded_post_commit(
     print("Test starting\n")
     run_all_gather_sharded_t3k(
         t3k_mesh_device,
-        num_devices,
+        8,
         input_shape,
         input_shard_shape,
         shard_grid,
         dim,
-        num_links,
+        1,
         orientation,
         input_dtype,
         tensor_layout,
@@ -1418,7 +1417,7 @@ def test_all_gather_sharded_post_commit(
         all_gather_topology=ttnn.Topology.Ring,
         enable_async=enable_async,
         trace_mode=True,
-        num_iter=10,
+        num_iter=20,
     )
 
 

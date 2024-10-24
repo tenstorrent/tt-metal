@@ -1,12 +1,6 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-//There are two parts to barrier_op.cpp. First we want to add the requred functions
-//to struct Barrier. Then we will generate the function referenced in the
-//Invoke function which uses a Barrier class variable
-
-//Required: validate, compute_output_shapes, create_output_tensors, create_program
 
 #include "ttnn/operations/ccl/barrier/device/barrier_op.hpp"
 #include "tt_metal/host_api.hpp"
@@ -16,30 +10,24 @@
 namespace ttnn {
 
 void Barrier::validate(const std::vector<Tensor>& input_tensors) const {
-    //Create conditions which check that the input is of a correct type
-    //Use TT_FATAL(condition_that_fails,"failure message")
-    //for (auto const& t : input_tensors) {
-        //This will run for all the input tensors
-    //    ;
-    //}
+    //Validate the input tensor
     TT_FATAL(this->topology == ccl::Topology::Ring, "We currently only support Ring topologies on this OP");
 }
 
-std::vector<tt::tt_metal::LegacyShape> Barrier::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<SimpleShape> Barrier::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
     //For a Barrier the output shape should match the input
-    auto shape = input_tensors[0].get_legacy_shape();
-    return std::vector<tt::tt_metal::LegacyShape>(input_tensors.size(), shape);
+    SimpleShape shape = input_tensors[0].get_logical_shape();
+    return std::vector<SimpleShape>(input_tensors.size(), shape);
 }
 
 std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    //I am not modifying the tensor in this function so I will just return what I was given
+    //Tensor is unmodified, return what was passed in
     return input_tensors;
 }
 
 operation::ProgramWithCallbacks Barrier::create_program(
-    //The create program function which calls barrier_with_workers defined in device/host/barrier_full_worker_grid.cpp
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    return ccl::barrier_detail::barrier_with_workers(
+    return ccl::barrier::detail::barrier_with_workers(
         input_tensors.at(0),
         output_tensors.at(0),
         this->is_starting_core,
@@ -50,23 +38,15 @@ operation::ProgramWithCallbacks Barrier::create_program(
         this->topology);
 }
 
-namespace operations{
+namespace operations::ccl{
 
-namespace ccl{
 Tensor barrier(
     const Tensor& input_tensor,
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology)
 {
-    //Host function to launch the OP called from Invoke in barrier.cpp
-
-    //Get the workers
     auto devices = input_tensor.get_workers();
-
-    //Split the job up between the tensors
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-
-    //Define the launch_op function
     operation::launch_op(
         [output_mem_config, topology, devices](
             const std::vector<Tensor>& input_tensors,
@@ -106,11 +86,8 @@ Tensor barrier(
         },
         {input_tensor},
         output_tensors);
-    //Return the first output tensor
     return output_tensors.at(0);
 }
 
-} //namespace ccl end
-
-} //namespace operations end
-} // namespace ttnn end
+} //namespace operations::ccl
+} // namespace ttnn
