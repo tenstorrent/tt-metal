@@ -631,6 +631,7 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -649,6 +650,7 @@ def test_transpose_hc(dtype, shape, device):
     transpose(shape, device, dim0=1, dim1=-2, input_dtype=dtype)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -677,6 +679,7 @@ def test_transpose_2D(dtype, shape, layout, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -758,6 +761,7 @@ def test_transpose_failures(config, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "config",
     [
