@@ -37,11 +37,8 @@ class DistributedNorm(LightweightModule):
             if mode == "decode":
                 x = ttnn.interleaved_to_sharded(x, self.gather_in_mem_cfg)
                 x = ttnn.all_gather(
-                    x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=self.gather_out_mem_cfg
+                    x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
                 )
-                # TODO: do we still need this?
-                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-                x = ttnn.interleaved_to_sharded(x, input_mem_cfg)
             else:
                 x = ttnn.all_gather(
                     x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg
