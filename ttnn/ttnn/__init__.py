@@ -155,6 +155,8 @@ from ttnn.device import (
     open_device,
     close_device,
     enable_program_cache,
+    sfpu_negative_inf,
+    sfpu_positive_inf,
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
