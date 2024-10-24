@@ -299,9 +299,11 @@ def run_test_rotary_embedding_llama(
         (1, 8192),
         (1, 16384),
         (1, 128 * 1024),
+        (64, 1),
         (32, 1),
         (16, 1),
         (8, 1),
+        (1, 1),
     ),
     ids=(
         "prefill_32",
@@ -314,9 +316,11 @@ def run_test_rotary_embedding_llama(
         "prefill_8k",
         "prefill_16k",
         "prefill_128k",
+        "decode_64",
         "decode_32",
         "decode_16",
         "decode_8",
+        "decode_1",
     ),
 )
 @pytest.mark.parametrize(
@@ -379,17 +383,21 @@ def test_rotary_embedding_llama(
         (1, 2048),
         (1, 4096),
         (1, 8192),
+        (64, 1),
         (32, 1),
         (16, 1),
         (8, 1),
+        (1, 1),
     ),
     ids=(
         "prefill_2k",
         "prefill_4k",
         "prefill_8k",
+        "decode_64",
         "decode_32",
         "decode_16",
         "decode_8",
+        "decode_1",
     ),
 )
 @pytest.mark.parametrize(
