@@ -60,6 +60,7 @@ run_post_commit_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local
 
     # Switch to modules only soon
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
