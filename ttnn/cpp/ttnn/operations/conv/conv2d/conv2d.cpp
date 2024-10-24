@@ -758,7 +758,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
 }
 
 template<typename T>
-ttnn::Tensor conv2d(
+std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T * device,
@@ -813,6 +813,7 @@ ttnn::Tensor conv2d(
         }
         conv_config.deallocate_activation = true;
     }
+
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
@@ -820,7 +821,7 @@ ttnn::Tensor conv2d(
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
         conv_out_memory_config, get_num_cores_nhw_from_parallel_config(parallel_config),
         get_num_cores_channels_from_parallel_config(parallel_config));
-
+ 
     auto opt_conv_op_block_config = determine_per_core_conv_block_config(
         parallel_config,
         opt_conv_op_parallel_config,
@@ -832,18 +833,48 @@ ttnn::Tensor conv2d(
         conv_config.fp32_dest_acc_enabled,
         conv_config.input_channels_alignment == 16);
 
-    // Validate weight and bias tensors
-    TT_FATAL(ttnn::is_tensor_on_device_or_multidevice(weight_tensor), "Weight tensor must be on device or multidevice");
-    TT_FATAL(weight_tensor.get_shape().rank() == 4, "Weight tensor must be 4D");
-    TT_FATAL(weight_tensor.get_shape()[0] == 1 && weight_tensor.get_shape()[1] == 1, "weight[0] != 1 and/or weight[1] != 1 indicates that the weight tensor has not been prepared for ttnn. Please use prepare_conv_weights_for_ttnn to prepare the weight tensor.");
-    if (bias_tensor.has_value()) {
-        TT_FATAL(ttnn::is_tensor_on_device_or_multidevice(bias_tensor.value()), "Bias tensor must be on device or multidevice");
-        TT_FATAL(bias_tensor->get_shape().rank() == 4, "Bias tensor must be 4D");
-        TT_FATAL(bias_tensor->get_layout() == Layout::TILE, "Bias tensor must be in TILE layout");
-    }
-
+    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
+    if (!weight_is_on_device) {
+        // prepare weights in desired layout and move to device
+        weight_tensor_on_device = prepare_conv_weights_for_ttnn(
+            weight_tensor, 
+            "OIHW",
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            device,
+            conv_config);
+
+        weight_tensor_on_device = ttnn::operations::core::to_device(weight_tensor_on_device, device, std::nullopt);
+
+        if (bias_tensor.has_value()) {
+            bias_tensor_on_device = prepare_conv_bias_for_ttnn(
+                bias_tensor.value(), 
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                groups,
+                device,
+                conv_config);
+
+            bias_tensor_on_device = ttnn::operations::core::to_device(bias_tensor_on_device.value(), device, std::nullopt);
+        }
+    }
 
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
@@ -911,7 +942,7 @@ ttnn::Tensor conv2d(
             if (conv_config.deallocate_activation) {
                 ttnn::operations::core::deallocate(input_tensor_post_tm);
             }
-            return conv_output;
+            return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
         }
         auto halo_output = ttnn::halo(
             DefaultQueueId,
@@ -960,7 +991,7 @@ ttnn::Tensor conv2d(
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
 
-        return conv_output;
+        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
         // run conv as matmul
         uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -998,129 +1029,8 @@ ttnn::Tensor conv2d(
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
-        return matmul_output;
+        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
-}
-
-template<typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d_host_weights(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    T * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config) {
-
-     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    if (conv_config.act_block_h_override == 0 && !input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
-        // This is a path for auto_sharding, set act_block_h_override to min value to
-        // be conservative with L1 memory usage.
-        if (conv_config.input_channels_alignment == (constants::TILE_WIDTH / 2)) {
-            // shallow conv, requires at least two tiles
-            conv_config.act_block_h_override = constants::TILE_HEIGHT * 2;
-        } else {
-            conv_config.act_block_h_override = constants::TILE_HEIGHT;
-        }
-    }
-    uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
-    uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
-    auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
-        device,
-        input_tensor,
-        conv_config,
-        batch_size,
-        output_height,
-        output_width,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        weight_tensor.get_shape()[3],
-        input_width,
-        groups);
-    if (tensor_manipulated) {
-        if (conv_config.deallocate_activation) {
-            ttnn::Tensor input_tensor_ = input_tensor;  // TODO: allow in place modification of inputs to the op
-            input_tensor_.deallocate();
-            // ttnn::operations::core::deallocate(input_tensor_);
-        }
-        conv_config.deallocate_activation = true;
-    }
-
-    bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
-    ttnn::Tensor weight_tensor_on_device = weight_tensor;
-    std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device) {
-        // prepare weights in desired layout and move to device
-        weight_tensor_on_device = prepare_conv_weights_for_ttnn(
-            weight_tensor, 
-            "OIHW",
-            in_channels,
-            out_channels,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            groups,
-            device,
-            conv_config);
-
-        weight_tensor_on_device = ttnn::operations::core::to_device(weight_tensor_on_device, device, std::nullopt);
-
-        if (bias_tensor.has_value()) {
-            bias_tensor_on_device = prepare_conv_bias_for_ttnn(
-                bias_tensor.value(), 
-                in_channels,
-                out_channels,
-                batch_size,
-                input_height,
-                input_width,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                groups,
-                device,
-                conv_config);
-
-            bias_tensor_on_device = ttnn::operations::core::to_device(bias_tensor_on_device.value(), device, std::nullopt);
-        }
-    }
-
-    Tensor conv_output = conv2d(
-        input_tensor_post_tm,
-        weight_tensor_on_device,
-        device,
-        in_channels,
-        out_channels,
-        batch_size,
-        input_height,
-        input_width,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        groups,
-        bias_tensor_on_device,
-        conv_config,
-        memory_config
-    );
-    return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 template ParallelConfig determine_parallel_config<Device>(
@@ -1241,7 +1151,7 @@ template std::tuple<OptimizedConvBlockConfig, TensorMemoryLayout> get_opt_conv_o
     const Conv2dConfig conv_config,
     MeshDevice *device);
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d_host_weights<Device>(
+template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<Device>(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     Device * device,
@@ -1259,43 +1169,7 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     std::optional<const Conv2dConfig> conv_config_,
     const std::optional<const MemoryConfig> memory_config);
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d_host_weights<MeshDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
-
-template ttnn::Tensor conv2d<Device>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    Device * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
-
-template ttnn::Tensor conv2d<MeshDevice>(
+template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<MeshDevice>(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice * device,

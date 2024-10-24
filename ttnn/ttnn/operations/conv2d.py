@@ -172,8 +172,16 @@ def conv2d(
     memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
+    return_output_size=False,
+    return_prepared_device_weights=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn._ttnn.operations.conv2d.conv2d_host_weights(
+    (
+        conv_output,
+        output_height,
+        output_width,
+        prepared_device_weight,
+        prepared_device_bias,
+    ) = ttnn._ttnn.operations.conv2d.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
@@ -192,47 +200,14 @@ def conv2d(
         memory_config=memory_config,
     )
 
-
-@ttnn.register_python_operation(name="ttnn.conv2d_device_weights")
-def conv2d_device_weights(
-    *,
-    input_tensor: ttnn.Tensor,  # may or may not be sharded
-    weight_tensor: ttnn.Tensor,
-    device: ttnn.Device,
-    in_channels: int,
-    out_channels: int,
-    batch_size: int,
-    input_height: int,
-    input_width: int,
-    kernel_size: Union[int, Tuple[int, int]],
-    stride: Union[int, Tuple[int, int]],
-    padding: Union[int, Tuple[int, int]],
-    dilation: Union[int, Tuple[int, int]] = (1, 1),
-    groups: int = 1,
-    bias_tensor: ttnn.Tensor = None,
-    conv_config: Conv2dConfig = None,  # config overrides by user
-    memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
-    conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
-    debug=False,  # ignored
-) -> ttnn.Tensor:
-    return ttnn._ttnn.operations.conv2d.conv2d(
-        input_tensor=input_tensor,
-        weight_tensor=weight_tensor,
-        device=device,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        bias_tensor=bias_tensor,
-        conv_config=conv_config,
-        memory_config=memory_config,
-    )
+    if return_output_size and return_prepared_device_weights:
+        return conv_output, output_height, output_width, prepared_device_weight, prepared_device_bias
+    elif return_prepared_device_weights:
+        return conv_output, prepared_device_weight, prepared_device_bias
+    elif return_output_size:
+        return conv_output, output_height, output_width
+    else:
+        return conv_output
 
 
 __all__ = []

@@ -163,7 +163,7 @@ def test_prepare_conv_weights(
     tt_weight_tensor_formatted = ttnn.to_device(tt_weight_tensor_formatted, device)
     tt_bias_tensor_formatted = ttnn.to_device(tt_bias_tensor_formatted, device) if has_bias else None
 
-    tt_output_tensor_on_device = ttnn.conv2d_device_weights(
+    tt_output_tensor_on_device = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor_formatted,
         bias_tensor=tt_bias_tensor_formatted,

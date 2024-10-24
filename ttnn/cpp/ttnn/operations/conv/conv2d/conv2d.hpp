@@ -230,7 +230,7 @@ ttnn::Tensor prepare_conv_bias_for_ttnn(
     std::optional<const Conv2dConfig> conv_config_);
 
 template <typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d_host_weights(
+std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T * device,
@@ -247,73 +247,9 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
     std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
     const std::optional<const MemoryConfig> memory_config = std::nullopt);
-
-template <typename T>
-ttnn::Tensor conv2d(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    T * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-    std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-    const std::optional<const MemoryConfig> memory_config = std::nullopt);
-
-
-struct Conv2dHostWeightsOperation{
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        Device * device,
-        uint32_t in_channels,
-        uint32_t out_channels,
-        uint32_t batch_size,
-        uint32_t input_height,
-        uint32_t input_width,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 2> padding,
-        std::array<uint32_t, 2> dilation,
-        uint32_t groups,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d_host_weights(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
-    }
-
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& weight_tensor,
-        MeshDevice * device,
-        uint32_t in_channels,
-        uint32_t out_channels,
-        uint32_t batch_size,
-        uint32_t input_height,
-        uint32_t input_width,
-        std::array<uint32_t, 2> kernel_size,
-        std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 2> padding,
-        std::array<uint32_t, 2> dilation,
-        uint32_t groups,
-        std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
-        std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d_host_weights(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
-    }
-};
 
 struct Conv2dOperation{
-    static ttnn::Tensor invoke(
+    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -334,7 +270,7 @@ struct Conv2dOperation{
         return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
     }
 
-    static ttnn::Tensor invoke(
+    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -361,6 +297,5 @@ struct Conv2dOperation{
 }  // namespace ttnn
 
 namespace ttnn{
-    constexpr auto conv2d_host_weights = ttnn::register_operation<"ttnn::conv2d_host_weights", operations::conv::conv2d::Conv2dHostWeightsOperation>();
     constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
 }
