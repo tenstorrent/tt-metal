@@ -227,8 +227,10 @@ std::shared_ptr<Buffer> Buffer::create(
         buffer->address_ = detail::AllocateBuffer(buffer.get(), bottom_up);
         detail::BUFFER_MAP.insert({buffer->device_->id(), buffer->address_}, buffer.get());
 
-        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
-        buffer->allocation_status_.notify_all();
+        std::unique_lock lock(buffer->allocation_mutex_);
+        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+        lock.unlock();
+        buffer->allocation_cv_.notify_all();
     });
 
     return buffer;
@@ -263,10 +265,6 @@ void Buffer::deallocate_impl() {
 }
 
 bool Buffer::is_allocated() const {
-    if (deallocation_requested_.load(std::memory_order::relaxed)) {
-        return false;
-    }
-
     auto allocation_status = allocation_status_.load(std::memory_order::relaxed);
 
     if (device_->can_use_passthrough_scheduling()) {
@@ -274,12 +272,18 @@ bool Buffer::is_allocated() const {
     }
 
     // For calls from different threads we consider buffer to be allocated even if it's just ALLOCATION_REQUESTED,
-    // because once the caller will try to access it, the buffer will already be fully allocated
-    return allocation_status == AllocationStatus::ALLOCATION_REQUESTED || allocation_status == AllocationStatus::ALLOCATED;
+    // because once the caller will try to access it, the buffer will already be fully allocated. For the same reason we need to check deallocation_requested_ too.
+    bool deallocation_requested = deallocation_requested_.load(std::memory_order::relaxed);
+    return (allocation_status == AllocationStatus::ALLOCATION_REQUESTED || allocation_status == AllocationStatus::ALLOCATED) && !deallocation_requested;
 }
 
 uint32_t Buffer::address() const {
-    allocation_status_.wait(AllocationStatus::ALLOCATION_REQUESTED, std::memory_order::acquire);
+    if (device_->can_use_passthrough_scheduling()) {
+        return address_;
+    }
+
+    std::unique_lock lock(allocation_mutex_);
+    allocation_cv_.wait(lock, [this] { return this->allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATION_REQUESTED; });
     return address_;
 }
 

@@ -6,6 +6,7 @@
 
 #include <map>
 #include <mutex>
+#include <condition_variable>
 #include <optional>
 
 #include "common/bfloat16.hpp"
@@ -234,6 +235,8 @@ class Buffer final {
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
+    mutable std::mutex allocation_mutex_;
+    mutable std::condition_variable allocation_cv_;
     // Used exclusively for is_allocated() method
     std::atomic<bool> deallocation_requested_ = false;
 
