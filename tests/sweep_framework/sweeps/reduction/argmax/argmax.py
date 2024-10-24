@@ -30,7 +30,7 @@ parameters = {
         + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 128)
         + gen_shapes([1, 1], [128, 128], [1, 1], 128),
         "dim": [0, 1, 2, 3, None],
-        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
