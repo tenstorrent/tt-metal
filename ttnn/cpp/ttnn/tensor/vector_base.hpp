@@ -43,9 +43,12 @@ public:
 
 protected:
     void init();
+    size_t size() const;
 
-    size_t m_original_size = 0;
     Container m_value;
+
+private:
+    size_t m_original_size = 0;
 };
 
 }

@@ -33,10 +33,15 @@ int32_t normalized_index(int32_t index, size_t original_size, size_t container_s
 void VectorBase::init() {
     m_original_size = m_value.size();
     const size_t min_internal_size = 4;
+
     if(m_original_size < min_internal_size) {
         std::vector<uint32_t> ones(min_internal_size - m_original_size, 1);
         m_value.insert(m_value.begin(), ones.begin(), ones.end());
     }
+}
+
+size_t VectorBase::size() const {
+    return m_original_size;
 }
 
 std::span<const uint32_t> VectorBase::view() const {
