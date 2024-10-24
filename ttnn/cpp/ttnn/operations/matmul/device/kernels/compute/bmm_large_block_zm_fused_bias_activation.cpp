@@ -127,9 +127,15 @@ void MAIN {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
+#ifdef IN1_TRANSPOSE_TILE
+    constexpr uint32_t in1_transpose_tile = true;
+#else
+    constexpr uint32_t in1_transpose_tile = false;
+#endif
+
     constexpr bool spill = num_blocks > 1;
 
-    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -190,7 +196,7 @@ void MAIN {
                             in0_index,
                             in1_index,
                             dst_index,
-                            false,
+                            in1_transpose_tile,
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);

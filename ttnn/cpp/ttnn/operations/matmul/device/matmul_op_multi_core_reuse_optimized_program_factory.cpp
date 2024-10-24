@@ -63,8 +63,14 @@ operation::ProgramWithCallbacks create_program(
 
     auto in0_tile = in0.get_tile();
     auto in1_tile = in1.get_tile();
+    // currently only support transpose of the full tile
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    if (in1_tile.get_transpose_of_faces()) {
+        std::swap(in1_tile_shape[0], in1_tile_shape[1]);
+    }
     // cannot use the output tensor tile directly as that might be changed by user override
-    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile.get_tile_shape()[1]});
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile_shape[1]});
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
@@ -218,6 +224,9 @@ operation::ProgramWithCallbacks create_program(
     }
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
+    }
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
@@ -490,6 +499,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     const auto& bshape = b.get_legacy_shape();
     auto in0_tile_shape = a.get_tile().get_tile_shape();
     auto in1_tile_shape = b.get_tile().get_tile_shape();
+    if (b.get_tile().get_transpose_of_faces()) {
+        std::swap(in1_tile_shape[0], in1_tile_shape[1]);
+    }
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),

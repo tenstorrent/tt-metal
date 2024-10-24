@@ -14,11 +14,12 @@
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "blockfloat_common.hpp"
 
+
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat4_b {};
 
-inline std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a) {
-    return pack_fp32_vec_as_bfp_tiles<tt::DataFormat::Bfp4_b>(fp32_vec, row_major_input, is_exp_a);
+inline std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(const std::vector<float> &fp32_vec, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
+    return pack_fp32_vec_as_bfp_tiles<tt::DataFormat::Bfp4_b>(fp32_vec, row_major_input, is_exp_a, tile);
 }
 
 constexpr int log2(int n) {
@@ -27,7 +28,7 @@ constexpr int log2(int n) {
     return log;
 }
 
-inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uint32_t> &bfp_tiles, bool row_major_output, bool is_exp_a) {
+inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uint32_t> &bfp_tiles, bool row_major_output, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
     constexpr int num_elements_in_dword = 8;

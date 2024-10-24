@@ -27,8 +27,8 @@ std::vector<T> convert_to_tile_layout(
     const BufferType<T>& data,
     const std::optional<const std::vector<uint32_t>>& tile_shape = std::nullopt,
     const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt,
-    const std::optional<bool>& transpose_within_face,
-    const std::optional<bool>& transpose_of_faces) {
+    const std::optional<bool>& transpose_within_face = std::nullopt,
+    const std::optional<bool>& transpose_of_faces = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -111,9 +111,7 @@ template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(
     const BufferTyp<T>& data,
     const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt,
-    const std::optional<bool>& transpose_within_face,
-    const std::optional<bool>& transpose_of_faces) {
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -125,49 +123,18 @@ std::vector<T> convert_to_flat_layout(
     auto face_HW = face_H * face_W;
     auto num_faces_row = tile_W / face_W;
     auto num_faces_col = tile_H / face_H;
-    bool transpose_face = transpose_within_face.has_value() ? transpose_within_face.value() : false;
-    bool transpose_face_order = transpose_of_faces.has_value() ? transpose_of_faces.value() : false;
     TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-
-        if (transpose_face && !transpose_face_order) {
-            int tile_start = tile_idx * tile_HW;
-            for(int face_y = 0; face_y < num_faces_col; face_y++) {
-                for(int col = 0; col < face_W; col++) {
-                    int start = tile_start + face_y * (face_H * tile_W) + col;
-                    for(int face_x = 0; face_x < num_faces_row; face_x++) {
-                        int offset = face_x * face_HW;
-                        for(int row = offset; row < offset + face_H; row++) {
-                            result.push_back(data[start + row * face_W]);
-                        }
-                    }
-                }
-            }
-        } else if (transpose_face && transpose_face_order) {
-            int tile_start = tile_idx * tile_HW;
-            for(int face_x = 0; face_x < num_faces_row; face_x++) {
-                for(int col = 0; col < face_W; col++) {
-                    int start = tile_start + face_x * face_HW + col;
-                    for(int face_y = 0; face_y < num_faces_col; face_y++) {
-                        int offset = face_y * (face_H * tile_W);
-                        for(int row = offset; row < offset + face_H; row++) {
-                            result.push_back(data[start + row * face_W]);
-                        }
-                    }
-                }
-            }
-        } else {
-            int tile_start = tile_idx * tile_HW;
-            for(int face_y = 0; face_y < num_faces_col; face_y++) {
-                for(int row = 0; row < face_H; row++) {
-                    int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
-                    for(int face_x = 0; face_x < num_faces_row; face_x++) {
-                        int offset = face_x * face_HW;
-                        for(int col = offset; col < offset + face_W; col++) {
-                            result.push_back(data[start + col]);
-                        }
+        int tile_start = tile_idx * tile_HW;
+        for(int face_y = 0; face_y < num_faces_col; face_y++) {
+            for(int row = 0; row < face_H; row++) {
+                int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
+                for(int face_x = 0; face_x < num_faces_row; face_x++) {
+                    int offset = face_x * face_HW;
+                    for(int col = offset; col < offset + face_W; col++) {
+                        result.push_back(data[start + col]);
                     }
                 }
             }
@@ -289,12 +256,14 @@ inline std::vector<T> convert_layout(
     TensorLayout inL,
     TensorLayout outL,
     const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt,
+    const std::optional<bool>& transpose_within_face = std::nullopt,
+    const std::optional<bool>& transpose_of_faces = std::nullopt) {
     ZoneScoped;
     switch (inL) {
         case TILED_SWIZZLED:
             if (outL == TILED_NFACES) {
-                return convert_to_tile_layout<T>(inp, tile_shape, face_shape);
+                return convert_to_tile_layout<T>(inp, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else if (outL == LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
             } else
@@ -304,8 +273,8 @@ inline std::vector<T> convert_layout(
             if (outL == TILED_SWIZZLED) {
                 return tilize_nchw<T>(inp, shape, tile_shape);
             } else if (outL == TILED_NFACES) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape);
-                return convert_layout<T>(swiz32, shape, TILED_SWIZZLED, outL, tile_shape, face_shape);
+                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+                return convert_layout<T>(swiz32, shape, TILED_SWIZZLED, outL, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;

@@ -200,6 +200,7 @@ def from_torch(
         tensor = tensor.reshape(tensor.shape.with_tile_padding())
         tensor = ttnn.to_torch(tensor)
 
+    print("a")
     if memory_config is not None:
         if device is None:
             raise RuntimeError("device must be specified when memory_config is specified")
@@ -213,8 +214,12 @@ def from_torch(
         else:
             tensor = ttnn.Tensor(tensor, dtype)
 
+    print("b")
+
     if layout is not None:
         tensor = ttnn.to_layout(tensor, layout, device=device)
+
+    print("c")
 
     if device is not None:
         if memory_config is None:
