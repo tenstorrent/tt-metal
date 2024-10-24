@@ -400,7 +400,7 @@ struct DeviceStorage {
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
-    inline bool is_allocated() const { return buffer && buffer->size() > 0; }
+    inline bool is_allocated() const { return buffer && buffer->is_allocated(); }
 };
 
 using BorrowedBuffer = std::variant<
@@ -844,7 +844,7 @@ struct MultiDeviceStorage {
         return std::all_of(
             ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto &&device_id) {
                 const auto &buffer = buffers.at(device_id);
-                return buffer && buffer->size() > 0;
+                return buffer && buffer->is_allocated();
             });
     }
 };
