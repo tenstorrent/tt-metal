@@ -10,7 +10,6 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
@@ -223,7 +222,7 @@ int main(int argc, char **argv) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range_one({0, 0}, {1, 1});
         CoreRange core_range_two({2, 2}, {3, 3});
-        CoreRangeSet core_ranges = CoreRangeSet({core_range_one, core_range_two});
+        CoreRangeSet core_ranges = CoreRangeSet(std::vector{core_range_one, core_range_two});
 
         pass &= test_program_specified_with_core_range_set(device, program, core_ranges);
 

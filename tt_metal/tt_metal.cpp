@@ -40,10 +40,10 @@ CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeS
         {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet({CoreRange(core_spec, core_spec)});
+                return CoreRangeSet(CoreRange(core_spec, core_spec));
             }
             else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet({core_spec});
+                return CoreRangeSet(core_spec);
             }
             else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 return core_spec;
@@ -113,11 +113,18 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    Program &program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup *kernel_group,
+    Device *device,
+    const CoreCoord &logical_core) {
 
+    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            // Need the individual offsets of each bin
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
+                kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
 }
@@ -319,61 +326,11 @@ std::map<chip_id_t, Device *> CreateDevices(
 }
 
 void CloseDevices(std::map<chip_id_t, Device *> devices) {
-    // Global Sync across all devices in the pool.
-    // We need to ensure that commands sent to each device have been completed
-    // before closing any device + modifying routing info.
-    // If this is not done, non-blocking CCLs followed by a close will hang, since
-    // the main thread will modify device state while the CCL is running on device.
-    for (const auto &[device_id, dev] : devices) {
-        dev->synchronize(); // Synchronize worker queue
-        Synchronize(dev); // Synchronize device
+    std::vector<Device *> devices_to_close;
+    for (auto& [id, device] : devices) {
+        devices_to_close.push_back(device);
     }
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
-    std::map<chip_id_t, v1::DeviceHandle> mmio_devices = {};
-    bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-
-    if (is_galaxy) {
-        //On Galaxy, gateway wormhole devices (mmio devices) are not included in the set of devices
-        //created by CreateDevices(). So when closing devices, we need to find the corresponding
-        //gateway chips for all the tunneled devcies.
-        for (const auto &[device_id, dev] : devices) {
-            const auto &mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-            if (mmio_devices.find(mmio_device_id) == mmio_devices.end()) {
-                auto dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-                mmio_devices.insert({mmio_device_id, dev_handle});
-            }
-        }
-    } else {
-        for (const auto &[device_id, dev] : devices) {
-            if(dev->is_mmio_capable()) {
-                mmio_devices.insert({device_id, tt::DevicePool::instance().get_handle(dev)});
-            }
-        }
-        for (const auto &[device_id, dev] : mmio_devices) {
-            devices.erase(device_id);
-        }
-    }
-
-    for (const auto &[device_id, dev] : mmio_devices) {
-        //For each mmio device, first close all the remote tunneled devices.
-        //Close the farthest tunneled device first.
-        auto tunnels_from_mmio = dev->tunnels_from_mmio_;
-        //iterate over all tunnels origination from this mmio device
-        for (auto t : tunnels_from_mmio) {
-            //iterate over all tunneled devices (tunnel stops) in this tunnel and close them.
-            for (uint32_t ts = t.size() - 1; ts > 0; ts--) {
-                if (devices.find(t[ts]) != devices.end()) {
-                    devices[t[ts]]->close();
-                    // When a device is closed, its worker thread is joined. Stop tracking this
-                    // worker thread.
-                    tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(devices[t[ts]]));
-                }
-            }
-        }
-        //finally close the mmio device
-        dev->close();
-        tt::DevicePool::instance().unregister_worker_thread_for_device(dev);
-    }
+    tt::DevicePool::instance().close_devices(devices_to_close);
 }
 
 bool InWorkerThread() {
@@ -421,7 +378,7 @@ void WriteToDeviceSharded(Buffer &buffer, const std::vector<uint32_t> &host_buff
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_ASSERT(buffer.size() % page_size == 0);
+    TT_ASSERT(page_size == 0 ? buffer.size() == 0 : buffer.size() % page_size == 0);
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_ASSERT(page_size % bytes_per_page_entry == 0);
@@ -455,12 +412,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer &buffer, const std::vector<
         buffer.size());
 
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     static constexpr uint32_t bytes_per_page_entry = sizeof(uint32_t);
     TT_FATAL(page_size % bytes_per_page_entry == 0,
@@ -524,12 +476,7 @@ void WriteToBuffer(Buffer &buffer, const std::vector<uint32_t> &host_buffer) {
 void ReadFromDeviceInterleavedContiguous(const Buffer &buffer, std::vector<uint32_t> &host_buffer) {
     host_buffer.clear();  // overwrite the data
     uint32_t page_size = buffer.page_size();
-    TT_FATAL(
-        buffer.size() % page_size == 0,
-        "Invalid buffer size: {}. Buffer size must be a multiple of page size {}.",
-        buffer.size(),
-        page_size);
-    uint32_t num_pages = buffer.size() / page_size;
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->num_banks(buffer.buffer_type());
@@ -756,7 +703,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -854,13 +801,35 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-void AllocateBuffer(Buffer *buffer, bool bottom_up) {
+DeviceAddr AllocateBuffer(const Buffer *buffer, bool bottom_up) {
     if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
         GraphTracker::instance().track_allocate(buffer, bottom_up);
-        return;
+        return 0;
     }
-    EnqueueAllocateBuffer(buffer->device()->command_queue(), buffer, bottom_up, false);
+
+    uint32_t allocated_addr;
+    if (is_sharded(buffer->buffer_layout())) {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            buffer->num_cores());
+    } else {
+        allocated_addr = allocator::allocate_buffer(
+            *(buffer->device()->allocator_),
+            buffer->size(),
+            buffer->page_size(),
+            buffer->buffer_type(),
+            bottom_up,
+            std::nullopt);
+    }
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+
     GraphTracker::instance().track_allocate(buffer, bottom_up);
+
+    return allocated_addr;
 }
 
 void DeallocateBuffer(Buffer *buffer) {
@@ -868,12 +837,8 @@ void DeallocateBuffer(Buffer *buffer) {
     if(GraphTracker::instance().hook_deallocate(buffer)) {
         return;
     }
-    EnqueueDeallocateBuffer(
-        buffer->device()->command_queue(),
-        *(buffer->device()->allocator_),
-        buffer->address(),
-        buffer->buffer_type(),
-        false);
+
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer->address(), buffer->buffer_type());
 }
 
 }  // namespace detail
@@ -1060,9 +1025,9 @@ uint32_t CreateSemaphore(
     return std::visit(
         [&](auto &&c) -> uint32_t {
             using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs({});
+            CoreRangeSet crs;
             if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet({c});
+                crs = CoreRangeSet(c);
             } else {
                 crs = c;
             }
@@ -1088,20 +1053,19 @@ uint32_t CreateSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
-    return std::make_shared<Buffer>(
-        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt, config.allocate);
+    return Buffer::create(
+        config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         config.device,
         config.size,
         config.page_size,
         config.buffer_type,
         config.buffer_layout,
         config.shard_parameters,
-        std::nullopt,
-        config.allocate);
+        std::nullopt);
 }
 
 void DeallocateBuffer(Buffer &buffer) { buffer.deallocate(); }

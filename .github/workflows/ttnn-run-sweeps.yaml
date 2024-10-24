@@ -80,6 +80,8 @@ on:
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
           - eltwise.unary.glu.glu
+          - eltwise.unary.geglu.geglu
+          - eltwise.unary.swiglu.swiglu
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid.sigmoid_pytorch2
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
@@ -157,6 +159,10 @@ on:
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.unary.reglu.reglu
+          - eltwise.unary_complex.polar.polar
+          - eltwise.unary_complex.angle.angle
+          - eltwise.unary_complex.polar_bw.polar_bw
+          - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.multiply.multiply
@@ -213,6 +219,8 @@ on:
           - eltwise.ternary.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
+          - reduction.topk.topk
+          - reduction.argmax.argmax
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

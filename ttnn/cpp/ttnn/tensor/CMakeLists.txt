@@ -1,4 +1,3 @@
-
 set(TENSOR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor.cpp
@@ -12,6 +11,6 @@ set(TENSOR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor_layout.cpp
-
-    CACHE INTERNAL "Tensor sources to reuse in ttnn build"
+    CACHE INTERNAL
+    "Tensor sources to reuse in ttnn build"
 )

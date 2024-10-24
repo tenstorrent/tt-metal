@@ -600,7 +600,7 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
         model.forward(activations, device=submesh_device, ...)
 ```
 
-3. Capture Model Trace: See [Advanced Performance Optimization For Models](../AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) guide for more details on how to capture and replay a trace.
+3. Capture Model Trace: See [Advanced Performance Optimizations For Models](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) guide for more details on how to capture and replay a trace.
 
 ```python
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)

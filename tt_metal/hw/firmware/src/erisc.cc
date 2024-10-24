@@ -34,7 +34,7 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
-void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
+void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -72,10 +72,13 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
             enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                WAYPOINT("R");
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
-                kernel_init();
+                kernel_init(0);
+                WAYPOINT("D");
             }
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
@@ -89,7 +92,6 @@ void __attribute__((section("erisc_l1_code.1"), noinline)) Application(void) {
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch messages in the ring buffer
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
-            WAYPOINT("R");
 
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
             // Reset the launch message buffer read ptr

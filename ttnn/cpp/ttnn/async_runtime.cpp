@@ -9,28 +9,6 @@
 #include "ttnn/tensor/tensor_layout.hpp"
 
 namespace ttnn {
-using DeviceBuffer = std::shared_ptr<Buffer>;
-using queue_id = uint8_t;
-
-DeviceBuffer allocate_buffer_on_device(
-    size_t buffer_size_bytes,
-    types::Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile) {
-
-    TensorLayout tensor_layout(data_type, PageConfig(layout, tile), memory_config);
-    TT_FATAL(buffer_size_bytes == tensor_layout.get_packed_buffer_size_bytes(shape),
-        "Buffer size mismatch. It is likely a bug in TensorLayout implementation. Expected: {}, Actual: {}",
-        tensor_layout.get_packed_buffer_size_bytes(shape), buffer_size_bytes);
-
-    const auto page_size = tensor_layout.get_page_size_bytes(shape);
-
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
-}
 
 void write_buffer(
     queue_id cq_id,

@@ -290,6 +290,12 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((1, 256, 16), (16, 256)),
         ((1, 256, 1024), (1, 256, 16, 64)),
         ((16, 16), (32, 8)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+        ((32,), (1, 1, 1, 32)),
+        ((16,), (1, 1, 1, 16)),
+        ((48,), (1, 1, 1, 48)),
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -299,7 +305,7 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn.bfloat16, device=device)
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
-
+    assert layout == ttnn_output.layout
     output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)

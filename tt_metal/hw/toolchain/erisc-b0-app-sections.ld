@@ -11,44 +11,30 @@
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
-ENTRY(ApplicationHandler)
+ENTRY(_start)
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
-  PROVIDE (__executable_start = __firmware_start);
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  erisc_l1_code :
-  {
-    *(SORT(erisc_l1_code.*))
-  } > REGION_APP_CODE
-  code_l1 :
-  {
-    *(code_l1)
-  } > REGION_APP_CODE
-  .init :
-  {
-    KEEP (*(SORT_NONE(.init)))
-  } > REGION_APP_CODE
-  PROVIDE (__ecode_l1 = .);
-  /* TODO: add back when using iram code loading
   .text :
-
   {
+    *(.start)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
-    /* .gnu.warning sections are handled specially by elf32.em.
+    /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_APP_IRAM_CODE AT > ERISC_OVERLAY*/
+  } > REGION_APP_CODE
+  .init.fini :
+  {
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
+  } > REGION_APP_CODE
 
-
-  PROVIDE (__etext = .);
-  PROVIDE (_etext = .);
-  PROVIDE (etext = .);
   .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
   .rodata1        : { *(.rodata1) } > REGION_APP_CODE
   .sdata2         :
@@ -56,12 +42,9 @@ SECTIONS
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
   } > REGION_APP_DATA
   .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
-  /* Adjust the address for the data segment.  We want to adjust up to
-     the same address within the page on the next page up.  */
-  . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA
+
+.data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA
   .dynamic        : { *(.dynamic) } > REGION_APP_DATA
-  . = DATA_SEGMENT_RELRO_END (0, .);
   .data           :
   {
     *(.data .data.* .gnu.linkonce.d.*)
@@ -69,8 +52,6 @@ SECTIONS
   } > REGION_APP_DATA
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  _edata = .; PROVIDE (edata = .);
-  . = .;
   __l1_bss_start = .;
   .sbss           :
   {
@@ -97,11 +78,6 @@ SECTIONS
    __ldm_bss_end = .;
   } > REGION_APP_DATA
   . = ALIGN(32 / 8);
-  . = SEGMENT_START("ldata-segment", .);
-  . = ALIGN(32 / 8);
-  _end = .; PROVIDE (end = .);
-  . = DATA_SEGMENT_END (.);
-
 
   .stack :
   {

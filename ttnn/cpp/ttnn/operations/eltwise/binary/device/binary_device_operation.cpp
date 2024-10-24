@@ -204,7 +204,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
     if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
         if (operation_attributes.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+            ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
             if (input_tensor_a.memory_config().is_sharded()) {
                 shard_spec = input_tensor_a.shard_spec().value();
             } else if (input_tensor_b.memory_config().is_sharded()) {
@@ -219,7 +219,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
         }
     } else {
         if (operation_attributes.memory_config.is_sharded()) {
-            ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+            ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
             if (input_tensor_a.memory_config().is_sharded()) {
                 // Derive output shard_spec based on input
                 shard_spec = input_tensor_a.shard_spec().value();

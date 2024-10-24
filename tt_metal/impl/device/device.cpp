@@ -2755,12 +2755,14 @@ void Device::configure_command_queue_programs() {
         }
     }
 
+    command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            mmio_command_queue_program.finalize(mmio_device);
             detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
         }
@@ -2808,7 +2810,6 @@ void Device::init_command_queue_device() {
     }
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
-    command_queue_program.finalize(this);
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -2828,7 +2829,6 @@ void Device::init_command_queue_device() {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            mmio_command_queue_program.finalize(mmio_device);
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -2945,8 +2945,6 @@ bool Device::close() {
             }
         }
     }
-
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
 
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
@@ -3218,7 +3216,7 @@ float Device::sfpu_inf() const{
     return std::numeric_limits<float>::infinity();
 }
 
-pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
+std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
     TT_ASSERT(programmable_core < this->build_state_indices_.size(),
         "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
     TT_ASSERT(processor_class < this->build_state_indices_[programmable_core].size(),
@@ -3236,7 +3234,7 @@ const JitBuildState& Device::build_kernel_state(uint32_t programmable_core, uint
 }
 
 const JitBuildStateSubset Device::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
+    std::pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
     JitBuildStateSubset subset = {
         &this->kernel_build_states_[bptti.first],
         bptti.second
@@ -3268,12 +3266,8 @@ CommandQueue &Device::command_queue(size_t cq_id) {
     return *sw_command_queues_[cq_id];
 }
 
-void Device::push_work(std::function<void()>&& work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
-}
-
-void Device::push_work(std::shared_ptr<std::function<void()>> work, bool blocking) {
-    this->work_executor.push_work(work, blocking);
+bool Device::can_use_passthrough_scheduling() const {
+    return this->work_executor.use_passthrough();
 }
 
 void Device::synchronize() {

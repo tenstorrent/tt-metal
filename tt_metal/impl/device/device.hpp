@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <mutex>
+#include <utility>
 
 #include "hostdevcommon/common_values.hpp"
 #include "impl/dispatch/work_executor.hpp"
@@ -256,8 +257,11 @@ class Device {
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
-    void push_work(std::function<void()>&& work, bool blocking = false);
-    void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
+    bool can_use_passthrough_scheduling() const;
+    template<typename F>
+    void push_work(F&& work, bool blocking = false) {
+        this->work_executor.push_work(std::forward<F>(work), blocking);
+    }
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);
@@ -334,7 +338,7 @@ class Device {
     T get_base_allocator_addr(const HalMemType &mem_type) const;
 
     template <typename CoreRangeContainer>
-    std::vector<pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
 
@@ -374,9 +378,9 @@ inline T Device::get_base_allocator_addr(const HalMemType &mem_type) const {
 
 // TODO: Find a better home for this function
 template <typename CoreRangeContainer>
-std::vector<pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type) {
+std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type) {
     // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-    std::vector<pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
+    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
     dst_noc_multicast_info.reserve(ranges.size());
     for (const CoreRange& core_range : ranges) {
         CoreCoord physical_start = this->physical_core_from_logical_core(core_range.start_coord, core_type);

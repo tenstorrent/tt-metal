@@ -129,7 +129,7 @@ DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& 
     auto shard_spec_buffer = layout.get_shard_spec_buffer(shape);
     auto memory_config = layout.get_memory_config();
 
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
+    return Buffer::create(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
 }
 
 void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {

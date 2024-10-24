@@ -74,7 +74,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
-    TT_ASSERT(nblocks == 1, "Multiple blocks not yet supported");
+    TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
 
     uint32_t tile_w = tt::constants::TILE_WIDTH;
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
@@ -88,7 +88,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto all_cores = input.shard_spec().value().grid;
     uint32_t ncores = all_cores.num_cores();
     auto core_range = all_cores;
-    auto core_range_cliff = CoreRangeSet({});
+    auto core_range_cliff = CoreRangeSet();
     uint32_t in_nhw_per_core = input.shard_spec()->shape[0];
     uint32_t in_nhw_per_core_cliff = 0;
     uint32_t out_nhw_per_core = output.shard_spec()->shape[0];
@@ -96,7 +96,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t ncores_w = grid_size.x;
 
     // TODO: support generic nblocks
-    TT_ASSERT(
+    TT_FATAL(
         out_nhw_per_core % nblocks == 0,
         "number of sticks per core ({}) should be divisible by nblocks ({})",
         out_nhw_per_core,
