@@ -12,7 +12,6 @@
 #include "common/test_common.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "host_mem_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
