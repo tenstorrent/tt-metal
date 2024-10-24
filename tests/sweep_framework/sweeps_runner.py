@@ -15,7 +15,7 @@ from multiprocessing import Process, Queue
 from queue import Empty
 import subprocess
 from framework.statuses import TestStatus, VectorValidity, VectorStatus
-import framework.tt_smi_util
+import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
