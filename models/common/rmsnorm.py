@@ -117,6 +117,7 @@ class RMSNorm(LightweightModule):
             weight=weight,
             program_config=program_config,
             memory_config=memory_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         if in_sharded and not out_sharded:
@@ -124,14 +125,14 @@ class RMSNorm(LightweightModule):
         else:
             return x
 
-    def _distributed_rmsnorm(self, inp, epsilon=None, weight=None, program_config=None, memory_config=None):
+    def _distributed_rmsnorm(
+        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+    ):
         assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
 
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(
-            inp, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
-        )
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
         tt_stats = ttnn.all_gather(
             tt_stats,
@@ -145,7 +146,7 @@ class RMSNorm(LightweightModule):
             tt_stats,
             epsilon=epsilon,
             weight=weight,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=compute_kernel_config,
         )
         tt_stats.deallocate(True)
 

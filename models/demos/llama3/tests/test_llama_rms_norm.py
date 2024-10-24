@@ -28,7 +28,8 @@ from models.demos.llama3.tt.distributed_norm import DistributedNorm
     ],
     indirect=True,
 )
-def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
+def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc, mode):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -59,7 +60,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, e
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = RefRMSNorm(dim=model_args.dim)
+    reference_model = RefRMSNorm(dim=model_args.dim, eps=model_args.norm_eps)
     reference_model.load_state_dict(partial_state_dict)
 
     input = torch.rand(1, 1, 32, model_args.dim)
@@ -72,9 +73,10 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, e
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-    )  # , device, put_on_device=False)
+        memory_config=tt_inner_norm.sharded_output_config,
+    )
 
-    tt_output = tt_model(tt_input, mode="decode")
+    tt_output = tt_model(tt_input, mode=mode)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[

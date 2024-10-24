@@ -716,7 +716,7 @@ def run_llama3_demo(
         "single_layer",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 11622400, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [

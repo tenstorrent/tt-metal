@@ -575,27 +575,9 @@ class TtModelArgs:
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
-            self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[attn_input_grid.x, attn_input_grid.y],
-                subblock_w=self.dim // attn_input_grid.num_cores // self.tile_size,
-                block_h=self.tile_padded_batch_rows // self.tile_size,
-                block_w=self.dim // attn_input_grid.num_cores // self.tile_size,
-                inplace=False,
-            )
-            self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[mlp_core_grid.x, mlp_core_grid.y],
-                subblock_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
-                block_h=self.tile_padded_batch_rows // self.tile_size,
-                block_w=self.dim // mlp_core_grid.num_cores // self.tile_size,
-                inplace=False,
-            )
-            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[self.lm_head_core_grid.x, self.lm_head_core_grid.y],
-                subblock_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
-                block_h=self.tile_padded_batch_rows // self.tile_size,
-                block_w=self.dim // self.lm_head_core_grid.num_cores // self.tile_size,
-                inplace=False,
-            )
+            self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
+            self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
+            self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.lm_head_core_grid)
 
             # All gather matmuls currently only supported on T3K
             # We need it sharded on num_cores = num_devices
@@ -887,7 +869,7 @@ class TtModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 2
+        max_rows = 4
         max_cols = 8  # Maximum number of rows or columns
         max_cores = max_rows * max_cols  # Maximum number of cores (8x2 grid)
 
@@ -922,6 +904,27 @@ class TtModelArgs:
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=None,
+        )
+
+    def create_sharded_norm_config(self, grid):
+        """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
+
+        Args:
+            grid (ttnn.CoreGrid): Grid specification for the norm operation
+        """
+        block_w = self.dim // grid.num_cores // self.tile_size
+        # Find largest value <= 4 that evenly divides block_w
+        subblock_w = 4
+        while subblock_w > 0:
+            if block_w % subblock_w == 0:
+                break
+            subblock_w -= 1
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[grid.x, grid.y],
+            subblock_w=subblock_w,
+            block_h=self.tile_padded_batch_rows // self.tile_size,
+            block_w=block_w,
+            inplace=False,
         )
 
 
