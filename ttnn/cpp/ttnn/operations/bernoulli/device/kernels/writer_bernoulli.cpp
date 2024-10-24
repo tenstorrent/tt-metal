@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common/constants.hpp"
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 using namespace tt;
 
@@ -40,7 +39,6 @@ void kernel_main() {
         for (uint32_t k = 0; k < constants::TILE_WIDTH; k++) {
             for (uint32_t j = 0; j < constants::TILE_HEIGHT; j++) {
                 float rand_float = *intermed_cb_addr;
-                DPRINT << rand_float << " ";
 
                 float input = 0;
 #ifdef INPUT_DTYPE_FLOAT32
