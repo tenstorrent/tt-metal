@@ -118,7 +118,7 @@ def run_with_trace(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def run_with_trace(
     (
         # LLama
         (
-            (1, 1, 32, 1024),
+            (1, 1, 32, 8192),
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
@@ -176,7 +176,7 @@ def test_run_barrier_impl(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -184,7 +184,7 @@ def test_run_barrier_impl(
     (
         # LLama
         (
-            (1, 1, 32, 1024),
+            (1, 1, 32, 8192),
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
@@ -229,7 +229,7 @@ def test_run_barrier_impl_pcie(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -243,7 +243,7 @@ def test_run_barrier_impl_pcie(
     (
         # LLama
         (
-            (1, 1, 32, 1024),
+            (1, 1, 32, 8192),
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
