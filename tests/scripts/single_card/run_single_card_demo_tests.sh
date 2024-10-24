@@ -42,6 +42,8 @@ run_common_func_tests() {
   # ConvNet Mnist
   pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
 
+  #MNIST
+  pytest --disable-warnings models/demos/wormhole/mnist/demo/demo.py --timeout 600; fail+=$?
   return $fail
 }
 
@@ -75,6 +77,8 @@ run_n300_func_tests() {
   fail=0;
 
   run_common_func_tests; fail+=$?
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/functional_mnist/demo/demo.py; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
