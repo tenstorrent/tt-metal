@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, santize_topk_sha
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
@@ -27,9 +27,23 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 8),
-        "dim": [-1],
+        "input_shape": gen_shapes([1, 1, 32, 64], [2, 6, 128, 128], [1, 1, 32, 64], 64)
+        + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
+        + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
+        "dim": [-1, -2, -3, -4],
         "largest": [True],
+        "k": [32],  # only k = 32 is supported for now
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 64)
+        + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
+        + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
+        "dim": [-1, -2, -3, -4],
+        "largest": [True, False],
         "k": [32],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -43,11 +57,15 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if len(test_vector["input_shape"]) != 4:
+        return True, "Input shape must be 4D"
+    if test_vector["dim"] != -1:
+        return True, "Only the last dim is supported right now"
+    if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
+        return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
 
@@ -78,6 +96,9 @@ def run(
     )(input_shape)
 
     # golden_function = ttnn.get_golden_function(ttnn.topk)
+    # torch_output_values, torch_output_indices =golden_function(
+    #    torch_input_tensor_a, k, dim=dim, largest=largest, sorted=True
+    # )
     torch_output_values, torch_output_indices = torch.topk(
         torch_input_tensor_a, k, dim=dim, largest=largest, sorted=True
     )
