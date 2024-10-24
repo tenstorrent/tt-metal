@@ -358,8 +358,6 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.get_dtype());
     const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
 
-    std::cout << "cos_single_tile_size: " << cos_single_tile_size << std::endl;
-
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.get_dtype());
     const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
 
@@ -394,7 +392,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     // Parallelization
     const uint32_t num_cores = num_cores_x * num_cores_y;
     const uint32_t batch_parallel_factor = std::min(batch, num_cores);
-    const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor;
+    const uint32_t batch_per_core = (batch + batch_parallel_factor - 1) / batch_parallel_factor; // TODO: To make general, add support for batch_per_core > 1
 
     const uint32_t num_sin_cos_rows_per_core = batch_per_core;
     uint32_t num_cos_sin_tiles = head_dim_t * num_sin_cos_rows_per_core;

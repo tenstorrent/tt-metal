@@ -16,7 +16,6 @@ from models.utility_functions import skip_for_grayskull, skip_for_blackhole, ski
 from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, freqs_to_rotation_matrix, gather_rotary_emb
 
 MAX_SEQ_LEN = 128 * 1024
-NUM_CORES = 64
 
 
 def get_rotation_mat(dhead, end, start_pos, seqlen, batch):
@@ -221,7 +220,7 @@ def run_test_rotary_embedding_llama(
     tt_model = TtLlamaRotary(device, batch, head_dim, mode, datatype)
 
     if mode == "decode":
-        cos, sin = tt_model.prepare_decode_cos_sin(torch.arange(batch))  # TODO: Update to check other indices as well
+        cos, sin = tt_model.prepare_decode_cos_sin(position_ids)
 
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         inp = [x.transpose(1, 2) for x in inp]
@@ -242,7 +241,7 @@ def run_test_rotary_embedding_llama(
             ttnn.from_torch(i, device=device, dtype=datatype, memory_config=input_mem_config, layout=ttnn.TILE_LAYOUT)
             for i in inp
         ]
-        tt_inp += [cos, sin]
+        tt_inp += [cos, sin]  # Append cos and sin to the input list
     else:
         cos, sin = compute_gather_cos_sin(
             dhead=head_dim,
@@ -326,7 +325,7 @@ def run_test_rotary_embedding_llama(
         (8, 1, 64),
         (8, 1, 128),
         (11, 3, 128),
-        # (71, 32, 64),
+        (71, 32, 64),
         (8, 1, 96),
         (8, 1, 256),
     ),
@@ -349,6 +348,9 @@ def test_rotary_embedding_llama(
 
     if seq_len == 128 * 1024 and (n_heads, n_kv_heads, head_dim) != (8, 1, 128):
         pytest.skip("Only testing for (8, 1, 128) due to time constraints")
+
+    if seq_len == 1 and (n_heads > ttnn.TILE_SIZE or n_kv_heads > ttnn.TILE_SIZE):
+        pytest.skip("n_heads or n_kv_heads cannot be greater than ttnn.TILE_SIZE for decode mode")
 
     max_seq_len = max(4096, seq_len)
 
@@ -377,11 +379,17 @@ def test_rotary_embedding_llama(
         (1, 2048),
         (1, 4096),
         (1, 8192),
+        (32, 1),
+        (16, 1),
+        (8, 1),
     ),
     ids=(
         "prefill_2k",
         "prefill_4k",
         "prefill_8k",
+        "decode_32",
+        "decode_16",
+        "decode_8",
     ),
 )
 @pytest.mark.parametrize(

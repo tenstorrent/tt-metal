@@ -9,8 +9,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/matmul.h"
 
-#include "debug/dprint.h"
-
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -30,9 +28,6 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t Ht = get_compile_time_arg_val(9); // How many rows (tiles) in n_heads dimension
 
-    // Dprint some info
-    DPRINT << "Wt: " << Wt << ENDL();
-
     mm_init();
     binary_op_init_common(rotated_in_interm_cb, cos_cb); // General Init for all binary ops
 
@@ -43,6 +38,7 @@ void MAIN {
 
 
     // Get the sin/cos matrices
+    // TODO: To parallelize acorss batch, this should be in a batch loop
     cb_reserve_back(sin_cb, Wt);
     cb_reserve_back(cos_cb, Wt);
 
@@ -50,9 +46,7 @@ void MAIN {
     cb_push_back(cos_cb, Wt);
 
 
-    for (uint32_t ht = 0; ht < Ht; ht++) {
-        DPRINT << "Processing head " << ht << " of " << Ht << ENDL();
-
+    for (uint32_t ht = 0; ht < Ht; ht++) { // Over n_heads_t dimension
         cb_reserve_back(rotated_in_interm_cb, Wt);
         cb_reserve_back(sin_interm_cb, Wt);
         cb_reserve_back(cos_interm_cb, Wt);
