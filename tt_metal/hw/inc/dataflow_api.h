@@ -27,6 +27,7 @@
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "debug/assert.h"
 #include "dev_msgs.h"
+#include "debug/dprint.h"
 
 #if defined(KERNEL_BUILD)
 constexpr uint8_t noc_index = NOC_INDEX;
@@ -1486,6 +1487,35 @@ void noc_async_write_multicast_loopback_src(
     WAYPOINT("NMLD");
 }
 
+inline
+void noc_async_write_multicast_exclude_region(
+    std::uint32_t src_local_l1_addr,
+    std::uint64_t dst_noc_addr_multicast,
+    std::uint32_t size,
+    std::uint32_t num_dests,
+    std::uint32_t exclude_region,
+    bool linked = false,
+    bool multicast_path_reserve = true,
+    uint8_t noc = noc_index) {
+    WAYPOINT("NMEW");
+    DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
+    uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+    DPRINT << "before transaction " << temp << ENDL();
+    ncrisc_noc_fast_write_any_len_exclude_region(
+        noc,
+        write_cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr_multicast,
+        size,
+        NOC_MULTICAST_WRITE_VC,
+        true,
+        linked,
+        num_dests,
+        multicast_path_reserve,
+        exclude_region);
+    WAYPOINT("NMED");
+}
+
 /**
  * This blocking call waits for all the outstanding enqueued *noc_async_read*
  * calls issued on the current Tensix core to complete. After returning from
@@ -1514,8 +1544,17 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NWBW");
-    while (!ncrisc_noc_nonposted_writes_flushed(noc))
-        ;
+    uint32_t i = 1;
+    while (!ncrisc_noc_nonposted_writes_flushed(noc)) {
+        if (i == 6400000) {
+            i = 1;
+            uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+            DPRINT << "barrier transaction " << temp << ENDL();
+        }
+        i++;
+    }
+    uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+    DPRINT << "barrier transaction " << temp << ENDL();
     WAYPOINT("NWBD");
 }
 
