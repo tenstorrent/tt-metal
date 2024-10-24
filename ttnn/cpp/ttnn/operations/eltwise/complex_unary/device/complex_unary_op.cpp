@@ -22,7 +22,7 @@ Tensor _imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) 
 }
 
 Tensor _angle(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
-    return ttnn::neg( atan2(input[1],input[0],output_mem_config), output_mem_config );
+    return ttnn::atan2(input[0],input[1],output_mem_config);
 }
 
 Tensor _is_imag(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
