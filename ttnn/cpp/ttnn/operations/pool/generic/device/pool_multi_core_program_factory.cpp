@@ -17,18 +17,21 @@ namespace {
 float get_reduce_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: return 1.;
+        case Pool2DType::AVG_POOL2D: return 1. / (float)kernel_size_hw;
     }
 }
 
 float get_reduce_init_value(Pool2DType pool_type) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: return -std::numeric_limits<float>::infinity();
+        case Pool2DType::AVG_POOL2D: return 0.;
     }
 }
 
 ReduceOpMath get_reduce_op(Pool2DType pool_type) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
+        case Pool2DType::AVG_POOL2D: return tt::tt_metal::ReduceOpMath::SUM;
     }
 }
 

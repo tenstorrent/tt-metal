@@ -18,7 +18,10 @@
 namespace ttnn::operations {
 namespace pool {
 
-enum class Pool2DType { MAX_POOL2D };
+enum class Pool2DType {
+    MAX_POOL2D,
+    AVG_POOL2D,
+};
 
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {

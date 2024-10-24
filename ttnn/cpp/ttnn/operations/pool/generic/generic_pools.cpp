@@ -5,10 +5,10 @@
 #include "generic_pools.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn {
 namespace operations::pool {
@@ -18,6 +18,7 @@ namespace {
 float get_pool_pad_value(Pool2DType pool_type) {
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: return -std::numeric_limits<float>::infinity();
+        case Pool2DType::AVG_POOL2D: return 0.;
     }
 }
 
@@ -133,7 +134,7 @@ Tensor Pool2DOp<pool_type>::invoke(uint8_t queue_id,
         queue_id,
         haloed_tensor,
         sliding_window_config,
-        Pool2DType::MAX_POOL2D,
+        pool_type,
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
         out_memory_config);
 
@@ -145,6 +146,7 @@ Tensor Pool2DOp<pool_type>::invoke(uint8_t queue_id,
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;
+template class Pool2DOp<Pool2DType::AVG_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
