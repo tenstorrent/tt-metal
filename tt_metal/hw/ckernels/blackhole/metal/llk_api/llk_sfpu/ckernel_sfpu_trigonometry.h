@@ -15,151 +15,82 @@ namespace ckernel {
 
 namespace sfpu {
 
-#define PI (3.14159265358979323846)
-#define PI_2 (1.570796326794)
+static const float PI = 3.1415927f;
+static const float PI_2 = 1.5707964f;
+static const float FRAC_1_PI = 0.31830987f;
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_tangent_maclaurin_series(vFloat val) {
-    // Mclauren series
-    // tan(x) = x + (x^3)/3 + (2x^5)/15 + (17x^7)/315 + (62x^9)/2835 + (1382x^11)/155925 + (21844x^13)/6081075 + ...
+static vFloat sfpu_xcot(vFloat x);
 
-    vFloat tmp = val;
-    vFloat val_square = val * val;
+template <>
+sfpi_inline vFloat sfpu_xcot<true>(vFloat x) {
+    x *= x;
 
-    // x
-    vFloat output = tmp;
-    // x^3/3
-    tmp = tmp * val_square;
-    output += 0.3333333333333333 * tmp;
-    // (2x^5)/15
-    tmp = tmp * val_square;
-    output += 0.13333333333333333 * tmp;
+    return ((-0xf.28e58p-12f
+        * x - 0x4.f8cc1p-8f)
+        * x - 0x5.5b78b8p-4f)
+        * x + 0x1.00081cp+0f;
+}
 
-    //(17x^7)/315
-    tmp = tmp * val_square;
-    output += 0.05396825396825397 * tmp;
+template <>
+sfpi_inline vFloat sfpu_xcot<false>(vFloat x) {
+    x *= x;
 
-    //(62x^9)/2835
-    tmp = tmp * val_square;
-    output += 0.021869488536155203 * tmp;
-
-    // (1382x^11)/155925
-    tmp = tmp * val_square;
-    output += 0.008863235529902197 * tmp;
-
-    // (21844x^13)/6081075
-    tmp = tmp * val_square;
-    output += 0.003592128036572481 * tmp;
-
-    // Write out output
-    return output;
+    return (((((-0x6.0847c8p-20f
+        * x - 0x7.19fff8p-20f)
+        * x - 0xf.a306ap-16f)
+        * x - 0x8.914dp-12f)
+        * x - 0x5.b10dcp-8f)
+        * x - 0x5.55538p-4f)
+        * x + 0xf.fffffp-4f;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        // Periodic, Range Reduction: To cover more input range
-        v_if(v > PI_2) { v = v - PI; }
-        v_elseif(v < -PI_2) { v = v + PI; }
-        v_else { v = v; }
-        v_endif;
-
-        v = sfpu_tangent_maclaurin_series<APPROXIMATION_MODE>(v);
-        dst_reg[0] = v;
+        vFloat v = dst_reg[0] * FRAC_1_PI;
+        vInt whole_v = float_to_int16(v, 0);
+        v = PI * (v - int32_to_float(whole_v, 0));
+        dst_reg[0] = v * sfpu_reciprocal<8>(sfpu_xcot<APPROXIMATION_MODE>(v));
         dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_sine_maclaurin_series(vFloat val) {
-    // Good for [-pi:pi]
-    // Mclauren series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
-    vFloat tmp = val;
-    // x
-    vFloat output = tmp;
-    // x^3/3!
-    tmp = tmp * val * val;
-    output += -0.166666666 * tmp;
-    // x^5/5!
-    tmp = tmp * val * val;
-    output += 0.0083333333 * tmp;
-    // x^7/7!
-    tmp = tmp * val * val;
-    output += -0.0001984126 * tmp;
+static vFloat sfpu_sinpi(vFloat x);
 
-    // x^9/9!
-    tmp = tmp * val * val;
-    output += 0.0000027557 * tmp;
+template <>
+sfpi_inline vFloat sfpu_sinpi<true>(vFloat x) {
+    vFloat xx = x * x;
 
-    if constexpr (not APPROXIMATION_MODE) {
-        // x^11/11!
-        tmp = tmp * val * val;
-        output += -0.00000002505 * tmp;
-
-        // x^13/13!
-        tmp = tmp * val * val;
-        output += 1.6059043836821613e-10 * (tmp);
-    }
-
-    // Write out output
-    return output;
+    return x * ((0x1.29cf02p+1f
+        * xx - 0x1.4954d4p+2f)
+        * xx + 0x1.92149p+1f);
 }
 
-template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_cosine_maclaurin_series(vFloat val) {
-    // Good for [-pi:pi]
-    // Mclauren series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
-    // 1
-    vFloat output = 1.0f;
-    // x^2/2!
-    vFloat tmp = val * val;
-    output += -0.5 * tmp;
-    // x^4/4!
-    tmp = tmp * val * val;
-    output += 0.0416666666 * tmp;
-    // x^6/6!
-    tmp = tmp * val * val;
-    output += -0.0013888888 * tmp;
+template <>
+sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
+    vFloat xx = x * x;
 
-    // x^8/8!
-    tmp = tmp * val * val;
-    output += 0.0000248015 * tmp;
-
-    // x^10/10!
-    tmp = tmp * val * val;
-    output += -0.0000002755 * tmp;
-
-    if constexpr (not APPROXIMATION_MODE) {
-        // x^12/12!
-        tmp = tmp * val * val;
-        output += 2.08767569878681e-9 * tmp;
-
-        // x^14/14!
-        tmp = tmp * val * val;
-        output += -1.1470745597729725e-11 * tmp;
-    }
-
-    // Write out output
-    return output;
+    return x * ((((0x1.406628p-4f
+        * xx - 0x9.93f86p-4f)
+        * xx + 0x2.8cd64p+0f)
+        * xx - 0x5.2aef6p+0f)
+        * xx + 0x3.243f6cp+0f);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
+        vFloat v = dst_reg[0] * FRAC_1_PI;
         vInt whole_v = float_to_int16(v, 0);
-        vFloat whole_v_float = int32_to_float(whole_v, 0);
-        v = v - whole_v_float;
-        v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
-        v = sfpu_sine_maclaurin_series<APPROXIMATION_MODE>(v);
-        whole_v = whole_v & 0x1;
-        v_if(whole_v != 0) {
-            // odd so flip the sign
-            v *= -1;
+        v -= int32_to_float(whole_v, 0);
+        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+
+        v_if (whole_v & 1) {
+            v = -v;
         }
         v_endif;
         dst_reg[0] = v;
@@ -171,17 +102,13 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_cosine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v = 0.318309886183791f * v;  // *1/pi to get number of pi rads.
+        vFloat v = dst_reg[0] * FRAC_1_PI + 0.5f;
         vInt whole_v = float_to_int16(v, 0);
-        vFloat whole_v_float = int32_to_float(whole_v, 0);
-        v = v - whole_v_float;
-        v *= 3.141592653589793f;  // fractional * pi to get it in [-pi:pi]
-        v = sfpu_cosine_maclaurin_series<APPROXIMATION_MODE>(v);
-        whole_v = whole_v & 0x1;
-        v_if(whole_v != 0) {
-            // odd so flip the sign
-            v *= -1;
+        v -= int32_to_float(whole_v, 0);
+        v = sfpu_sinpi<APPROXIMATION_MODE>(v);
+
+        v_if (whole_v & 1) {
+            v = -v;
         }
         v_endif;
         dst_reg[0] = v;
