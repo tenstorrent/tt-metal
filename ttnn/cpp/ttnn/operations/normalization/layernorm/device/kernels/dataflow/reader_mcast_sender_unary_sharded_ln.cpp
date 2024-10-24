@@ -137,6 +137,7 @@ void kernel_main() {
                 }
 
                 uint32_t curr_block_index = block_index_stride;
+                cb_reserve_back(cb_external, num_blocks_second_stage - 1);
                 for(uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                     uint64_t noc_addr_ex = remote_noc_addrs[curr_block_index] | l1_read_addr_ex;
                     noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
