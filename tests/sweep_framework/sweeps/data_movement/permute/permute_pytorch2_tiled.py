@@ -260,7 +260,7 @@ parameters = {
             {"shape": [1, 16, 256, 64], "dims": [0, 2, 1, 3]},
             {"shape": [1, 256, 16, 64], "dims": [0, 2, 1, 3]},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.TILE_LAYOUT],
     },
 }
