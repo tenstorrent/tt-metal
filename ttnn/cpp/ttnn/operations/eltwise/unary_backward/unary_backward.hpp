@@ -7,6 +7,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/cpp/ttnn/device.hpp"
 
 namespace ttnn {
 

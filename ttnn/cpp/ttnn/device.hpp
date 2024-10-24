@@ -17,6 +17,8 @@ void enable_program_cache(Device &device);
 void disable_and_clear_program_cache(Device &device);
 bool is_wormhole_or_blackhole(tt::ARCH arch);
 void deallocate_buffers(Device *device);
+float sfpu_neg_inf(tt::tt_metal::DataType dtype);
+float sfpu_pos_inf(tt::tt_metal::DataType dtype);
 
 }  // namespace device
 
