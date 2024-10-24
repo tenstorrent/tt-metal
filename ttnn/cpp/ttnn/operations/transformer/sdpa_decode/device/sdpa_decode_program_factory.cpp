@@ -123,7 +123,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     TT_FATAL(num_cores_available <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
 
     // balance the number of cores to use based on batch
-    uint32_t num_cores_per_batch = num_cores_available / B;
+    uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch*B*num_kv_heads;
+    uint32_t num_cores_per_batch = std::min(num_cores_available,max_num_cores_for_compute) / B;
     uint32_t num_active_cores = num_cores_per_batch * B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t) 1, num_cores_per_batch / num_kv_heads);

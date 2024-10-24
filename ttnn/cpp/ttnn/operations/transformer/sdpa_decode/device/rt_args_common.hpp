@@ -26,11 +26,11 @@ get_runtime_args(int cur_pos, int cur_batch, int core_num, int num_cores_per_bat
     }
     else{
         int chunks_per_core = num_chunks_value / num_cores_per_batch;
-        k_chunk_start = (num_cores_per_batch-core_num-1) * chunks_per_core;
-        k_chunk_end = (num_cores_per_batch-core_num) * chunks_per_core;
-        if (core_num == 0) {
-            k_chunk_end+= (num_chunks_value % num_cores_per_batch);
-        }
+        int residuals = num_chunks_value % num_cores_per_batch;
+        int reversed_core_num = num_cores_per_batch-core_num-1;
+        k_chunk_start = reversed_core_num * chunks_per_core + std::min(residuals, reversed_core_num);
+        k_chunk_end = k_chunk_start + chunks_per_core;
+        if (reversed_core_num < residuals) k_chunk_end+=1;
     }
     return {pst_value, num_chunks_value, k_chunk_start, k_chunk_end};
 }
