@@ -9,6 +9,7 @@
 #include "conv2d_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace py = pybind11;
 
@@ -57,9 +58,10 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
+                std::optional<const DeviceComputeKernelConfig> compute_config,
                 const std::optional<const MemoryConfig> memory_config,
                 const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -77,6 +79,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0},
 
@@ -96,9 +99,10 @@ void py_bind_conv2d(py::module& module) {
                 uint32_t groups,
                 std::optional<const ttnn::Tensor> bias_tensor,
                 std::optional<const Conv2dConfig> conv_config,
+                std::optional<const DeviceComputeKernelConfig> compute_config,
                 const std::optional<const MemoryConfig> memory_config,
                 const uint8_t& queue_id) -> std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> {
-                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, memory_config);
+                return self(queue_id, input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config, compute_config, memory_config);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -116,6 +120,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("groups"),
             py::arg("bias_tensor") = std::nullopt,
             py::arg("conv_config") = std::nullopt,
+            py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
@@ -303,20 +308,15 @@ void py_bind_conv2d(py::module& module) {
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
     py_conv_config.def(
-            py::init<MathFidelity, DataType, DataType, bool, bool, bool, string, uint32_t, bool, bool, uint32_t, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
+            py::init<DataType, DataType, string, uint32_t, bool, bool, uint32_t, bool, bool, std::optional<TensorMemoryLayout>, std::optional<CoreRangeSet>, bool, Layout, bool, bool, bool>(),
             py::kw_only(),
-            py::arg("math_fidelity") = MathFidelity::HiFi4,
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("weights_dtype") = DataType::BFLOAT16,
-            py::arg("math_approx_mode_enabled") = true,
-            py::arg("fp32_dest_acc_enabled") = false,
-            py::arg("packer_l1_accum_enabled") = false,
             py::arg("activation") = "",
             py::arg("input_channels_alignment") = 32,
             py::arg("deallocate_activation") = false,
             py::arg("reallocate_halo_output") = false,
-            py::arg("act_block_h_override") = 0,
-            py::arg("act_block_w_div") = 1,
+            py::arg("act_block_div") = 1,
             py::arg("reshard_if_not_optimal") = false,
             py::arg("override_sharding_config") = false,
             py::arg("shard_layout") = std::nullopt,
@@ -327,18 +327,13 @@ void py_bind_conv2d(py::module& module) {
             py::arg("enable_split_reader") = false,
             py::arg("enable_subblock_padding") = false
         );
-        py_conv_config.def_readwrite("math_fidelity", &Conv2dConfig::math_fidelity);
         py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
         py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype);
-        py_conv_config.def_readwrite("math_approx_mode_enabled", &Conv2dConfig::math_approx_mode_enabled);
-        py_conv_config.def_readwrite("fp32_dest_acc_enabled", &Conv2dConfig::fp32_dest_acc_enabled);
-        py_conv_config.def_readwrite("packer_l1_accum_enabled", &Conv2dConfig::packer_l1_accum_enabled);
         py_conv_config.def_readwrite("activation", &Conv2dConfig::activation);
         py_conv_config.def_readwrite("input_channels_alignment", &Conv2dConfig::input_channels_alignment);
         py_conv_config.def_readwrite("deallocate_activation", &Conv2dConfig::deallocate_activation);
         py_conv_config.def_readwrite("reallocate_halo_output", &Conv2dConfig::reallocate_halo_output);
-        py_conv_config.def_readwrite("act_block_h_override", &Conv2dConfig::act_block_h_override);
-        py_conv_config.def_readwrite("act_block_w_div", &Conv2dConfig::act_block_w_div);
+        py_conv_config.def_readwrite("act_block_div", &Conv2dConfig::act_block_div);
         py_conv_config.def_readwrite("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal);
         py_conv_config.def_readwrite("override_sharding_config", &Conv2dConfig::override_sharding_config);
         py_conv_config.def_readwrite("shard_layout", &Conv2dConfig::shard_layout);

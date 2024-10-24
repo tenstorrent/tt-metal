@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "ttnn/core.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -26,19 +27,14 @@ namespace operations::conv {
 namespace conv2d {
 
 struct Conv2dConfig {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
     DataType dtype = DataType::BFLOAT16;
     DataType weights_dtype = DataType::BFLOAT16;
-    bool math_approx_mode_enabled = true;
-    bool fp32_dest_acc_enabled = false;
-    bool packer_l1_accum_enabled = false;
     string activation = "";
     uint32_t input_channels_alignment = 32;
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
-    uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
-    uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
-                                  //Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
+    uint32_t act_block_div = 1; //Amount by which the maximum possible act_block is divided along a certain dimension.
+                                //Divided along height for Height & Block Sharding. Divided along width for Width Sharding.
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout;
@@ -49,18 +45,13 @@ struct Conv2dConfig {
     bool enable_split_reader = false;
     bool enable_subblock_padding = false;
     static constexpr auto attribute_names = std::make_tuple(
-        "math_fidelity",
         "dtype",
         "weights_dtype",
-        "math_approx_mode_enabled",
-        "fp32_dest_acc_enabled",
-        "packer_l1_accum_enabled",
         "activation",
         "input_channels_alignment",
         "deallocate_activation",
         "reallocate_halo_output",
-        "act_block_h_override",
-        "act_block_w_div",
+        "act_block_div",
         "reshard_if_not_optimal",
         "override_sharding_config",
         "shard_layout",
@@ -72,18 +63,13 @@ struct Conv2dConfig {
         "enable_subblock_padding");
     const auto attribute_values() const {
         return std::make_tuple(
-            std::cref(this->math_fidelity),
             std::cref(this->dtype),
             std::cref(this->weights_dtype),
-            std::cref(this->math_approx_mode_enabled),
-            std::cref(this->fp32_dest_acc_enabled),
-            std::cref(this->packer_l1_accum_enabled),
             std::cref(this->activation),
             std::cref(this->input_channels_alignment),
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
-            std::cref(this->act_block_h_override),
-            std::cref(this->act_block_w_div),
+            std::cref(this->act_block_div),
             std::cref(this->reshard_if_not_optimal),
             std::cref(this->override_sharding_config),
             std::cref(this->shard_layout),
@@ -203,6 +189,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
     std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig> memory_config = std::nullopt);
 
 
@@ -224,8 +211,9 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
+        std::optional<const DeviceComputeKernelConfig> compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, compute_config_, memory_config);
     }
 
     static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
@@ -245,8 +233,9 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+        std::optional<const DeviceComputeKernelConfig> compute_config_ = std::nullopt,
+        const std::optional<const MemoryConfig> memory_config = std::nullopt) {
+        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, compute_config_, memory_config);
     }
 };
 

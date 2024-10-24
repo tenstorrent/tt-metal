@@ -246,32 +246,34 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const ParallelConfig& parallel_config,
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
-    uint32_t act_block_h_override,
-    uint32_t act_block_w_div,
+    uint32_t act_block_div,
     uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
     bool use_shallow_conv_variant) {
 
-    if (act_block_h_override > 0) {
-        TT_ASSERT(
-            act_block_h_override % 32 == 0,
-            "Config Error: act_block_h_override must be a multiple of 32 (tile height).");
-    }
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
+
     uint32_t act_block_h_ntiles = conv_op_parallel_config.per_core_out_matrix_height_ntiles;
-    if (parallel_config.shard_scheme != TensorMemoryLayout::WIDTH_SHARDED && act_block_h_override > 0 ) {
-        log_info(LogOp, "act_block_h_override is set, but ignored when Width Sharding is used");
-        act_block_h_ntiles = act_block_h_override / constants::TILE_HEIGHT;
-    }
     uint32_t act_block_w = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
                                ? round_up(padded_in_channels * window_w, 32)
                                : padded_in_channels;
-    if(parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-        act_block_w = (padded_in_channels * window_h * window_w)/(parallel_config.grid.num_cores() * act_block_w_div);
+
+
+    if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
+        uint32_t full_act_block_w = padded_in_channels * window_h * window_w;
+        uint32_t num_act_block_w_divs = parallel_config.grid.num_cores() * act_block_div;
+        TT_ASSERT(full_act_block_w % num_act_block_w_divs == 0, "full act block width {} must be a divisor of act block w {}",full_act_block_w,num_act_block_w_divs);
+        act_block_w = (full_act_block_w/num_act_block_w_divs);
     }
-    TT_ASSERT(act_block_w % 32 == 0);
-    uint32_t act_block_w_ntiles = act_block_w / 32;
+    else
+    {
+        TT_ASSERT(act_block_h_ntiles % act_block_div == 0,"act_block_div {} must be a divisor of act_block_h_ntiles {}",act_block_div,act_block_h_ntiles);
+        act_block_h_ntiles =  act_block_h_ntiles / act_block_div;
+    }
+
+    TT_ASSERT(act_block_w % constants::TILE_WIDTH == 0);
+    uint32_t act_block_w_ntiles = act_block_w / constants::TILE_WIDTH;
     uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
                                 : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
                                                                                                    : grid_size.x;
@@ -804,19 +806,21 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
+    std::optional<const DeviceComputeKernelConfig> compute_config_,
     const std::optional<const MemoryConfig> memory_config) {
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    if (conv_config.act_block_h_override == 0 && !input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
-        // This is a path for auto_sharding, set act_block_h_override to min value to
-        // be conservative with L1 memory usage.
-        if (conv_config.input_channels_alignment == (constants::TILE_WIDTH / 2)) {
-            // shallow conv, requires at least two tiles
-            conv_config.act_block_h_override = constants::TILE_HEIGHT * 2;
-        } else {
-            conv_config.act_block_h_override = constants::TILE_HEIGHT;
-        }
-    }
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(DeviceComputeKernelConfig());
+    // if (conv_config.act_block_h_override == 0 && !input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
+    //     // This is a path for auto_sharding, set act_block_h_override to min value to
+    //     // be conservative with L1 memory usage.
+    //     if (conv_config.input_channels_alignment == (constants::TILE_WIDTH / 2)) {
+    //         // shallow conv, requires at least two tiles
+    //         conv_config.act_block_h_override = constants::TILE_HEIGHT * 2;
+    //     } else {
+    //         conv_config.act_block_h_override = constants::TILE_HEIGHT;
+    //     }
+    // }
     uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     uint32_t output_width = ((input_width - kernel_size[1] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
     auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = shard_or_reshard_tensor_if_required(
@@ -855,11 +859,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         parallel_config,
         opt_conv_op_parallel_config,
         tt::round_up(in_channels, conv_config.input_channels_alignment),
-        conv_config.act_block_h_override,
-        conv_config.act_block_w_div,
+        conv_config.act_block_div,
         kernel_size[0],
         kernel_size[1],
-        conv_config.fp32_dest_acc_enabled,
+        get_fp32_dest_acc_en(compute_config),
         conv_config.input_channels_alignment == 16);
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -894,13 +897,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     // call optimized conv op or matmul micro op
     bool input_is_on_device = ttnn::is_tensor_on_device_or_multidevice(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
-    DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
-        device->arch(),
-        std::nullopt,
-        conv_config.math_fidelity,
-        conv_config.math_approx_mode_enabled,
-        conv_config.fp32_dest_acc_enabled,
-        conv_config.packer_l1_accum_enabled);
 
     if (!mm_conv) {
         // call halo op
@@ -931,14 +927,14 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 groups,
                 conv_config.output_layout == Layout::ROW_MAJOR,
                 conv_config.activation == "relu",
-                conv_config.math_fidelity,
+                get_math_fidelity(compute_config),
                 opt_conv_op_parallel_config,
                 opt_conv_op_block_config,
                 conv_out_memory_config,
                 conv_config.dtype,
                 {batch_size, input_height, input_width, in_channels},
                 conv_config.input_channels_alignment == 16,
-                compute_kernel_config,
+                compute_config,
                 conv_config.enable_act_double_buffer,
                 conv_config.enable_split_reader,
                 conv_config.enable_subblock_padding);
@@ -975,14 +971,14 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation == "relu",
-            conv_config.math_fidelity,
+            get_math_fidelity(compute_config),
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,
             conv_config.dtype,
             {batch_size, input_height, input_width, in_channels},
             conv_config.input_channels_alignment == 16,
-            compute_kernel_config,
+            compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
@@ -1021,7 +1017,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             /*bcast_batch=*/std::nullopt,
             conv_out_memory_config,
             conv_config.dtype,
-            compute_kernel_config});
+            compute_config});
         if (conv_config.deallocate_activation) {
             ttnn::operations::core::deallocate(matmul_input);
         }
@@ -1162,6 +1158,7 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
+    std::optional<const DeviceComputeKernelConfig> compute_config_,
     const std::optional<const MemoryConfig> memory_config);
 
 template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<MeshDevice>(
@@ -1180,6 +1177,7 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
+    std::optional<const DeviceComputeKernelConfig> compute_config_,
     const std::optional<const MemoryConfig> memory_config);
 
 }  // namespace conv2d
