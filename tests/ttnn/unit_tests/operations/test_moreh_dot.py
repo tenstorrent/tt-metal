@@ -23,32 +23,41 @@ def get_torch_dtype(dtype):
         return torch.bfloat16
 
 
-def run_moreh_dot_test(input_shape, npu_dtype, device, optional_output=False):
+def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=False):
     # TODO @thanhnguyen-moreh: Support bfloat8_b in kernel
-    if npu_dtype == ttnn.bfloat8_b:
+    if ttnn_dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
-    cpu_dtype = get_torch_dtype(npu_dtype)
+    torch_dtype = get_torch_dtype(ttnn_dtype)
     output_shape = [1, 1, 1, 1]
 
-    if npu_dtype == ttnn.int32:
-        torch_input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
-        torch_other = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
-    else:
-        torch_input = torch.rand(input_shape, dtype=cpu_dtype)
-        torch_other = torch.rand(input_shape, dtype=cpu_dtype)
+    if ttnn_dtype == ttnn.int32:
+        torch_input = torch.randint(-2, 3, input_shape, dtype=torch_dtype)
+        torch_other = torch.randint(-2, 3, input_shape, dtype=torch_dtype)
+        torch_optional_output = torch.randint(-2, 3, output_shape, dtype=torch_dtype)
 
-    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_other = ttnn.from_torch(torch_other, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        tt_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )  # Input dtype must be of bfloat16 or bfloat8_b
+        tt_other = ttnn.from_torch(
+            torch_other, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )  # Input dtype must be of bfloat16 or bfloat8_b
 
-    if optional_output == False:
-        tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=npu_dtype)
     else:
-        torch_optional_output = torch.rand(output_shape, dtype=cpu_dtype)
-        optional_output = ttnn.from_torch(
-            torch_optional_output, device=device, dtype=npu_dtype, layout=ttnn.TILE_LAYOUT
-        )
-        tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=npu_dtype, output=optional_output)
-    tt_out = ttnn.to_torch(tt_out)
+        torch_input = torch.rand(input_shape, dtype=torch_dtype)
+        torch_other = torch.rand(input_shape, dtype=torch_dtype)
+        torch_optional_output = torch.rand(output_shape, dtype=torch_dtype)
+
+        tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+        tt_other = ttnn.from_torch(torch_other, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+
+    optional_output = (
+        ttnn.from_torch(torch_optional_output, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+        if use_optional_output
+        else None
+    )
+
+    tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=ttnn_dtype, output=optional_output)
+    tt_out = ttnn.to_torch(tt_out).to(torch_dtype)
 
     # torch matmul
     torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
@@ -78,9 +87,10 @@ def run_moreh_dot_test(input_shape, npu_dtype, device, optional_output=False):
     (
         ttnn.bfloat16,
         ttnn.int32,
+        ttnn.bfloat8_b,
     ),
 )
-def test_moreh_matmul_1d(input_shape, dtype, device):
+def test_moreh_dot(input_shape, dtype, device):
     torch.manual_seed(3072)
     run_moreh_dot_test(input_shape, dtype, device)
 
@@ -126,18 +136,4 @@ def test_moreh_matmul_1d_callback(input_shape, dtype, device, use_program_cache)
 )
 def test_moreh_dot_optional_output_tensor(input_shape, dtype, device):
     torch.manual_seed(3072)
-    run_moreh_dot_test(input_shape, dtype, device, True)
-
-
-@pytest.mark.parametrize(
-    "input_shape",
-    (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
-        [1, 1, 1, 32],  # test single tile
-        [1, 1, 1, 352],  # test multiple tiles
-        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
-    ),
-)
-def test_moreh_dot_bfp8(input_shape, device):
-    torch.manual_seed(3072)
-    run_moreh_dot_test(input_shape, ttnn.bfloat8_b, device)
+    run_moreh_dot_test(input_shape, dtype, device, use_optional_output=True)
