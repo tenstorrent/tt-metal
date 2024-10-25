@@ -94,18 +94,20 @@ std::vector<WorkerAttributes> build_worker_attributes(
         worker_receiver_semaphore_id :
         worker_receiver_semaphore_id_second_core_range;
 
+    std::array<size_t, 2> worker_slice_index = {0, 0};
+
     for (std::size_t l = 0; l < num_links; l++) {
         for (std::size_t i = 0; i < workers_per_slice; i++) {
             auto worker_id = get_global_worker_id(l, i, num_channels_per_link);
             TT_ASSERT(worker_cores_idx < worker_cores_list.size());
-
+            auto direction = is_buffer_in_clockwise_direction_fn(worker_id) ? Direction::CLOCKWISE : Direction::COUNTER_CLOCKWISE;
             worker_attributes.push_back(
                 {
                     l,
                     i,
-                    i,
-                    is_buffer_in_clockwise_direction_fn(worker_id) ? Direction::CLOCKWISE : Direction::COUNTER_CLOCKWISE,
-                    first_workers_list[worker_cores_idx],
+                    worker_slice_index[static_cast<size_t>(direction)]++,
+                    direction,
+                    first_workers_list.at(worker_cores_idx),
                     first_send_to_edm_sem_id,
                     first_read_from_edm_sem_id
                 }
@@ -119,14 +121,15 @@ std::vector<WorkerAttributes> build_worker_attributes(
                 TT_ASSERT(second_vec_index < second_workers_list.value().size());
                 std::size_t my_logical_index = workers_per_slice + i;
                 std::size_t my_idx = worker_attributes.size();
+                auto direction = is_buffer_in_clockwise_direction_fn(my_logical_index) ?
+                            Direction::CLOCKWISE : Direction::COUNTER_CLOCKWISE;
                 worker_attributes.push_back(
                     {
                         l,
                         my_logical_index,
-                        i,
-                        is_buffer_in_clockwise_direction_fn(my_logical_index) ?
-                            Direction::CLOCKWISE : Direction::COUNTER_CLOCKWISE,
-                        second_workers_list.value()[second_vec_index],
+                        worker_slice_index[static_cast<size_t>(direction)]++,
+                        direction,
+                        second_workers_list.value().at(second_vec_index),
                         second_send_to_edm_sem_id,
                         second_read_from_edm_sem_id
                     }
@@ -150,9 +153,10 @@ std::vector<WorkerAttributes> build_worker_attributes(
     // Log worker attributes
     log_trace(tt::LogOp, "Worker Attributes:");
     for (const auto &wa : worker_attributes) {
-        log_trace(tt::LogOp, "\tAttributes: link={}, index={}, core_logical=(x={},y={}), direction={}, associated_core=(x={},y={}), associated_index={}",
+        log_trace(tt::LogOp, "\tAttributes: link={}, chan_index={}, slice_index: {}, core_logical=(x={},y={}), direction={}, associated_core=(x={},y={}), associated_index={}",
             wa.link,
             wa.channel,
+            wa.index_in_slice,
             wa.location_logical.x,
             wa.location_logical.y,
             wa.direction == Direction::CLOCKWISE ? "CLOCKWISE": "COUNTER-CLOCKWISE",
