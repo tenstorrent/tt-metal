@@ -33,7 +33,7 @@ def test_bw_acosh(input_shapes, device):
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
-    golden_tensor = golden_function(grad_data, in_data, device=device)
+    golden_tensor = golden_function(grad_data, in_data)
 
     # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=5, sci_mode = False, edgeitems=17)
     # print("golden_tensor",golden_tensor)
@@ -65,7 +65,7 @@ def test_bw_acosh_nan_inf(input_shapes, device):
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
-    golden_tensor = golden_function(grad_data, in_data, device=device)
+    golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
 
