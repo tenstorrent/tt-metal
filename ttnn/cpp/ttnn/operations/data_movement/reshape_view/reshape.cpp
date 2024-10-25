@@ -35,14 +35,28 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
         ttnn::Tensor slice_input;
         std::vector<uint32_t> begins;
         std::vector<uint32_t> ends;
-        TT_FATAL(tensor_shape.rank() <= 4, "Only up to 4D tensors");
-        auto host_tensor_4d = unsqueeze_to_4D(rm_tensor);
-        auto tensor_shape_4d = host_tensor_4d.shape();
+
+        ttnn::Tensor host_tensor_4d;
+        std::array<uint32_t, 4> tensor_shape_4d_array;
+        if(tensor_shape.rank() > 4) {
+            auto tensor_shape_4d = rm_tensor.shape().to_rank(4);
+            tensor_shape_4d_array = tensor_shape_4d.value.to_array_4D();
+            host_tensor_4d = rm_tensor.reshape(tensor_shape_4d);
+        }
+        else {
+            host_tensor_4d = unsqueeze_to_4D(rm_tensor);
+            tensor_shape_4d_array = host_tensor_4d.shape().value.to_array_4D();
+        }
         begins = std::vector<uint32_t>({0, 0, 0, 0});
-        ends = std::vector<uint32_t>({tensor_shape_4d[0], tensor_shape_4d[1], tensor_shape_4d[2], tensor_shape_4d[3]});
+        ends = std::vector<uint32_t>({tensor_shape_4d_array[0], tensor_shape_4d_array[1], tensor_shape_4d_array[2], tensor_shape_4d_array[3]});
         auto step = std::vector<uint32_t>({1, 1, 1, 1});
         host_tensor_4d = ttnn::slice(host_tensor_4d, begins, ends, step, std::nullopt);
-        host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
+        if(tensor_shape.rank() > 4) {
+            host_tensor = host_tensor_4d.reshape(rm_tensor.shape());
+        }
+        else {
+            host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
+        }
     }
     auto host_reshape_tensor = rm_tensor.reshape(shape);
     auto final_layout_tensor = ttnn::to_layout(host_reshape_tensor, layout, std::nullopt, std::nullopt, (Device *)nullptr);
@@ -59,7 +73,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(const ttnn
     //Constraint in device kernel
     uint32_t ROW_MAJOR_WIDTH = 8;
     ttnn::Tensor reshaped_rm_tensor;
-    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0) and tensor_shape.rank() == 4) {
+    if((tensor_shape[-1] % ROW_MAJOR_WIDTH == 0 && shape[-1] % ROW_MAJOR_WIDTH == 0) and tensor_shape.rank() == 4 and shape.rank() <= 4) {
         auto rm_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
         if (rm_tensor.is_contiguous()) {
             // Page size depends on the width, so only modify the shape if the width is the same
