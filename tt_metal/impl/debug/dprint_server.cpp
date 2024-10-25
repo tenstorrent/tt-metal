@@ -30,7 +30,6 @@ using std::string;
 using std::to_string;
 using std::cout;
 using std::endl;
-using std::vector;
 using std::setw;
 using std::flush;
 using std::tuple;
@@ -155,7 +154,7 @@ private:
 
     // A map from Device -> Core Range, which is used to determine which cores on which devices
     // to scan for print data. Also a lock for editing it.
-    std::map<Device*, vector<CoreDescriptor>> device_to_core_range_;
+    std::map<Device*, std::vector<CoreDescriptor>> device_to_core_range_;
     std::map<Device*, bool> device_reads_dispatch_cores_;  // True if given device reads any dispatch cores. Used to
                                                            // know whether dprint can be compiled out.
     std::mutex device_to_core_range_lock_;
@@ -327,7 +326,7 @@ void WriteInitMagic(Device *device, const CoreCoord& phys_core, int hart_id, boo
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
-    vector<uint32_t> initbuf = vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
+    std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, base_addr);
 } // WriteInitMagic
@@ -340,7 +339,7 @@ bool CheckInitMagicCleared(Device *device, const CoreCoord& phys_core, int hart_
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
 
-    vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
+    std::vector<uint32_t> initbuf = { DEBUG_PRINT_SERVER_STARTING_MAGIC };
     auto result = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, 4);
     return (result[0] != initbuf[0]);
 } // CheckInitMagicCleared
@@ -446,13 +445,13 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    std::vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
 
     // Core range depends on whether dprint_all_cores flag is set.
-    vector<CoreDescriptor> print_cores_sanitized;
+    std::vector<CoreDescriptor> print_cores_sanitized;
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         if (tt::llrt::OptionsG.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
             tt::llrt::RunTimeDebugClassAll) {
@@ -495,7 +494,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
                 tt::llrt::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            vector<CoreCoord>& print_cores =
+            std::vector<CoreCoord>& print_cores =
                 tt::llrt::OptionsG.get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
@@ -556,7 +555,7 @@ void DebugPrintServerContext::AttachDevice(Device* device) {
 
 void DebugPrintServerContext::DetachDevice(Device* device) {
     // Don't detach the device if it's disabled by env vars - in this case it wasn't attached.
-    vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
+    std::vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!tt::llrt::OptionsG.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint))
         if (std::find(chip_ids.begin(), chip_ids.end(), device->id()) == chip_ids.end())
             return;
@@ -926,7 +925,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         // with rpos not aligned to wpos
 
         // write back to device - update rpos only
-        vector<uint32_t> rposbuf;
+        std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
         tt::llrt::write_hex_vec_to_core(chip_id, phys_core, rposbuf, base_addr+offs);
@@ -957,7 +956,7 @@ void DebugPrintServerContext::PollPrintData(uint32_t hart_mask) {
         }
 
         // Make a copy of the device->core map, so that it can be modified while polling.
-        std::map<Device*, vector<CoreDescriptor>> device_to_core_range_copy;
+        std::map<Device*, std::vector<CoreDescriptor>> device_to_core_range_copy;
         device_to_core_range_lock_.lock();
         device_to_core_range_copy = device_to_core_range_;
 
