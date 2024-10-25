@@ -120,6 +120,7 @@ tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
+tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957
 
 # TTNN Distributed
 ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt

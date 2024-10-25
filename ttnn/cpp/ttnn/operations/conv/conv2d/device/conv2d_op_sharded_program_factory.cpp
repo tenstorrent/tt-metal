@@ -485,7 +485,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         TT_FATAL(not weight_width_sliced, "split reader does not work with 2d conv");
         TT_FATAL((act_block_h_ntiles / block_config.out_subblock_h_ntiles) >= 2, "split reader needs to have at leaset two subblocks");
     }
-    bool split_reader = use_shallow_conv_variant or enable_split_reader;
+    bool split_reader = enable_split_reader;
     if (split_reader) {
         TT_FATAL(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
