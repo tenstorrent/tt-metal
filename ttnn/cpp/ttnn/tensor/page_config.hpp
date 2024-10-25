@@ -6,8 +6,13 @@
 
 #include <array>
 
+#include "types.hpp"
+#include "alignment.hpp"
+#include "enum_types.hpp"
 #include "impl/tile/tile.hpp"
 #include "size.hpp"
+
+#include <optional>
 
 namespace tt::tt_metal {
 

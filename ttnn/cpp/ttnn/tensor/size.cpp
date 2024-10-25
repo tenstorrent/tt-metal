@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "size.hpp"
+#include <ostream>
 
 namespace tt::tt_metal {
 

@@ -4,6 +4,8 @@
 
 #include "alignment.hpp"
 
+#include <ostream>
+
 namespace tt::tt_metal {
 
 bool Alignment::operator==(const Alignment &other) const = default;

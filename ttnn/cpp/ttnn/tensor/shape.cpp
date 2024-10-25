@@ -4,6 +4,9 @@
 
 #include "shape.hpp"
 
+#include <numeric>
+#include <ostream>
+
 namespace ttnn {
 
 bool SimpleShape::operator==(const SimpleShape &other) const = default;
