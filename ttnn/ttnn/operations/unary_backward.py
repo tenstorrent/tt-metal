@@ -319,7 +319,7 @@ def _golden_function_acosh(grad_tensor, input_tensor, *args, **kwargs):
             result,
             nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
             posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
-            neginf=-ttnn.sfpu_negative_inf(tt_input.get_dtype()),
+            neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
         )
     ]
 

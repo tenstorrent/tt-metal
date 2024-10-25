@@ -454,6 +454,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
     float t_nan = ttnn::sfpu_positive_nan(input.get_dtype());
     float t_inf = ttnn::sfpu_positive_inf(input.get_dtype());
+    float t_neg_inf = ttnn::sfpu_negative_inf(input.get_dtype());
     auto arch_env = detect_arch();
     if(arch_env == tt::ARCH::WORMHOLE_B0){
         std::cout<<"Arch = WORMHOLE_B0";
@@ -462,13 +463,16 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     }
     std::cout<<"\nDevice : "<<input.device();
     std::cout<<"\nNan : "<<t_nan;
-    std::cout<<"\nInf : "<<t_inf;
+    std::cout<<"\n+Inf : "<<t_inf;
+    std::cout<<"\n-Inf : "<<t_neg_inf;
     Tensor cond_result = ttnn::logical_or(
         ttnn::eq(input, -1.0f, std::nullopt, output_mem_config),
         ttnn::eq(input, 1.0f, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    grad_a = ttnn::where( ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config), t_inf, grad_a, output_mem_config);
+    grad_a = ttnn::where( ttnn::eq(cond_result, 1.0f, std::nullopt, output_mem_config),
+                        ttnn::where( ttnn::ltz(grad, output_mem_config), t_neg_inf, t_inf, output_mem_config),
+                        grad_a, output_mem_config);
     cond_result = ttnn::logical_and(
         ttnn::gt(input, -1.0f, std::nullopt, output_mem_config),
         ttnn::lt(input, 1.0f, std::nullopt, output_mem_config),
