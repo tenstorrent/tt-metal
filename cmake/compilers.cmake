@@ -30,6 +30,7 @@ endfunction()
 
 function(ADJUST_COMPILER_WARNINGS)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(STATUS "Adjusting compiler warnings for Clang")
         target_compile_options(
             compiler_warnings
             INTERFACE
@@ -47,6 +48,11 @@ function(ADJUST_COMPILER_WARNINGS)
         )
     else() # GCC-12 or higher
         target_compile_options(
+            message
+            (
+                STATUS
+                "Adjusting compiler warnings for GCC"
+            )
             compiler_warnings
             INTERFACE
                 -Wno-deprecated
