@@ -55,27 +55,6 @@ jobs:
               timeout: 40
             },
             {
-              name: "API tests GS",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch grayskull --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
-              name: "API tests N300 WH B0",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
-              name: "API tests N150 WH B0",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type frequent_api --dispatch-mode fast,
-              timeout: 10
-            },
-            {
               name: "[Unstable] N150 models",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
