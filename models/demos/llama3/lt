@@ -179,12 +179,10 @@ def main(stdscr):
                         device_input = input_fields[2]["value"] or "n150,n300,t3k"
 
                         if command_input == "modules":
-                            command_input = "attention,attention-prefill,mlp,lm-head"
+                            command_input = "rmsnorm,attention,attention-prefill,mlp,lm-head"
 
                         if command_input == "tests":
-                            command_input = (
-                                "attention,attention-prefill,mlp,lm-head,decoder,decoder-prefill,model,model-prefill"
-                            )
+                            command_input = "embedding,rmsnorm,attention,attention-prefill,mlp,lm-head,decoder,decoder-prefill,model,model-prefill"
 
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
