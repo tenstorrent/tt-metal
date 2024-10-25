@@ -420,6 +420,7 @@ Data Movement
    ttnn.reshape
    ttnn.repeat
    ttnn.repeat_interleave
+   ttnn.slice
    ttnn.tilize
    ttnn.tilize_with_val_padding
    ttnn.fill_rm
@@ -467,7 +468,6 @@ Transformer
    ttnn.experimental.rotary_embedding
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
-   ttnn.transformer.scaled_dot_product_attention_decode_gqa
 
 CCL
 ===

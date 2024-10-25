@@ -977,7 +977,7 @@ def run_test_sdpa_decode_single_iter(
         tt_Q,
         tt_K,
         tt_V,
-        [start_idx for _ in range(b)],
+        cur_pos=[start_idx for _ in range(b)],
         scale=scale,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,

@@ -12,7 +12,6 @@
 #include "sdpa/sdpa_pybind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_pybind.hpp"
-#include "sdpa_decode_gqa/sdpa_decode_gqa_pybind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
 
 namespace ttnn::operations::transformer {
@@ -39,7 +38,6 @@ void py_module(py::module& module) {
 
     py_bind_sdpa(module);
     py_bind_sdpa_decode(module);
-    py_bind_sdpa_gqa_decode(module);
 }
 
 }  // namespace ttnn::operations::transformer

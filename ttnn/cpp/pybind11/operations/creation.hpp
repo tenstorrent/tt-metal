@@ -96,7 +96,7 @@ void bind_full_operation(py::module& module, const creation_operation_t& operati
 }
 
 template <typename creation_operation_t>
-void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string) {
+void bind_full_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor with the specified shape and fills it with the value of {1}.
@@ -115,6 +115,9 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
         Returns:
             ttnn.Tensor: A tensor filled with {1}.
 
+        Note:
+            {2}
+
         Example:
             >>> tensor = ttnn.{0}(shape=[1, 2, 2, 2], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
             >>> print(tensor)
@@ -124,7 +127,8 @@ void bind_full_operation_with_hard_coded_value(py::module& module, const creatio
                             [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
         )doc",
         operation.base_name(),
-        value_string);
+        value_string,
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -221,7 +225,7 @@ void bind_full_like_operation(py::module& module, const creation_operation_t& op
 }
 
 template <typename creation_operation_t>
-void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string) {
+void bind_full_like_operation_with_hard_coded_value(py::module& module, const creation_operation_t& operation, const std::string& value_string, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a tensor of the same shape as the input tensor and fills it with the value of {1}. The data type, layout, device, and memory configuration of the resulting tensor can be specified.
@@ -238,6 +242,9 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
         Returns:
             ttnn.Tensor: A tensor filled with {1}.
 
+        Note:
+            {2}
+
         Example:
             >>> tensor = ttnn.{0}(ttnn.from_torch(torch.randn(1, 2, 2, 2), ttnn.bfloat16, ttnn.TILE_LAYOUT)
             >>> output_tensor = ttnn.{0}(tensor=input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -248,7 +255,8 @@ void bind_full_like_operation_with_hard_coded_value(py::module& module, const cr
                             [{1}, {1}]]]]], shape=Shape([1, 2, 2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE_LAYOUT)
         )doc",
         operation.base_name(),
-        value_string);
+        value_string,
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -320,7 +328,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
 }
 
-void bind_empty_operation(py::module& module) {
+void bind_empty_operation(py::module& module, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Creates a device tensor with uninitialized values of the specified shape, data type, layout, and memory configuration.
@@ -335,12 +343,16 @@ void bind_empty_operation(py::module& module) {
         Returns:
             ttnn.Tensor: The output uninitialized tensor.
 
+        Note:
+            {1}
+
         Example:
             >>> tensor = ttnn.empty(shape=[2, 3], device=device)
             >>> print(tensor)
             ttnn.Tensor([[[[0.9, 0.21, 0.5], [0.67, 0.11, 0.30]]]], shape=Shape([2, 3]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
         )doc",
-        ttnn::empty.base_name());
+        ttnn::empty.base_name(),
+        info_doc);
 
     using EmptyType = decltype(ttnn::empty);
     bind_registered_operation(
@@ -414,16 +426,40 @@ void bind_empty_like_operation(py::module& module) {
 
 void py_module(py::module& module) {
     detail::bind_full_operation(module, ttnn::full);
-    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, "0.0");
+    detail::bind_full_operation_with_hard_coded_value(module, ttnn::zeros, "0.0",
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
+
     detail::bind_full_operation_with_hard_coded_value(module, ttnn::ones, "1.0");
 
     detail::bind_full_like_operation(module, ttnn::full_like);
-    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, "0.0");
+    detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::zeros_like, "0.0",
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_full_like_operation_with_hard_coded_value(module, ttnn::ones_like, "1.0");
 
     detail::bind_arange_operation(module, ttnn::arange);
 
-    detail::bind_empty_operation(module);
+    detail::bind_empty_operation(module,
+    R"doc(Supported dtypes, layouts, and ranks:
+
+        +----------------------------+---------------------------------+-------------------+
+        |     Dtypes                 |         Layouts                 |     Ranks         |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT16, FLOAT32       |       ROW_MAJOR, TILE           |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+
+        |    BFLOAT_8                |          TILE                   |      2, 3, 4      |
+        +----------------------------+---------------------------------+-------------------+)doc");
     detail::bind_empty_like_operation(module);
 }
 
