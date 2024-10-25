@@ -511,11 +511,6 @@ def worker_thread_func(output_entries, stop_event, screen_lock, screen_needs_upd
             for entry in output_entries:
                 with entry["lock"]:
                     if entry["status"] == "Waiting":
-                        with open("running.txt", "a") as f:
-                            # Write a list of all the entry statuses in output_entries
-                            for e in output_entries:
-                                f.write(f"{e['command_name']} {e['model']} {e['device']} {e['status']}\n")
-                            f.write("\n")
                         run_entry_command(entry, screen_lock, output_entries, screen_needs_update)
                         break
         # Set screen_needs_update whenever there's a change in output entries
