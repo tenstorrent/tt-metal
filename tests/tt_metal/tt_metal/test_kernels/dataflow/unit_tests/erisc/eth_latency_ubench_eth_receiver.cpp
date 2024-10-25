@@ -16,17 +16,6 @@ struct addr_sem_pair {
 static constexpr bool DISABLE_CONTEXT_SWITCHING = true;
 static constexpr uint32_t NUM_CHANNELS = 8;
 
-FORCE_INLINE
-void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
-    channel_sync->bytes_sent = 0;
-    channel_sync->receiver_ack = 0;
-    internal_::eth_send_packet(
-        0,
-        ((uint32_t)(channel_sync)) >> 4,
-        ((uint32_t)(channel_sync)) >> 4,
-        1);
-}
-
 template <bool measure>
 FORCE_INLINE void roundtrip_ping(
     std::array<uint32_t, NUM_CHANNELS> const& channels_addrs,
