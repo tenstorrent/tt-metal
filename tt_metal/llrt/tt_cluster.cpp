@@ -667,7 +667,10 @@ void Cluster::set_tunnels_from_mmio_device() {
                     }
                 }
             }
-            TT_ASSERT(tunneled_device_hit || (it == device_ids.end()), "Loop Exit Error.");
+            TT_FATAL(
+                tunneled_device_hit || (it == device_ids.end()),
+                "Detected ethernet connections did not match expected device connectivity, try re-running "
+                "tt-topology.");
         }
 
         TT_ASSERT(tunnels_from_mmio.size() != 0, "Must have at least 1 tunnel from MMIO Device.");

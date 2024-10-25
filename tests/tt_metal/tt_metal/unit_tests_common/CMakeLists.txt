@@ -18,6 +18,7 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_hanging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tensix_dest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_raise_wait.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/test_dram_to_l1_multicast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/test_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp

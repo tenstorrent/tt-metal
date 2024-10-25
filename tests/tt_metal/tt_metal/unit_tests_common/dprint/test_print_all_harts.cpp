@@ -40,7 +40,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Unpack
 Basic Types:
 101-1.61800337@0.122558594
@@ -65,7 +65,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Math
 Basic Types:
 101-1.61800337@0.122558594
@@ -108,7 +108,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b)
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b)
 Test Debug Print: Data1
 Basic Types:
 101-1.61800337@0.122558594
@@ -133,7 +133,7 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CB::c_in1: Unsupported data format (Bfp8_b))";
+Tried printing CB::c_in1: Unsupported data format (Bfp2_b))";
 
 static void RunTest(DPrintFixture* fixture, Device* device) {
     // Set up program and command queue
@@ -151,7 +151,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
     // A CB with an unsupported data format
     CircularBufferConfig cb_src1_config = CircularBufferConfig(
         buffer_size,
-        {{CB::c_in1, tt::DataFormat::Bfp8_b}}
+        {{CB::c_in1, tt::DataFormat::Bfp2_b}}
     ).set_page_size(CB::c_in1, buffer_size);
     CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
