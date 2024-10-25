@@ -11,62 +11,68 @@ namespace operations {
 namespace data_movement {
 
 struct SliceOperation {
+    template<typename T>
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        std::span<const uint32_t> begins,
-        std::span<const uint32_t> ends,
-        std::span<const uint32_t> step,
+        std::span<const T> begins,
+        std::span<const T> ends,
+        std::span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+    template<typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        std::span<const uint32_t> begins,
-        std::span<const uint32_t> ends,
-        std::span<const uint32_t> step,
+        std::span<const T> output_tensor_start,
+        std::span<const T> output_tensor_end,
+        std::span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor& input_tensor,
-        std::span<const int> begins,
-        std::span<const int> ends,
-        std::span<const int> step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        std::span<const int> begins,
-        std::span<const int> ends,
-        std::span<const int> step,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    template<typename T, size_t N>
+    template<typename T>
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const std::array<T, N>& begins,
-        const std::array<T, N>& ends,
-        const std::array<T, N>& step,
+        const ttnn::SmallVector<T>& begins,
+        const ttnn::SmallVector<T>& ends,
+        const ttnn::SmallVector<T>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(queue_id, input_tensor, std::span<const T>(begins), std::span<const T>(ends), std::span<const T>(step), memory_config_arg, optional_output_tensor);
+        return invoke(queue_id, input_tensor, std::span<const T>(begins.begin(), begins.end()), std::span<const T>(ends.begin(), ends.end()), std::span<const T>(step.begin(), step.end()), memory_config_arg, optional_output_tensor);
     }
 
-    template<typename T, size_t N>
+    template<typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::array<T, N>& begins,
-        const std::array<T, N>& ends,
-        const std::array<T, N>& step,
+        const ttnn::SmallVector<T>& begins,
+        const ttnn::SmallVector<T>& ends,
+        const ttnn::SmallVector<T>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(ttnn::DefaultQueueId, input_tensor, std::span<const T>(begins), std::span<const T>(ends), std::span<const T>(step), memory_config_arg, optional_output_tensor);
+        return invoke(input_tensor, std::span<const T>(begins.begin(), begins.end()), std::span<const T>(ends.begin(), ends.end()), std::span<const T>(step.begin(), step.end()), memory_config_arg, optional_output_tensor);
     }
+
+    template<typename T, std::size_t N>
+    static ttnn::Tensor invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const std::array<T, N> &output_tensor_start,
+        const std::array<T, N> &output_tensor_end,
+        const std::array<T, N> &step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    template<typename T, std::size_t N>
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const std::array<T, N> &output_tensor_start,
+        const std::array<T, N> &output_tensor_end,
+        const std::array<T, N> &step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+
 };
 
 }  // namespace data_movement

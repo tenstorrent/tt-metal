@@ -62,7 +62,7 @@ ttnn::Tensor RepeatOperation::invoke(
     if (input_tensor.get_layout() != Layout::ROW_MAJOR
         && logical_input_shape != padded_input_shape) {
         auto zero_indices = ttnn::SmallVector<uint32_t>(input_rank, 0);
-        auto end_indices = repeated_logical_shape.view();
+        auto end_indices =  ttnn::SmallVector<uint32_t>(repeated_logical_shape.cbegin(), repeated_logical_shape.cend());
         auto step = ttnn::SmallVector<uint32_t>(input_rank, 1);
 
         if (repeated_logical_shape.volume() % tt::constants::TILE_HW != 0) {
