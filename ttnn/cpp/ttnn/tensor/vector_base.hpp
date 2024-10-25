@@ -9,6 +9,7 @@
 #include <array>
 
 #include <boost/container/small_vector.hpp>
+#include <pybind11/stl.h>
 
 #include "tt_metal/tt_stl/reflection.hpp"
 
@@ -97,3 +98,8 @@ struct fmt::formatter<ttnn::SmallVector<T>> {
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
+
+namespace PYBIND11_NAMESPACE { namespace detail {
+    template <typename T>
+    struct type_caster<ttnn::SmallVector<T>> : list_caster<ttnn::SmallVector<T>, T> {};
+}}
