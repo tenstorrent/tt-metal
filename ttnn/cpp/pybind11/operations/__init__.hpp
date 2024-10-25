@@ -29,6 +29,7 @@
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/full_like/full_like_pybind.hpp"
+#include "ttnn/operations/index_fill/index_fill_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
@@ -148,6 +149,9 @@ void py_module(py::module& module) {
 
     auto m_uniform = module.def_submodule("uniform", "uniform operations");
     uniform::bind_uniform_operation(m_uniform);
+
+    auto m_index_fill = module.def_submodule("index_fill", "index_fill operation");
+    index_fill::bind_index_fill_operation(m_index_fill);
 }
 }  // namespace operations
 
