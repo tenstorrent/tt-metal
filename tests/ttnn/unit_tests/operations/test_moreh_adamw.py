@@ -21,26 +21,22 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from loguru import logger
 
 
-def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device):
-    def create_tt_tensor(tensor: torch.Tensor, device):
-        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    def create_empty_tensor(x, device):
-        ret = ttnn.zeros(x.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
-        return ret
+def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, dtype, device):
+    def create_tt_tensor(tensor: torch.Tensor, dtype, device):
+        return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     # input tensors
-    param_in = create_tt_tensor(cpu_weight, device)
-    grad = create_tt_tensor(cpu_grad, device)
-    exp_avg_in = create_tt_tensor(cpu_exp_avg, device)
-    exp_avg_sq_in = create_tt_tensor(cpu_exp_avg_sq, device)
-    max_exp_avg_sq_in = create_tt_tensor(cpu_max_exp_avg_sq, device) if amsgrad else None
+    param_in = create_tt_tensor(cpu_weight, dtype, device)
+    grad = create_tt_tensor(cpu_grad, dtype, device)
+    exp_avg_in = create_tt_tensor(cpu_exp_avg, dtype, device)
+    exp_avg_sq_in = create_tt_tensor(cpu_exp_avg_sq, dtype, device)
+    max_exp_avg_sq_in = create_tt_tensor(cpu_max_exp_avg_sq, dtype, device) if amsgrad else None
 
     # output tensors
-    param_out = create_empty_tensor(cpu_weight, device)
-    exp_avg_out = create_empty_tensor(cpu_exp_avg, device)
-    exp_avg_sq_out = create_empty_tensor(cpu_exp_avg_sq, device)
-    max_exp_avg_sq_out = create_empty_tensor(cpu_max_exp_avg_sq, device) if amsgrad else None
+    param_out = create_tt_tensor(cpu_weight, dtype, device)
+    exp_avg_out = create_tt_tensor(cpu_exp_avg, dtype, device)
+    exp_avg_sq_out = create_tt_tensor(cpu_exp_avg_sq, dtype, device)
+    max_exp_avg_sq_out = create_tt_tensor(cpu_max_exp_avg_sq, dtype, device) if amsgrad else None
 
     return (
         (param_in, grad, exp_avg_in, exp_avg_sq_in, max_exp_avg_sq_in),
@@ -48,16 +44,29 @@ def create_tt_tensors(cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max
     )
 
 
-def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, compute_kernel_options=None):
+def run_moreh_adamw(
+    shape,
+    lr,
+    betas,
+    eps,
+    weight_decay,
+    amsgrad,
+    step,
+    device,
+    *,
+    ttnn_dtype=ttnn.bfloat16,
+    torch_dtype=torch.bfloat16,
+    compute_kernel_options=None,
+):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    x_data = torch.rand(shape).to(torch.bfloat16)
-    y_data = torch.rand(shape).to(torch.bfloat16)
+    x_data = torch.rand(shape).to(torch_dtype)
+    y_data = torch.rand(shape).to(torch_dtype)
 
     class SimpleModel(nn.Module):
         def __init__(self):
             super(SimpleModel, self).__init__()
-            self.weight = nn.Parameter(torch.randn(shape).to(torch.bfloat16)).to(torch.bfloat16)
+            self.weight = nn.Parameter(torch.randn(shape).to(torch_dtype)).to(torch_dtype)
 
         def forward(self, x):
             return torch.mul(x, self.weight)
@@ -105,7 +114,14 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
         cpu_max_exp_avg_sq_result = None
 
     tt_input_tensors, tt_output_tensors = create_tt_tensors(
-        cpu_grad, cpu_weight, cpu_exp_avg, cpu_exp_avg_sq, cpu_max_exp_avg_sq, amsgrad, device
+        cpu_grad,
+        cpu_weight,
+        cpu_exp_avg,
+        cpu_exp_avg_sq,
+        cpu_max_exp_avg_sq,
+        amsgrad,
+        ttnn_dtype,
+        device,
     )
 
     tt_param_in, tt_grad, tt_exp_avg_in, tt_exp_avg_sq_in, tt_max_exp_avg_sq_in = tt_input_tensors
@@ -133,11 +149,11 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
 
     assert tt_param_out.shape.with_tile_padding() == list(model.weight.shape)
 
-    param_result = tt_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
-    exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
-    exp_avg_sq_result = tt_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+    param_result = tt_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
+    exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
+    exp_avg_sq_result = tt_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
     if amsgrad:
-        max_exp_avg_sq_result = tt_max_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
+        max_exp_avg_sq_result = tt_max_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
     else:
         max_exp_avg_sq_result = None
 
@@ -184,10 +200,12 @@ def run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, 
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
-def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Bfloat8_b is only supported with fp32_dest_acc set to True")
     torch.manual_seed(0)
-
-    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, ttnn_dtype=ttnn_dtype)
 
 
 @pytest.mark.parametrize(
@@ -223,12 +241,27 @@ def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_adamw_compute_kernel_options(
-    shape, lr, betas, eps, weight_decay, amsgrad, step, compute_kernel_options, device
+    shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dtype, compute_kernel_options, device
 ):
+    if ttnn_dtype == ttnn.bfloat8_b and not compute_kernel_options:
+        pytest.skip("Bfloat8_b is only supported with fp32_dest_acc set to True")
+
     torch.manual_seed(0)
-    run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, compute_kernel_options)
+    run_moreh_adamw(
+        shape,
+        lr,
+        betas,
+        eps,
+        weight_decay,
+        amsgrad,
+        step,
+        device,
+        ttnn_dtype=ttnn_dtype,
+        compute_kernel_options=compute_kernel_options,
+    )
 
 
 @pytest.mark.parametrize(
