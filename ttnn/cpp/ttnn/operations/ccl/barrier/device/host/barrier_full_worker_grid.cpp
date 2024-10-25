@@ -55,7 +55,6 @@ static std::tuple<KernelHandle,KernelHandle,KernelHandle> schedule_kernel_compil
 static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32_t>> get_rt_args(
     tt::tt_metal::Program& program,
     Device *device,
-    uint32_t ring_index,
     bool is_starting_core,
     CoreCoord const& eth_sender_core,
     CoreCoord const& eth_receiver_core,
@@ -149,7 +148,6 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const auto [sender_eth_rt_args, receiver_eth_rt_args, sem_id_args] = get_rt_args(
             program,
             device,
-            ring_index,
             is_starting_core,
             eth_sender_core,
             eth_receiver_core,

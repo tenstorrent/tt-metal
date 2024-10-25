@@ -11,15 +11,17 @@
 namespace ttnn {
 
 struct Barrier {
-    const bool is_starting_core;
-    const uint32_t ring_size;
-    const uint32_t ring_index;
-    const std::optional<chip_id_t> receiver_device_id;
-    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
+    std::vector<Device*> devices;
+    bool is_starting_core=false;
+    uint32_t ring_size=devices.size();
+    uint32_t ring_index=0;
+    std::optional<chip_id_t> receiver_device_id=0;
+    std::optional<chip_id_t> sender_device_id=0;
 
     //Required functions to all tensor op functions
+    void update_structure (const Tensor& input_tensor);
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
@@ -43,10 +45,9 @@ operation::ProgramWithCallbacks barrier_with_workers(
 
 namespace operations::ccl{
     //Template for the barrier tensor found in device/barrier_op.cpp
-    Tensor barrier(
-    const Tensor &input_tensor,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+Tensor barrier(
+    const Tensor& input_tensor,
+    const ttnn::Barrier& barrier_struct);
 } // namespace operations::ccl
 
 }// namespace ttnn

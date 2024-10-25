@@ -10,18 +10,17 @@
 
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace ccl {
+#include "ttnn/cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
 
-struct ExecuteBarrier {
+namespace ttnn {
+namespace operations::ccl {
+
+struct BarrierOperation {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
 };
-}  // namespace ttnn::operations::ccl end
-}  // namespace ttnn::operations end
-constexpr auto barrier =
-    ttnn::register_operation<"ttnn::barrier", ttnn::operations::ccl::ExecuteBarrier>();
-}  // namespace ttnn end
+}  // namespace operations::ccl
+constexpr auto barrier = ttnn::register_operation<"ttnn::barrier", ttnn::operations::ccl::BarrierOperation>();
+}  // namespace ttnn

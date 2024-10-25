@@ -4,18 +4,24 @@
 
 #include "barrier.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
-
 namespace ttnn::operations::ccl {
 
-ttnn::Tensor ExecuteBarrier::invoke(
-    const ttnn::Tensor& input_tensor,
-    //Internalize these
+ttnn::Tensor BarrierOperation::invoke(
+    const Tensor& input_tensor,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    ttnn::ccl::Topology topology) {
-
+    ttnn::ccl::Topology topology)
+{
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return ttnn::operations::ccl::barrier(input_tensor, out_memory_config,topology);
+    return barrier
+    (
+        input_tensor,
+        Barrier
+        {
+            out_memory_config,
+            topology,
+            input_tensor.get_workers()
+        }
+    );
 }
 
 }  // namespace ttnn::operations::ccl
