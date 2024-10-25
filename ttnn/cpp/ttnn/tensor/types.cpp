@@ -391,25 +391,25 @@ int32_t normalized_index(int32_t index, size_t container_size) {
 }
 
 bool SimpleShape::operator==(const SimpleShape &other) const {
-    return this->m_value == other.m_value;
+    return this->value == other.value;
 }
 
 bool SimpleShape::operator==(const SmallVector<uint32_t> &other) const {
-    return this->m_value == other;
+    return this->value == other;
 }
 
 uint32_t SimpleShape::operator[](int32_t index) const {
-    auto norm_index = normalized_index(index, m_value.size());
-    return m_value[norm_index];
+    auto norm_index = normalized_index(index, value.size());
+    return value[norm_index];
 }
 
 uint32_t& SimpleShape::operator[](int32_t index) {
-    auto norm_index = normalized_index(index, m_value.size());
-    return m_value[norm_index];
+    auto norm_index = normalized_index(index, value.size());
+    return value[norm_index];
 }
 
 uint64_t SimpleShape::volume() const {
-    return std::accumulate(this->m_value.cbegin(), this->m_value.cend(),
+    return std::accumulate(this->value.cbegin(), this->value.cend(),
                            uint64_t{1}, std::multiplies<uint64_t>());
 }
 

@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 #include <algorithm>
+#include <span>
 
 #include "common/bfloat16.hpp"
 #include "tt_metal/common/core_coord.hpp"
@@ -18,7 +19,7 @@
 #include "tt_metal/tt_stl/concepts.hpp"
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/vector_base.hpp"
+#include "ttnn/tensor/small_vector.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
 namespace ttnn {
@@ -35,15 +36,15 @@ Plan:
 **/
 class SimpleShape final {
 public:
-    explicit SimpleShape(const SmallVector<uint32_t>& shape) : m_value(shape) {}
-    explicit SimpleShape(SmallVector<uint32_t>&& shape) : m_value(std::move(shape)) {}
-    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : m_value(ilist) {}
+    explicit SimpleShape(const SmallVector<uint32_t>& shape) : value(shape) {}
+    explicit SimpleShape(SmallVector<uint32_t>&& shape) : value(std::move(shape)) {}
+    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
     template<std::size_t N>
-    explicit SimpleShape(const std::array<uint32_t, N>& arr) : m_value(arr) {}
+    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
-        return m_value == other;
+        return value.size() == other.size() && std::equal(value.cbegin(), value.cend(), other.cbegin());
     }
 
     bool operator==(const SimpleShape &other) const;
@@ -52,22 +53,22 @@ public:
     uint32_t operator[](int32_t index) const;
     uint32_t &operator[](int32_t index);
 
-    size_t rank() const { return m_value.size(); }
+    size_t rank() const { return value.size(); }
     uint64_t volume() const;
 
-    auto cbegin() const { return m_value.cbegin(); }
-    auto cend() const { return m_value.cend(); }
+    auto cbegin() const { return value.cbegin(); }
+    auto cend() const { return value.cend(); }
 
-    std::span<const uint32_t> view() const { return m_value.view(); }
+    std::span<const uint32_t> view() const { return value; }
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(m_value); }
+    auto attribute_values() const { return std::forward_as_tuple(value); }
 
     friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
 
 private:
-    VectorBase m_value;
+    SmallVector<uint32_t> value;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
