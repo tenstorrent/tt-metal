@@ -25,7 +25,10 @@ from models.experimental.yolov4.ttnn.head import TtHead
 
 class TtYOLOv4:
     def __init__(self, path) -> None:
-        self.torch_model = torch.load(path)
+        if type(path) is str:
+            self.torch_model = torch.load(path)
+        else:
+            self.torch_model = path
         self.torch_keys = self.torch_model.keys()
         self.down1 = Down1(self)
         self.down2 = Down2(self)

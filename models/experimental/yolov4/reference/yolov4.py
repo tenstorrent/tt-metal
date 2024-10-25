@@ -36,3 +36,16 @@ class Yolov4(nn.Module):
         x4, x5, x6 = self.head(x20, x13, x6)
 
         return x4, x5, x6
+
+    @staticmethod
+    def from_random_weights():
+        model = Yolov4()
+        model.eval()
+
+        new_state_dict = {}
+        for name, parameter in model.state_dict().items():
+            if isinstance(parameter, torch.FloatTensor):
+                new_state_dict[name] = parameter
+
+        model.load_state_dict(new_state_dict)
+        return model
