@@ -186,6 +186,8 @@ foreach(ARCH IN LISTS ARCHS)
                 ${CMAKE_COMMAND} -E make_directory ${HW_LIB_DIR}
             COMMAND
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
+            DEPENDS
+                ${${HWLIB}_SOURCE}
             COMMENT "Building hw lib ${HWLIB}.o"
             VERBATIM
         )
