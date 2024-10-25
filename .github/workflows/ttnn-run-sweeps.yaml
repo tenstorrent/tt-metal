@@ -259,6 +259,8 @@ on:
           - reduction.argmax.argmax
           - embedding.embedding
           - eltwise.ternary_backward.addcmul_bw
+          - reduction.prod
+          - reduction.sum
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved

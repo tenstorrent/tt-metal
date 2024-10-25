@@ -62,8 +62,9 @@ def run(
     )(input_shape)
 
     dim = dim % len(input_shape)
+    # print(f"dim {dim} input_shape {input_shape} input_a_dtype {input_a_dtype}")
 
-    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=True)
+    torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=True)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -74,7 +75,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    result = ttnn.sum(input_tensor_a, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
