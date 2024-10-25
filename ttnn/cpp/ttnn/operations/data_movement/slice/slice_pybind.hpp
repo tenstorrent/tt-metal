@@ -52,17 +52,14 @@ void bind_slice(py::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input_tensor,
-                std::span<const int> slice_start,
-                std::span<const int> slice_end,
-                std::optional<std::span<const int>> step,
+                const ttnn::SmallVector<int>& slice_start,
+                const ttnn::SmallVector<int>& slice_end,
+                const std::optional<ttnn::SmallVector<int>>& step,
                 const std::optional<ttnn::MemoryConfig>& memory_config,
                 const std::optional<Tensor>& optional_output_tensor,
                 uint8_t queue_id) {
-                    if (step.has_value()) {
-                        return self(queue_id, input_tensor, slice_start, slice_end, step.value(), memory_config, optional_output_tensor);
-                    } else {
-                        return self(queue_id, input_tensor, slice_start, slice_end, ttnn::SmallVector<int>(slice_end.size(), 1), memory_config, optional_output_tensor);
-                    }
+                    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+                    return self(queue_id, input_tensor, slice_start, slice_end, step_value, memory_config, optional_output_tensor);
                 },
                 py::arg("input_tensor"),
                 py::arg("slice_start"),

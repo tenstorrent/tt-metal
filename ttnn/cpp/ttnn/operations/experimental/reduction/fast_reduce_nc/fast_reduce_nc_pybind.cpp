@@ -22,7 +22,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
         ttnn::pybind_overload_t{
             [] (const OperationType& self,
                 const ttnn::Tensor& input,
-                std::span<const int32_t> dims,
+                const ttnn::SmallVector<int32_t>& dims,
                 const std::optional<const Tensor> output,
                 const ttnn::MemoryConfig memory_config,
                 std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
@@ -31,7 +31,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
                 },
                 pybind11::arg("input").noconvert(),
                 pybind11::kw_only(),
-                pybind11::arg("dims").noconvert() = std::span<const int32_t>(),
+                pybind11::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
                 pybind11::arg("output").noconvert() = std::nullopt,
                 pybind11::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                 pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
