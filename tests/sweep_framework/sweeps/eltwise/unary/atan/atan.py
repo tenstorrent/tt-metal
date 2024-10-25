@@ -27,7 +27,7 @@ parameters = {
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    },
+    }
 }
 
 
@@ -59,7 +59,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.tanh)
+    golden_function = ttnn.get_golden_function(ttnn.atan)
     torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
@@ -71,7 +71,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.tanh(input_tensor, memory_config=output_memory_config)
+    result = ttnn.atan(input_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
