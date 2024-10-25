@@ -60,7 +60,7 @@ Tensor _transform_weights_for_conv_transpose2d(
             },
             conv_weight_tensor.get_storage());
     };
-    return is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
+    return ttnn::distributed::is_multi_device_tensor(conv_weight_tensor) ? transform(conv_weight_tensor, convert_tensor) : convert_tensor(conv_weight_tensor);
 }
 
 
@@ -158,16 +158,34 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 break;
 
             default:
-                TT_ASSERT(false);
+                TT_THROW("Invalid Device Arch, Got {}",device->arch());
         }
 
 
         //Call Halo Transpose
-        auto [input_tensor_post_tm, parallel_config, tensor_manipulated] = conv2d::shard_or_reshard_tensor_if_required(
-            device, input_tensor, conv_config, batch_size, output_height, output_width, in_channels, out_channels, kernel_size, stride);
+        auto [input_tensor_post_tm, parallel_config, tensor_manipulated, use_non_tile_height] = conv2d::shard_or_reshard_tensor_if_required(
+            device,
+            input_tensor,
+            conv_config,
+            batch_size,
+            output_height,
+            output_width,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            weight_tensor.get_shape()[3],
+            input_width,
+            groups
+            );
+
+        uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
 
         sliding_window_config.num_cores_nhw = conv2d::get_num_cores_nhw_from_parallel_config(parallel_config);
         sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
+        sliding_window_config.snap_to_tile = !use_non_tile_height;
 
         if (tensor_manipulated) {
             if (conv_config.deallocate_activation) {
@@ -192,7 +210,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
         auto conv_out_memory_config = conv2d::create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         parallel_config,
-        32);
+        round_up_size);
         auto opt_conv_op_parallel_config = conv2d::determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
             conv2d::get_num_cores_nhw_from_parallel_config(parallel_config),

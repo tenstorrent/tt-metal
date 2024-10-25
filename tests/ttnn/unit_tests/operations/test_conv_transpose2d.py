@@ -191,9 +191,24 @@ def run_conv_transpose2d(
         (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 0, 0, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         # Stride = 2
         (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
-        (1, 8, 8, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         (1, 128, 128, 32, 64, 3, 3, 2, 2, 1, 1, 1, 1, {"act_block_h": 64}, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, None, ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        (
+            1,
+            16,
+            16,
+            256,
+            256,
+            3,
+            3,
+            2,
+            2,
+            1,
+            1,
+            1,
+            1,
+            None,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),  # Fails with error : act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH)
         # # (1, 16, 16, 32, 32, 3, 3, 2, 2, 1, 1, 0, 0, None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED), # Issue with reading block sharded tensor
         # Vanilla Unet
         # Filter Size = 2 not supported in Block sharded

@@ -46,7 +46,7 @@ Shape SlidingWindowConfig::get_output_shape() const {
 }
 
 Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
-    TT_ASSERT(is_transpose == true);
+    TT_FATAL(is_transpose == true,"SlidingWindowConfig::get_transposed_full_input_shape() is only valid for transposed operation");
     auto output_shape = get_output_shape();
     uint32_t full_input_height = output_shape[1] + dilation_hw.first * (window_hw.first - 1);
     uint32_t full_input_width = output_shape[2] + dilation_hw.second * (window_hw.second - 1);
@@ -54,7 +54,7 @@ Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
 }
 
 std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() const {
-    TT_ASSERT(is_transpose == true);
+    TT_FATAL(is_transpose == true,"SlidingWindowConfig::get_transposed_full_input_shape() is only valid for transposed operation");
 
     auto full_input_shape = get_transposed_full_input_shape();
     //Size of input after adding interleaved 0s.
