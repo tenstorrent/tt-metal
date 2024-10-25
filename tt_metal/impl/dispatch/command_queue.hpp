@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"

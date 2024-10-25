@@ -12,6 +12,7 @@
 // DO NOT ADD MORE CODE TO THIS FILE
 // THIS FILE POLLUTES ALL TRANSLATION UNITS - tt_metal, ttnn, programming examples, tests, customer code
 
+// FIXME: At least put this in tt namespace
 inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
 namespace tt {
