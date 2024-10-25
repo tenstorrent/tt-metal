@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t src_addr           = get_arg_val<uint32_t>(0);
@@ -20,6 +21,8 @@ void kernel_main() {
     uint32_t num_dests          = get_arg_val<uint32_t>(10);
     uint32_t exclude_start_x    = get_arg_val<uint32_t>(11);
     uint32_t exclude_start_y    = get_arg_val<uint32_t>(12);
+    uint32_t exclude_dir_x      = get_arg_val<uint32_t>(13);
+    uint32_t exclude_dir_y      = get_arg_val<uint32_t>(14);
 
 
     // Read src buffer into local L1 buffer
@@ -34,7 +37,11 @@ void kernel_main() {
         dst_noc_x_end,
         dst_noc_y_end,
         dst_addr);
-    uint32_t exclude_region = (0x1 << 22) | (0x0 << 21) | (0x0 << 20) | (7 << 14) | (6 << 8);
-    noc_async_write_multicast_exclude_region(local_addr, dst_noc_multicast_addr, src_buffer_size, 140 -36, exclude_region);
+    uint32_t noc_exclude_addr = get_noc_exclude_addr(
+        exclude_start_x, 
+        exclude_start_y,
+        exclude_dir_x,
+        exclude_dir_y);
+    noc_async_write_multicast_exclude_region(local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests, noc_exclude_addr);
     noc_async_write_barrier();
 }

@@ -620,6 +620,18 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
     return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
 }
 
+FORCE_INLINE
+std::uint32_t  get_noc_exclude_addr(
+    std::uint32_t exclude_start_x,
+    std::uint32_t exclude_start_y,
+    std::uint32_t exclude_dir_x,
+    std::uint32_t exclude_dir_y) {
+        /*
+            Get an encoding which contians the definition of the exclusion area
+        */
+        return (1 << 22 | exclude_dir_y << 21 | exclude_dir_x << 20 | exclude_start_y << 14 | exclude_start_x << 8);
+}
+
 
 
 uint64_t get_dram_noc_addr(const uint32_t id, const uint32_t page_size, const uint32_t bank_base_address, const uint32_t offset = 0, uint8_t noc = noc_index) {
@@ -1487,6 +1499,42 @@ void noc_async_write_multicast_loopback_src(
     WAYPOINT("NMLD");
 }
 
+/**
+ * Initiates an asynchronous write from a source address in L1 memory on the
+ * Tensix core executing this function call to an L- shaped destination which is defined by 
+ * a grid and an exclusion zone. 
+ * The destinations are specified using a uint64_t encoding referencing an
+ * on-chip grid of nodes located at NOC coordinate range
+ * (x_start,y_start,x_end,y_end) and a local address created using
+ * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
+ * Similarly, the exclusion zone is specified using uint32_t encoding referencing
+ * an on-chip and directions relative to it created using *get_noc_exclude_addr* function.
+ *
+ * The destination nodes can only be a set of Tensix cores + L1 memory address.
+ * The destination nodes must form a rectangular grid. The destination L1
+ * memory address must be the same on all destination nodes.
+ *
+ * With this API, the multicast sender cannot be part of the multicast
+ * destinations. If the multicast sender has to be in the multicast
+ * destinations (i.e. must perform a local L1 write), the other API variant
+ * *noc_async_write_multicast_loopback_src* can be used.
+ *
+ * Note: The number of destinations needs to be non-zero. Besides that,
+ * there is no restriction on the number of destinations, i.e. the
+ * multicast destinations can span the full chip. However, as mentioned
+ * previously, the multicast source cannot be part of the destinations. So, the
+ * maximum number of destinations is 119.
+ *
+ * Return value: None
+ *
+ * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
+ * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
+ * | exclude_region         | Encoding of the excluded regin (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ */
 inline
 void noc_async_write_multicast_exclude_region(
     std::uint32_t src_local_l1_addr,
@@ -1500,7 +1548,6 @@ void noc_async_write_multicast_exclude_region(
     WAYPOINT("NMEW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    DPRINT << "before transaction " << temp << ENDL();
     ncrisc_noc_fast_write_any_len_exclude_region(
         noc,
         write_cmd_buf,
@@ -1554,7 +1601,6 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
         i++;
     }
     uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    DPRINT << "barrier transaction " << temp << ENDL();
     WAYPOINT("NWBD");
 }
 

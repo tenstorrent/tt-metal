@@ -20,6 +20,7 @@ struct DRAMtoL1MulticastConfig{
     std::uint32_t target_grid_offset;
     std::string kernel_file;
     CoreCoord exclude_start = {0, 0};
+    CoreCoord exclude_direction = {0, 0};
 };
 
 bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, const DRAMtoL1MulticastConfig &cfg){
@@ -54,6 +55,14 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
     CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
     auto core_start_physical = device->worker_core_from_logical_core(core_start);
     auto core_end_physical = device->worker_core_from_logical_core(core_end);
+    auto core_exclude_physical = device->worker_core_from_logical_core(cfg.exclude_start);
+    auto num_dests = (grid_size.x * grid_size.y) - cfg.target_grid_offset;
+    // calculate number of destination cores, taking exluded ones into account
+    if (cfg.exclude_start.x != 0 || cfg.exclude_start.y != 0) {
+        auto num_x = cfg.exclude_direction.x == 1 ? grid_size.x - cfg.exclude_start.x : cfg.exclude_start.x + 1;
+        auto num_y = cfg.exclude_direction.y == 1 ? grid_size.y - cfg.exclude_start.y : cfg.exclude_start.y + 1;
+        num_dests = (grid_size.x * grid_size.y) - num_x * num_y - cfg.target_grid_offset;
+    }
     std::vector<uint32_t> mcast_reader_args = {
         (std::uint32_t)dram_buffer_addr,
         (std::uint32_t)dram_noc_xy.x,
@@ -65,9 +74,11 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
         (std::uint32_t)core_start_physical.y,
         (std::uint32_t)core_end_physical.x,
         (std::uint32_t)core_end_physical.y,
-        (std::uint32_t)(grid_size.x * grid_size.y) - cfg.target_grid_offset,
-        (std::uint32_t)cfg.exclude_start.x,
-        (std::uint32_t)cfg.exclude_start.y}; // Note: exclude src from acks, since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
+        (std::uint32_t)num_dests,
+        (std::uint32_t)core_exclude_physical.x,
+        (std::uint32_t)core_exclude_physical.y,
+        (std::uint32_t)cfg.exclude_direction.x,
+        (std::uint32_t)cfg.exclude_direction.y,}; // Note: exclude src from acks, since we are not setting NOC_CMD_BRCST_SRC_INCLUDE
 
     log_debug(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
     log_debug(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
@@ -90,6 +101,12 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 
     for(int i = 0 ; i < grid_size.y; i++) {
         for(int j = 0 ; j < grid_size.x; j++) {
+            // don't compare on skipped cores
+            if ( ((cfg.exclude_direction.x == 0 && j <= cfg.exclude_start.x) || (cfg.exclude_direction.x == 1 && j >= cfg.exclude_start.x)) &&
+                ((cfg.exclude_direction.y == 0 && i <= cfg.exclude_start.y) || (cfg.exclude_direction.y == 1 && i >= cfg.exclude_start.y))) {
+                    tt::log_debug(tt::LogTest, "Skipping core {},{}", j, i); // debug print to verify we don't skip unnecessary cores
+                    continue;
+                }
             CoreCoord dest_core = {(std::size_t) core_start.x + j, (std::size_t) core_start.y + i};
             std::vector<uint32_t> dest_core_data;
             tt_metal::detail::ReadFromDeviceL1(device, dest_core, dest_buffer_addr, dram_buffer_size, dest_core_data);
@@ -133,7 +150,28 @@ TEST_F(CommonFixture, DRAMtoL1MulticastLoopbackSrc){
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
     }
 }
-TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegion){
+TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
+    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        GTEST_SKIP();
+    }
+    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
+        .dest_buffer_addr = 200 * 1024,
+        .target_grid_offset = 0, //source core is in exclusion zone, don't count twice
+        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
+        .exclude_start = {10, 6},
+        .exclude_direction = {0, 0}
+    };
+    for (unsigned int id=0; id < devices_.size(); id++){
+        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
+            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            GTEST_SKIP();
+        }
+        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
+    }
+}
+
+TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
@@ -142,7 +180,50 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegion){
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
-        .exclude_start = {6, 6}
+        .exclude_start = {10, 6},
+        .exclude_direction = {1, 0}
+    };
+    for (unsigned int id=0; id < devices_.size(); id++){
+        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
+            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            GTEST_SKIP();
+        }
+        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
+    }
+}
+
+TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
+    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        GTEST_SKIP();
+    }
+    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
+        .dest_buffer_addr = 200 * 1024,
+        .target_grid_offset = 1,
+        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
+        .exclude_start = {10, 6},
+        .exclude_direction = {0, 1}
+    };
+    for (unsigned int id=0; id < devices_.size(); id++){
+        if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
+            tt::log_info(tt::LogTest, "This test is only supported on Blackhole");
+            GTEST_SKIP();
+        }
+        ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
+    }
+}
+
+TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownRight){
+    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
+        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        GTEST_SKIP();
+    }
+    unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
+        .dest_buffer_addr = 200 * 1024,
+        .target_grid_offset = 1,
+        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
+        .exclude_start = {10, 6},
+        .exclude_direction = {1, 1}
     };
     for (unsigned int id=0; id < devices_.size(); id++){
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
