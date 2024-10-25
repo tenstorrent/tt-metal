@@ -94,7 +94,8 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
                         int exponent_index = (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
                         exp_word = bfp_tiles.at(exponent_index); // Extract the uint32_t value that stores the shared exponent for this set of data. Each 32 bit word is shared amongst 64 datums
 
-                        sub_word_index = (tile_and_data_index >> data_dwords_per_exp_log2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
+                        int num_exponent_words_skip = tile_index * num_exp_words;
+                        sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) & 0x3; // Extract the byte in which the shared exponent is stored. Each byte is shared amongst 16 datums.
                         __m256i exp_vector0 = _mm256_set1_epi32(get_byte(exp_word, sub_word_index)); // Replicate exp scalar in a vector
                         __m256i exp_vector1 = exp_vector0;
 

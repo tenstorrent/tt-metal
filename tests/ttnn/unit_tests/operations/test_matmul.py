@@ -105,12 +105,13 @@ def test_tiny_tiles_transposed_tile(device, n, c, h, w, tile_h, tile_w):
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [768])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype):
+    # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
     torch.manual_seed(0)
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         tile=ttnn.Tile((tile_h, tile_w)),
@@ -158,26 +159,17 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("in1_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-# @pytest.mark.parametrize("b", [1])
-# @pytest.mark.parametrize("h", [1])
-# @pytest.mark.parametrize("m", [32])
-# @pytest.mark.parametrize("k", [32])
-# @pytest.mark.parametrize("n", [32])
-# @pytest.mark.parametrize("in0_sharded", [True])
-# @pytest.mark.parametrize("in1_sharded", [True])
-# @pytest.mark.parametrize("out_sharded", [True])
-# @pytest.mark.parametrize("tile_h", [16])
-# @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_reuse_config_sharded_tiny_tile(
-    device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, transpose_tile
+    device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     torch.manual_seed(0)
 
     grid_size = (b, h)
 
-    in0 = torch.ones([b, h, m, k]).bfloat16().float()
-    in1 = torch.randn([b, h, k, n]).bfloat16().float()
+    in0 = torch.randn((b, h, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn((b, h, k, n), dtype=torch.bfloat16)
 
     if in0_sharded:
         in0_memory_config = ttnn.create_sharded_memory_config(
@@ -209,7 +201,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     in1_t = ttnn.from_torch(
         in1,
         tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
-        dtype=ttnn.bfloat16,
+        dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in1_memory_config,
@@ -239,13 +231,18 @@ def test_matmul_reuse_config_sharded_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
+    output_tile = ttnn.Tile([tile_h, tile_w])
     output_t = ttnn.matmul(
         in0_t, in1_t, program_config=program_config, memory_config=out_mem_config, output_tile=output_tile
     )
-    # output_tensor = ttnn.to_torch(output_t)
-    # pt_out = in0 @ in1
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if in1_dtype == ttnn.bfloat8_b:
+        expected_pcc = 0.999
+    elif in1_dtype == ttnn.bfloat4_b:
+        expected_pcc = 0.993
 
-    # assert_with_pcc(pt_out, output_tensor, 0.999)
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
 def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
@@ -264,7 +261,8 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 @pytest.mark.parametrize("grid_size", [(8, 1)])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
-def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, tile_h, tile_w):
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype):
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_grayskull():
@@ -314,7 +312,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, ti
     in1_t = ttnn.from_torch(
         in1,
         tile=ttnn.Tile((32, tile_w)),
-        dtype=ttnn.bfloat16,
+        dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in1_memory_config,
@@ -384,8 +382,11 @@ def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, ti
     pt_out = in0 @ in1
     if has_bias:
         pt_out += bias
-
-    assert_with_pcc(pt_out, output_tensor, 0.999)
+    if in1_dtype == ttnn.bfloat4_b:
+        expected_pcc = 0.993
+    else:
+        expected_pcc = 0.999
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
 @run_for_wormhole_b0()
