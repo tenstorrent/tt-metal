@@ -26,6 +26,44 @@ void disable_and_clear_program_cache(Device &device) {
     device.disable_and_clear_program_cache();
 }
 
+float sfpu_positive_nan(DataType dtype) {
+    union {
+        uint32_t i;
+        float f;
+    } u;
+    switch (dtype) {
+        case DataType::BFLOAT16: {
+            u.i = { 0x7FFF };
+            return u.f;
+        }
+        case DataType::FLOAT32: {
+            u.i = { 0x7FFFFFFF };
+            return u.f;
+        }
+        default:
+            return std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
+float sfpu_negative_nan(DataType dtype) {
+    union {
+        uint32_t i;
+        float f;
+    } u;
+    switch (dtype) {
+        case DataType::BFLOAT16: {
+            u.i = { 0xFFFF };
+            return u.f;
+        }
+        case DataType::FLOAT32: {
+            u.i = { 0xFFFFFFFF };
+            return u.f;
+        }
+        default:
+            return -std::numeric_limits<float>::quiet_NaN();
+    }
+}
+
 float sfpu_positive_inf(DataType dtype) {
 
     switch (dtype) {
