@@ -11,6 +11,7 @@ from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_attention_optimized import TtLlamaAttention_optimized
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
+from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
 
 from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -45,7 +46,7 @@ class PagedAttentionConfig:
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num):
+    def __init__(self, hf_reference_model, layer_num, rope_theta):
         super().__init__()
         self.attention = hf_reference_model.layers[layer_num].attention
 
@@ -57,6 +58,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         hidden_dim = configuration.dim
         self.head_dim = hidden_dim // self.n_heads
         self.max_seq_len = configuration.max_seq_len
+        self.rope_theta = rope_theta
 
     def prepare_inputs(self, x, start_pos):
         """
@@ -64,7 +66,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
@@ -80,7 +82,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -107,7 +109,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode):
+def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode, rope_theta, rope_setup=None):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
@@ -130,7 +132,7 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode)
         )
         xs = ttnn.to_device(xs, llama_attention_model.mesh_device)
 
-        cos, sin = precompute_freqs(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2)
+        cos, sin = precompute_freqs(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta)
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
         assert sin_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
@@ -181,22 +183,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode)
         xs = ttnn.interleaved_to_sharded(xs, llama_attention_model.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"])
 
         cache_idxs = torch.tensor([start_pos for _ in range(batch)])
-
-        rot_emb = generate_rot_emb(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2)
-        rot_mat = get_rotation_mat(rot_emb, cache_idxs, seq_len, batch=batch)
-        assert rot_mat.size() == (1, batch, llama_attention_model.head_dim, llama_attention_model.head_dim)
-
-        rot_mats = ttnn.as_tensor(
-            rot_mat,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
-            device=llama_attention_model.mesh_device,
-        )
-
-        rot_mats = ttnn.interleaved_to_sharded(rot_mats, llama_attention_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-
         cache_idxs_tt = ttnn.as_tensor(
             cache_idxs,
             dtype=ttnn.int32,
@@ -205,6 +191,8 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode)
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
         )
+
+        rot_mats = rope_setup.get_rot_mats(cache_idxs)
 
     return (
         xs,
@@ -231,10 +219,11 @@ def run_test_LlamaAttention_inference(
     skip_model_load = should_skip_model_load()
 
     # Prepare configs
+    max_seq_len = MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
+        max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
         n_layers=UNIT_TEST_N_LAYER,
         skip_model_load=skip_model_load,
@@ -244,21 +233,31 @@ def run_test_LlamaAttention_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    mode = "prefill" if seq_len > 1 else "decode"
 
     # PyTorch model --------------------------------------------------------------------
-    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(hugging_face_reference_model, UNIT_TEST_LAYER_NUM)
-    # TT model -------------------------------------------------------------------------
-    transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
-
-    transformation_mats = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+    pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
+        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
     )
-    transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
+    # TT model -------------------------------------------------------------------------
+
+    if mode == "decode":
+        head_dim = configuration.dim // configuration.n_heads
+        rope_setup = TtLlamaRotarySetup(t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta)
+        transformation_mats = rope_setup.get_trans_mats()
+        transformation_mats = {"decode": transformation_mats}
+    else:
+        transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
+        transformation_mats = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=t3k_mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        )
+        transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
+        transformation_mats = {"prefill": transformation_mats}
 
     page_table_tt = None
     paged_attention_config = None
@@ -279,8 +278,6 @@ def run_test_LlamaAttention_inference(
             mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
         )
         page_table_tt = ttnn.to_device(page_table_tt, t3k_mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    mode = "prefill" if seq_len > 1 else "decode"
 
     tt_LlamaAttention_model = TtLlamaAttention_optimized(
         t3k_mesh_device,
@@ -329,8 +326,14 @@ def run_test_LlamaAttention_inference(
 
         # TT hardware execution -------------------------------------------------------------
         attention_input, start_pos, rot_mat, cache_idxs = tt_llama_attention_prepare_inputs(
-            tt_LlamaAttention_model, tt_input, start_pos, mode
+            tt_LlamaAttention_model,
+            tt_input,
+            start_pos,
+            mode,
+            configuration.rope_theta,
+            rope_setup=rope_setup if mode == "decode" else None,
         )
+
         tt_out = tt_LlamaAttention_model(
             attention_input,
             rot_mat,

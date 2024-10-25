@@ -42,8 +42,26 @@ class TtLlamaRotary(torch.nn.Module):
         self.device = device
         self.mode = mode
 
-        self.core_grid = device.compute_with_storage_grid_size()
-        num_cores = self.core_grid.x * self.core_grid.y
+        self.cos_matrix = ttnn.from_torch(
+            cos_matrix.squeeze(0).squeeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype
+        )
+        self.sin_matrix = ttnn.from_torch(
+            sin_matrix.squeeze(0).squeeze(0), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=datatype
+        )
+
+        # Generate the transformation matrix
+        trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
+            1, 1, num_cores, 1
+        )  # Repeat across all cores on device
+        trans_mat_mem_config = ttnn.create_sharded_memory_config(
+            shape=(1, 1, ttnn.TILE_SIZE * num_cores, ttnn.TILE_SIZE),
+            core_grid=ttnn.CoreGrid(y=self.core_grid.y, x=self.core_grid.x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self.transformation_mat = ttnn.from_torch(
+            trans_mat, device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype, memory_config=trans_mat_mem_config
+        )
 
         if mode == "decode":
             # Generate the cos/sin matrices needed for ttnn.embedding op
@@ -99,19 +117,16 @@ class TtLlamaRotary(torch.nn.Module):
     def prepare_decode_cos_sin(self, position_ids):
         assert isinstance(position_ids, torch.Tensor), "Position ids must be a torch tensor"
 
-        position_ids = position_ids.unsqueeze(-1)  # [batch, 1]
+        position_ids = position_ids.unsqueeze(0)  # [1, batch]
         position_ids = ttnn.from_torch(
             position_ids, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
         )
 
-        cos = ttnn.embedding(position_ids, self.cos_matrix)  # [batch, head_dim, head_dim]
-        sin = ttnn.embedding(position_ids, self.sin_matrix)  # [batch, head_dim, head_dim]
+        cos = ttnn.embedding(position_ids, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [batch, head_dim, head_dim]
+        sin = ttnn.embedding(position_ids, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [batch, head_dim, head_dim]
 
-        cos = ttnn.reshape(cos, [1, position_ids.shape[0], 1, self.head_dim])  # [1, batch, 1, head_dim]
-        sin = ttnn.reshape(sin, [1, position_ids.shape[0], 1, self.head_dim])  # [1, batch, 1, head_dim]
-
-        cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
-        sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
+        cos = ttnn.permute(cos, [1, 0, 2])
+        sin = ttnn.permute(sin, [1, 0, 2])
 
         grid = ttnn.num_cores_to_corerangeset(self.batch, self.core_grid, row_wise=True).bounding_box().grid_size()
         mem_config = ttnn.create_sharded_memory_config(
@@ -443,6 +458,6 @@ def test_rotary_embedding_llama_with_program_cache(
         cache_tensors.append(test_tensor)
 
     if mode == "decode":
-        assert device.num_program_cache_entries() == 5  # 2 * Rope + embedding + reshape + to_layout
+        assert device.num_program_cache_entries() == 6  # 2 * Rope + embedding + permute +
     else:
         assert device.num_program_cache_entries() == 2  # 2 * Rope
