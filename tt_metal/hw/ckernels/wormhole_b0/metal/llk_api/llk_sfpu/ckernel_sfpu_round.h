@@ -41,7 +41,7 @@ void calculate_round(const int decimals) {
     const auto exp10i = [](int n) {
         if (n < 0)
             return pow_unsigned(0.1f, -n);
-        return pow_unsigned(10.0f, 0);
+        return pow_unsigned(10.0f, n);
     };
 
     const vFloat coeff = exp10i(decimals);
