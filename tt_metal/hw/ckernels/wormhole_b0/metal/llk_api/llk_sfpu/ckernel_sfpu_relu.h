@@ -53,7 +53,7 @@ inline void relu_max(uint uint_threshold)
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS=8>
 inline void calculate_lrelu(const uint slope)
 {
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);

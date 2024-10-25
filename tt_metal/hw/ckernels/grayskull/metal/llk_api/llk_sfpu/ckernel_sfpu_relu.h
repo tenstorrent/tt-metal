@@ -60,7 +60,7 @@ inline void relu_min(uint uint_threshold)
 
 // LRELU = LEAKY RELU
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS=4>
 inline void calculate_lrelu(uint slope)
 {
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);

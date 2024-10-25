@@ -68,10 +68,10 @@ inline void llk_math_eltwise_unary_sfpu_lrelu_init() {
     llk_math_eltwise_unary_sfpu_init<APPROXIMATE>();
 }
 
-template <bool APPROXIMATE, int ITERATIONS=4>
+template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_lrelu(uint dst_index, int param0 = 0) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_lrelu<APPROXIMATE, ITERATIONS>,
+        ckernel::sfpu::calculate_lrelu<APPROXIMATE>,
         dst_index,
         VectorMode::RC,
         param0);
