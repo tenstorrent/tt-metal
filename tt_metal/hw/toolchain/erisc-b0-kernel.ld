@@ -110,11 +110,6 @@ SECTIONS
    . += 4;
   } > REGION_LDM
 
-  data_noinit (NOLOAD):
-  {
-    *(data_noinit)
-  } > REGION_APP_KERNEL_DATA
-
   l1_memory :
   {
     *(l1_memory)
