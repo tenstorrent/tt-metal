@@ -7,32 +7,12 @@
  */
 #pragma once
 
-#include <array>
 #include <cstdint>
-#include <iostream>
-#include <array>
-#include <vector>
-#include <map>
-
-#include "tt_metal/common/tt_backend_api_types.hpp" // These are the types exported to frontend team...
-#include "tt_metal/common/assert.hpp"
-#include "hostdevcommon/kernel_structs.h"
-#include "eth_l1_address_map.h"
-#include "common/constants.hpp"
-#include "common/base_types.hpp"
-
-using std::array;
-using std::ostream;
-using std::uint8_t;
-using std::uint32_t;
-using std::uint64_t;
-using std::vector;
-using std::string;
-using std::size_t;
-using std::map;
+#include <cstddef>
+#include <functional>
+#include <utility>
 
 inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
-
 
 namespace tt
 {

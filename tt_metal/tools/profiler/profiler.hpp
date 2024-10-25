@@ -81,7 +81,7 @@ class DeviceProfiler {
         // Helper function for reading risc profile results
         void readRiscProfilerResults(
                 int device_id,
-                const vector<std::uint32_t> &profile_buffer,
+                const std::vector<std::uint32_t> &profile_buffer,
                 const CoreCoord &worker_core);
 
         //Push device results to tracy
@@ -114,7 +114,7 @@ class DeviceProfiler {
         void setOutputDir(const std::string& new_output_dir);
 
         //Traverse all cores on the device and dump the device profile results
-        void dumpResults(Device *device, const vector<CoreCoord> &worker_cores, bool lastDump);
+        void dumpResults(Device *device, const std::vector<CoreCoord> &worker_cores, bool lastDump);
 };
 
 }  // namespace tt_metal

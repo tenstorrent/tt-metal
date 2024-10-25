@@ -21,9 +21,9 @@
 // Needed for TargetDevice enum
 #include "common/base.hpp"
 
-inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, string output_dir = "") {
+inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, std::string output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    string tt_metal_home;
+    std::string tt_metal_home;
     if (getenv("TT_METAL_HOME")) {
         tt_metal_home = getenv("TT_METAL_HOME");
     } else {

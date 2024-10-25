@@ -30,6 +30,7 @@ using std::string;
 using std::to_string;
 using std::cout;
 using std::endl;
+using std::vector;
 using std::setw;
 using std::flush;
 using std::tuple;
