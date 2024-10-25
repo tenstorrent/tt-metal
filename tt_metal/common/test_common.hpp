@@ -18,8 +18,8 @@
 #include <sstream>
 #include "common/metal_soc_descriptor.h"
 
-// Needed for TargetDevice enum
-#include "common/base.hpp"
+
+#include "tt_metal/common/base.hpp"
 
 inline std::string get_soc_description_file(const tt::ARCH &arch, tt::TargetDevice target_device, std::string output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.

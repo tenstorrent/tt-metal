@@ -28,7 +28,6 @@
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
 using tt_target_dram = std::tuple<int, int, int>;
-using tt::TargetDevice;
 
 enum EthRouterMode : uint32_t {
     IDLE = 0,

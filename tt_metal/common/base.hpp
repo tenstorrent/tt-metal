@@ -8,35 +8,20 @@
 #pragma once
 
 #include <cstdint>
-#include <cstddef>
-#include <functional>
-#include <utility>
+
+// DO NOT ADD MORE CODE TO THIS FILE
+// THIS FILE POLLUTES ALL TRANSLATION UNITS - tt_metal, ttnn, programming examples, tests, customer code
 
 inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
-namespace tt
-{
-
-/**
- * @brief Specifies the target devices on which the graph can be run.
-*/
-enum class TargetDevice : uint8_t
-{
-    Silicon = 0,
-    Simulator = 1,
-    Invalid = 0xFF,
-};
-
-constexpr uint32_t MAX_AVAILABLE_CHIPS = 16;
-
-struct pair_hash {
-    template <class T1, class T2>
-    std::size_t operator()(const std::pair<T1,T2> &p) const
-    {
-        auto h1 = std::hash<T1>{}(p.first);
-        auto h2 = std::hash<T2>{}(p.second);
-        return h1 ^ h2;
-    }
-};
-
-} // end namespace tt
+namespace tt {
+  /**
+   * @brief Specifies the target devices on which the graph can be run.
+  */
+  enum class TargetDevice : std::uint8_t
+  {
+      Silicon = 0,
+      Simulator = 1,
+      Invalid = 0xFF,
+  };
+}
