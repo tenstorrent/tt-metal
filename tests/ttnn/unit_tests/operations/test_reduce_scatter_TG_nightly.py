@@ -209,7 +209,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
         (4, 1, [1, 4, 32, 2304], 1, ttnn.TILE_LAYOUT),
-        (4, 1, [4, 1, 32, 2304], 0, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(

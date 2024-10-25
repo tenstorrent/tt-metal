@@ -743,8 +743,8 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     bool forward_direction = start_slice_index > end_slice_index_exclusive; // only for debug
     auto incr = start_slice_index < end_slice_index_exclusive ? 1 : -1;
     if (forward_direction) {
-        log_info(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
-        log_info(tt::LogOp, "worker_index {}", worker_index);
+        log_trace(tt::LogOp, "slice_size_on_dim {}", slice_size_on_dim);
+        log_trace(tt::LogOp, "worker_index {}", worker_index);
     }
 
     auto worker_slice_start_offset = /*fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} :*/ TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
@@ -767,7 +767,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
 
         auto const& tensor_slice = TensorSlice(tensor_shape, slice_shape, tensor_slice_offset_adjusted, worker_slice_shape, worker_slice_start_offset, fracture_dim);
         if (forward_direction) {
-        log_info(
+        log_trace(
             tt::LogOp,
             "generate_slice ({}):\n\ttensor_shape: (y={},x={})\n\ttensor_slice_shape: (y={},x={})\n\ttensor_slice_offset_adjusted: (y={},x={})\n\tslice_start_shape: (y={},x={})\n\tworker relative slice_start_offset: (y={},x={})\n\tfracture_dim: {}\n\tdim_start_offset: {}\n\tslice_size_on_dim: {}\n",
             i,
