@@ -289,7 +289,7 @@ ttnn.attach_golden_function(ttnn.polygamma, golden_function=_golden_function_pol
 def _golden_function_clamp(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
-    return torch.clamp(input=input_tensor_a, min=min, max=max)
+    return torch.clamp(input_tensor_a, min, max)
 
 
 ttnn.attach_golden_function(ttnn.clamp, golden_function=_golden_function_clamp)
@@ -298,7 +298,7 @@ ttnn.attach_golden_function(ttnn.clamp, golden_function=_golden_function_clamp)
 def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
-    return torch.clip(input=input_tensor_a, min=min, max=max)
+    return torch.clip(input_tensor_a, min, max)
 
 
 ttnn.attach_golden_function(ttnn.clip, golden_function=_golden_function_clip)

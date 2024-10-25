@@ -349,11 +349,11 @@ def run_activation_test_scalarBC_key(device, h, w, scalar1, scalar2, ttnn_functi
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
 
-    torch_output_tensor = golden_function(torch_input_tensor_a, min=scalar1, max=scalar2)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar1, scalar2)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn_function(input_tensor_a, min=scalar1, max=scalar2)
+    output_tensor = ttnn_function(input_tensor_a, scalar1, scalar2)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
