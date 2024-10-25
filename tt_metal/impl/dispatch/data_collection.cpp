@@ -35,7 +35,7 @@ public:
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream &outfile,  map<uint32_t, uint32_t> &raw_data) {
+    void Dump(std::ofstream &outfile,  std::map<uint32_t, uint32_t> &raw_data) {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -74,7 +74,7 @@ public:
 
         // Track stats for all RISCS, as well as per RISC
         DispatchStats total_stats;
-        map<uint32_t, uint32_t> total_data;
+        std::map<uint32_t, uint32_t> total_data;
         for (auto &riscv_and_data : data) {
             // Go through all data and update stats
             DispatchStats riscv_stats;
@@ -98,7 +98,7 @@ public:
     }
 
 private:
-    map<RISCV, map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
+    std::map<RISCV, std::map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
     data_collector_t type;
 };
 
@@ -122,9 +122,9 @@ public:
     void DumpData();
 
 private:
-    map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
-    map<uint64_t, map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
-    map<uint64_t, int> program_id_to_call_count;
+    std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
+    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
+    std::map<uint64_t, int> program_id_to_call_count;
 };
 
 void DataCollector::RecordData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {

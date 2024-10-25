@@ -44,7 +44,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
         }
     }
 
-    std::vector<vector<string>> device_map;
+    std::vector<std::vector<string>> device_map;
     std::vector<string> device_data;
     while (std::getline(device_dispatch_dump_file, line) and line != "EXIT_CONDITION") {
         if (line == "CHUNK") {
