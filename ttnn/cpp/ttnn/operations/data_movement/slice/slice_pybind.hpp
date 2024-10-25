@@ -17,26 +17,31 @@ namespace py = pybind11;
 void bind_slice(py::module& module) {
     auto doc =
         R"doc(
-            slice(input_tensor: ttnn.Tensor, slice_start: List[int[tensor rank], slice_end: List[int[tensor rank],  value: Union[int, float], *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
 
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                output_tensor = input_tensor[output_start: output_end]
-
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`slice_start`: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                * :attr:`slice_end`: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                * :attr:`step` (Optional[List[int[tensor rank]]): Step size for each dim. Default is None, which works out be 1 for each dimension.
+                input_tensor: Input Tensor.
+                slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`queue_id` (Optional[uint8]): command queue id
-        )doc";
+                memory_config Memory Config of the output tensor
+                queue_id (uint8, optional) command queue id
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Example:
+                >>> tensor = ttnn.slice(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device), [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
+                >>> print(tensor.shape)
+                [1, 1, 32, 16]
+                >>> input = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
+                >>> output = ttnn.slice(input, [0, 0, 0, 0], [1, 1, 32, 32])
+                >>> print(output.shape)
+                [1, 1, 32, 32]
+                )doc";
+
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than a vector with a fixed size default value
     using OperationType = decltype(ttnn::slice);
