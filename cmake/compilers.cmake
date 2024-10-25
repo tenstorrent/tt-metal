@@ -47,12 +47,8 @@ function(ADJUST_COMPILER_WARNINGS2)
                 -Wno-deprecated-declarations
         )
     else() # GCC-12 or higher
+        message(STATUS "Adjusting compiler warnings for GCC")
         target_compile_options(
-            message
-            (
-                STATUS
-                "Adjusting compiler warnings for GCC"
-            )
             compiler_warnings
             INTERFACE
                 -Wno-deprecated
