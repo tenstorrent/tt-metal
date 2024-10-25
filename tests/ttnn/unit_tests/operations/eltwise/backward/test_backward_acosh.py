@@ -26,19 +26,10 @@ def test_bw_acosh_val(input_shapes, device):
 
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
 
-    print("input_tensor : ", input_tensor)
-    # print("grad_tensor : ",grad_tensor)
-
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
     golden_tensor = golden_function(grad_data, in_data)
-
-    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=5, sci_mode = False, edgeitems=17)
-    # print("golden_tensor",golden_tensor)
-
-    # ttnn.set_printoptions(profile="full")
-    print("tt_output_tensor_on_device", tt_output_tensor_on_device)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -48,8 +39,8 @@ def test_bw_acosh_val(input_shapes, device):
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        # (torch.Size([1, 1, 320, 384])),
-        # (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
     ),
 )
 def test_bw_acosh(input_shapes, device):
@@ -57,19 +48,10 @@ def test_bw_acosh(input_shapes, device):
 
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
 
-    # print("input_tensor : ", input_tensor)
-    # print("grad_tensor : ",grad_tensor)
-
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
     golden_tensor = golden_function(grad_data, in_data)
-
-    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=5, sci_mode = False, edgeitems=17)
-    # print("golden_tensor",golden_tensor)
-
-    # ttnn.set_printoptions(profile="full")
-    # print("tt_output_tensor_on_device", tt_output_tensor_on_device)
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
@@ -89,16 +71,10 @@ def test_bw_acosh_nan_inf(input_shapes, device):
     in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, val=0.5)
     grad_data, grad_tensor = data_gen_pt_tt(input_shapes, device, False, val=1)
 
-    print("input_tensor", input_tensor)
-    print("grad_tensor", grad_tensor)
-
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
     golden_tensor = golden_function(grad_data, in_data)
 
     comp_pass = compare_results(tt_output_tensor_on_device, golden_tensor)
-
-    print("tt_output_tensor_on_device", tt_output_tensor_on_device)
-    print("golden_tensor", golden_tensor)
     assert comp_pass
