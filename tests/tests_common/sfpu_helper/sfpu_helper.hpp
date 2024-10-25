@@ -74,8 +74,8 @@ float ref_identity(float x) {
     return x;
 }
 
-vector<uint32_t> sfpu(const std::vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
-    vector<uint32_t> dst;
+std::vector<uint32_t> sfpu(const std::vector<uint32_t> &src, std::function<float(float)> sfpu_func) {
+    std::vector<uint32_t> dst;
 
     for (uint32_t el: src) {
 
@@ -98,13 +98,13 @@ vector<uint32_t> sfpu(const std::vector<uint32_t> &src, std::function<float(floa
 }
 
 // Helper functions
-vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint32_t num_bytes, int seed) {
+std::vector<uint32_t> create_random_ones_and_twos_vector_of_bfloat16(uint32_t num_bytes, int seed) {
     // Used for reciprocal, since binary vectors are filled with 0s and 1s, and recip of 0 is undefined,
     // so then we just generate a vector of ones and twos
 
-    vector<uint32_t> src = create_random_binary_vector_of_bfloat16(num_bytes, seed);
+    std::vector<uint32_t> src = create_random_binary_vector_of_bfloat16(num_bytes, seed);
 
-    vector<uint32_t> dst;
+    std::vector<uint32_t> dst;
 
     for (uint32_t el: src) {
 

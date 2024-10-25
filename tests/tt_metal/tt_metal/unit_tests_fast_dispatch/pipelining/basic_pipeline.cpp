@@ -22,6 +22,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::map;
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::tt_metal;

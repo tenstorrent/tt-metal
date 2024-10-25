@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 struct BufferStressTestConfig {

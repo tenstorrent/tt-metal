@@ -11,6 +11,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 

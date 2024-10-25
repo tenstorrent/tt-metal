@@ -12,6 +12,7 @@
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 enum class DataMovementMode: uint8_t {
