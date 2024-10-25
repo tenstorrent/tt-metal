@@ -26,7 +26,8 @@ bool SlidingWindowConfig::has_parallel_config() const {
     */
 Shape SlidingWindowConfig::get_output_shape() const {
     if(is_transpose) {
-        //Inverse of is_transpose == False
+        //This is the inverse calculation of the shape used in the forward pass.
+        //Given the same values of stride, padding, dilation, and kernel size, the output shape of conv_transpose2d is the input shape of conv2d, and vice versa.
         uint32_t output_h = (input_hw.first - 1) * stride_hw.first - 2 * pad_hw.first + dilation_hw.first * (window_hw.first - 1) + output_pad_hw.first + 1;
         uint32_t output_w  = (input_hw.second -  1) * stride_hw.second - 2 * pad_hw.second + dilation_hw.second * (window_hw.second - 1) + output_pad_hw.second + 1;
         log_debug(tt::LogOp, "SlidingWindowConfig::get_output_shape(): {} {} {} {}", batch_size, output_h, output_w, "is_transpose==True");
