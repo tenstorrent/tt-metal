@@ -9,14 +9,20 @@
 #include "ttnn/run_operation.hpp"
 
 namespace {
-uint32_t get_chunk_size(uint32_t s) {
-    if (s <= 128) {
-        return 32;
+inline uint32_t get_chunk_size(uint32_t s) {
+    /*
+    # find maximum power of 2 divisor of s
+    for i in range(1, s):
+        if s % (2**(i+1)) != 0:
+            break
+    */
+    uint32_t i = 1;
+    for (; i < s; i++) {
+        if (s % (1 << (i + 1)) != 0) {
+            break;
+        }
     }
-    if (s <= 256) {
-        return 256;
-    }
-    return 512;
+    return std::min(512, 1 << i);
 }
 }  // namespace
 
@@ -27,6 +33,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
+    const bool is_causal,
+    const std::optional<const Tensor> attn_mask,
     const std::vector<uint32_t> cur_pos,
     const std::optional<const Tensor> cur_pos_tensor,
     std::optional<float> scale,
@@ -35,13 +43,15 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    //uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
-    uint32_t k_chunk_size = 512; //get_chunk_size(max_cur_pos + 1);
+    uint32_t s = input_tensor_k.get_logical_shape()[-2];
+    uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
         // assert chunk size must be power of 2 and multiple of 32
         TT_FATAL((k_chunk_size & (k_chunk_size - 1)) == 0, "User provided k_chunk_size must be power of 2, got: {}", k_chunk_size);
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
+    } else {
+        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}", k_chunk_size);
     }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -50,6 +60,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
 
     return operation::run(
                ScaledDotProductAttentionDecode{
+                   .is_causal = is_causal,
                    .cur_pos = cur_pos,
                    .scale = scale,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -58,7 +69,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                    .k_chunk_size = k_chunk_size,
                    .paged_attention = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
-               {cur_pos_tensor, std::nullopt},
+               {cur_pos_tensor, std::nullopt, attn_mask},
                {},
                queue_id)
         .at(0);
@@ -68,6 +79,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
+    const bool is_causal,
+    const std::optional<const Tensor> attn_mask,
     const std::vector<uint32_t> cur_pos,
     const std::optional<const Tensor> cur_pos_tensor,
     std::optional<float> scale,
@@ -79,6 +92,8 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
+        is_causal,
+        attn_mask,
         cur_pos,
         cur_pos_tensor,
         scale,
@@ -93,21 +108,25 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
-    const ttnn::Tensor &cur_pos_tensor,
     const ttnn::Tensor &page_table_tensor,
+    const bool is_causal,
+    const std::optional<const Tensor> attn_mask,
+    const std::optional<const Tensor> &cur_pos_tensor,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE ? input_tensor_q.device()->arch()
                                                                      : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    //uint32_t max_cur_pos = *std::max_element(cur_pos.begin(), cur_pos.end());
-    uint32_t k_chunk_size = 512; //get_chunk_size(max_cur_pos + 1);
+    uint32_t s = input_tensor_k.get_logical_shape()[-2];
+    uint32_t k_chunk_size = get_chunk_size(s);
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
         k_chunk_size = program_config.value().k_chunk_size;
         // assert chunk size must be power of 2 and multiple of 32
         TT_FATAL((k_chunk_size & (k_chunk_size - 1)) == 0, "User provided k_chunk_size must be power of 2, got: {}", k_chunk_size);
         TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
+    } else {
+        TT_FATAL(k_chunk_size % 32 == 0, "Chunk size must be multiple of 32, but the maximum calculated k_chunk_size is: {}", k_chunk_size);
     }
 
     // get chunk size and then pass to sdpa decode as an attribute for prgm cache
@@ -116,6 +135,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
 
     return operation::run(
                ScaledDotProductAttentionDecode{
+                   .is_causal = is_causal,
                    .cur_pos = std::vector<uint32_t>(),
                    .scale = scale,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
@@ -124,7 +144,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                    .k_chunk_size = k_chunk_size,
                    .paged_attention = true},
                {input_tensor_q, input_tensor_k, input_tensor_v},
-               {cur_pos_tensor, page_table_tensor},
+               {cur_pos_tensor, page_table_tensor, attn_mask},
                {},
                queue_id)
         .at(0);
@@ -134,8 +154,10 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     const ttnn::Tensor &input_tensor_q,
     const ttnn::Tensor &input_tensor_k,
     const ttnn::Tensor &input_tensor_v,
-    const ttnn::Tensor &cur_pos_tensor,
     const ttnn::Tensor &page_table_tensor,
+    const bool is_causal,
+    const std::optional<const Tensor> attn_mask,
+    const std::optional<const Tensor> &cur_pos_tensor,
     std::optional<float> scale,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<SDPAProgramConfig> program_config,
@@ -145,8 +167,10 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        cur_pos_tensor,
         page_table_tensor,
+        is_causal,
+        attn_mask,
+        cur_pos_tensor,
         scale,
         memory_config,
         program_config,

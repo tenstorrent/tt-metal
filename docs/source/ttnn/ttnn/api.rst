@@ -468,7 +468,6 @@ Transformer
    ttnn.experimental.rotary_embedding
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
-   ttnn.transformer.scaled_dot_product_attention_decode_gqa
 
 CCL
 ===

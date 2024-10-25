@@ -279,19 +279,17 @@ class TtLlamaAttention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
-                transpose_q=False,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode_gqa(
+            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
                 cur_pos_tensor=current_pos,
-                transpose_q=False,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],

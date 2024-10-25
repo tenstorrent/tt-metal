@@ -244,6 +244,7 @@ void kernel_main() {
     constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(16);
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(17);
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(18);
+    constexpr bool is_causal = get_compile_time_arg_val(19) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr  = get_arg_val<uint32_t>(arg_idx++);
@@ -262,22 +263,25 @@ void kernel_main() {
         return;
     }
     // Get cur_pos
-    uint32_t cur_pos = 0;
+    constexpr uint32_t cur_pos_base = St*32-1;
+    uint32_t cur_pos = cur_pos_base; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
     // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg != UINT32_MAX){
-        cur_pos = cur_pos_arg;
-    }
-    else {
-        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
-        cb_wait_front(cb_index_id, 1);
-        uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
-        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-        cur_pos = index_ptr[cur_batch];
-    }
+    if constexpr(is_causal) {
+        if (cur_pos_arg != UINT32_MAX){
+            cur_pos = cur_pos_arg;
+        }
+        else {
+            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            cb_wait_front(cb_index_id, 1);
+            uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
+            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
+            cur_pos = index_ptr[cur_batch];
+        }
 
-    if (cur_pos == UINT32_MAX) {
-        // cur_pos of -1 indicates that the user should be skipped
-        return;
+        if (cur_pos == UINT32_MAX) {
+            // cur_pos of -1 indicates that the user should be skipped
+            return;
+        }
     }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
@@ -347,8 +351,8 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    // generate and send mask to compute
-    generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
+    // generate and send mask to compute if causal
+    if constexpr(is_causal) generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
 
     for (uint32_t cur_head = cur_head_group*num_heads_per_core; cur_head < cur_head_group*num_heads_per_core + num_heads_per_core; ++cur_head) {
         if (k_chunk_end - k_chunk_start < k_num_chunks){
