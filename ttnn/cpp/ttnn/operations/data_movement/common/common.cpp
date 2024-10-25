@@ -4,10 +4,27 @@
 
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+    ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor) {
+        auto shape = tensor.get_shape();
+        if (shape.rank() <= 4) {
+            return tensor;
+        }
+        else {
+            auto rank = shape.rank();
+            auto squeezed = tensor;
+            while (rank > 4) {
+                squeezed = ttnn::squeeze(squeezed, 0);
+                rank = squeezed.get_shape().rank();
+            }
+            return squeezed;
+        }
+    };
+
     ttnn::Tensor pad_to_tile_vol(uint8_t queue_id,
                                  const ttnn::Tensor& tensor,
                                  const float value,

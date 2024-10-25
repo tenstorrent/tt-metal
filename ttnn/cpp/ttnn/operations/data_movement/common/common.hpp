@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
+    ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
+
     ttnn::Tensor pad_to_tile_vol(uint8_t queue_id,
                                  const ttnn::Tensor& tensor,
                                  const float value,
@@ -24,13 +29,11 @@ namespace data_movement {
         using PostTransformFuncWithArgs = std::function<OpOutputType(const OpOutputType&, OpInputTypes...)>;
         using PostTransformFunctWithoutArgs = std::function<OpOutputType(const OpOutputType&)>;
         using PostTransformFunc = std::variant<PostTransformFuncWithArgs, PostTransformFunctWithoutArgs>;
-        using PrecompFunc = std::function<OwnedArgsType(OpInputTypes...)>;
         using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
         PredicateFunc predicate;      // Function to determine if formatting should be applied
         PreTransformFunc pre_transform;  // Function to pre-process input arguments
         PostTransformFunc post_transform;  // Function to post-process the operation output
-        PrecompFunc precomp;           // Function for fixing up input arguments after preprocessing has been applied
         OpType operation;              // The main operation to be performed
     };
 
@@ -45,14 +48,12 @@ namespace data_movement {
         using PostTransformFuncWithArgs = std::function<OpOutputType(const OpOutputType&, OpInputTypes...)>;
         using PostTransformFunctWithoutArgs = std::function<OpOutputType(const OpOutputType&)>;
         using PostTransformFunc = std::variant<PostTransformFuncWithArgs, PostTransformFunctWithoutArgs>;
-        using PrecompFunc = std::function<OwnedArgsType(OpInputTypes...)>;
         using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
         MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...> params)
             : predicate_(params.predicate)
             , pre_transform_(params.pre_transform)
             , post_transform_(params.post_transform)
-            , precomp_(params.precomp)
             , operation_(params.operation) {}
 
         inline bool should_format(OpInputTypes... args) const {
@@ -73,15 +74,11 @@ namespace data_movement {
             }, post_transform_);
         }
 
-        inline OwnedArgsType precomp(OpInputTypes... args) const {
-            return precomp_(args...);
-        }
-
         inline OpOutputType operator()(OpInputTypes... args) const {
             if (should_format(args...)) {
                 auto formatted_input = pre_format(args...);
-                auto precomped = std::apply(precomp_,formatted_input);
-                return post_format(std::apply(operation_, precomped), args...);
+                auto op_output = std::apply(operation_, formatted_input);
+                return post_format(op_output, args...);
             }
             return operation_(args...);
         }
@@ -97,10 +94,12 @@ namespace data_movement {
                                          p2 = other.predicate_](OpInputTypes... args) -> OwnedArgsType {
                 // this is ugly, but I couldn't find a way around it since
                 // the OpInputTypes may contain consts/refs.
-                if (p1(args...) && std::apply(p2, t1(args...))) {
-                    return std::apply(t2, t1(args...));
-                } else if (p1(args...)) {
-                    return t1(args...);
+                if (p1(args...)) {
+                    auto transformed_args = t1(args...);
+                    if (std::apply(p2, transformed_args)) {
+                        return std::apply(t2, transformed_args);
+                    }
+                    return transformed_args;
                 } else if (p2(args...)) {
                     return t2(args...);
                 } else {
@@ -147,29 +146,11 @@ namespace data_movement {
                 return transformed_output;
             };
 
-            auto merged_precomp = [pc1 = this->precomp_,
-                                   pc2 = other.precomp_,
-                                   p1 = this->predicate_,
-                                   p2 = other.predicate_,
-                                   t1 = this->pre_transform_](OpInputTypes... args) -> OwnedArgsType {
-                if (p1(args...) && std::apply(p2, t1(args...))) {
-                    return std::apply(pc2, pc1(args...));
-                }
-                else if (p1(args...)) {
-                    return pc1(args...);
-                }
-                else if (p2(args...)) {
-                    return pc2(args...);
-                }
-                return std::make_tuple(args...);
-            };
-
             return MassagedOperation(
                 MassagedOperationParams<OpOutputType, OpInputTypes...>{
                     .predicate = merged_predicate,
                     .pre_transform = merged_pre_transform,
                     .post_transform = merged_post_transform,
-                    .precomp = merged_precomp,
                     .operation = this->operation_
                 }
             );
@@ -179,23 +160,28 @@ namespace data_movement {
         PredicateFunc get_predicate() const { return predicate_; }
         PreTransformFunc get_pre_transform() const { return pre_transform_; }
         PostTransformFunc get_post_transform() const { return post_transform_; }
-        PrecompFunc get_precomp() const { return precomp_; }
         OpType get_operation() const { return operation_; }
 
         // setters for all private members
         void set_predicate(PredicateFunc predicate) { predicate_ = predicate; }
         void set_pre_transform(PreTransformFunc pre_transform) { pre_transform_ = pre_transform; }
         void set_post_transform(PostTransformFunc post_transform) { post_transform_ = post_transform; }
-        void set_precomp(PrecompFunc precomp) { precomp_ = precomp; }
         void set_operation(OpType operation) { operation_ = operation; }
 
     private:
         PredicateFunc predicate_;
         PreTransformFunc pre_transform_;
         PostTransformFunc post_transform_;
-        PrecompFunc precomp_;
         OpType operation_;
     };
+
+    ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
+    ttnn::Tensor pad_to_tile_vol(uint8_t queue_id,
+                                 const ttnn::Tensor& tensor,
+                                 const float value,
+                                 const bool use_multicore,
+                                 const std::optional<MemoryConfig>& memory_config);
+
 }
 }
 }
