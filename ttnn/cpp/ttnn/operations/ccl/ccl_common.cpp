@@ -12,6 +12,35 @@
 namespace ttnn {
 namespace ccl {
 
+std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> getDeviceIndexAndSenderReceiverIDs(
+    const Tensor& input_tensor,
+    const std::vector<Device*>& devices,
+    const ttnn::ccl::Topology& topology) {
+
+    uint32_t num_devices = devices.size();
+    bool is_linear = topology == ttnn::ccl::Topology::Linear;
+    uint32_t device_index = 0; // Initialize device index
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices.at(i) == input_tensor.device()) {
+            device_index = i;
+            bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
+
+            std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+
+            std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+
+            return {device_index, sender_device_id, receiver_device_id};
+        }
+    }
+
+    return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+}
+
 RingTopology::RingTopology(
     Device const* device,
     Topology topology,

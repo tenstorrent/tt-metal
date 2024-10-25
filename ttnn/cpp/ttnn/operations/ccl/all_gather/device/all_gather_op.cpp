@@ -24,39 +24,8 @@ AllGather create_all_gather_struct(
     const ttnn::ccl::Topology topology
 ) {
     uint32_t num_devices = devices.size();
-
-    uint32_t device_index = 0; // Initialize device index
-    std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
-    std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
-
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices[i] == input_tensor.device()) {
-            device_index = i;
-            switch(topology){
-                case ttnn::ccl::Topology::Ring:{
-                    // Ring topology
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-                    break;
-                }
-                case ttnn::ccl::Topology::Linear:{
-                    // Linear topology
-                    bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
-                    bool is_last_chip_in_counter_clockwise_direction = i == 0;
-                    receiver_device_id = is_last_chip_in_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i+1)->id());
-                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i-1)->id());
-                    break;
-                }
-                default:
-                    TT_FATAL(false, "Invalid Topology {}, Accepted topologies are Ring and Linear currently", topology);
-            }
-            break;
-        }
-    }
+    auto [device_index, sender_device_id, receiver_device_id] =
+                getDeviceIndexAndSenderReceiverIDs(input_tensor, devices, topology);
 
     return ttnn::AllGather{
         dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};

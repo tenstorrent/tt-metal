@@ -89,27 +89,11 @@ Tensor reduce_scatter(
             if (num_devices == 2){
                 topology = ttnn::ccl::Topology::Linear;
             }
-            bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
             const auto& input_tensor = input_tensors.at(0);
-            uint32_t device_index = 0; // Initialize device index
-            std::optional<chip_id_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
-            std::optional<chip_id_t> sender_device_id = std::nullopt; // Initialize sender device ID
-            for (uint32_t i = 0; i < num_devices; ++i) {
-                if (devices.at(i) == input_tensor.device()) {
+            auto [device_index, sender_device_id, receiver_device_id] =
+                getDeviceIndexAndSenderReceiverIDs(input_tensor, devices, topology);
 
-                    bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
-                    bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
-                    device_index = i;
-                    receiver_device_id = is_last_chip_in_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
-                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
-                    break;
-                }
-            }
             TT_FATAL(receiver_device_id != std::nullopt || sender_device_id != std::nullopt, "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be incorrect");
 
             return operation::run(

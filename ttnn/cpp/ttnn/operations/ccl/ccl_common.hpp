@@ -18,6 +18,11 @@
 namespace ttnn {
 namespace ccl {
 
+std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> getDeviceIndexAndSenderReceiverIDs(
+    const Tensor& input_tensor,
+    const std::vector<Device*>& devices,
+    const ttnn::ccl::Topology& topology);
+
 // Eventual home: ccl_topology_descriptors
 struct RingTopology {
     RingTopology(
