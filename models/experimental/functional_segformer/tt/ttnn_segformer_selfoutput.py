@@ -10,8 +10,6 @@ class TtSegformerSelfOutput:
         super().__init__()
 
     def __call__(self, hidden_states: ttnn.Tensor, parameters):
-        # print("mm-6--", hidden_states.shape)
-
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         mm_f_y = 8
@@ -47,7 +45,6 @@ class TtSegformerSelfOutput:
             dtype=ttnn.bfloat8_b,
         )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        # print("self", hidden_states.shape)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         return hidden_states

@@ -22,9 +22,8 @@ class TtSegformerAttention:
 
     def __call__(self, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False):
         self_outputs = self.self(hidden_states, height, width, parameters.self, output_attentions)
-
         attention_output = self.output(self_outputs[0], parameters.output)
-        outputs = (attention_output,) + self_outputs[1:]  # add attentions if we output them
+        outputs = (attention_output,) + self_outputs[1:]
         ttnn.deallocate(self_outputs[0])
 
         return outputs

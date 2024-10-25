@@ -34,10 +34,10 @@ def create_custom_preprocessor(device):
         if isinstance(model, SegformerLayer):
             parameters["layer_norm_1"] = {}
             parameters["layer_norm_1"]["weight"] = preprocess_layernorm_parameter(
-                model.layer_norm_1.weight, dtype=ttnn.bfloat16
+                model.layer_norm_1.weight, dtype=ttnn.bfloat8_b
             )
             parameters["layer_norm_1"]["bias"] = preprocess_layernorm_parameter(
-                model.layer_norm_1.bias, dtype=ttnn.bfloat16
+                model.layer_norm_1.bias, dtype=ttnn.bfloat8_b
             )
 
             attention_preprocess = create_custom_preprocessor_attention(device)
@@ -50,10 +50,10 @@ def create_custom_preprocessor(device):
 
             parameters["layer_norm_2"] = {}
             parameters["layer_norm_2"]["weight"] = preprocess_layernorm_parameter(
-                model.layer_norm_2.weight, dtype=ttnn.bfloat16
+                model.layer_norm_2.weight, dtype=ttnn.bfloat8_b
             )
             parameters["layer_norm_2"]["bias"] = preprocess_layernorm_parameter(
-                model.layer_norm_2.bias, dtype=ttnn.bfloat16
+                model.layer_norm_2.bias, dtype=ttnn.bfloat8_b
             )
         return parameters
 

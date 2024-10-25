@@ -37,7 +37,6 @@ class TtSegformerLayer:
             parameters.attention,
             output_attentions=output_attentions,
         )
-
         attention_output = self_attention_outputs[0]
         outputs = self_attention_outputs[1:]  # add self attentions if we output attention weights
 

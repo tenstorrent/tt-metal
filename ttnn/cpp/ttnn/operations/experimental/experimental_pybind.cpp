@@ -20,6 +20,8 @@
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
@@ -43,6 +45,8 @@ void py_module(py::module& module) {
     transformer::detail::bind_nlp_concat_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_falcon7b(module);
+    transformer::detail::bind_nlp_create_qkv_heads_vit(module);
+    transformer::detail::bind_nlp_create_qkv_heads_segformer(module);
     transformer::detail::bind_nlp_kv_cache_load_slice(module);
 
     transformer::py_bind_rotary_embedding(module);

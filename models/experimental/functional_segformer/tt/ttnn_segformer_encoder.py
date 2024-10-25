@@ -48,6 +48,10 @@ class TtSegformerEncoder:
                     patch_size=config.patch_sizes[i],
                 )
             )
+            # print("EMB")
+            # print("")
+            # print(parameters["patch_embeddings"][i])
+            # print("stride=", config.strides[i], " -- patch size =", config.patch_sizes[i])
         self.patch_embeddings = embeddings  # self.patch_embeddings = nn.ModuleList(embeddings)
 
         # Transformer blocks
@@ -124,12 +128,10 @@ class TtSegformerEncoder:
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
-            # print("e1", hidden_states.shape)
-            # fourth, optionally reshape back to (batch_size, num_channels, height, width)
-            # TODO: does the input to Conv need to be 4D?
-            if idx != len(self.patch_embeddings) - 1 or (
-                idx == len(self.patch_embeddings) - 1 and self.config.reshape_last_stage
-            ):
+            if idx != len(self.patch_embeddings) - 1:
+                hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
+                hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, -1))
+            elif idx == len(self.patch_embeddings) - 1 and self.config.reshape_last_stage:
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, -1))
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
@@ -138,7 +140,7 @@ class TtSegformerEncoder:
             # Original folded version is passed to the Decoder
             # if output_hidden_states:
             #    all_hidden_states = all_hidden_states + (hidden_states,)
-            # print("e2", hidden_states.shape)
+
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)
         return TtBaseModelOutput(

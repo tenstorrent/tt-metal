@@ -12,8 +12,6 @@ class TtSegformerMixFFN:
         self.dwconv = TtSegformerDWConv(parameters["dwconv"], hidden_features)
 
     def __call__(self, hidden_states: ttnn.Tensor, height: int, width: int, parameters, device):
-        # print("mm-7--", hidden_states.shape, parameters.dense1.weight.shape)
-
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         mm_f_y = 8
@@ -59,7 +57,6 @@ class TtSegformerMixFFN:
         # TODO: GeLU on sharded data
         hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # print("mm-8--", hidden_states.shape, parameters.dense2.weight.shape)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         hidden_states = ttnn.to_memory_config(
@@ -81,5 +78,5 @@ class TtSegformerMixFFN:
             dtype=ttnn.bfloat8_b,
         )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         return hidden_states

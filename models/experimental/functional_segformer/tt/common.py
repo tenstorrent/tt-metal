@@ -18,7 +18,7 @@ class Conv:
         height_sharding=True,
         activation="",
         groups=1,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -73,15 +73,5 @@ class Conv:
             conv_config=conv_config,
             groups=self.groups,
         )
-        ## TODO: Op | WARNING  | Tensor at index 0 is not allocated
-        # print("sr2a", output_tensor.shape)
-
-        # output_tensor = ttnn.from_device(output_tensor)
-        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # output_tensor = ttnn.reshape(
-        #     output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        # )
-        # del _out_height, _out_width
 
         return output_tensor, _out_height, _out_width

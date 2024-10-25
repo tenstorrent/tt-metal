@@ -57,23 +57,6 @@ class TtSegformerMLP:
     def __call__(self, hidden_states: ttnn.Tensor, parameters):
         device = hidden_states.device()
 
-        if 0:
-            # print("mlp0", hidden_states.shape)
-            hidden_states = ttnn.from_device(hidden_states)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states = ttnn.reshape(
-                hidden_states,
-                (hidden_states.shape[0], hidden_states.shape[1], hidden_states.shape[2] * hidden_states.shape[3]),
-            )
-            hidden_states = ttnn.to_device(hidden_states, device=device)
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-            # print("mlp1", hidden_states.shape)
-            hidden_states = ttnn.permute(hidden_states, (0, 2, 1))
-            # print("mlp2", hidden_states.shape)
-            if len(hidden_states.shape) == 2:  # This is due to while permuting 1,x,y we are getting 2D as output
-                hidden_states = ttnn.reshape(hidden_states, (1, hidden_states.shape[0], hidden_states.shape[1]))
-            # print("mlp3", hidden_states.shape)
-
         mm_f_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_f_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         mm_f_y = 8
@@ -95,7 +78,6 @@ class TtSegformerMLP:
             mm_prog_config = program_configs["linear_config_16384"]
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-        # print("---mlp MM----", hidden_states.shape, parameters.proj.weight.shape)
 
         if (hidden_states.shape[-2] == 1024) and (hidden_states.shape[-1] == 160):
             # TODO: convert it to sharding

@@ -34,10 +34,10 @@ def create_custom_preprocessor(device):
 
             parameters["layer_norm"] = {}
             parameters["layer_norm"]["weight"] = preprocess_layernorm_parameter(
-                model.layer_norm.weight, dtype=ttnn.bfloat16
+                model.layer_norm.weight, dtype=ttnn.bfloat8_b
             )
             parameters["layer_norm"]["bias"] = preprocess_layernorm_parameter(
-                model.layer_norm.bias, dtype=ttnn.bfloat16
+                model.layer_norm.bias, dtype=ttnn.bfloat8_b
             )
 
         return parameters

@@ -48,10 +48,10 @@ def create_custom_preprocessor(device):
 
                 parameters["layer_norm"] = {}
                 parameters["layer_norm"]["weight"] = preprocess_layernorm_parameter(
-                    model.layer_norm.weight, dtype=ttnn.bfloat16
+                    model.layer_norm.weight, dtype=ttnn.bfloat8_b
                 )
                 parameters["layer_norm"]["bias"] = preprocess_layernorm_parameter(
-                    model.layer_norm.bias, dtype=ttnn.bfloat16
+                    model.layer_norm.bias, dtype=ttnn.bfloat8_b
                 )
 
         return parameters
@@ -64,13 +64,13 @@ def create_custom_preprocessor(device):
     "batch_size, seq_len, hidden_size, height, width, num_attention_heads, sequence_reduction_ratio, block_i, efficient_self_attention_i",
     [
         (1, 16384, 32, 128, 128, 1, 8, 0, 0),
-        # (1, 16384, 32, 128, 128, 1, 8, 0, 1),
+        (1, 16384, 32, 128, 128, 1, 8, 0, 1),
         (1, 4096, 64, 64, 64, 2, 4, 1, 0),
-        # (1, 4096, 64, 64, 64, 2, 4, 1, 1),
+        (1, 4096, 64, 64, 64, 2, 4, 1, 1),
         (1, 1024, 160, 32, 32, 5, 2, 2, 0),
-        # (1, 1024, 160, 32, 32, 5, 2, 2, 1),
+        (1, 1024, 160, 32, 32, 5, 2, 2, 1),
         (1, 256, 256, 16, 16, 8, 1, 3, 0),
-        # (1, 256, 256, 16, 16, 8, 1, 3, 1),
+        (1, 256, 256, 16, 16, 8, 1, 3, 1),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
