@@ -179,44 +179,60 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
     register_ttnn_cpp_unary_function(unary_function)
 
 
-def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
+def _golden_function_asin(input_tensor_a, *args, **kwargs):
     import torch
 
+    tt_input = ttnn.Tensor(input_tensor_a)
     return torch.nan_to_num(
-        torch.asin(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+        torch.asin(input_tensor_a),
+        nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
+        posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
+        neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
     )
 
 
 ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
 
 
-def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acos(input_tensor_a, *args, **kwargs):
     import torch
 
+    tt_input = ttnn.Tensor(input_tensor_a)
     return torch.nan_to_num(
-        torch.acos(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+        torch.acos(input_tensor_a),
+        nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
+        posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
+        neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
     )
 
 
 ttnn.attach_golden_function(ttnn.acos, golden_function=_golden_function_acos)
 
 
-def _golden_function_acosh(input_tensor_a, *args, device, **kwargs):
+def _golden_function_acosh(input_tensor_a, *args, **kwargs):
     import torch
 
+    tt_input = ttnn.Tensor(input_tensor_a)
     return torch.nan_to_num(
-        torch.acosh(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+        torch.acosh(input_tensor_a),
+        nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
+        posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
+        neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
     )
 
 
 ttnn.attach_golden_function(ttnn.acosh, golden_function=_golden_function_acosh)
 
 
-def _golden_function_reciprocal(input_tensor_a, *args, device, **kwargs):
+def _golden_function_reciprocal(input_tensor_a, *args, **kwargs):
     import torch
 
+    tt_input = ttnn.Tensor(input_tensor_a)
     return torch.nan_to_num(
-        torch.reciprocal(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+        torch.reciprocal(input_tensor_a),
+        nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
+        posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
+        neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
     )
 
 
@@ -499,14 +515,15 @@ def _golden_function_softshrink(input_tensor_a, *args, lambd=0.5, **kwargs):
 ttnn.attach_golden_function(ttnn.softshrink, golden_function=_golden_function_softshrink)
 
 
-def _golden_function_logit(input_tensor_a, *args, eps=None, device, **kwargs):
+def _golden_function_logit(input_tensor_a, *args, eps=None, **kwargs):
     import torch
 
+    tt_input = ttnn.Tensor(input_tensor_a)
     return torch.nan_to_num(
         torch.special.logit(input_tensor_a, eps=eps),
-        nan=device.sfpu_nan(),
-        posinf=device.sfpu_inf(),
-        neginf=-device.sfpu_inf(),
+        nan=ttnn.sfpu_positive_nan(tt_input.get_dtype()),
+        posinf=ttnn.sfpu_positive_inf(tt_input.get_dtype()),
+        neginf=ttnn.sfpu_negative_inf(tt_input.get_dtype()),
     )
 
 

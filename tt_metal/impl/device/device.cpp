@@ -3192,33 +3192,6 @@ float Device::sfpu_eps() const {
     return std::numeric_limits<float>::epsilon();
 }
 
-float Device::sfpu_nan() const {
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL: return tt::tt_metal::NAN_GS;
-        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::NAN_WHB0;
-        case tt::ARCH::BLACKHOLE: return tt::tt_metal::NAN_BH;
-        default: return std::numeric_limits<float>::quiet_NaN();
-    }
-
-    return std::numeric_limits<float>::quiet_NaN();
-}
-
-// machine inf
-float Device::sfpu_inf() const{
-
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL:
-            return tt::tt_metal::INF_GS;
-        case tt::ARCH::WORMHOLE_B0:
-            return tt::tt_metal::INF_WHB0;
-        case tt::ARCH::BLACKHOLE:
-            return tt::tt_metal::INF_BH;
-        default:
-            return std::numeric_limits<float>::infinity();
-    }
-    return std::numeric_limits<float>::infinity();
-}
-
 std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
     TT_ASSERT(programmable_core < this->build_state_indices_.size(),
         "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
