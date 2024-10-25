@@ -360,7 +360,7 @@ class TtLlamaAttention_galaxy:
             query_layer,
             keys,
             values,
-            [start_pos for _ in range(self.max_batch_size)],
+            cur_pos=[start_pos for _ in range(self.max_batch_size)],
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SDPA"],

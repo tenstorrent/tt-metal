@@ -14,6 +14,9 @@ on:
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
+          - creation.zeros.zeros
+          - creation.empty.empty
+          - creation.zeros_like.zeros_like
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
@@ -52,6 +55,8 @@ on:
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.atanh.atanh
+          - eltwise.unary.atan.atan
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -98,6 +103,8 @@ on:
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
           - eltwise.unary.sinh.sinh
+          - eltwise.unary.asinh.asinh
+          - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
