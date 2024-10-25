@@ -39,14 +39,6 @@ parameters = {
 }
 
 
-def mesh_device_fixture():
-    device = ttnn.open_device(device_id=0)
-    assert ttnn.device.is_wormhole_b0(device), "This op is only available for Wormhole_B0"
-    yield (device, "Wormhole_B0")
-    ttnn.close_device(device)
-    del device
-
-
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
         return True, "Input must be in row major layout"
