@@ -28,7 +28,7 @@ function(CHECK_COMPILERS)
     endif()
 endfunction()
 
-function(ADJUST_COMPILER_WARNINGS)
+function(ADJUST_COMPILER_WARNINGS2)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         message(STATUS "Adjusting compiler warnings for Clang")
         target_compile_options(
