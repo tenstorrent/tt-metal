@@ -99,7 +99,8 @@ ttnn::Tensor slice_operation_invoke_impl(
         padded_ends[adjusted_rank - 2] = std::max(tt::round_up(padded_ends[adjusted_rank - 2], tt::constants::TILE_HEIGHT), tt::constants::TILE_HEIGHT);
         padded_ends[adjusted_rank - 1] = std::max(tt::round_up(padded_ends[adjusted_rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
     }
-    SmallVector<uint32_t> actual_shape, padded_shape;
+
+    SmallVector<uint32_t> actual_shape, final_padded_shape;
     actual_shape.reserve(input_rank);
     final_padded_shape.reserve(input_rank);
     bool empty = false;
@@ -220,5 +221,5 @@ ttnn::Tensor SliceOperation::invoke(
         const std::optional<Tensor>& optional_output_tensor) {
     return slice_operation_invoke_impl(ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg, optional_output_tensor);
 }
-slice.cpp
+
 }  // namespace operations
