@@ -1,40 +1,94 @@
 #!/bin/bash
 
-run_t3000_perplexity_tests() {
+run_t3000_falcon7b_perplexity_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_perplexity_tests"
+  echo "LOG_METAL: Running run_t3000_falcon7b_perplexity_tests"
 
   # Falcon7B perplexity tests
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py --timeout=1500 ; fail+=$?
 
-  # Falcon40B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
-
-  # Llama-70B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
-
-  # Mixtral8x7B perplexity tests
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
-
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_perplexity_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_falcon7b_perplexity_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
 
+run_t3000_falcon40b_perplexity_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_falcon40b_perplexity_tests"
+
+  # Falcon40B perplexity tests
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perplexity_falcon.py --timeout=2100 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_falcon40b_perplexity_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama70b_perplexity_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
+
+  # Llama-70B perplexity tests
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/llama2_70b/demo/eval_t3000.py --timeout=7200 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama70b_perplexity_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_mixtral8x7b_perplexity_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
+
+  # Mixtral8x7B perplexity tests
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mixtral8x7b_perplexity_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
 
 run_t3000_tests() {
+  # Run Falcon-7B perplexity tests
+  run_t3000_falcon7b_perplexity_tests
 
-  # Run perplexity tests
-  run_t3000_perplexity_tests
+  # Run Falcon-40B perplexity tests
+  run_t3000_falcon40b_perplexity_tests
 
+  # Run Llama-70B perplexity tests
+  run_t3000_llama70b_perplexity_tests
+
+  # Run Mixtral8x7B perplexity tests
+  run_t3000_mixtral8x7b_perplexity_tests
 }
 
 fail=0

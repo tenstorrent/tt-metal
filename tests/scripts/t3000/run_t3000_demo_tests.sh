@@ -30,9 +30,7 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  # Llama3 70B demo (output verification)
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_enabled-greedy-tt-70b-T3000-80L-decode_only-trace_mode_off-text_completion-llama3] --timeout=900 ; fail+=$?
-
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -145,6 +143,10 @@ run_t3000_mixtral_tests() {
 }
 
 run_t3000_tests() {
+
+  # Run llama3 smaller tests (1B, 3B, 8B, 11B)
+  run_t3000_llama3_tests
+
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests
 
