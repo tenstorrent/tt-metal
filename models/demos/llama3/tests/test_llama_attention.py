@@ -77,7 +77,8 @@ def test_llama_attention_inference(mesh_device, use_program_cache, reset_seeds, 
     cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2)
     freqs_cis = torch.complex(cos, sin)
     for i in range(generation_length):
-        pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
+        # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
+        pt_attention_input = torch.randn(batch, seq_len, model_args.dim) * 0.05
 
         tt_attention_input = pt_attention_input.clone()
         current_pos = generation_start_pos + i
