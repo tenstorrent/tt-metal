@@ -49,7 +49,7 @@ In addition to our double-buffer config, we introduce a third circular buffer de
     CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
         .set_page_size(output_cb_index, single_tile_size)
         .set_page_size(interm0_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::v0::CreateCircularBuffer(program, all_cores, cb_output_config);
 
 Stride Kernel Arguments
 -----------------------
