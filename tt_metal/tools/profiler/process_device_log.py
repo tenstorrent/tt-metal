@@ -507,7 +507,9 @@ def get_duration(riscData, analysis):
         desMarker = {"risc": risc, "zone_name": timerID["zone_name"]}
         if desMarker == analysis["marker"]:
             totalDuration += statData
-    return [dict(duration_type=analysis["marker"], duration_cycles=totalDuration)]
+    if totalDuration:
+        return [dict(duration_type=analysis["marker"], duration_cycles=totalDuration)]
+    return []
 
 
 def adjacent_LF_analysis(riscData, analysis):
