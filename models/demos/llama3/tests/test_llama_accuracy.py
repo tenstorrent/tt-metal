@@ -10,8 +10,6 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_single_rot_mat,
     get_prefill_rot_mat,
-    prepare_inputs_ttnn,
-    prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     HostEmbedding,
 )
@@ -89,9 +87,8 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
         )
 
         # Run prefill
-        decode_input = prepare_inputs_ttnn_prefill(
+        decode_input = model_args.prepare_inputs_ttnn_prefill(
             pt_prefill_input,
-            mesh_device,
         )
         tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
         ttnn.deallocate(tt_out)
@@ -131,10 +128,9 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
         # Get embedding
         pt_decode_input = embd(ref_token).view(1, 1, -1)
         # Prepare input for TT model
-        decode_input = prepare_inputs_ttnn(
+        decode_input = model_args.prepare_inputs_ttnn_decode(
             pt_decode_input,
-            model_args.dim,
-            mesh_device,
+            ttnn.L1_MEMORY_CONFIG,
         )
         # Run TT model
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
