@@ -13,6 +13,7 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffer/test_simple_l1_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_allocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_creation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/circular_buffer/test_CircularBuffer_non_blocking.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_golden_impls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_reduce.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/test_single_core_binary_compute.cpp
