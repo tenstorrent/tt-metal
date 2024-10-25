@@ -112,12 +112,12 @@ def test_unary_composite_clamp_ttnn(input_shapes, min, max, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     if min is None and max is None:
         with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
-            ttnn.clamp(input_tensor1, min=min, max=max)
+            ttnn.clamp(input_tensor1, min, max)
         assert True
     else:
-        output_tensor = ttnn.clamp(input_tensor1, min=min, max=max)
+        output_tensor = ttnn.clamp(input_tensor1, min, max)
         golden_function = ttnn.get_golden_function(ttnn.clamp)
-        golden_tensor = golden_function(in_data1, min=min, max=max)
+        golden_tensor = golden_function(in_data1, min, max)
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
 
@@ -149,12 +149,12 @@ def test_unary_composite_clip_ttnn(input_shapes, min, max, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     if min is None and max is None:
         with pytest.raises(RuntimeError, match="Only one of 'min' or 'max' can be None. Please provide one value"):
-            ttnn.clip(input_tensor1, min=min, max=max)
+            ttnn.clip(input_tensor1, min, max)
         assert True
     else:
-        output_tensor = ttnn.clip(input_tensor1, min=min, max=max)
+        output_tensor = ttnn.clip(input_tensor1, min, max)
         golden_function = ttnn.get_golden_function(ttnn.clip)
-        golden_tensor = golden_function(in_data1, min=min, max=max)
+        golden_tensor = golden_function(in_data1, min, max)
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
 
