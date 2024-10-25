@@ -19,7 +19,7 @@ def generate_reference_outputs(total_length, output_file):
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     # Load the model state dict
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Initialize the reference model
     reference_model = Transformer(model_args)
