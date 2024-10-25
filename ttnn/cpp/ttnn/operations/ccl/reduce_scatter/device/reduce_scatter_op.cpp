@@ -24,7 +24,7 @@ std::vector<ttnn::SimpleShape> ReduceScatter::compute_output_shapes(const std::v
     auto shape = input_tensors[0].get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
-        "The size of the scatter dimension must be a multiple of the ring size");
+        "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}", shape[this->scatter_dim], this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
     return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
 }
@@ -131,6 +131,78 @@ Tensor reduce_scatter(
      output_tensors);
     return output_tensors.at(0);
 }
+
+
+
+
+Tensor reduce_scatter(
+    const Tensor &input_tensor,
+    const uint32_t scatter_dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::operations::reduction::ReduceType reduce_op,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> user_defined_num_workers,
+    const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
+
+    TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");
+    const auto mesh_view = mesh_device.get_view();
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view->num_rows() : mesh_view->num_cols();
+
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+
+    operation::launch_op(
+        [scatter_dim, binary_op_type, num_links, output_mem_config, mesh_view, cluster_axis, user_defined_num_workers, user_defined_num_buffers_per_channel, num_devices, topology](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+
+            const auto& input_device_tensor = input_tensors.at(0);
+
+            const auto coordinate = mesh_view->find_device(input_device_tensor.device()->id());
+            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
+            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+
+            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+                auto new_coord = coordinate;
+                if (cluster_axis == 0) {
+                    new_coord.row = line_index % num_devices;
+                } else {
+                    new_coord.col = line_index % num_devices;
+                }
+                return mesh_view->find_device_id(new_coord);
+            };
+
+            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+            auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+            auto sender_device_id = is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_devices - 1);
+
+            return operation::run(
+                ttnn::ReduceScatter{
+                    binary_op_type,
+                    scatter_dim,
+                    num_links,
+                    num_devices,
+                    device_index,
+                    receiver_device_id,
+                    sender_device_id,
+                    output_mem_config.value_or(input_device_tensor.memory_config()),
+                    topology,
+                    user_defined_num_workers,
+                    user_defined_num_buffers_per_channel},
+                {input_device_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+    return output_tensors.at(0);
+
+}
+
+
 
 } // namespace ccl
 } // namespace operations
