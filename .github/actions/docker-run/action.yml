@@ -65,6 +65,8 @@ runs:
         # for newly created files.
         # Passing HOME variable is necessary to avoid Python lib installation into /home/ubuntu/.local folder which
         # may not be writable by the RUNNER_UID user.
+        # --log-driver none: Do not save logs to disk as we're printing them to GitHub
+        # and it takes up space
         options: |
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm
@@ -73,8 +75,6 @@ runs:
           -v /etc/bashrc:/etc/bashrc:ro
           -v ${{ github.workspace }}:${{ github.workspace }}
           --net=host
-          # Do not save logs to disk as we're printing them to GitHub
-          # and it takes up space
           --log-driver none
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
