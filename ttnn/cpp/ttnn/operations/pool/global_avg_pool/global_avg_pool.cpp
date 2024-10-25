@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/pool/avgpool/avg_pool.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace tt {
@@ -22,7 +22,7 @@ Tensor pool_2d(const Tensor& input, const MemoryConfig& memory_config, const std
     }
 }
 
-Tensor avg_pool2d(const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
+Tensor global_avg_pool2d(const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
     auto output = input;
 

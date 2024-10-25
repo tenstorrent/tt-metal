@@ -44,7 +44,7 @@ def test_run_average_pool(act_shape, dtype, device):
         ttact = ttact.pad_to_tile(0.0)
     ttact = ttact.to(device)
 
-    out = ttnn.avg_pool2d(ttact)
+    out = ttnn.global_avg_pool2d(ttact)
 
     out = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     out_shape = [batch_size, 1, 1, channels]
