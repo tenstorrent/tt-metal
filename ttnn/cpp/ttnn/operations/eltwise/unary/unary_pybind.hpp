@@ -1680,6 +1680,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
     detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::round, "decimals", "Round the input tensor to `decimals` decimal places", "Available for Wormhole_B0 only");
 
 
     // Unary ops with dim parameter
@@ -1907,11 +1908,6 @@ void py_module(py::module& module) {
         ttnn::triu,
         "diagonal", "diagonal value", 0,
         R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc");
-    detail::bind_unary_composite_int_with_default(
-        module,
-        ttnn::round,
-        "decimals", "decimals value", 0,
-        R"doc(Performs round function on :attr:`input_tensor`, not supported for grayskull, :attr:`decimals`.)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,

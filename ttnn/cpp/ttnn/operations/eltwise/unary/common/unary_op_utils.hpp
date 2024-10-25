@@ -57,6 +57,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::BITWISE_OR:
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::ROUND:
         case UnaryOpType::REMAINDER:
         case UnaryOpType::DROPOUT:
         case UnaryOpType::FILL:
