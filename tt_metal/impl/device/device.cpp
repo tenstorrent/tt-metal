@@ -2755,14 +2755,12 @@ void Device::configure_command_queue_programs() {
         }
     }
 
-    command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
     if (device_id != mmio_device_id) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            mmio_command_queue_program.finalize(mmio_device);
             detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
             tt::Cluster::instance().l1_barrier(mmio_device_id);
         }
@@ -2810,6 +2808,7 @@ void Device::init_command_queue_device() {
     }
     this->configure_command_queue_programs();
     Program& command_queue_program = *this->command_queue_programs[0];
+    command_queue_program.finalize(this);
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -2829,6 +2828,7 @@ void Device::init_command_queue_device() {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
+            mmio_command_queue_program.finalize(mmio_device);
             std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
             for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
                 const auto& logical_dispatch_cores = logical_cores[index];
@@ -2949,10 +2949,8 @@ bool Device::close() {
     tt::Cluster::instance().l1_barrier(id_);
     allocator::clear(*this->allocator_);
     // After device close, no buffers on this device should be used
-    for (const auto &[buf_attr, buf] : detail::BUFFER_MAP.value()) {
-        if (std::get<0>(buf_attr) == this->id()) {
-            DeallocateBuffer(*buf);
-        }
+    for (const auto &buf : this->get_allocated_buffers()) {
+        DeallocateBuffer(*buf);
     }
 
     this->compute_cores_.clear();
@@ -3172,6 +3170,11 @@ size_t Device::get_l1_small_size() const {
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
     this->check_allocator_is_initialized();
     return allocator::dump_memory_blocks(*this->allocator_, buffer_type, out);
+}
+
+const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
+    this->check_allocator_is_initialized();
+    return allocator::get_allocated_buffers(*this->allocator_);
 }
 
 void Device::deallocate_buffers(){

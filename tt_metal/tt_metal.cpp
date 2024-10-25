@@ -113,18 +113,11 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    Program &program,
-    uint32_t programmable_core_type_index,
-    const KernelGroup *kernel_group,
-    Device *device,
-    const CoreCoord &logical_core) {
+    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
 
-    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            // Need the individual offsets of each bin
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
-                kernel_config_base, kernel_group->kernel_text_offsets);
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
         }
     }
 }
@@ -703,7 +696,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -801,33 +794,29 @@ void CompileProgram(Device *device, Program &program, bool fd_bootloader_mode) {
     program.compile(device, fd_bootloader_mode);
 }
 
-DeviceAddr AllocateBuffer(const Buffer *buffer, bool bottom_up) {
-    if(GraphTracker::instance().hook_allocate(buffer, bottom_up)) {
-        GraphTracker::instance().track_allocate(buffer, bottom_up);
+DeviceAddr AllocateBuffer(Buffer *buffer) {
+    if(GraphTracker::instance().hook_allocate(buffer)) {
+        GraphTracker::instance().track_allocate(buffer);
         return 0;
     }
 
-    uint32_t allocated_addr;
+    DeviceAddr allocated_addr;
     if (is_sharded(buffer->buffer_layout())) {
         allocated_addr = allocator::allocate_buffer(
             *(buffer->device()->allocator_),
-            buffer->shard_spec().size() * buffer->num_cores() * buffer->page_size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            bottom_up,
-            buffer->num_cores());
+            buffer->shard_spec().size() * buffer->num_cores().value() * buffer->page_size(),
+            buffer);
     } else {
         allocated_addr = allocator::allocate_buffer(
             *(buffer->device()->allocator_),
             buffer->size(),
-            buffer->page_size(),
-            buffer->buffer_type(),
-            bottom_up,
-            std::nullopt);
+            buffer);
     }
+    // Assertion here because buffer class returns a u32 when address is queried
+    // Requires updating all use cases of buffer address to accept a u64 to remove
     TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
 
-    GraphTracker::instance().track_allocate(buffer, bottom_up);
+    GraphTracker::instance().track_allocate(buffer);
 
     return allocated_addr;
 }
@@ -838,7 +827,7 @@ void DeallocateBuffer(Buffer *buffer) {
         return;
     }
 
-    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer->address(), buffer->buffer_type());
+    allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
 }
 
 }  // namespace detail

@@ -60,7 +60,7 @@ class MemoryReporter {
     MemoryReporter(const MemoryReporter&) = delete;
     MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
-    void flush_program_memory_usage(const Program &program, const Device *device);
+    void flush_program_memory_usage(uint64_t program_id, const Device *device);
 
     void dump_memory_usage_state(const Device *device, std::string prefix="") const;
 
