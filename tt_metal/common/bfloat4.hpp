@@ -31,14 +31,26 @@ constexpr int log2(int n) {
 inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uint32_t> &bfp_tiles, bool row_major_output, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile = std::nullopt) {
     ZoneScoped;
 
-    constexpr int num_elements_in_dword = 8;
-    constexpr int data_dwords_per_exp = 16 / num_elements_in_dword;
-    constexpr int num_exps_in_dword = 4;
-    constexpr int data_dwords_per_exp_dword_log2 = log2(data_dwords_per_exp * num_exps_in_dword);
-    constexpr int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
+    auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    auto num_faces = tile_HW / face_HW;
+    auto subtiles_in_tile_row = tile_H / face_H;
+    auto subtiles_in_tile_col = tile_W / face_W;
+    auto subtile_rows = face_H;
+    auto subtile_cols = face_W;
+
+    int num_elements_in_dword = 8;
+    int data_dwords_per_exp = face_W / num_elements_in_dword;
+    int num_exps_in_dword = 4;
+    int data_dwords_per_exp_dword_log2 = log2(data_dwords_per_exp * num_exps_in_dword);
+    int data_dwords_per_exp_log2 = log2(data_dwords_per_exp);
 
     uint32_t size_bytes = bfp_tiles.size() * 4;
-    uint32_t single_bfp_tile_size = tile_size(tt::DataFormat::Bfp4_b);
+    uint32_t single_bfp_tile_size = tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp4_b) : tile_size(tt::DataFormat::Bfp4_b);
     TT_ASSERT(size_bytes % single_bfp_tile_size == 0);
     uint32_t num_tiles = size_bytes / single_bfp_tile_size;
 
@@ -59,15 +71,13 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
     }
     uint32_t exp_word, sub_word_index;
 
-    constexpr int subtiles_in_tile_row = 2;
-    constexpr int subtiles_in_tile_col = 2;
-    constexpr int subtile_rows = 16;
-    constexpr int subtile_cols = 16;
-    constexpr uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
+    uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
     uint32_t fp32_element_index = 0;
 
-    constexpr int num_bfp_dwords_in_tile = 128 + 16;
-    constexpr int num_dwords_per_row = subtile_cols / num_elements_in_dword;
+    uint32_t num_exp_words = num_faces * face_H / num_exps_in_dword;
+    uint32_t num_tile_words = tile_HW / num_elements_in_dword;
+    int num_bfp_dwords_in_tile = num_tile_words + num_exp_words;
+    int num_dwords_per_row = subtile_cols / num_elements_in_dword;
 
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
@@ -78,7 +88,7 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
                     subtile_r = tr * subtile_rows + i;
                     for (int j = 0; j < subtile_cols; j += 2*num_elements_in_dword) {
                         subtile_c = tc * subtile_cols + j;
-                        data_index = (tr*64 + tc*32 + i*num_dwords_per_row + j/num_elements_in_dword); // Each uint32_t contains 8 BFP4 values. Divide data index by 8
+                        data_index = (tr*(subtiles_in_tile_col*face_HW/num_elements_in_dword) + tc*(face_HW/num_elements_in_dword) + i*num_dwords_per_row + j/num_elements_in_dword); // Each uint32_t contains 8 BFP4 values. Divide data index by 8
                         int tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
 
                         int exponent_index = (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
@@ -90,10 +100,10 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
 
                         // Take 2 uint32_t values. These are 16 BFP4 values
                         // Replicate each uint32 value 8 times - one for each bfp4 value
-                        uint32_t first_val = bfp_tiles.at(16 + tile_and_data_index);
+                        uint32_t first_val = bfp_tiles.at(num_exp_words + tile_and_data_index);
                         __m128i first0 = _mm_set1_epi32(first_val);
                         __m128i first1 = _mm_set1_epi32(first_val);
-                        uint32_t second_val = bfp_tiles.at(16 + tile_and_data_index + 1);
+                        uint32_t second_val = bfp_tiles.at(num_exp_words + tile_and_data_index + 1);
                         __m128i second0 = _mm_set1_epi32(second_val);
                         __m128i second1 = _mm_set1_epi32(second_val);
 
@@ -146,7 +156,7 @@ inline std::vector<float> unpack_bfp4_tiles_into_float_vec(const std::vector<uin
 
                         uint32_t float_data_index;
                         if (row_major_output) {
-                            float_data_index = subtile_c + (32 * subtile_r) + (tile_index * num_float_in_tile);
+                            float_data_index = subtile_c + (tile_W * subtile_r) + (tile_index * num_float_in_tile);
                         } else {
                             float_data_index = fp32_element_index;
                             fp32_element_index += 2*num_elements_in_dword;

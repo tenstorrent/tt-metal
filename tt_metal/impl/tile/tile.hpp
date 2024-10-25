@@ -123,32 +123,6 @@ struct Tile {
         }
     }
 
-    const uint32_t get_tile_volume(const DataFormat& format) const {
-        switch (format) {
-            case DataFormat::Bfp2:
-            case DataFormat::Bfp2_b:
-            case DataFormat::Bfp4:
-            case DataFormat::Bfp4_b:
-            case DataFormat::Bfp8:
-            case DataFormat::Bfp8_b: return tile_hw + (face_shape[0] * num_faces);
-            case DataFormat::Float16:
-            case DataFormat::Float16_b:
-            case DataFormat::Float32: return tile_hw;
-            case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
-            case DataFormat::Int8:
-            case DataFormat::Lf8:
-            case DataFormat::UInt8:
-            case DataFormat::UInt16:
-            case DataFormat::UInt32:
-            case DataFormat::RawUInt8:
-            case DataFormat::RawUInt16:
-            case DataFormat::Int32:
-            case DataFormat::RawUInt32: return tile_hw;
-            case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
-            default: throw std::invalid_argument("Unknown format");
-        }
-    }
-
     // operators
     bool operator==(const Tile& other) const {
         return tile_shape == other.tile_shape && face_shape == other.face_shape;

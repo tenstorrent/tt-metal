@@ -107,19 +107,24 @@ def test_tiny_tiles_transposed_tile(device, n, c, h, w, tile_h, tile_w):
 @pytest.mark.parametrize("w", [768])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
-def test_tiny_tiles_bfloat8(device, n, c, h, w, tile_h, tile_w):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         tile=ttnn.Tile((tile_h, tile_w)),
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     output_tensor = ttnn.to_torch(input_tensor)
-    assert_with_pcc(torch_input_tensor, output_tensor, 0.9999)
+    if dtype == ttnn.bfloat8_b:
+        expected_pcc = 0.9999
+    elif dtype == ttnn.bfloat4_b:
+        expected_pcc = 0.989
+    assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
 @pytest.mark.parametrize("n", [1])

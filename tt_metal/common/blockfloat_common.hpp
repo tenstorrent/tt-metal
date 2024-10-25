@@ -284,8 +284,18 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float>
         BfpFormat == tt::DataFormat::Bfp8_b
     );
 
-    uint32_t single_bfp8_tile_size = tile_size(BfpFormat);
-    int num_float_in_tile = 1024;
+    auto tile_H = tile.has_value() ? tile->get_tile_shape()[0] : tt::constants::TILE_HEIGHT;
+    auto tile_W = tile.has_value() ? tile->get_tile_shape()[1] : tt::constants::TILE_WIDTH;
+    auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
+    auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
+    auto tile_HW = tile_H * tile_W;
+    auto face_HW = face_H * face_W;
+    auto subtiles_in_tile_row = tile_H / face_H;
+    auto subtiles_in_tile_col = tile_W / face_W;
+    auto subtile_rows = face_H;
+    auto subtile_cols = face_W;
+
+    int num_float_in_tile = tile_HW;
     TT_ASSERT(fp32_vec.size() % num_float_in_tile == 0);
     uint32_t num_tiles = fp32_vec.size() / num_float_in_tile;
 
@@ -294,10 +304,6 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float>
     std::vector<uint8_t> exponents;
     std::vector<uint32_t> data;
 
-    int subtiles_in_tile_row = 2;
-    int subtiles_in_tile_col = 2;
-    int subtile_rows = 16;
-    int subtile_cols = 16;
     int num_exponents_in_dword = 4;
     int num_mantissas_in_dword =
         (BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp2_b) ? 16 :
@@ -313,7 +319,7 @@ inline std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(const std::vector<float>
                     for (int j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
-                            data_index = (tr*16 + i)*32 + (tc*16 + j) + (num_float_in_tile * tile_index);
+                            data_index = (tr*face_H + i)*tile_W + (tc*face_W + j) + (num_float_in_tile * tile_index);
                         } else {
                             data_index = fp32_element_index++;
                         }
