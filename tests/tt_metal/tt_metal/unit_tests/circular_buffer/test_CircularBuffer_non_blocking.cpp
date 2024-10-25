@@ -46,7 +46,6 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program &program, Dev
                 {cb_n_pages,cb_n_pages},
                 {1,1}
             ),
-            true
         };
         output_buffers.push_back(CreateBuffer(buffer_config));
     }
