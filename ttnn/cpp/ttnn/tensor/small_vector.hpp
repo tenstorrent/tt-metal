@@ -5,9 +5,12 @@
 #pragma once
 
 #include <boost/container/small_vector.hpp>
-#include <pybind11/stl.h>
 
 #include "tt_metal/tt_stl/reflection.hpp"
+
+#if TTNN_WITH_PYTHON_BINDINGS
+#include <pybind11/stl.h>
+#endif
 
 namespace ttnn {
 
@@ -55,7 +58,9 @@ struct fmt::formatter<ttnn::SmallVector<T, PREALLOCATED_SIZE>> {
     }
 };
 
+#if TTNN_WITH_PYTHON_BINDINGS
 namespace PYBIND11_NAMESPACE { namespace detail {
     template <typename T, size_t PREALLOCATED_SIZE>
     struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {};
 }}
+#endif
