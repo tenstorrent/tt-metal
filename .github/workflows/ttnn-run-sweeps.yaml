@@ -258,6 +258,7 @@ on:
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
+          - data_movement.nonzero.nonzero
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
