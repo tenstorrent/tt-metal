@@ -148,7 +148,7 @@ bool is_close_rtol_0p175_atol_0p1(float a, float b) {
 }
 
 // SFPU maps -> relevant kernels, golden functions, comparison functions
-static std::vector<string> sfpu_op =
+static std::vector<std::string> sfpu_op =
     { "relu",
      "exponential",
      "reciprocal",
@@ -165,7 +165,7 @@ static std::vector<string> sfpu_op =
      "identity"
     };
 
-const map<string, std::function<float(float)>> sfpu_op_to_function = {
+const std::map<std::string, std::function<float(float)>> sfpu_op_to_function = {
     {"relu",        relu},
     {"exponential", exponential},
     {"reciprocal",  reciprocal},
@@ -182,7 +182,7 @@ const map<string, std::function<float(float)>> sfpu_op_to_function = {
     {"identity",    ref_identity}
 };
 
-const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
+const std::map<std::string, std::function<std::vector<uint32_t>(uint32_t num_bytes, int seed)>> sfpu_op_to_init_func = {
     {"relu",        create_random_vector_of_bfloat16_1_1},
     {"exponential", create_random_binary_vector_of_bfloat16},
     {"reciprocal",  create_random_ones_and_twos_vector_of_bfloat16},
@@ -199,7 +199,7 @@ const map<string, std::function<vector<uint32_t>(uint32_t num_bytes, int seed)>>
     {"identity",      create_random_vector_of_bfloat16_1_1}
 };
 
-const map<string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
+const std::map<std::string, std::function<bool(float a, float b)>> sfpu_op_to_comparison_function = {
     {"exponential", equal_within_two_sig_figs},
     {"reciprocal", equal_within_absolute_tolerance_of_0p03},
     {"gelu", is_close_0p015},
