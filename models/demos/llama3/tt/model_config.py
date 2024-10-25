@@ -144,8 +144,6 @@ class TtModelArgs:
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
-        self.n_local_heads = self.n_heads // self.num_devices
-
         # Reduce full 128k context length for combinations with memory constraints
         # Currently: n150 8b and t3k 70b with 8b/8b/8b MLPs
         # Default folder location for weights and cached files
@@ -195,6 +193,8 @@ class TtModelArgs:
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
+            self.n_local_heads = self.n_heads // self.num_devices
+
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
 
@@ -245,9 +245,9 @@ class TtModelArgs:
 
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
-                self.n_heads % self.num_devices == 0,
-                f"n_heads must be divisible by num_devices: {self.n_heads} % {self.num_devices}",
-            )
+                self.n_heads % self.num_devices == 0
+            ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.num_devices}"
+
             self.model_config["ATTN_OUTPUT_PROGCFG"] = self.dram_matmul_config(
                 m=self.tile_padded_batch_rows,
                 k=self.dim // self.num_devices,
