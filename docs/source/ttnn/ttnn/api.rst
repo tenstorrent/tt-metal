@@ -420,6 +420,7 @@ Data Movement
    ttnn.reshape
    ttnn.repeat
    ttnn.repeat_interleave
+   ttnn.slice
    ttnn.tilize
    ttnn.tilize_with_val_padding
    ttnn.fill_rm
