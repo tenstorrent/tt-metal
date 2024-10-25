@@ -433,6 +433,41 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
 }
 
 /**
+ * A non-blocking call that checks if the specified number of pages are available for reservation at the back of the circular buffer.
+ * This call is used by the producer to see if the consumer has freed up the desired space (in pages).
+ *
+ * CB total size must be an even multiple of the argument passed to this call.
+ *
+ * Return value: true if the specified number of pages are available
+ *
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of free tiles to wait for  | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ */
+FORCE_INLINE
+bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+
+    // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
+    // "tiles_pushed" is updated by the producer only when the tiles are pushed
+    uint32_t pages_received = get_cb_tiles_received_ptr(operand)[0];
+
+    invalidate_l1_cache();
+    // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+    // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+    uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+#ifdef ARCH_GRAYSKULL
+    // The following test slows down by 5% when removing the barrier
+    // TODO(pgk) investigate GS arbiter WAR in compiler, is this fixing an issue there?
+    // models/experimental/stable_diffusion/tests/test_perf_unbatched_stable_diffusion.py::test_perf_bare_metal
+    volatile uint32_t local_mem_barrier = pages_acked;
+#endif
+    uint16_t free_space_pages_wrap = cb_interface[operand].fifo_num_pages - (pages_received - pages_acked);
+    return num_pages <=  static_cast<int32_t>(free_space_pages_wrap);
+}
+
+/**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
  * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
  *
@@ -471,6 +506,38 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
         free_space_pages = (int32_t)free_space_pages_wrap;
     } while (free_space_pages < num_pages);
     WAYPOINT("CRBD");
+}
+
+/**
+ * A non-blocking call that tells the caller if the specified number of pages are available in the specified circular buffer (CB).
+ * This call is used by the consumer of the CB to see if the prodcuers has fill the CB with at least the specified number
+ * of tiles. Important note: in case multiple calls of cb_wait_front(n) are issued without a paired cb_pop_front() call,
+ * n is expected to be incremented by the user to be equal to a cumulative total of tiles. Example: 4 calls of
+ * cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of cb_wait_front()
+ * waiting on 8, 16, 24, 32 tiles should be issued.
+ *
+ * Important note: number of tiles used in all cb_* calls must evenly divide the cb size and must be the same number in
+ * all cb_wait_front calls in the same kernel. Example 1: cb_wait_front(32), cb_wait_front(40), cb_pop_front(32+8) tiles
+ * on a CB of size 64 would produce incorrect behavior. Example 2: cb_wait_front(3) on a cb of size 32 would also
+ * produce incorrect behavior. These limitations are due to performance optimizations in the CB implementation.
+ *
+ * Important note: CB total size must be an even multiple of the argument passed to this call.
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                           | Type     | Valid Range | Required |
+ * |-----------|---------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
+ * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ * | num_tiles | The number of tiles to check for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
+ * */
+FORCE_INLINE
+bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
+    uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
+    uint32_t pages_received_ptr = (uint32_t) get_cb_tiles_received_ptr(operand);
+
+    invalidate_l1_cache();
+    uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+    return num_pages <= pages_received;
 }
 
 /**
