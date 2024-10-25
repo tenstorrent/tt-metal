@@ -129,6 +129,8 @@ def gen_rand_bitwise_left_shift(size, shift_bits=None, low=-2147483647, high=214
 
 def gen_with_zeroes(size, probabilityzeroes=0.5, low=-100, high=100, dtype=torch.bfloat16):
     element_count = 1
+    if probabilityzeroes == "random":
+        probabilityzeroes = random.uniform(0.0, 0.9)
     for i in size:
         element_count = element_count * i
     raw = torch.zeros(element_count).to(dtype)

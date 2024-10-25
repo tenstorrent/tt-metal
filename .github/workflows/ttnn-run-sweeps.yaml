@@ -55,6 +55,8 @@ on:
           - eltwise.unary.expm1.expm1
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
+          - eltwise.unary.atanh.atanh
+          - eltwise.unary.atan.atan
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -101,6 +103,8 @@ on:
           - eltwise.unary.identity.identity
           - eltwise.unary.neg.neg
           - eltwise.unary.sinh.sinh
+          - eltwise.unary.asinh.asinh
+          - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
@@ -216,6 +220,8 @@ on:
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
+          - eltwise.binary_backward.rsub_bw.rsub_bw
+          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -233,6 +239,7 @@ on:
           - eltwise.ternary.where.where_pytorch2
           - reduction.topk.topk
           - reduction.argmax.argmax
+          - embedding.embedding
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -262,6 +269,7 @@ on:
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
+          - data_movement.nonzero.nonzero
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
