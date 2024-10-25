@@ -49,7 +49,6 @@ def run_conv_transpose2d(
     pad_w,
     out_pad_h,
     out_pad_w,
-    use_1d_systolic_array=True,
     config_override=None,
     dilation=1,
     use_shallow_conv_variant=False,
@@ -132,12 +131,6 @@ def run_conv_transpose2d(
 
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
-
-    if config_override and "num_cores_nhw" in config_override:
-        if config_override["num_cores_nhw"] == 98:
-            conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
-            conv_config.override_sharding_config = True
-            print("Setting num_cores_nhw to 98")
 
     [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
