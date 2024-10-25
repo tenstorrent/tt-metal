@@ -34,7 +34,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::vector<int32_t>& shape
+               std::span<const int32_t> shape
                ) -> ttnn::Tensor {
                 return self(input_tensor, shape);
             },

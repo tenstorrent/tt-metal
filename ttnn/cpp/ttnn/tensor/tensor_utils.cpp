@@ -266,13 +266,13 @@ static Tensor conv_group_weight_zero_pad_helper(
                 for (int m = 0; m < original_weight_shape[3]; m++) {
                     // Get value from original weight tensor
                     auto value_flat_input_index =
-                        compute_flat_indices({curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
+                        compute_flat_indices(ttnn::SmallVector<int>{curr_batch_idx, j, k, m}, compute_strides(original_weight_shape));
                     auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                     // Copy value to output tensor at the adjusted position
                     auto new_channel_idx = new_channel_start_idx + j;
                     auto output_flat_input_index = compute_flat_indices(
-                        {new_batch_idx, new_channel_idx, k, m}, compute_strides(output_weight_shape));
+                        ttnn::SmallVector<int>{new_batch_idx, new_channel_idx, k, m}, compute_strides(output_weight_shape));
                     output_buffer[output_flat_input_index] = value;
                 }
             }
@@ -301,9 +301,9 @@ static Tensor conv_depthwise_weight_bcast_helper(
             for (int k = 0; k < output_weight_shape[2]; k++) {
                 for (int l = 0; l < output_weight_shape[3]; l++) {
                     auto value_flat_input_index =
-                        compute_flat_indices({i, 0, k, l}, compute_strides(original_weight_shape));
+                        compute_flat_indices(ttnn::SmallVector<int>{i, 0, k, l}, compute_strides(original_weight_shape));
                     auto value = conv_weight_tensor_buffer[value_flat_input_index];
-                    auto output_flat_input_index = compute_flat_indices({i, j, k, l}, compute_strides(output_weight_shape));
+                    auto output_flat_input_index = compute_flat_indices(ttnn::SmallVector<int>{i, j, k, l}, compute_strides(output_weight_shape));
                     output_buffer[output_flat_input_index] = value;
                 }
             }
@@ -456,7 +456,7 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
     TT_THROW("Unsupported weight data type given when trying to add zero padding to weight tensor");
 }
 
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::vector<int32_t>& shape) {
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, std::span<const int32_t> shape) {
     int64_t old_volume = tensor.get_logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
@@ -477,7 +477,7 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::
         }
     }
 
-    std::vector<uint32_t> new_shape(shape.size());
+    ttnn::SmallVector<uint32_t> new_shape(shape.size());
     std::copy(shape.begin(), shape.end(), new_shape.begin());
     if (index_of_negative_1 == -1) {
         TT_FATAL(new_volume == old_volume, "Invalid arguments to reshape");

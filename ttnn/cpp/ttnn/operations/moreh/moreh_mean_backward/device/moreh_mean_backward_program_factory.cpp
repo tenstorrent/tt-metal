@@ -12,7 +12,7 @@
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
-void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t> &dim, const tt::tt_metal::LegacyShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -27,7 +27,7 @@ void get_tensor_dim(std::vector<uint32_t> &dim, const tt::tt_metal::LegacyShape 
 }
 
 tt::tt_metal::LegacyShape get_output_grad_shape(
-    const Tensor &output_grad, const Tensor &input_grad, const std::vector<int64_t> &dims, const bool &keepdim) {
+    const Tensor &output_grad, const Tensor &input_grad, const ttnn::SmallVector<int64_t> &dims, const bool &keepdim) {
     if (keepdim) {
         return output_grad.get_shape().value;
     }
@@ -78,15 +78,15 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     const auto &input_grad_shape_wo_padding = input_grad_shape.without_padding();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
-    std::vector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto &output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
     const auto &output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
-    std::vector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    std::vector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);

@@ -24,9 +24,9 @@ struct ReshapeOperation {
 
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
 
-    static ttnn::Tensor invoke(uint8_t queue_id, const ttnn::Tensor& input_tensor, const std::vector<int32_t>& shape_vector, const std::optional<MemoryConfig>& memory_config_arg);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const std::vector<int32_t>& shape_vector, const std::optional<MemoryConfig>& memory_config_arg);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const std::vector<int32_t>& shape_vector);
+    static ttnn::Tensor invoke(uint8_t queue_id, const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector, const std::optional<MemoryConfig>& memory_config_arg);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector, const std::optional<MemoryConfig>& memory_config_arg);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector);
 };
 
 

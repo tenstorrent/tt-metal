@@ -61,9 +61,9 @@ ttnn::Tensor RepeatOperation::invoke(
     TT_FATAL(output_tensors.size() == 1, "ttnn.repeat: expected 1 output tensor, but got {}", output_tensors.size());
     if (input_tensor.get_layout() != Layout::ROW_MAJOR
         && logical_input_shape != padded_input_shape) {
-        auto zero_indices = std::vector<uint32_t>(input_rank, 0);
-        auto end_indices = repeated_logical_shape.as_vector();
-        auto step = std::vector<uint32_t>(input_rank, 1);
+        auto zero_indices = ttnn::SmallVector<uint32_t>(input_rank, 0);
+        auto end_indices = repeated_logical_shape.view();
+        auto step = ttnn::SmallVector<uint32_t>(input_rank, 1);
 
         if (repeated_logical_shape.volume() % tt::constants::TILE_HW != 0) {
             // volume of the repeated tensor doesn't fit neatly into tiles.
@@ -86,7 +86,7 @@ ttnn::Tensor RepeatOperation::invoke(
             auto padded_width = tt::round_up(sliced_padded_shape[-1], tt::constants::TILE_WIDTH);
             TT_ASSERT(input_rank >= 2, "ttnn.repeat: rank of tiled input tensor must be >= 2");
             uint32_t num_non_hw_dims = input_rank - 2u;
-            auto padding_vec = std::vector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
+            auto padding_vec = ttnn::SmallVector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
             padding_vec.reserve(input_rank);
             padding_vec.emplace_back(0, padded_height - sliced_padded_shape[-2]);
             padding_vec.emplace_back(0, padded_width - sliced_padded_shape[-1]);
@@ -95,8 +95,8 @@ ttnn::Tensor RepeatOperation::invoke(
             auto padded_output = ttnn::pad(queue_id, sliced_output, padding_vec, 0.0f, pad_use_multicore, std::nullopt);
             auto tiled_output = ttnn::tilize(padded_output, input_tensor.memory_config());
 
-            auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.as_vector(),
-                                                     tiled_output.get_padded_shape().as_vector());
+            auto padded_to_tiled_shape = ttnn::Shape(sliced_logical_shape.view(),
+                                                     tiled_output.get_padded_shape().view());
             tiled_output.set_shape(padded_to_tiled_shape);
             return tiled_output;
         } else {

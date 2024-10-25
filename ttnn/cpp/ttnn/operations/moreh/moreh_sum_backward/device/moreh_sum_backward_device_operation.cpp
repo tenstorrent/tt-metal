@@ -120,14 +120,14 @@ std::tuple<MorehSumBackwardOperation::operation_attributes_t, MorehSumBackwardOp
 MorehSumBackwardOperation::invoke(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
-    const std::vector<int64_t>& dims,
+    std::span<const int64_t> dims,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return {
         operation_attributes_t{
-            dims,
+            ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
             keepdim,
             memory_config.value_or(output_grad.memory_config()),
             init_device_compute_kernel_config(

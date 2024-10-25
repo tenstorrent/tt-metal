@@ -19,8 +19,8 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const in
         normal_dim += input_tensor_rank;
     }
 
-    std::vector<uint32_t> original_logical_shape_vector(input_tensor_rank - 1);
-    std::vector<uint32_t> padded_shape_vector(input_tensor_rank - 1);
+    SmallVector<uint32_t> original_logical_shape_vector(input_tensor_rank - 1);
+    SmallVector<uint32_t> padded_shape_vector(input_tensor_rank - 1);
     uint32_t vector_id = 0;
     for(int i=0; i< input_tensor_rank; i++) {
         if(i != normal_dim or original_logical_shape[i] != 1) {

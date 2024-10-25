@@ -73,7 +73,7 @@ std::vector<tt::tt_metal::LegacyShape> FastReduceNCDeviceOperation::compute_outp
 
     // last 2-dim
     output_shape[this->dim] = 1;
-    return {tt::tt_metal::LegacyShape(output_shape.as_vector(), padding)};
+    return {tt::tt_metal::LegacyShape(output_shape.view(), padding)};
 }
 
 std::vector<Tensor> FastReduceNCDeviceOperation::create_output_tensors(
@@ -97,12 +97,12 @@ operation::ProgramWithCallbacks FastReduceNCDeviceOperation::create_program(
 Tensor fast_reduce_nc(
     uint8_t queue_id,
     const ttnn::Tensor& input,
-    const std::vector<int32_t>& dims,
+    std::span<const int32_t> dims,
     const std::optional<const ttnn::Tensor> output,
     const MemoryConfig& output_mem_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
 
-    std::vector<int32_t> sorted_dims = dims;
+    ttnn::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
     auto temp_input = input;

@@ -55,7 +55,7 @@ void MorehGetItemOperation::validate_inputs(
         TT_FATAL(
             dim_start + i == dim,
             "The value of index_dims={} must be consecutive integers.",
-            operation_attributes.index_dims);
+            std::vector(operation_attributes.index_dims.begin(), operation_attributes.index_dims.end()));
         i++;
     }
     if (!output_tensor.has_value()) {
@@ -104,8 +104,8 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
         // index_dims = 1,2
         // output: (10, 1, 100, 40)
         auto dim_offset = 5 - input_shape.rank();
-        auto dimensions_pads = std::vector<Padding::PadDimension>();
-        std::vector<uint32_t> output_size_vec;
+        auto dimensions_pads = SmallVector<Padding::PadDimension>();
+        SmallVector<uint32_t> output_size_vec;
         for (int dim = 0; dim < output_shape.size(); dim++) {
             dimensions_pads.push_back(output_shape.value.padding()[dim]);
             output_size_vec.push_back(output_shape.value[dim]);
@@ -148,7 +148,7 @@ MorehGetItemOperation::shape_return_value_t MorehGetItemOperation::compute_outpu
         // index_tensor: [(100), (100)]
         // index_dims = 1,2
         // output: (10, 100, 40)
-        std::vector<uint32_t> output_size_vec;
+        SmallVector<uint32_t> output_size_vec;
 
         auto input_shape = input_tensor.get_shape();
         uint32_t input_rank = input_shape.rank();
@@ -193,7 +193,7 @@ std::tuple<MorehGetItemOperation::operation_attributes_t, MorehGetItemOperation:
 MorehGetItemOperation::invoke(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const std::vector<uint32_t> index_dims,
+    const ttnn::SmallVector<uint32_t> index_dims,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig> memory_config) {
     operation_attributes_t operation_attributes = {index_dims, memory_config.value_or(input.memory_config())};

@@ -187,7 +187,7 @@ constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpack
 //                                  Layout converters
 // ======================================================================================
 namespace detail {
-static std::vector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
+static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 1) {
         return {1, 1, 1, shape[-1]};
     } else if (shape.rank() == 2) {
@@ -201,14 +201,6 @@ static std::vector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape)
     }
 }
 
-static std::vector<uint32_t> to_vector(const tt::tt_metal::LegacyShape& shape) {
-    std::vector<uint32_t> shape_vec;
-    for (int i = 0; i < shape.rank(); i++) {
-        shape_vec.push_back(shape[i]);
-    }
-    return shape_vec;
-}
-
 }  // namespace detail
 
 template <typename T, template <typename> typename BufferType>
@@ -220,7 +212,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
     auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
+        data_to_convert, std::vector(shape.begin(), shape.end()), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
 }
 
 template <typename T, template <typename> typename BufferType>
@@ -228,7 +220,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::Legac
     auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
+        data_to_convert, std::vector(shape.begin(), shape.end()), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
 }
 
 // ======================================================================================

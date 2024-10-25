@@ -53,7 +53,7 @@ template <typename ShapeType>
 static ttnn::Tensor pad_impl(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::vector<std::pair<uint32_t, uint32_t>> padding,
+    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -116,31 +116,32 @@ static ttnn::Tensor pad_impl(
 ttnn::Tensor ExecutePad::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const std::vector<std::pair<uint32_t, uint32_t>>& padding,
+    std::span<const std::pair<uint32_t, uint32_t>> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_shape().rank();
+    ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vec(padding.begin(), padding.end());
 
     ttnn::Tensor output_tensor;
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         switch (original_rank) {
-            case 1: output_tensor = pad_impl<tt::tt_metal::Array1D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 2: output_tensor = pad_impl<tt::tt_metal::Array2D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 3: output_tensor = pad_impl<tt::tt_metal::Array3D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 4: output_tensor = pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 5: output_tensor = pad_impl<tt::tt_metal::Array5D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
-            case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg); break;
+            case 1: output_tensor = pad_impl<tt::tt_metal::Array1D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 2: output_tensor = pad_impl<tt::tt_metal::Array2D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 3: output_tensor = pad_impl<tt::tt_metal::Array3D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 4: output_tensor = pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 5: output_tensor = pad_impl<tt::tt_metal::Array5D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 6: output_tensor = pad_impl<tt::tt_metal::Array6D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 7: output_tensor = pad_impl<tt::tt_metal::Array7D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
+            case 8: output_tensor = pad_impl<tt::tt_metal::Array8D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg); break;
             default: TT_THROW("Unsupported tensor rank of {}. Needs to be between 1 and 8 inclusively.", original_rank);
         }
     }
     else {
-        output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, padding, value, use_multicore, memory_config_arg);
+        output_tensor =  pad_impl<tt::tt_metal::Array4D>(queue_id, input_tensor, std::move(padding_vec), value, use_multicore, memory_config_arg);
     }
     // output_tensor is currently 4D. We have to squeeze back to the original rank
-    auto to_vec = [](const auto& arr) {return std::vector<uint32_t>(arr.begin(), arr.end());};
+    auto to_vec = [](const auto& arr) {return ttnn::SmallVector<uint32_t>(arr.begin(), arr.end());};
     auto shape = to_vec(output_tensor.get_shape().value);
     auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
     if (auto rank_diff = shape.size() - original_rank; rank_diff) {

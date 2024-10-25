@@ -34,7 +34,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(Tensor conv_weight_tensor, u
 // Converts convolution weights to depthwise layout with broadcasted weights
 Tensor convert_conv_weight_tensor_to_depthwise_layout(Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, const std::vector<int32_t>& shape);
+const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, std::span<const int32_t> shape);
 
 // TODO: Remove this once we switch to SimpleShape .volume()
 static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
@@ -45,12 +45,12 @@ static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
     return volume;
 }
 
-static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
+static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     if (shape.rank() == 0)
         return {};
 
     auto num_elements = shape.volume();
-    std::vector<uint32_t> strides;
+    ttnn::SmallVector<uint32_t> strides;
     for (std::int32_t index = 0; index < shape.rank(); index++) {
         if (shape[index] == 0) {
             // Insert 0 to indicate no memory access for this dimension
@@ -64,7 +64,7 @@ static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     return strides;
 }
 
-static int compute_flat_indices(const std::vector<int>& indices, const std::vector<std::uint32_t> strides) {
+static int compute_flat_indices(std::span<const int> indices, std::span<const uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];

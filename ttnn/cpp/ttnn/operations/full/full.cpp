@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::full {
 Tensor Full::invoke(
-    const std::vector<uint32_t>& shape,
+    const ttnn::SmallVector<uint32_t> shape,
     const std::variant<float, int> fill_value,
     const ttnn::Tensor& any,
     const std::optional<DataType>& dtype,

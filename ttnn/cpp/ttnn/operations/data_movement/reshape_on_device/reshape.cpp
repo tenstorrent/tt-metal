@@ -94,15 +94,15 @@ ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
     return invoke(DefaultQueueId, input_tensor, shape, std::nullopt);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(uint8_t queue_id, const ttnn::Tensor& input_tensor, const std::vector<int32_t> & shape_vector, const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, ttnn::Shape(infer_dims_for_reshape(input_tensor, shape_vector).as_vector()), memory_config_arg);
+ttnn::Tensor ReshapeOperation::invoke(uint8_t queue_id, const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector, const std::optional<MemoryConfig>& memory_config_arg) {
+    return invoke(queue_id, input_tensor, ttnn::Shape(infer_dims_for_reshape(input_tensor, shape_vector).view()), memory_config_arg);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const std::vector<int32_t>& shape_vector, const std::optional<MemoryConfig>& memory_config_arg) {
+ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector, const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(DefaultQueueId, input_tensor, shape_vector, memory_config_arg);
 }
 
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const std::vector<int32_t>& shape_vector) {
+ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, std::span<const int32_t> shape_vector) {
     return invoke(input_tensor, shape_vector, std::nullopt);
 }
 

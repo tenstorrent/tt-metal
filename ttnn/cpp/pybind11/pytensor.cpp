@@ -64,7 +64,7 @@ void log_external_operation(
 #endif
 
 template <typename T>
-Tensor create_owned_tensor(T* data_ptr, size_t num_elements, std::vector<uint32_t>& shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
+Tensor create_owned_tensor(T* data_ptr, size_t num_elements, std::span<const uint32_t> shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
 {
     auto data = std::vector(data_ptr, data_ptr + num_elements);
     auto buffer = owned_buffer::create(std::move(data));
@@ -80,7 +80,7 @@ Tensor convert_torch_tensor_to_tt_tensor(
     }
 
     auto torch_dtype = torch_tensor.attr("dtype");
-    auto shape = py::cast<std::vector<uint32_t>>(torch_tensor.attr("shape"));
+    auto shape = py::cast<ttnn::SmallVector<uint32_t>>(torch_tensor.attr("shape"));
 
     auto contiguous_torch_tensor = torch_tensor.attr("contiguous")();
 
@@ -251,7 +251,7 @@ Tensor convert_numpy_tensor_to_tt_tensor(
     }
 
     auto np_dtype = np_tensor.attr("dtype");
-    auto shape = py::cast<std::vector<uint32_t>>(np_tensor.attr("shape"));
+    auto shape = py::cast<ttnn::SmallVector<uint32_t>>(np_tensor.attr("shape"));
 
     auto contiguous_np_tensor = np.attr("ascontiguousarray")(np_tensor);
 
@@ -1325,7 +1325,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "unpad_from_tile",
-            [](const Tensor &self, const std::vector<uint32_t> &output_tensor_shape) {
+            [](const Tensor &self, const ttnn::SmallVector<uint32_t> &output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::SimpleShape(output_tensor_shape));
             },
             R"doc(
@@ -1593,7 +1593,7 @@ void pytensor_module(py::module &m_tensor) {
         )doc")
         .def(
             "reshape",
-            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(infer_dims_for_reshape(self, {N, C, H, W})); },
+            [](Tensor &self, int N, int C, int H, int W) { return self.reshape(infer_dims_for_reshape(self, ttnn::SmallVector<int>{N, C, H, W})); },
             R"doc(
                 Reshapes TT tensor
 
@@ -1613,7 +1613,7 @@ void pytensor_module(py::module &m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor &self, const std::vector<int32_t> &shape) -> Tensor { return self.reshape(infer_dims_for_reshape(self, shape)); },
+            [](Tensor &self, const ttnn::SmallVector<int32_t> &shape) -> Tensor { return self.reshape(infer_dims_for_reshape(self, shape)); },
             R"doc(
                 Reshapes TT tensor
 

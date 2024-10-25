@@ -33,14 +33,12 @@ ttnn::Tensor host_reshape(const ttnn::Tensor& tensor, const ttnn::Shape& shape) 
     auto rm_tensor = ttnn::to_layout(host_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device *)nullptr);
     if(tensor_shape.has_tile_padding()) {
         ttnn::Tensor slice_input;
-        std::vector<uint32_t> begins;
-        std::vector<uint32_t> ends;
         TT_FATAL(tensor_shape.rank() <= 4, "Only up to 4D tensors");
         auto host_tensor_4d = unsqueeze_to_4D(rm_tensor);
         auto tensor_shape_4d = host_tensor_4d.shape();
-        begins = std::vector<uint32_t>({0, 0, 0, 0});
-        ends = std::vector<uint32_t>({tensor_shape_4d[0], tensor_shape_4d[1], tensor_shape_4d[2], tensor_shape_4d[3]});
-        auto step = std::vector<uint32_t>({1, 1, 1, 1});
+        ttnn::SmallVector<uint32_t> begins({0, 0, 0, 0});
+        ttnn::SmallVector<uint32_t> ends({tensor_shape_4d[0], tensor_shape_4d[1], tensor_shape_4d[2], tensor_shape_4d[3]});
+        ttnn::SmallVector<uint32_t> step({1, 1, 1, 1});
         host_tensor_4d = ttnn::slice(host_tensor_4d, begins, ends, step, std::nullopt);
         host_tensor = squeeze_from_4D(host_tensor_4d, tensor_shape.rank());
     }
@@ -128,12 +126,12 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
-    return invoke(tensor, ttnn::Shape(shape.as_vector()));
+    return invoke(tensor, ttnn::Shape(shape.view()));
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const std::vector<int32_t> & shape_vector
+    std::span<const int32_t> shape_vector
     ) {
     return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector));
 }

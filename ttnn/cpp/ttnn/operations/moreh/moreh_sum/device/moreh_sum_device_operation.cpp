@@ -93,8 +93,8 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
 
         output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
     } else {
-        std::vector<uint32_t> shape;
-        std::vector<Padding::PadDimension> pad_dimensions;
+        ttnn::SmallVector<uint32_t> shape;
+        ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
         auto input_padding = input_shape.value.padding();
 

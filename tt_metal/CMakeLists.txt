@@ -31,6 +31,7 @@ target_link_libraries(
         magic_enum
         fmt
         span
+        Boost::container
 )
 
 target_precompile_headers(

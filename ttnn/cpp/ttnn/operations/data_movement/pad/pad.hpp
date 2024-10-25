@@ -32,7 +32,7 @@ struct ExecutePad {
     // Any rank tensor supported
     static ttnn::Tensor invoke(uint8_t queue_id,
                                    const ttnn::Tensor& input_tensor,
-                                   const std::vector<std::pair<uint32_t, uint32_t>>& padding,
+                                   std::span<const std::pair<uint32_t, uint32_t>> padding,
                                    const float value,
                                    const bool use_multicore,
                                    const std::optional<MemoryConfig>& memory_config_arg);
