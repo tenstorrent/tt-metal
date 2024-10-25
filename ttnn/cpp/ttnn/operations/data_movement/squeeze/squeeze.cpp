@@ -9,8 +9,8 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
-    const auto original_logical_shape = input_tensor.get_shape();
-    const auto padded_shape = input_tensor.get_shape().with_tile_padding();
+    const auto original_logical_shape = input_tensor.get_logical_shape();
+    const auto padded_shape = input_tensor.get_padded_shape();
     const auto input_tensor_rank = original_logical_shape.rank();
 
     int normal_dim =  dim;
@@ -19,21 +19,15 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const in
         normal_dim += input_tensor_rank;
     }
 
-    SmallVector<uint32_t> original_logical_shape_vector(input_tensor_rank - 1);
-    SmallVector<uint32_t> padded_shape_vector(input_tensor_rank - 1);
-    uint32_t vector_id = 0;
-    for(int i=0; i< input_tensor_rank; i++) {
-        if(i != normal_dim or original_logical_shape[i] != 1) {
-            original_logical_shape_vector[vector_id] = original_logical_shape[i];
-            padded_shape_vector[vector_id] = padded_shape[i];
-            vector_id++;
-        }
-    }
-
     // If dim is out of range or original dimension was not of size 1, include all dimensions
-    if (normal_dim >= static_cast<int>(original_logical_shape.size()) || original_logical_shape[normal_dim] != 1) {
+    if (normal_dim < 0 || normal_dim >= original_logical_shape.rank() || original_logical_shape[normal_dim] != 1) {
         return input_tensor;
     }
+
+    SmallVector<uint32_t> original_logical_shape_vector(original_logical_shape.cbegin(), original_logical_shape.cend());
+    SmallVector<uint32_t> padded_shape_vector(padded_shape.cbegin(), padded_shape.cend());
+    original_logical_shape_vector.erase(original_logical_shape_vector.begin() + normal_dim);
+    padded_shape_vector.erase(padded_shape_vector.begin() + normal_dim);
 
     return ttnn::reshape(input_tensor, ttnn::Shape(original_logical_shape_vector, padded_shape_vector));
 }
