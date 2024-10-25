@@ -253,7 +253,7 @@ static void set_reduce_scatter_worker_rt(
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
-    WorkerAttributes &worker_attributes,
+    WorkerAttributes const& worker_attributes,
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
