@@ -239,7 +239,7 @@ void test_dropout(tt_metal::Device* device, const DropoutConfig& test_config) {
 
 }
 
-TEST_F(DeviceFixture, ComputeDropout) {
+TEST_F(DeviceFixture, TensixComputeDropout) {
     if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP();
     }

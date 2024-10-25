@@ -160,7 +160,7 @@ TEST_F(DeviceFixture, TestSimpleL1BufferWriteOnlyHi) {
     }
 }
 
-TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileLo) {
+TEST_F(DeviceFixture, TensixTestSimpleL1ReadWriteTileLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = 768 * 1024;
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(
@@ -172,7 +172,7 @@ TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileLo) {
     }
 }
 
-TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileHi) {
+TEST_F(DeviceFixture, TensixTestSimpleL1ReadWriteTileHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(
@@ -184,7 +184,7 @@ TEST_F(DeviceFixture, TestSimpleL1ReadWriteTileHi) {
     }
 }
 
-TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
+TEST_F(DeviceFixture, TensixTestSimpleL1ReadWritex2y2TileLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = 768 * 1024;
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(
@@ -196,7 +196,7 @@ TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileLo) {
     }
 }
 
-TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
+TEST_F(DeviceFixture, TensixTestSimpleL1ReadWritex2y2TileHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(
@@ -208,7 +208,7 @@ TEST_F(DeviceFixture, TestSimpleL1ReadWritex2y2TileHi) {
     }
 }
 
-TEST_F(DeviceFixture, TestBufferL1ReadWriteTileLo) {
+TEST_F(DeviceFixture, TensixTestBufferL1ReadWriteTileLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = 768 * 1024;
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(
@@ -220,7 +220,7 @@ TEST_F(DeviceFixture, TestBufferL1ReadWriteTileLo) {
     }
 }
 
-TEST_F(DeviceFixture, TestBufferL1ReadWriteTileHi) {
+TEST_F(DeviceFixture, TensixTestBufferL1ReadWriteTileHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(

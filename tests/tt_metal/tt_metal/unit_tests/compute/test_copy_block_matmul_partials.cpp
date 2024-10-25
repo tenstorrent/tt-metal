@@ -170,7 +170,7 @@ void run_single_core_copy_block_matmul_partials(tt_metal::Device* device, const 
 // - matmul_pack_tile
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(DeviceFixture, DISABLED_ComputeCopyBlockSingle) {
+TEST_F(DeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
@@ -185,7 +185,7 @@ TEST_F(DeviceFixture, DISABLED_ComputeCopyBlockSingle) {
         }
     }
 }
-TEST_F(DeviceFixture, ComputeCopyBlockMultiple) {
+TEST_F(DeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;
@@ -204,7 +204,7 @@ TEST_F(DeviceFixture, ComputeCopyBlockMultiple) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeCopyBlockComputeBottleneck) {
+TEST_F(DeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
         // FP32 dest acc not possible for GS
         if ((fp32_dest_acc_en == true) && (this->arch_ == tt::ARCH::GRAYSKULL)) continue;

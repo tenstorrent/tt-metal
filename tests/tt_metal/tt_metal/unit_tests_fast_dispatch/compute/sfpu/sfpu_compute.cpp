@@ -233,7 +233,7 @@ bool run_sfpu_all_same_buffer(CommandQueue & cq, const SfpuConfig& test_config) 
 class SingleCoreSingleCardSfpuParameterizedFixture : public CommandQueueSingleCardFixture,
                                                        public testing::WithParamInterface<std::tuple<size_t, string>> {
 };
-TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, SfpuCompute) {
+TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
     for (Device* device_: devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
@@ -279,7 +279,7 @@ class SingleCoreSingleCardSfpuParameterizedApproxFixture
     : public CommandQueueSingleCardFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
-TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, SfpuCompute) {
+TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
     for (Device* device_: devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
@@ -326,7 +326,7 @@ class MultiCoreSingleCardSfpuParameterizedApproxFixture
     : public CommandQueueSingleCardFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
-TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, AllCoreMultiTileSfpuApproxCompute) {
+TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
     for (Device* device_: devices_) {
 
         size_t num_tiles = std::get<0>(GetParam());

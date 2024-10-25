@@ -264,14 +264,14 @@ detail::LaunchProgram(device, program);
 
 }   // end namespace local_test_functions
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, false));
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0, "Error");
@@ -289,7 +289,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
@@ -298,7 +298,7 @@ TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::DRAM) % 2 == 0, "Error");
@@ -318,14 +318,14 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1WriterOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1WriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true));
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1WriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0, "Error");
@@ -343,7 +343,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1WriterOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramWriterOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
@@ -352,7 +352,7 @@ TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramWriterOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramWriterOnly) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         TT_FATAL(this->devices_.at(id)->num_banks(BufferType::DRAM) % 2 == 0, "Error");
@@ -372,14 +372,14 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramWriterOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         EXPECT_TRUE(local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true));
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
@@ -397,7 +397,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
@@ -406,7 +406,7 @@ TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
@@ -426,7 +426,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
@@ -434,7 +434,7 @@ TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedDramReaderAndL1Writer) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
@@ -454,7 +454,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderAndL1Writer) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.output_buffer_type = BufferType::DRAM;
@@ -462,7 +462,7 @@ TEST_F(DeviceFixture, TestSingleCoreSingleTileBankedL1ReaderAndDramWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         test_config.output_buffer_type = BufferType::DRAM;
@@ -482,7 +482,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderAndDramWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
@@ -501,7 +501,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::DRAM);
@@ -521,7 +521,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter)
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
@@ -542,7 +542,7 @@ TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
     }
 }
 
-TEST_F(DeviceFixture, TestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
+TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
         size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);

@@ -102,7 +102,7 @@ void try_creating_more_than_max_num_semaphores(
 
 }  // namespace unit_tests::initialize_semaphores
 
-TEST_F(DeviceFixture, InitializeLegalSemaphores) {
+TEST_F(DeviceFixture, TensixInitializeLegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range({0, 0}, {1, 1});
@@ -111,7 +111,7 @@ TEST_F(DeviceFixture, InitializeLegalSemaphores) {
     }
 }
 
-TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
+TEST_F(DeviceFixture, TensixInitializeIllegalSemaphores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range({0, 0}, {1, 1});
@@ -121,7 +121,7 @@ TEST_F(DeviceFixture, InitializeIllegalSemaphores) {
     }
 }
 
-TEST_F(DeviceFixture, CreateMultipleSemaphoresOnSameCore) {
+TEST_F(DeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core0(0,0);

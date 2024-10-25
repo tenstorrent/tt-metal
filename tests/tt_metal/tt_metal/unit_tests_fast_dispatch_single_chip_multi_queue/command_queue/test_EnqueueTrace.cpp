@@ -70,7 +70,7 @@ Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
 // the eager mode results
 namespace basic_tests {
 
-TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
     Setup(2048, 2);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -111,7 +111,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTrace) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoops) {
     Setup(4096, 2);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -162,7 +162,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceLoops) {
     ReleaseTrace(this->device_, trace_id);
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueOneProgramTraceBenchmark) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenchmark) {
     Setup(6144, 2);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);

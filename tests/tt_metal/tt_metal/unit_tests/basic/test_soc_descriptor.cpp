@@ -43,7 +43,7 @@ namespace unit_tests::basic::soc_desc {
 
 
 // This test ensures that no logical core maps to a harvested row
-TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
+TEST_F(BasicFixture, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     size_t num_devices = tt_metal::GetNumAvailableDevices();
     ASSERT_TRUE(num_devices > 0);
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -67,7 +67,7 @@ TEST_F(BasicFixture, ValidateLogicalToPhysicalCoreCoordHostMapping) {
     }
 }
 
-TEST_F(DeviceFixture, ValidateMetalSocDescriptors) {
+TEST_F(DeviceFixture, TensixValidateMetalSocDescriptors) {
     for (chip_id_t device_id = 0; device_id < this->num_devices_; device_id++) {
         const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
 

@@ -651,7 +651,7 @@ namespace basic_tests {
 
 namespace compiler_workaround_hardware_bug_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestArbiterDoesNotHang) {
     for (Device *device : devices_) {
         Program program;
 
@@ -669,7 +669,7 @@ TEST_F(CommandQueueSingleCardFixture, TestArbiterDoesNotHang) {
 }
 namespace single_core_tests {
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -682,7 +682,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlySentSingleCore)
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestMultiCbSeqConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -699,7 +699,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbSeqConfigCorrectlySentSingleCor
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestMultiCbRandomConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -716,7 +716,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbRandomConfigCorrectlySentSingle
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -770,7 +770,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCBSharedAddressSpaceSentSingleCor
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestSingleCbConfigCorrectlyUpdateSizeSentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -783,7 +783,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleCbConfigCorrectlyUpdateSizeSentS
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestSingleSemaphoreConfigCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -794,7 +794,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSingleSemaphoreConfigCorrectlySentSing
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
     for (Device *device : devices_) {
         Program program;
 
@@ -812,7 +812,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAutoInsertedBlankBriscKernelInDeviceDi
 }
 
 // Sanity test for setting and verifying common and unique runtime args to a single core, the simplest case.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreCompute) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanitySingleCoreCompute) {
     CoreRange cr0({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr0});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -822,7 +822,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreComput
 }
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return 0 active eth cores, that's okay.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
+TEST_F(CommandQueueSingleCardFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
@@ -836,7 +836,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanitySingleCoreDataMo
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC(IDLE). Some arch may return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
@@ -850,7 +850,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleC
 
 // Sanity test for setting and verifying common and unique runtime args to single cores via inactive ERISC cores. Some arch may return 0 active eth cores, that's okay.
 // FIXME - Re-enable when FD-on-idle-eth is supported
-TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (Device *device : devices_) {
         for (const auto &eth_core : device->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
@@ -862,7 +862,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_IncrementRuntimeArgsSanitySingleC
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestRuntimeArgsCorrectlySentSingleCore) {
     CoreRange cr({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr});
 
@@ -876,7 +876,7 @@ TEST_F(CommandQueueSingleCardFixture, TestRuntimeArgsCorrectlySentSingleCore) {
 }  // end namespace single_core_tests
 
 namespace multicore_tests {
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -896,7 +896,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultiCore) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector <CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -916,7 +916,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMul
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultiCore) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -937,7 +937,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -958,7 +958,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentMultipleCoreR
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config = {.num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
 
     std::vector<CBConfig> cb_config_vector(NUM_CIRCULAR_BUFFERS, cb_config);
@@ -979,7 +979,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllCbConfigsCorrectlySentUpdateSizeMul
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestMultiCbConfigsCorrectlySentUpdateSizeMultipleCoreRanges) {
     CBConfig cb_config_0 = {.cb_id = 0, .num_pages = 1, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_1 = {.cb_id = 1, .num_pages = 2, .page_size = 4096, .data_format = tt::DataFormat::Float16_b};
     CBConfig cb_config_2 = {.cb_id = 2, .num_pages = 2, .page_size = 2048, .data_format = tt::DataFormat::Float16_b};
@@ -1001,7 +1001,7 @@ TEST_F(CommandQueueSingleCardFixture, TestMultiCbConfigsCorrectlySentUpdateSizeM
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1014,7 +1014,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemConfigsCorrectlySentMultiCore) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
     for (Device *device : devices_)
     {
         CoreRange first_cr({0, 0}, {1, 1});
@@ -1054,7 +1054,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllSemaphoreConfigsCorrectlySentMultip
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1066,7 +1066,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore) 
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1078,7 +1078,7 @@ TEST_F(CommandQueueSingleCardFixture, TestAllRuntimeArgsCorrectlySentMultiCore_2
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
     for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1092,7 +1092,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiCoreRange) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCoreRange) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
     // Core ranges get merged in kernel groups, this one does not
     for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1107,7 +1107,7 @@ TEST_F(CommandQueueSingleCardFixture, TestSendRuntimeArgsMultiNonOverlappingCore
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
+TEST_F(CommandQueueSingleCardFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
     for (Device* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1122,7 +1122,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUpdateRuntimeArgsMultiCoreRange) {
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
@@ -1133,7 +1133,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 }
 
 // Max number of 255 unique RT args.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
@@ -1144,7 +1144,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 }
 
 // Max number of 255 common RT args.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
@@ -1155,7 +1155,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreCompute
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via BRISC.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementBrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
@@ -1166,7 +1166,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMov
 }
 
 // Sanity test for setting and verifying common and unique runtime args to multiple cores via NCRISC.
-TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
+TEST_F(CommandQueueSingleCardFixture, TensixIncrementRuntimeArgsSanityMultiCoreDataMovementNcrisc) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
@@ -1183,7 +1183,7 @@ TEST_F(CommandQueueSingleCardFixture, IncrementRuntimeArgsSanityMultiCoreDataMov
 namespace stress_tests {
 
 
-TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
+TEST_F(CommandQueueSingleCardFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
     for (Device *device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1197,7 +1197,7 @@ TEST_F(CommandQueueSingleCardFixture, DISABLED_TestFillDispatchCoreBuffer) {
     }
 }
 
-TEST_F(CommandQueueFixture, TestRandomizedProgram) {
+TEST_F(CommandQueueFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;

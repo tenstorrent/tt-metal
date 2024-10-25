@@ -81,7 +81,7 @@ bool dram_ping(
 }
 }  // namespace unit_tests::basic::device
 
-TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
+TEST_F(BasicFixture, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
@@ -163,7 +163,7 @@ TEST_F(DeviceFixture, PingIllegalDramChannels) {
     }
 }
 
-TEST_F(DeviceFixture, PingAllLegalL1Cores) {
+TEST_F(DeviceFixture, TensixPingAllLegalL1Cores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         {
             size_t start_byte_address = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
@@ -198,7 +198,7 @@ TEST_F(DeviceFixture, PingAllLegalL1Cores) {
     }
 }
 
-TEST_F(DeviceFixture, PingIllegalL1Cores) {
+TEST_F(DeviceFixture, TensixPingIllegalL1Cores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto grid_size = devices_.at(id)->logical_grid_size();
         grid_size.x++;
@@ -215,7 +215,7 @@ TEST_F(DeviceFixture, PingIllegalL1Cores) {
 // 2. Launch a kernel to read and increment the value in each bank
 // 3. Host validates that the value from step 1 has been incremented
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
-TEST_F(DeviceFixture, ValidateKernelDoesNotTargetHarvestedCores) {
+TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         uint32_t num_l1_banks = this->devices_.at(id)->num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
@@ -280,7 +280,7 @@ TEST_F(DeviceFixture, TestDeviceToHostMemChannelAssignment) {
 }
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
-TEST_F(DeviceFixture, TestL1ToPCIeAt16BAlignedAddress) {
+TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     tt_metal::Program program = tt_metal::CreateProgram();
     Device *device = this->devices_.at(0);
     EXPECT_TRUE(device->is_mmio_capable());

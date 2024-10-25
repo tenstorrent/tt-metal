@@ -66,7 +66,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 }
 
-TEST_F(DPrintFixture, TestPrintMuting) {
+TEST_F(DPrintFixture, TensixTestPrintMuting) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }

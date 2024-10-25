@@ -200,7 +200,7 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
 
 namespace host_command_queue_tests {
 
-TEST_F(CommandQueueFixture, TestAsyncCommandQueueSanityAndProfile) {
+TEST_F(CommandQueueFixture, TensixTestAsyncCommandQueueSanityAndProfile) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
@@ -263,7 +263,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
+TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -306,7 +306,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncCBAllocation) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
+TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
@@ -332,7 +332,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncAssertForDeprecatedAPI) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestAsyncFlattenStress){
+TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncFlattenStress){
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);

@@ -384,7 +384,7 @@ void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig
 
 using namespace unit_tests::compute::reduce;
 
-TEST_F(DeviceFixture, ComputeReduceH) {
+TEST_F(DeviceFixture, TensixComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -422,7 +422,7 @@ TEST_F(DeviceFixture, ComputeReduceH) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeReduceW) {
+TEST_F(DeviceFixture, TensixComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -457,7 +457,7 @@ TEST_F(DeviceFixture, ComputeReduceW) {
     }
 }
 // Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_ComputeReduceHW) {
+TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -493,7 +493,7 @@ TEST_F(DeviceFixture, DISABLED_ComputeReduceHW) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeReduceHMathOnly) {
+TEST_F(DeviceFixture, TensixComputeReduceHMathOnly) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -532,7 +532,7 @@ TEST_F(DeviceFixture, ComputeReduceHMathOnly) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
+TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -568,7 +568,7 @@ TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
     }
 }
 // Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_ComputeReduceHWMathOnly) {
+TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWMathOnly) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -605,7 +605,7 @@ TEST_F(DeviceFixture, DISABLED_ComputeReduceHWMathOnly) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeReduceHShortInit) {
+TEST_F(DeviceFixture, TensixComputeReduceHShortInit) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -644,7 +644,7 @@ TEST_F(DeviceFixture, ComputeReduceHShortInit) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeReduceWShortInit) {
+TEST_F(DeviceFixture, TensixComputeReduceWShortInit) {
     std::vector<uint32_t> shape = {1, 3, 17*TILE_HEIGHT, 19*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -680,7 +680,7 @@ TEST_F(DeviceFixture, ComputeReduceWShortInit) {
     }
 }
 // Disabled due to GH issue #14510
-TEST_F(DeviceFixture, DISABLED_ComputeReduceHWShortInit) {
+TEST_F(DeviceFixture, DISABLED_TensixComputeReduceHWShortInit) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {

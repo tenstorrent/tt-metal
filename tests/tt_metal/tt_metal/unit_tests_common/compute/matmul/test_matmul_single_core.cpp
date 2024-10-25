@@ -216,7 +216,7 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
 }
 } // namespace unit_tests_common::matmul::test_matmul_single_core
 
-TEST_F (CommonFixture, MatmulSingleCoreSmall){
+TEST_F (CommonFixture, TensixMatmulSingleCoreSmall){
     uint32_t M = 4;
     uint32_t K = 4;
     uint32_t N = 4;
@@ -227,7 +227,7 @@ TEST_F (CommonFixture, MatmulSingleCoreSmall){
     }
 }
 
-TEST_F (CommonFixture, MatmulSingleCore){
+TEST_F (CommonFixture, TensixMatmulSingleCore){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();

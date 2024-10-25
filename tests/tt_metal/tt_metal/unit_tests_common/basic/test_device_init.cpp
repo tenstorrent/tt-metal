@@ -92,7 +92,7 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
     }
 }
 
-TEST_P(DeviceParamFixture, DeviceLoadBlankKernels) {
+TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     unsigned int num_devices = GetParam();
     unsigned int num_pci_devices = tt::tt_metal::GetNumPCIeDevices();
     if ((arch == tt::ARCH::GRAYSKULL && num_devices > 1) || (num_devices > num_pci_devices)) {

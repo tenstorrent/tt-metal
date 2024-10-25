@@ -365,7 +365,7 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
 
 }
 
-TEST_F(CommonFixture, MatmulLargeBlock) {
+TEST_F(CommonFixture, TensixMatmulLargeBlock) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;;
         tt::log_info(tt::LogTest, "Math Fidelity = {}", i);

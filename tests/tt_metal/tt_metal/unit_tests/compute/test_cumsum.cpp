@@ -179,7 +179,7 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 }
 }
 
-TEST_F(DeviceFixture, ComputeCumsumColumnwise) {
+TEST_F(DeviceFixture, TensixComputeCumsumColumnwise) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP(); // Not implemented for GRAYSKULL
@@ -201,7 +201,7 @@ TEST_F(DeviceFixture, ComputeCumsumColumnwise) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeCumsumRowwise) {
+TEST_F(DeviceFixture, TensixComputeCumsumRowwise) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP(); // Not implemented for GRAYSKULL

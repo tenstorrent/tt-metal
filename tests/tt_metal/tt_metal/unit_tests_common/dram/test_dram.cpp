@@ -139,7 +139,7 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
 }
 }
 
-TEST_F(CommonFixture, DRAMLoopbackSingleCore){
+TEST_F(CommonFixture, TensixDRAMLoopbackSingleCore){
     uint32_t buffer_size = 2 * 1024 * 25;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -155,7 +155,7 @@ TEST_F(CommonFixture, DRAMLoopbackSingleCore){
     }
 }
 
-TEST_F(CommonFixture, DRAMLoopbackSingleCoreDB){
+TEST_F(CommonFixture, TensixDRAMLoopbackSingleCoreDB){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();

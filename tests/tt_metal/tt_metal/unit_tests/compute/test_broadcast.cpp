@@ -293,7 +293,7 @@ class BroadcastParametrizedDeviceFixture : public DeviceFixture,
                                            public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {
 };
 
-TEST_P(BroadcastParametrizedDeviceFixture, ComputeSingleTileBroadcast) {
+TEST_P(BroadcastParametrizedDeviceFixture, TensixComputeSingleTileBroadcast) {
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;

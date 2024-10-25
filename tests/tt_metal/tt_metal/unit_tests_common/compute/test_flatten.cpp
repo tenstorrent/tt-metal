@@ -191,7 +191,7 @@ bool flatten(CommonFixture *fixture, tt_metal::Device *device, uint32_t num_tile
 
 }
 
-TEST_F(CommonFixture, Flatten){
+TEST_F(CommonFixture, TensixFlatten){
     // TODO: Re-enable when #7264 is fixed
     GTEST_SKIP();
     uint32_t num_tiles_r = 2;

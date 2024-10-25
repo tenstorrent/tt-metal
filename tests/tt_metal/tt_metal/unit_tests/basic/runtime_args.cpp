@@ -168,7 +168,7 @@ bool verify_results(
 }
 
 // Write unique and common runtime args to device and readback to verify written correctly.
-TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
+TEST_F(DeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
@@ -214,7 +214,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsDataMovement) {
     }
 }
 
-TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
+TEST_F(DeviceFixture, TensixLegallyModifyRTArgsCompute) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
@@ -244,7 +244,7 @@ TEST_F(DeviceFixture, LegallyModifyRTArgsCompute) {
 }
 
 // Don't cover all cores of kernel with SetRuntimeArgs. Verify that correct offset used to access common runtime args.
-TEST_F(DeviceFixture, SetRuntimeArgsSubsetOfCoresCompute) {
+TEST_F(DeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
@@ -272,7 +272,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsSubsetOfCoresCompute) {
 }
 
 // Different unique runtime args per core. Not overly special, but verify that it works.
-TEST_F(DeviceFixture, SetRuntimeArgsUniqueValuesCompute) {
+TEST_F(DeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
@@ -305,7 +305,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsUniqueValuesCompute) {
 
 // Some cores have more unique runtime args than others. Unused in kernel, but API supports it, so verify it works and that
 // common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
-TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
+TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
@@ -356,7 +356,7 @@ TEST_F(DeviceFixture, SetRuntimeArgsVaryingLengthPerCore) {
 }
 
 // Too many unique and common runtime args, overflows allowed space and throws expected exception from both unique/common APIs.
-TEST_F(DeviceFixture, IllegalTooManyRuntimeArgs) {
+TEST_F(DeviceFixture, TensixIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
         CoreRangeSet core_range_set(first_core_range);
@@ -376,7 +376,7 @@ TEST_F(DeviceFixture, IllegalTooManyRuntimeArgs) {
     }
 }
 
-TEST_F(DeviceFixture, IllegallyModifyRTArgs) {
+TEST_F(DeviceFixture, TensixIllegallyModifyRTArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));

@@ -278,7 +278,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
 }
 }  // namespace unit_tests::compute::binary
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -296,7 +296,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileAdd) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -314,7 +314,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileSub) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -332,7 +332,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileMul) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileAddFullInit) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -351,7 +351,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileAddFullInit) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileSubFullInit) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -370,7 +370,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileSubFullInit) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileMulFullInit) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -389,7 +389,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreSingleTileMulFullInit) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddWithDestReuse) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddWithDestReuse) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -407,7 +407,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddWithDestReuse) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubWithDestReuse) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubWithDestReuse) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -425,7 +425,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubWithDestReuse) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMulWithDestReuse) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulWithDestReuse) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -443,7 +443,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMulWithDestReuse) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -461,7 +461,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAdd) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -479,7 +479,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSub) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
@@ -497,7 +497,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMul) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddDestAcc) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -521,7 +521,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileAddDestAcc) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubDestAcc) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -545,7 +545,7 @@ TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileSubDestAcc) {
     }
 }
 
-TEST_F(DeviceFixture, BinaryComputeSingleCoreMultiTileMulDestAcc) {
+TEST_F(DeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();

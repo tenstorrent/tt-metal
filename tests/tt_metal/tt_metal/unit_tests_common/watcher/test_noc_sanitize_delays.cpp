@@ -154,7 +154,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord 
         EXPECT_TRUE((read_vec[0] >> 24) == 0x3);
 }
 
-TEST_F(WatcherDelayFixture, TestWatcherSanitizeInsertDelays) {
+TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
 

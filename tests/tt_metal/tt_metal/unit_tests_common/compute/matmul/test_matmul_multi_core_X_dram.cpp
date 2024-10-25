@@ -498,7 +498,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
 
 }
 
-TEST_F(CommonFixture, MatmulMultiCoreSingleDRAM){
+TEST_F(CommonFixture, TensixMatmulMultiCoreSingleDRAM){
     const char* arch = getenv("ARCH_NAME");
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is only supported in slow dispatch mode");
@@ -512,7 +512,7 @@ TEST_F(CommonFixture, MatmulMultiCoreSingleDRAM){
     }
 }
 
-TEST_F(CommonFixture, MatmulMultiCoreMultiDRAM){
+TEST_F(CommonFixture, TensixMatmulMultiCoreMultiDRAM){
     // need to update move_tiles_to_dram to support both slow and fast
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");

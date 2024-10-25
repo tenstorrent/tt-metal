@@ -123,7 +123,7 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 }
 }
 
-TEST_F(CommonFixture, DRAMtoL1Multicast){
+TEST_F(CommonFixture, TensixDRAMtoL1Multicast){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -133,7 +133,7 @@ TEST_F(CommonFixture, DRAMtoL1Multicast){
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
     }
 }
-TEST_F(CommonFixture, DRAMtoL1MulticastLoopbackSrc){
+TEST_F(CommonFixture, TensixDRAMtoL1MulticastLoopbackSrc){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,

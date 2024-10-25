@@ -12,7 +12,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt::tt_metal;
 
-TEST(DPrintErrorChecking, TestPrintInvalidCore) {
+TEST(DPrintErrorChecking, TensixTestPrintInvalidCore) {
     // Set DPRINT enabled on a mix of invalid and valid cores. Previously this would hang during
     // device setup, but not the print server should simply ignore the invalid cores.
     std::map<CoreType, std::vector<CoreCoord>> dprint_cores;

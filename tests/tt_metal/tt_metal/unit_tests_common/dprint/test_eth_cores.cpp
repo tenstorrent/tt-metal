@@ -81,7 +81,7 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
 }
 }
 
-TEST_F(DPrintFixture, TestPrintEthCores) {
+TEST_F(DPrintFixture, ActiveEthTestPrint) {
     for (Device* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {
@@ -96,7 +96,7 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
         );
     }
 }
-TEST_F(DPrintFixture, TestPrintIEthCores) {
+TEST_F(DPrintFixture, IdleEthTestPrint) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();

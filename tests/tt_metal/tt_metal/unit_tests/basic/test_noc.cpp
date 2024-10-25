@@ -72,7 +72,7 @@ void read_translation_table (Device* device, CoreCoord logical_node, std::vector
 
 
 
-TEST_F(BasicFixture, VerifyNocNodeIDs) {
+TEST_F(BasicFixture, TensixVerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
@@ -95,7 +95,7 @@ TEST_F(BasicFixture, VerifyNocNodeIDs) {
     }
     ASSERT_TRUE(tt::tt_metal::CloseDevice(device));
 }
-TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
+TEST_F(BasicFixture, TensixVerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
     if (arch == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP();
@@ -133,7 +133,7 @@ TEST_F(BasicFixture, VerifyNocIdentityTranslationTable) {
 
 // Tests that kernel can write to and read from a stream register address
 // This is meant to exercise noc_inline_dw_write API
-TEST_F(DeviceFixture, DirectedStreamRegWriteRead) {
+TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
     CoreCoord start_core{0, 0};
     const uint32_t stream_id = 0;
     const uint32_t stream_reg = 4;

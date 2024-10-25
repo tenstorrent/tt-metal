@@ -230,7 +230,7 @@ static bool reader_datacopy_writer(
     return input_data == output_data;
 }
 
-TEST_F(DPrintFixture, TestDestPrintFloat16b) {
+TEST_F(DPrintFixture, TensixTestDestPrintFloat16b) {
     // Setup test configuration
     DestPrintTestConfig test_config = {
         .num_tiles = 2,
@@ -246,7 +246,7 @@ TEST_F(DPrintFixture, TestDestPrintFloat16b) {
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, TestDestPrintFloat32) {
+TEST_F(DPrintFixture, TensixTestDestPrintFloat32) {
     // Setup test configuration
     DestPrintTestConfig test_config = {
         .num_tiles = 2,
@@ -266,7 +266,7 @@ TEST_F(DPrintFixture, TestDestPrintFloat32) {
         this->devices_[0]);
 }
 
-TEST_F(DPrintFixture, TestDestPrintFloat32RemapAndSwizzle) {
+TEST_F(DPrintFixture, TensixTestDestPrintFloat32RemapAndSwizzle) {
     // Setup test configuration
     DestPrintTestConfig test_config = {
         .num_tiles = 3,

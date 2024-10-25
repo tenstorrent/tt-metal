@@ -324,7 +324,7 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
 // - pack_reconfig_l1_acc
 ////////////////////////////////////////////////////////////////////////////
 
-TEST_F(DeviceFixture, TileCopyReconfigExplicitSplitDstAcc) {
+TEST_F(DeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -363,7 +363,7 @@ TEST_F(DeviceFixture, TileCopyReconfigExplicitSplitDstAcc) {
     }
 }
 
-TEST_F(DeviceFixture, TileCopyReconfigL1Acc) {
+TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();

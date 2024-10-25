@@ -92,7 +92,7 @@ constexpr bool kBlocking = true;
 constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
-TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
+TEST_F(SingleDeviceTraceFixture, TensixInstantiateTraceSanity) {
     Setup(2048);
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -124,7 +124,7 @@ TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramTraceCapture) {
     Setup(2048);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -167,7 +167,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramDeviceCapture) {
     Setup(2048);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -218,7 +218,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueTwoProgramTrace) {
     Setup(6144);
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
@@ -294,7 +294,7 @@ TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
     }
 }
 
-TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
+TEST_F(SingleDeviceTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     Setup(6144);
     CommandQueue& command_queue = this->device_->command_queue();
 

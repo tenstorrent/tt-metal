@@ -37,7 +37,7 @@ class ProgramWithKernelCreatedFromStringFixture : public CommonFixture {
     std::map<chip_id_t, Device *> device_ids_to_devices_;
 };
 
-TEST_F(ProgramWithKernelCreatedFromStringFixture, DataMovementKernel) {
+TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const string &kernel_src_code = R"(
     #include "debug/dprint.h"
@@ -62,7 +62,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, DataMovementKernel) {
     };
 }
 
-TEST_F(ProgramWithKernelCreatedFromStringFixture, ComputeKernel) {
+TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const string &kernel_src_code = R"(
     #include "debug/dprint.h"
@@ -94,7 +94,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ComputeKernel) {
     };
 }
 
-TEST_F(ProgramWithKernelCreatedFromStringFixture, EthernetKernel) {
+TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     const string &kernel_src_code = R"(
     #include "debug/dprint.h"
     #include "dataflow_api.h"

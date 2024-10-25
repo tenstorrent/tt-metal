@@ -46,7 +46,7 @@ bool test_cb_config_written_to_core(Program &program, Device *device, const Core
     return pass;
 }
 
-TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
+TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     CBConfig cb_config;
 
     CoreRange cr({0, 0}, {0, 1});
@@ -95,7 +95,7 @@ TEST_F(DeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
     EXPECT_ANY_THROW(CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
-TEST_F(DeviceFixture, TestCreateCircularBufferAtOverlappingIndex) {
+TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {
     Program program;
     CBConfig cb_config;
 

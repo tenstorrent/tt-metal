@@ -351,7 +351,7 @@ using namespace unit_tests_common::matmul::test_matmul_X_tile;
 }
 */
 
-TEST_F(CommonFixture, MatmulSingleTile){
+TEST_F(CommonFixture, TensixMatmulSingleTile){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -377,7 +377,7 @@ TEST_F(CommonFixture, MatmulSingleTile){
     }
 }
 
-TEST_F(CommonFixture, MatmulMultiTile){
+TEST_F(CommonFixture, TensixMatmulMultiTile){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -410,7 +410,7 @@ TEST_F(CommonFixture, MatmulMultiTile){
     }
 }
 
-TEST_F(CommonFixture, MatmulBlock){
+TEST_F(CommonFixture, TensixMatmulBlock){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -441,7 +441,7 @@ TEST_F(CommonFixture, MatmulBlock){
     }
 }
 
-TEST_F(CommonFixture, MatmulBlockInitShort){
+TEST_F(CommonFixture, TensixMatmulBlockInitShort){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -472,7 +472,7 @@ TEST_F(CommonFixture, MatmulBlockInitShort){
     }
 }
 
-TEST_F(CommonFixture, MatmulBlockInitShortWithDt){
+TEST_F(CommonFixture, TensixMatmulBlockInitShortWithDt){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {

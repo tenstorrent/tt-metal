@@ -142,7 +142,7 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     );
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
+TEST_F(WatcherFixture, TensixTestWatcherRingBufferBrisc) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
@@ -150,7 +150,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
+TEST_F(WatcherFixture, TensixTestWatcherRingBufferNCrisc) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
@@ -158,7 +158,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
+TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc0) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
@@ -166,7 +166,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
+TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc1) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
@@ -174,7 +174,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
+TEST_F(WatcherFixture, TensixTestWatcherRingBufferTrisc2) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
@@ -182,7 +182,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
+TEST_F(WatcherFixture, ActiveEthTestWatcherRingBufferErisc) {
     for (Device* device : this->devices_) {
         this->RunTestOnDevice(
             [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
@@ -190,7 +190,7 @@ TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
         );
     }
 }
-TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
+TEST_F(WatcherFixture, IdleEthTestWatcherRingBufferIErisc) {
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
