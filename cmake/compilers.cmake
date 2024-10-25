@@ -50,6 +50,7 @@ function(ADJUST_COMPILER_WARNINGS)
             compiler_warnings
             INTERFACE
                 -Wno-deprecated
+                -Wno-deprecated-declarations
                 -Wno-attributes
                 -Wno-stringop-overread
                 -Wno-stringop-overflow
