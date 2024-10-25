@@ -53,6 +53,8 @@ disable_and_clear_program_cache = ttnn._ttnn.device.disable_and_clear_program_ca
 
 sfpu_negative_inf = ttnn._ttnn.device.sfpu_negative_inf
 sfpu_positive_inf = ttnn._ttnn.device.sfpu_positive_inf
+sfpu_negative_nan = ttnn._ttnn.device.sfpu_negative_nan
+sfpu_positive_nan = ttnn._ttnn.device.sfpu_positive_nan
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice

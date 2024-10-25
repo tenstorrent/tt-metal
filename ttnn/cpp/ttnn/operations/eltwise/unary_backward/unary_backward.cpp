@@ -452,7 +452,7 @@ std::vector<Tensor> ExecuteUnaryBackwardAcosh::invoke(const Tensor& grad, const 
     Tensor in_rsqrt = ttnn::square(input, output_mem_config);
     in_rsqrt = ttnn::rsqrt(ttnn::subtract(in_rsqrt, 1.0, std::nullopt, output_mem_config), true, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = input.device()->sfpu_nan();
+    float t_nan = ttnn::sfpu_positive_nan(input.get_dtype());
     float t_inf = ttnn::sfpu_positive_inf(input.get_dtype());
     auto arch_env = detect_arch();
     if(arch_env == tt::ARCH::WORMHOLE_B0){

@@ -19,6 +19,8 @@ bool is_wormhole_or_blackhole(tt::ARCH arch);
 void deallocate_buffers(Device *device);
 float sfpu_negative_inf(tt::tt_metal::DataType dtype);
 float sfpu_positive_inf(tt::tt_metal::DataType dtype);
+float sfpu_negative_nan(tt::tt_metal::DataType dtype);
+float sfpu_positive_nan(tt::tt_metal::DataType dtype);
 
 }  // namespace device
 
