@@ -1237,7 +1237,7 @@ int main(int argc, char **argv) {
                 }
                 if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
                 && tx_skip_pkt_content_gen
-                && !check_txrx_timeout
+                // && !check_txrx_timeout
                 && rx_disable_data_check
                 && rx_disable_header_check
                 && (data_kb_per_tx >= 1024*1024)
