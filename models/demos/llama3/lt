@@ -561,6 +561,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     command_input = entry["command_input"]
     if command_input in command_shortcuts:
         command_input = command_shortcuts[command_input]
+    elif command_input.startswith("pytest "):
+        pass  # Run anything you want, bro!
     else:  # If command is invalid, set status to "Error" and return a message to the user with the full list of commands
         entry["status"] = "Error"
         entry["output"] = f"Warning: '{command_input}' is not a valid command. Valid commands are: " + ", ".join(
