@@ -7,7 +7,6 @@
 #include <magic_enum.hpp>
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 
@@ -378,38 +377,45 @@ void verify_safe_allocation(Allocator& allocator) {
     }
 }
 
-uint64_t allocate_buffer(
-    Allocator &allocator,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    const BufferType &buffer_type,
-    bool bottom_up,
-    std::optional<uint32_t> num_shards) {
-    uint64_t address = 0;
+const std::unordered_set<Buffer *> &get_allocated_buffers(const Allocator &allocator) { return allocator.allocated_buffers; }
+
+DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer) {
+    DeviceAddr address = 0;
+    auto page_size = buffer->page_size();
+    auto buffer_type = buffer->buffer_type();
+    auto bottom_up = buffer->bottom_up();
+    auto num_shards = buffer->num_cores();
     verify_safe_allocation(allocator);
     switch (buffer_type) {
         case BufferType::DRAM:
-            return allocator.descriptor.dram.alloc(
+            address = allocator.descriptor.dram.alloc(
                 allocator.config, allocator.dram_manager, size, page_size, bottom_up, num_shards);
+            break;
         case BufferType::L1:
-            return allocator.descriptor.l1.alloc(
+            address = allocator.descriptor.l1.alloc(
                 allocator.config, allocator.l1_manager, size, page_size, bottom_up, num_shards);
+            break;
         case BufferType::L1_SMALL: {
             TT_FATAL(num_shards.has_value(), "L1_SMALL only supports sharded allocations, see validate_num_banks");
-            return allocator.descriptor.l1.alloc(
+            address = allocator.descriptor.l1.alloc(
                 allocator.config, allocator.l1_small_manager, size, page_size, bottom_up, num_shards);
-            case BufferType::TRACE:
-                return allocator.descriptor.dram.alloc(
-                    allocator.config, allocator.trace_buffer_manager, size, page_size, bottom_up, num_shards);
+            break;
         }
+        case BufferType::TRACE:
+            address = allocator.descriptor.dram.alloc(
+                allocator.config, allocator.trace_buffer_manager, size, page_size, bottom_up, num_shards);
+            break;
         default: {
             TT_THROW("Unsupported buffer type!");
         }
     }
+    allocator.allocated_buffers.insert(buffer);
     return address;
 }
 
-void deallocate_buffer(Allocator &allocator, DeviceAddr address, const BufferType &buffer_type) {
+void deallocate_buffer(Allocator &allocator, Buffer *buffer) {
+    auto address = buffer->address();
+    auto buffer_type = buffer->buffer_type();
     switch (buffer_type) {
         case BufferType::DRAM: allocator.dram_manager.deallocate_buffer(address); break;
         case BufferType::L1: allocator.l1_manager.deallocate_buffer(address); break;
@@ -419,6 +425,7 @@ void deallocate_buffer(Allocator &allocator, DeviceAddr address, const BufferTyp
             TT_THROW("Unsupported buffer type!");
         }
     }
+    allocator.allocated_buffers.erase(buffer);
 }
 
 void deallocate_buffers(Allocator &allocator) {
@@ -426,6 +433,7 @@ void deallocate_buffers(Allocator &allocator) {
     allocator.l1_manager.deallocate_all();
     allocator.l1_small_manager.deallocate_all();
     allocator.trace_buffer_manager.deallocate_all();
+    allocator.allocated_buffers.clear();
 }
 
 void clear(Allocator &allocator) {
@@ -433,6 +441,7 @@ void clear(Allocator &allocator) {
     allocator.l1_manager.clear();
     allocator.l1_small_manager.clear();
     allocator.trace_buffer_manager.clear();
+    allocator.allocated_buffers.clear();
 }
 
 }  // namespace allocator
@@ -461,6 +470,7 @@ void Allocator::reset() {
     l1_manager.clear();
     l1_small_manager.clear();
     trace_buffer_manager.clear();
+    allocated_buffers.clear();
     config.reset();
 }
 

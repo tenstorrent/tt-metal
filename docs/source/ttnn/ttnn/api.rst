@@ -193,12 +193,10 @@ Pointwise Unary
    ttnn.tanhshrink
    ttnn.threshold
    ttnn.trunc
-   ttnn.mul_bw
    ttnn.clamp_bw
    ttnn.hardtanh_bw
    ttnn.threshold_bw
    ttnn.softplus_bw
-   ttnn.div_bw
    ttnn.rdiv_bw
    ttnn.bias_gelu_bw
    ttnn.pow_bw
@@ -207,7 +205,6 @@ Pointwise Unary
    ttnn.sqrt_bw
    ttnn.assign_bw
    ttnn.multigammaln_bw
-   ttnn.add_bw
    ttnn.lgamma_bw
    ttnn.fill_bw
    ttnn.hardsigmoid_bw
@@ -216,7 +213,6 @@ Pointwise Unary
    ttnn.acos_bw
    ttnn.atan_bw
    ttnn.rad2deg_bw
-   ttnn.sub_bw
    ttnn.frac_bw
    ttnn.trunc_bw
    ttnn.log_sigmoid_bw
@@ -344,7 +340,9 @@ Pointwise Binary
    ttnn.polyval
    ttnn.scatter
    ttnn.atan2
+   ttnn.add_bw
    ttnn.atan2_bw
+   ttnn.div_bw
    ttnn.embedding_bw
    ttnn.addalpha_bw
    ttnn.subalpha_bw
@@ -353,6 +351,8 @@ Pointwise Binary
    ttnn.ldexp_bw
    ttnn.logaddexp_bw
    ttnn.logaddexp2_bw
+   ttnn.mul_bw
+   ttnn.sub_bw
    ttnn.squared_difference_bw
    ttnn.concat_bw
    ttnn.rsub_bw
@@ -420,6 +420,7 @@ Data Movement
    ttnn.reshape
    ttnn.repeat
    ttnn.repeat_interleave
+   ttnn.slice
    ttnn.tilize
    ttnn.tilize_with_val_padding
    ttnn.fill_rm
@@ -467,7 +468,6 @@ Transformer
    ttnn.experimental.rotary_embedding
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
-   ttnn.transformer.scaled_dot_product_attention_decode_gqa
 
 CCL
 ===

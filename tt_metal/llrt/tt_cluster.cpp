@@ -4,18 +4,47 @@
 
 #include "tt_cluster.hpp"
 
-#include <immintrin.h>
-
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
+#include <map>                                                       // for map
+#include <memory>
+#include <set>                                                       // for set
+#include <stdexcept>
 #include <string>
+#include <tuple>                                                     // for get
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include "hostdevcommon/dprint_common.h"
-#include "rtoptions.hpp"
-#include "third_party/umd/device/tt_silicon_driver_common.hpp"
+#include "fmt/base.h"
+#include "tt_metal/common/base.hpp" // TODO: Eliminate this file, catchall include and is ARCH_NAME dependent
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/metal_soc_descriptor.h"
+#include "tt_metal/common/test_common.hpp"
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "third_party/umd/device/tt_arch_types.h"
+#include "third_party/umd/device/tt_cluster_descriptor.h"
+#include "third_party/umd/device/tt_cluster_descriptor_types.h"
+#include "third_party/umd/device/tt_device.h"
+#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/tt_xy_pair.h"
+#include "third_party/umd/device/xy_pair.h"
+
+// TODO: ARCH_NAME specific, must remove
+#include "eth_l1_address_map.h"
+#include "dev_msgs.h"
+#include "tensix.h"
+//
+//
+#include "llrt/hal.hpp"                                              // for Hal
+
+#include "third_party/tracy/public/tracy/Tracy.hpp"
 #include "third_party/umd/device/simulation/tt_simulation_device.h"
-#include "tools/profiler/profiler.hpp"
+
 #include "tt_metal/impl/debug/sanitize_noc_host.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
@@ -909,56 +938,58 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
-    const routing_info_t routing_info_disabled = {
-        .routing_enabled = 0,
-        .src_sent_valid_cmd = 0,
-        .dst_acked_valid_cmd = 0,
-    };
-    const routing_info_t routing_info_enabled = {
-        .routing_enabled = 1,
-        .src_sent_valid_cmd = 0,
-        .dst_acked_valid_cmd = 0,
-    };
+    std::vector<chip_id_t> mmio_devices;
+    mmio_devices.reserve(this->devices_grouped_by_assoc_mmio_device_.size());
+    std::vector<chip_id_t> non_mmio_devices;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+        mmio_devices.emplace_back(assoc_mmio_device);
         for (const auto &chip_id : devices) {
+            non_mmio_devices.emplace_back(chip_id);
+        }
+    }
+
+    if (enable_internal_routing) {
+        const routing_info_t routing_info_enabled = {
+            .routing_enabled = 1,
+            .src_sent_valid_cmd = 0,
+            .dst_acked_valid_cmd = 0,
+        };
+        for (const auto &chip_id : non_mmio_devices) {
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                if (chip_id == assoc_mmio_device and not enable_internal_routing) {
-                    // Disable internal ethernet routing for mmio devices
-                    write_core(
-                        (void *)&routing_info_disabled,
-                        sizeof(routing_info_t),
-                        eth_phys_core,
-                        routing_info_addr,
-                        false);
-                } else if (chip_id != assoc_mmio_device and enable_internal_routing) {
-                    // Enable internal ethernet routing for non-mmio devices
-                    write_core(
-                        (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
-
-                } else {
-                    continue;
-                }
+                // Enable internal ethernet routing for non-mmio devices
+                write_core(
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
             }
         }
-        for (const auto &chip_id : devices) {
+        for (const auto &chip_id : mmio_devices) {
             for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
                 tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
-                if (chip_id != assoc_mmio_device and not enable_internal_routing) {
-                    // Disable internal ethernet routing for non-mmio devices
-                    write_core(
-                        (void *)&routing_info_disabled,
-                        sizeof(routing_info_t),
-                        eth_phys_core,
-                        routing_info_addr,
-                        false);
-                } else if (chip_id == assoc_mmio_device and enable_internal_routing) {
-                    // Enable internal ethernet routing for mmio devices
-                    write_core(
-                        (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
-                } else {
-                    continue;
-                }
+                // Enable internal ethernet routing for mmio devices
+                write_core(
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+            }
+        }
+    } else {
+        const routing_info_t routing_info_disabled = {
+            .routing_enabled = 0,
+            .src_sent_valid_cmd = 0,
+            .dst_acked_valid_cmd = 0,
+        };
+        for (const auto &chip_id : mmio_devices) {
+            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+                tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                // Disable internal ethernet routing for mmio devices
+                write_core(
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
+            }
+        }
+        for (const auto &chip_id : non_mmio_devices) {
+            for (const auto &[eth_core, routing_info] : this->device_eth_routing_info_.at(chip_id)) {
+                tt_cxy_pair eth_phys_core(chip_id, ethernet_core_from_logical_core(chip_id, eth_core));
+                // Disable internal ethernet routing for non-mmio devices
+                write_core(
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), eth_phys_core, routing_info_addr, false);
             }
         }
     }

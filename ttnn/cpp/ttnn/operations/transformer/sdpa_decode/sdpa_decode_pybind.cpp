@@ -26,11 +26,12 @@ void py_bind_sdpa_decode(py::module &module) {
             input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
             input_tensor_k (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
             input_tensor_v (ttnn.Tensor): the input tensor [b x nkv x   s x dh]
-            cur_pos (List of int): list of integers of length b.
-
 
 
         Keyword args:
+            is_causal (bool): whether the attention is is_causal. Defaults to `True`.
+            attn_mask (ttnn.Tensor, optional): the input tensor [b x 1 x s x s]. Defaults to `None`.
+            cur_pos (List of int, optional): list of integers of length b. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
             cur_pos_tensor (ttnn.Tensor, optional): [b] tensor of integers of length b. Defaults to `None`.
@@ -57,6 +58,8 @@ void py_bind_sdpa_decode(py::module &module) {
                const ttnn::Tensor &input_tensor_q,
                const ttnn::Tensor &input_tensor_k,
                const ttnn::Tensor &input_tensor_v,
+               const bool is_causal,
+               const std::optional<const Tensor> attn_mask,
                const std::vector<uint32_t> cur_pos,
                const std::optional<const Tensor> cur_pos_tensor,
                std::optional<float> scale,
@@ -69,6 +72,8 @@ void py_bind_sdpa_decode(py::module &module) {
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
+                    is_causal,
+                    attn_mask,
                     cur_pos,
                     cur_pos_tensor,
                     scale,
@@ -79,8 +84,10 @@ void py_bind_sdpa_decode(py::module &module) {
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
             py::arg("input_tensor_v").noconvert(),
-            py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
             py::kw_only(),
+            py::arg("is_causal").noconvert() = true,
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
             py::arg("cur_pos_tensor").noconvert() = std::nullopt,
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
@@ -100,8 +107,10 @@ void py_bind_sdpa_decode(py::module &module) {
                 const ttnn::Tensor &input_tensor_q,
                 const ttnn::Tensor &input_tensor_k,
                 const ttnn::Tensor &input_tensor_v,
-                const ttnn::Tensor &cur_pos_tensor,
                 const ttnn::Tensor &page_table_tensor,
+                const bool is_causal,
+                const std::optional<const Tensor> attn_mask,
+                const std::optional<const Tensor> &cur_pos_tensor,
                 std::optional<float> scale,
                 const std::optional<MemoryConfig> &memory_config,
                 std::optional<SDPAProgramConfig> program_config,
@@ -112,8 +121,10 @@ void py_bind_sdpa_decode(py::module &module) {
                     input_tensor_q,
                     input_tensor_k,
                     input_tensor_v,
-                    cur_pos_tensor,
                     page_table_tensor,
+                    is_causal,
+                    attn_mask,
+                    cur_pos_tensor,
                     scale,
                     memory_config,
                     program_config,
@@ -122,9 +133,11 @@ void py_bind_sdpa_decode(py::module &module) {
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
             py::arg("input_tensor_v").noconvert(),
-            py::arg("cur_pos_tensor").noconvert(),
             py::arg("page_table_tensor").noconvert(),
             py::kw_only(),
+            py::arg("is_causal").noconvert() = true,
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("cur_pos_tensor").noconvert() = std::nullopt,
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,

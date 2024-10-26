@@ -197,6 +197,8 @@ class Device {
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const;
 
+    const std::unordered_set<Buffer *> &get_allocated_buffers() const;
+
     void deallocate_buffers();
 
     // machine epsilon
@@ -257,8 +259,11 @@ class Device {
     friend bool CloseDevice(Device *device);
 
     // APIs to access this device's work executor
-    void push_work(std::function<void()>&& work, bool blocking = false);
-    void push_work(std::shared_ptr<std::function<void()>> work, bool blocking = false);
+    bool can_use_passthrough_scheduling() const;
+    template<typename F>
+    void push_work(F&& work, bool blocking = false) {
+        this->work_executor.push_work(std::forward<F>(work), blocking);
+    }
     void synchronize();
     void set_worker_mode(const WorkExecutorMode& mode);
     void enable_async(bool enable);

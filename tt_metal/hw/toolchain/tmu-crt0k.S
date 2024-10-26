@@ -3,5 +3,5 @@
 .type   _start, @function
 
 _start:
-	tail    _Z13kernel_launchm
+	tail    _Z13kernel_launchv
 	.size  _start, .-_start

@@ -138,37 +138,21 @@ class WorkExecutor {
         }
     }
 
-    inline void push_work(const std::function<void()>& work_executor, bool blocking = false) {
+    inline bool use_passthrough() const {
+        return std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() ||
+            this->worker_state != WorkerState::RUNNING;
+    }
+
+    template<typename F>
+    inline void push_work(F&& work_executor, bool blocking = false) {
         ZoneScopedN("PushWork");
-        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
-            not(this->worker_state == WorkerState::RUNNING)) {
+        if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
             work_executor();
         } else {
             // Push to worker queue.
-            this->worker_queue.push(work_executor);
-            {
-                std::lock_guard lock(this->cv_mutex);
-                cv.notify_one();
-            }
-            if (blocking) {
-                this->synchronize();
-            }
-        }
-    }
-
-    inline void push_work(std::shared_ptr<std::function<void()>> work_executor, bool blocking = false) {
-        // Latest push API, passing ptrs around for work container. Usually faster, since no data-copies.
-        ZoneScopedN("PushWork");
-        if (std::this_thread::get_id() == this->worker_queue.worker_thread_id.load() or
-            not(this->worker_state == WorkerState::RUNNING)) {
-            // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
-            // thread.
-            (*work_executor)();
-        } else {
-            // Push to worker queue.
-            this->worker_queue.push(work_executor);
+            this->worker_queue.push(std::forward<F>(work_executor));
             {
                 std::lock_guard lock(this->cv_mutex);
                 cv.notify_one();
@@ -220,11 +204,11 @@ class WorkExecutor {
         this->worker_queue_mode = mode;
     }
 
-    WorkerQueueMode get_worker_queue_mode() { return worker_queue_mode; }
+    WorkerQueueMode get_worker_queue_mode() const { return worker_queue_mode; }
 
-    inline std::thread::id get_parent_thread_id() { return this->worker_queue.parent_thread_id; }
+    inline std::thread::id get_parent_thread_id() const { return this->worker_queue.parent_thread_id; }
 
-    inline std::thread::id get_worker_thread_id() { return this->worker_queue.worker_thread_id; }
+    inline std::thread::id get_worker_thread_id() const { return this->worker_queue.worker_thread_id; }
 
    private:
     std::thread worker_thread;

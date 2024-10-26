@@ -155,7 +155,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
                 log_info(LogTest, "Running iteration {}", i);
             }
             for (auto& dev : devs) {
-                auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
                 auto input_storage = DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
                 // Push inputs.
@@ -250,7 +250,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
             log_info(LogTest, "Running iteration {}", i);
         }
         for (auto& dev : ring_devices) {
-            auto input_buffer = ttnn::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+            auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
             auto input_storage = DeviceStorage{input_buffer};
             Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
             // Push inputs.

@@ -63,18 +63,11 @@ SECTIONS
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
   } > REGION_CODE
 
-  l1_data :
-  {
-    *(l1_data_test_only)
-  } > REGION_CODE
-
   . = ALIGN(. + MEM_PAD, MEM_ALIGN);
 
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = .;
-#if defined(TARGET_NCRISC)
   PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
-#endif
 #endif
 
 #if defined(TYPE_KERNEL)

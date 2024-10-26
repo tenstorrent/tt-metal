@@ -10,7 +10,6 @@
 #include <limits>
 #include <stdexcept>
 
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "tensix.h"
 #include "tt_elffile.hpp"
 #include "tt_metal/common/assert.hpp"
@@ -24,20 +23,16 @@ memory::memory() {
     packed_size_ = 0;
 }
 
-memory::memory(std::string const &path, Relocate relo_type) : memory() {
+memory::memory(std::string const &path) : memory() {
     ElfFile elf;
 
     elf.ReadImage(path);
-    if (relo_type == Relocate::XIP) {
-        elf.MakeExecuteInPlace();
-    }
 
     // The ELF file puts the text segment first, but memory wants
     // ordered spans.
     // FIXME: Perhaps we can relax that?
     uint32_t total_size = 0;
     auto emit_segment = [&](ElfFile::Segment const& segment) {
-        TT_ASSERT(segment.relocs.empty(), "Unexpected dynamic relocations");
         link_spans_.emplace_back(
             segment.address, segment.contents.size());
         data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
@@ -54,7 +49,7 @@ memory::memory(std::string const &path, Relocate relo_type) : memory() {
     if (text)
         emit_segment(*text);
 
-    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(word_t));
+    set_text_size(elf.GetSegments()[0].contents.size() * sizeof(uint32_t));
     set_packed_size(total_size * sizeof(uint32_t));
 }
 
@@ -149,7 +144,6 @@ void memory::pack_data_into_text(std::uint64_t text_start, std::uint64_t data_st
     this->link_spans_.resize(1);
     this->link_spans_[0] = new_span;
     this->data_ = new_data;
-    this->text_addr_ = new_span.addr;
 }
 
 }  // namespace ll_api

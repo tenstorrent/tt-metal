@@ -10,7 +10,6 @@
 #include <limits>
 #include <random>
 
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/buffers/buffer.hpp"
 namespace tt {
 
