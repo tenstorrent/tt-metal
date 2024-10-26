@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         Ht,  // Ht
         Wt,  // Wt
         NC,  // NC

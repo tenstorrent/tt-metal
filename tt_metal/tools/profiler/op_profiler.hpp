@@ -195,7 +195,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
 
 static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
@@ -204,7 +204,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
 
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
@@ -215,7 +215,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
 
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));

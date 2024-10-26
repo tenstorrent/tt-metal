@@ -13,6 +13,7 @@
 
 #include "test_tiles.hpp"
 
+using std::vector;
 using namespace tt;
 
 using std::uint32_t;

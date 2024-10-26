@@ -71,7 +71,7 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
     uint32_t padded_input_w,
     uint32_t out_tensor_size) {
     auto conv_tensor_buf = owned_buffer::create<bfloat16>(out_tensor_size);
-    vector<float> input_window;
+    std::vector<float> input_window;
     uint32_t out_idx = 0;
     for (auto anchor : op_trace_metadata) {
         for (uint32_t h = 0; h < filter_h; h++) {
@@ -135,10 +135,10 @@ owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
 
 owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     const owned_buffer::Buffer<bfloat16> &input_padded_tensor_buf,
-    const vector<float> &filter_vector,
+    const std::vector<float> &filter_vector,
     const std::vector<uint32_t> &op_trace_metadata,
-    const vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
-    const vector<std::vector<uint16_t>> &sharded_input_top_left_indices,
+    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>> &shard_boundaries,
+    const std::vector<std::vector<uint16_t>> &sharded_input_top_left_indices,
     uint32_t input_h,
     uint32_t input_w,
     uint32_t stride_h,
@@ -149,7 +149,7 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     uint32_t out_tensor_size) {
     auto conv_tensor_buf = owned_buffer::create<bfloat16>(out_tensor_size);
 
-    vector<float> input_window;
+    std::vector<float> input_window;
     uint32_t out_idx = 0;
 
     for (auto j = 0; j < sharded_input_top_left_indices.size(); j++) {
@@ -176,7 +176,7 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
 }
 
 std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<std::pair<bool, uint32_pair_t>> &tensor_metadata) {
-    vector<bool> ref_pad_metadata;
+    std::vector<bool> ref_pad_metadata;
     for (auto i = 0; i < tensor_metadata.size(); i++) {
         auto is_pad_stick = tensor_metadata[i].first;
         if (is_pad_stick) {

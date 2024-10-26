@@ -531,7 +531,7 @@ operation::ProgramWithCallbacks pad_tile(const Tensor &a, Tensor& output, const 
 }
 
 
-inline void log_rt_args(const CoreCoord& core,  vector<uint32_t>& args) {
+inline void log_rt_args(const CoreCoord& core,  std::vector<uint32_t>& args) {
     for (auto v : args) {
         tt::log_debug(tt::LogOp, "{},{} :: {}", core.x, core.y, v);
     }
@@ -1276,7 +1276,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // reader rt args
-        vector<uint32_t> reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args;
         reader_kernel_args.push_back(core_stick_map.size()); // num_cores
 
         tt::log_debug("num_cores: {}", core_stick_map.size());
@@ -1296,7 +1296,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // coalesce the sticks into chunks
-        vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_and_repeated_values(core_stick_pair.second);
             stick_chunks_per_core.push_back(stick_chunks);

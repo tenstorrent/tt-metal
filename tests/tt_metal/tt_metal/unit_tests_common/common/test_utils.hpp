@@ -66,7 +66,7 @@ inline bool StringContainsWithWildcard(const string& s1, const string& s2, char 
 
 // Check whether the given file contains a list of strings. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(string file_name, const vector<string> &must_contain) {
+inline bool FileContainsAllStrings(string file_name, const std::vector<string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -78,7 +78,7 @@ inline bool FileContainsAllStrings(string file_name, const vector<string> &must_
         string line;
         while (getline(log_file, line)) {
             // Check for all target strings in the current line
-            vector<string> found_on_current_line;
+            std::vector<string> found_on_current_line;
             for (const string &s : must_contain_set) {
                 if (StringContainsWithWildcard(s, line, '*'))
                     found_on_current_line.push_back(s);
@@ -110,7 +110,7 @@ inline bool FileContainsAllStrings(string file_name, const vector<string> &must_
 
 // Check whether the given file contains a list of strings (in order). Doesn't check for strings
 // between lines in a file.
-inline bool FileContainsAllStringsInOrder(string file_name, const vector<string> &must_contain) {
+inline bool FileContainsAllStringsInOrder(string file_name, const std::vector<string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;

@@ -121,7 +121,7 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 
 // Set of build states
 // Used for parallel builds, builds all members in one call
-typedef vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
+typedef std::vector<std::shared_ptr<JitBuildState>> JitBuildStateSet;
 
 // Exracts a slice of builds from a JitBuildState
 // Used for parallel building a subset of the builds in a JitBuildStateSet

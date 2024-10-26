@@ -866,7 +866,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
     auto extract_dst_noc_unicast_info =
         [&device](const auto &ranges, const CoreType core_type) -> std::vector<std::pair<transfer_info_cores, uint32_t>> {
         // This API extracts all the pairs of noc multicast encodings given a set of core ranges
-        vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
+        std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info;
         for (const CoreRange &core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -880,13 +880,13 @@ void detail::Program_::populate_dispatch_data(Device *device) {
 
     // Unicast/Multicast Semaphores
     for (const Semaphore &semaphore : this->semaphores()) {
-        vector<uint32_t> semaphore_data(1);
+        std::vector<uint32_t> semaphore_data(1);
         semaphore_data[0] = semaphore.initial_value();
 
         // TODO: use semaphore.core_type from main
         if (semaphore.core_type() == CoreType::WORKER) {
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                 device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                     semaphore.core_range_set().ranges(), CoreType::WORKER);
             transfer_info transfer_info = {
@@ -898,7 +898,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
         } else if (semaphore.core_type() == CoreType::ETH) {
             // TODO: we only fast dispatch to active eth...
             uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-            vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
+            std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                 extract_dst_noc_unicast_info(semaphore.core_range_set().ranges(), CoreType::ETH);
             transfer_info transfer_info = {
                 .dst_base_addr = semaphore.offset(),
@@ -950,7 +950,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
 
                 uint32_t max_kernel_bin_size = processor_to_firmware_size[sub_kernels[sub_kernel_index]];
 
-                kernel_bin.process_spans([&](vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
+                kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t dst, uint32_t len) {
 
                     max_kernel_bin_size -= dst - processor_to_firmware_base[sub_kernels[sub_kernel_index]];
 
@@ -1000,7 +1000,7 @@ void detail::Program_::populate_dispatch_data(Device *device) {
                     device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                         kernel_group.core_ranges.ranges(), core_type);
 
-                vector<KernelHandle> kernel_ids;
+                std::vector<KernelHandle> kernel_ids;
                 for (auto &optional_id : kernel_group.kernel_ids) {
                     if (optional_id) {
                         kernel_ids.push_back(optional_id.value());
@@ -1015,10 +1015,10 @@ void detail::Program_::populate_dispatch_data(Device *device) {
                 }
             } else {
                 TT_ASSERT(core_type == CoreType::ETH);
-                vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
+                std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group.core_ranges.ranges(), core_type);
 
-                vector<KernelHandle> kernel_ids;
+                std::vector<KernelHandle> kernel_ids;
                 if (kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
                     kernel_ids.push_back(kernel_group.kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
                 }
@@ -1046,8 +1046,8 @@ uint32_t detail::Program_::finalize_rt_args(uint32_t programmable_core_type_inde
     // Common RTAs come after unique RTAs
     uint32_t processor_classes = hal.get_processor_classes_count(programmable_core_type_index);
 
-    vector<uint32_t> max_rtas(processor_classes);
-    vector<uint32_t> max_crtas(processor_classes);
+    std::vector<uint32_t> max_rtas(processor_classes);
+    std::vector<uint32_t> max_crtas(processor_classes);
     uint32_t max_unique_rta_size = 0;
     uint32_t total_crta_size = 0;
 

@@ -200,7 +200,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         u_weight_decay.f = weight_decay;
         u_one.f = 1.0f;
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             param_in.buffer()->address(),
             grad.buffer()->address(),
             momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0,
@@ -213,7 +213,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
             u_one.u,
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             param_out.buffer()->address(),
             momentum_buffer_out.has_value() ? momentum_buffer_out.value().buffer()->address() : 0,
             num_tiles_per_core,

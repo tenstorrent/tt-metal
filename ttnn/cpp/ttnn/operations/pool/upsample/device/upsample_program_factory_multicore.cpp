@@ -130,7 +130,7 @@ operation::ProgramWithCallbacks upsample_multi_core(const Tensor &input, Tensor&
     // runtime args
 
     uint32_t writer_nargs = 7;
-    vector<uint32_t> writer_rt_args(writer_nargs);
+    std::vector<uint32_t> writer_rt_args(writer_nargs);
     writer_rt_args[0] = input_stick_nbytes;
     writer_rt_args[1] = input_nsticks_per_core / in_w;
     writer_rt_args[2] = scale_factor_h;

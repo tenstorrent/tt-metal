@@ -225,7 +225,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
             uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-            vector<uint32_t> reader_args = {
+            std::vector<uint32_t> reader_args = {
                 // buffers
                 input.buffer()->address(),
                 index_info[0].address,
@@ -284,7 +284,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 num_alignment_width,
             };
 
-            vector<uint32_t> writer_args = {
+            std::vector<uint32_t> writer_args = {
                 // buffers
                 output.buffer()->address(),
 
@@ -452,7 +452,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
             uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-            vector<uint32_t> reader_args = {
+            std::vector<uint32_t> reader_args = {
                 // buffers
                 input.buffer()->address(),
                 index_info[0].address,
@@ -509,7 +509,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_unit_size,
                 input.element_size(),
             };
-            vector<uint32_t> writer_args = {
+            std::vector<uint32_t> writer_args = {
                 // buffers
                 output.buffer()->address(),
 

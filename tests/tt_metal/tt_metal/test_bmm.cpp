@@ -11,6 +11,7 @@
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 

@@ -16,6 +16,7 @@
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
+using std::vector;
 using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram {

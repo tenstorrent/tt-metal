@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 
-void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output,
+void golden_matmul(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B) {
     std::uint32_t idx_c = 0;
     std::uint32_t idx_a = 0;
@@ -27,7 +27,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
 
     float c_f;
     float float_tmp;
-    vector<bfloat16> c_bf(M * N, 0);
+    std::vector<bfloat16> c_bf(M * N, 0);
 
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
@@ -46,7 +46,7 @@ void golden_matmul(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& o
     }
 }
 
-void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfloat16>& output, bool bcast_batch,
+void matmul_multicore_reuse(std::vector<bfloat16>& a, std::vector<bfloat16>& b, std::vector<bfloat16>& output, bool bcast_batch,
                         uint32_t M, uint32_t N, uint32_t K, uint32_t B, Device* device) {
 
     /*
@@ -122,7 +122,7 @@ void matmul_multicore_reuse(vector<bfloat16>& a, vector<bfloat16>& b, vector<bfl
 
     uint32_t out_subblock_num_tiles = out_subblock_h*out_subblock_w;
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         in0_block_w, // in0_block_w
         in0_num_subblocks, // in0_num_subblocks
         in0_block_num_tiles, // in0_block_num_tiles
@@ -372,7 +372,7 @@ int main(int argc, char **argv) {
         std::vector<bfloat16> src1_vec = create_random_vector_of_bfloat16_native(dram_buffer_B_size, 1, 12522, -0.3);
 
         /* Golden Matmul running on CPU (Float)*/
-        vector<bfloat16> golden_vec(M * N, 0);
+        std::vector<bfloat16> golden_vec(M * N, 0);
         golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K, B);
 
         /* Input vector tilizing */
@@ -380,7 +380,7 @@ int main(int argc, char **argv) {
         tilize(src1_vec, K, N);
 
         /* Calling the MatMul host program. Read in result into a host vector */
-        vector<bfloat16> result_vec(dram_buffer_C_size/sizeof(bfloat16));
+        std::vector<bfloat16> result_vec(dram_buffer_C_size/sizeof(bfloat16));
         matmul_multicore_reuse(src0_vec, src1_vec, result_vec, false, M, N, K, B, device);
         untilize(result_vec, M, N);
 

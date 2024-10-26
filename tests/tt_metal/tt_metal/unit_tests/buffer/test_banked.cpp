@@ -13,6 +13,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 namespace basic_tests::buffer::banked {

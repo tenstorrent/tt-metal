@@ -127,7 +127,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         uint32_t mask_h = input.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0)
             mask_h = tt::constants::TILE_HEIGHT;
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
             num_tiles_per_core,
             tile_offset,
@@ -136,7 +136,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
             *reinterpret_cast<uint32_t*>(&scaler),
             mask_h};
 
-        vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
+        std::vector<uint32_t> writer_args = {output.buffer()->address(), num_tiles_per_core, tile_offset, Ht, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

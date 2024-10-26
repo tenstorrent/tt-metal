@@ -24,7 +24,7 @@ namespace tt_metal {
 
 void DeviceProfiler::readRiscProfilerResults(
         int device_id,
-        const vector<std::uint32_t> &profile_buffer,
+        const std::vector<std::uint32_t> &profile_buffer,
         const CoreCoord &worker_core
         ){
 
@@ -52,7 +52,7 @@ void DeviceProfiler::readRiscProfilerResults(
     uint32_t coreFlatID = soc_d.physical_routing_to_profiler_flat_id.at(worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+    std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->control_vector),
@@ -372,7 +372,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes()
 
 void DeviceProfiler::dumpResults (
         Device *device,
-        const vector<CoreCoord> &worker_cores,
+        const std::vector<CoreCoord> &worker_cores,
         bool lastDump){
 #if defined(TRACY_ENABLE)
     ZoneScoped;

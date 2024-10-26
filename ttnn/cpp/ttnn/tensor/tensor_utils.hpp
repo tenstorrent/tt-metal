@@ -64,7 +64,7 @@ static std::vector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     return strides;
 }
 
-static int compute_flat_indices(const vector<int>& indices, const vector<std::uint32_t> strides) {
+static int compute_flat_indices(const std::vector<int>& indices, const std::vector<std::uint32_t> strides) {
     int flat_index = 0;
     for (auto i = 0; i < indices.size(); i++) {
         flat_index += indices[i] * strides[i];

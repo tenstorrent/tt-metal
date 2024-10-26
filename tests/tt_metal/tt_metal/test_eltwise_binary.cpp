@@ -12,6 +12,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 

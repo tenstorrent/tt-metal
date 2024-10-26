@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
 
     // Configure and Create Void Kernel
 
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     KernelHandle void_compute_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/hello_world_compute_kernel/kernels/compute/void_compute_kernel.cpp",

@@ -61,7 +61,7 @@ struct BcastOp {
     // These constants above map to ops in llk_3c.h:
     // add_tiles_bcast, sub_tiles_bcast, mul_tiles_bcast
 
-    static const vector<Enum> all() { return { ADD, SUB, MUL }; }
+    static const std::vector<Enum> all() { return { ADD, SUB, MUL }; }
 };
 
 
@@ -122,7 +122,7 @@ inline std::vector<uint16_t> gold_bmm(
     const std::vector<uint32_t> shapeA,
     const std::vector<uint16_t>& A,
     const std::vector<uint32_t>& shapeB,
-    const vector<uint16_t>& B,
+    const std::vector<uint16_t>& B,
     bool acc16 = false
     )
 {
@@ -132,12 +132,12 @@ inline std::vector<uint16_t> gold_bmm(
     uint32_t K = shapeA[3]; TT_FATAL(shapeB[2] == K, "Error");
     uint32_t N = shapeB[3];
 
-    vector<uint32_t> shapeC{1, nb, M, N};
+    std::vector<uint32_t> shapeC{1, nb, M, N};
     TensAddr addrC(shapeC);
     TensAddr addrA(shapeA);
     TensAddr addrB(shapeB);
-    vector<uint16_t> result(addrC.numel());
-    vector<float> resultf(addrC.numel());
+    std::vector<uint16_t> result(addrC.numel());
+    std::vector<float> resultf(addrC.numel());
     std::fill(resultf.begin(), resultf.end(), 0);
 
     for (int ib = 0; ib < nb; ib++)

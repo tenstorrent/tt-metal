@@ -10,6 +10,7 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {

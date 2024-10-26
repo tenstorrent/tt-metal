@@ -9,6 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 namespace basic_tests::circular_buffer {

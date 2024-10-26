@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     if (convert_df) {
-        vector<uint32_t> compute_kernel_args = {num_units_per_shard};
+        std::vector<uint32_t> compute_kernel_args = {num_units_per_shard};
 
         auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
             program,

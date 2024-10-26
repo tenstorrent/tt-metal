@@ -12,6 +12,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "test_tiles.hpp"
 
+using std::vector;
 using namespace tt;
 
 struct BinaryOpType {

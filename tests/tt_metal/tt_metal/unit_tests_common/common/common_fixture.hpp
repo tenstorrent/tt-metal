@@ -48,7 +48,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    vector<tt::tt_metal::v1::DeviceHandle> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -70,7 +70,7 @@ protected:
         // An extra flag for if we have remote devices, as some tests are disabled for fast
         // dispatch + remote devices.
         this->has_remote_devices_ = num_devices > num_pci_devices;
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))
                 continue;

@@ -36,7 +36,7 @@ bool RunCustomCycle(tt_metal::Device *device, int loop_count)
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .defines = kernel_defines});
 
-    vector<uint32_t> trisc_kernel_args = {};
+    std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_custom_cycle_count_slow_dispatch/kernels/custom_cycle_count_compute_slow_dispatch.cpp",
         all_cores,

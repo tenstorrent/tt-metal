@@ -4,17 +4,16 @@
 
 #pragma once
 #include <cstdint>
-#include <iostream>
-#include <map>
 #include <vector>
-#include <string>
-#include "common/base.hpp"
+#include "common/tt_backend_api_types.hpp"  // for DataFormat
+#include "device/tt_arch_types.h"           // for ARCH
+enum class UnpackToDestMode : std::uint8_t;
 
 namespace tt {
 
 static constexpr uint NUM_OPERANDS = 8;
 
-enum class ExpPrecision : uint8_t
+enum class ExpPrecision : std::uint8_t
 {
   A = 0,
   B = 1,

@@ -135,11 +135,11 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
-    vector<uint32_t> compute_args_cliff = {
+    std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff ,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -384,7 +384,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
     } else {
         bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-        vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
+        std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
 
         unary_reader_kernel_id = CreateKernel(
             program,
@@ -406,7 +406,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
         if (src_block_sharded) {
-            vector<uint32_t> writer_ct_args = {
+            std::vector<uint32_t> writer_ct_args = {
                 (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
             unary_writer_kernel_id = CreateKernel(
                 program,
@@ -416,7 +416,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         } else {
             bool stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
             uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(block_size_nbytes) : 0;
-            vector<uint32_t> writer_ct_args = {
+            std::vector<uint32_t> writer_ct_args = {
                 (uint32_t)out_is_dram,
                 (uint32_t)stick_size_is_power_of_two,
                 (uint32_t)log2_stick_size,
@@ -433,11 +433,11 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
-    vector<uint32_t> compute_args_cliff = {
+    std::vector<uint32_t> compute_args_cliff = {
         (uint32_t)nblocks_per_core_cliff,
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -482,7 +482,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             continue;
         }
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
+        std::vector<uint32_t> reader_rt_args;
 
         if (src_sharded) {
             reader_rt_args = {
@@ -499,7 +499,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // ntiles_per_block * nblocks_per_core);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (out_sharded) {
             writer_rt_args = {
                 ntiles_per_block * nblocks_per_core  // ntiles
@@ -570,7 +570,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         // reader runtime args
-        vector<uint32_t> reader_rt_args;
+        std::vector<uint32_t> reader_rt_args;
 
         if (src_sharded) {
             reader_rt_args = {
@@ -587,7 +587,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
         // nblocks_per_core_cliff);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (out_sharded) {
             writer_rt_args = {
                 ntiles_per_block * nblocks_per_core_cliff  // ntiles
@@ -787,7 +787,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         uint32_t(num_tiles / num_tiles_per_block),  // per_core_block_cnt
         uint32_t(num_tiles_per_block)               // per_core_block_tile_cnt
     };

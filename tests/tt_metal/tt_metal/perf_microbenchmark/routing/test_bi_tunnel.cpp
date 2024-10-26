@@ -10,6 +10,7 @@
 #include "kernels/traffic_gen_test.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::vector;
 using namespace tt;
 
 

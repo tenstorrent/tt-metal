@@ -570,7 +570,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         input_cb_index,
         halo_prev_input_cb_index,
         halo_next_input_cb_index,
@@ -761,7 +761,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         TT_ASSERT(v.output_flat_h == 0);
 
         // Compile runtime args
-        vector<uint32_t> compile_rt_kernel_args = {
+        std::vector<uint32_t> compile_rt_kernel_args = {
             local_input_num_rows_of_tiles,
             local_input_offset_rows_of_tiles,
             halo_prev_read_enabled,
@@ -773,7 +773,7 @@ operation::ProgramWithCallbacks downsample_single_core(
         tt::tt_metal::SetRuntimeArgs(program, downsample_compute_kernel_id, core, compile_rt_kernel_args);
 
         // Writer runtime args
-        vector<uint32_t> writer_kernel_args = {
+        std::vector<uint32_t> writer_kernel_args = {
             (uint32_t)img_height,
             (uint32_t)img_width,
             (uint32_t)img_stride_h,

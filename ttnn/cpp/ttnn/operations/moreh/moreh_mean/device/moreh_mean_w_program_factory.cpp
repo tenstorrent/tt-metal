@@ -113,19 +113,19 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         units_per_core_group_1,  // Ht
         Wt,                      // Wt
         1,                       // NC
         origin_W,
     };
-    vector<uint32_t> compute_kernel_args_group_2 = {
+    std::vector<uint32_t> compute_kernel_args_group_2 = {
         units_per_core_group_2,  // Ht
         Wt,                      // Wt
         1,                       // NC
         origin_W,
     };
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

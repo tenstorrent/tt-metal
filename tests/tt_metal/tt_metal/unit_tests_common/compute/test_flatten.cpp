@@ -14,6 +14,7 @@
 #include "llrt/llrt.hpp"
 
 
+using std::vector;
 using namespace tt;
 
 namespace gtest_smoke::test_flatten{

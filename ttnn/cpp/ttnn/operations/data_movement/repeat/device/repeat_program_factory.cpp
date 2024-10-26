@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
         num_pages_per_block = num_accum_pages * dim_pages;
     }
 
-    vector<uint32_t> reader_kernel_args = {src_addr, 0, num_pages_per_block, 0, 0, 0, 0};
+    std::vector<uint32_t> reader_kernel_args = {src_addr, 0, num_pages_per_block, 0, 0, 0, 0};
     if (rm_layout) {
         reader_kernel_args.push_back(src_page_size);
     }
@@ -164,7 +164,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
         reader_kernel_args[5] = curr_block_start_id;
         reader_kernel_args[6] = curr_id;
 
-        vector<uint32_t> writer_kernel_args;
+        std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
                 dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};

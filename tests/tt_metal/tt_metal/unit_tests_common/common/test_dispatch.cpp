@@ -6,6 +6,8 @@
 
 #include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
 
+using std::vector;
+
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(CommonFixture *fixture,

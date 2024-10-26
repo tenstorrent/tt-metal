@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
@@ -314,7 +314,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // writer runtime args
-        vector<uint32_t> writer_rt_args = {
+        std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
             unpadded_row_size_bytes,
             padded_row_size_bytes,
@@ -475,7 +475,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
+        std::vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16 ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
@@ -486,7 +486,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-        vector<uint32_t> writer_ct_args = {
+        std::vector<uint32_t> writer_ct_args = {
             (uint32_t)out_is_dram, (uint32_t)(input_cb_data_format == tt::DataFormat::Float32)};
         unary_writer_kernel_id = CreateKernel(
             program,
@@ -497,7 +497,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
@@ -529,7 +529,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     std::vector<CoreCoord> cores;
 
     if (out_sharded) {
-        vector<uint32_t> writer_rt_args;
+        std::vector<uint32_t> writer_rt_args;
         if (unpad_tensor_w_16) {
             writer_rt_args = {num_output_rows_unpadded, num_input_tiles};
         } else {

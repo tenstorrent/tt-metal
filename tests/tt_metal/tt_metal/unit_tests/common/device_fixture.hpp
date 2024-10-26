@@ -29,7 +29,7 @@ class DeviceFixture : public ::testing::Test {
             num_devices_ = 2;
         }
 
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices_; id++) {
             ids.push_back(id);
         }
@@ -94,7 +94,7 @@ class GalaxyFixture : public ::testing::Test {
     void InitializeDevices()
     {
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (uint32_t id = 0; id < num_devices; id++)
         {
             ids.push_back(id);

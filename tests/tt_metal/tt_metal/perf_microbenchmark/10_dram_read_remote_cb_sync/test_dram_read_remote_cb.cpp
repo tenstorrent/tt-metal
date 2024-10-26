@@ -24,6 +24,7 @@
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 #include <yaml-cpp/yaml.h>
 
+using std::vector;
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;

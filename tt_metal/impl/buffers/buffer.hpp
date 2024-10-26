@@ -13,7 +13,6 @@
 #include "common/core_coord.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/common/base.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/impl/allocator/allocator_types.hpp"

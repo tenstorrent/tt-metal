@@ -663,7 +663,7 @@ void EnqueueProgramCommand::assemble_runtime_args_commands(ProgramCommandSequenc
                                 .noc_xy_addr = this->device->get_noc_unicast_encoding(this->noc_index, physical_core)});
                         }
                     } else {
-                        vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                        std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                             device->extract_dst_noc_multicast_info<std::vector<CoreRange>>(
                                 kernel->logical_coreranges(), core_type);
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
@@ -749,7 +749,7 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     TT_ASSERT(
                         transfer_info.data.size() == write_packed_len,
-                        "Not all data vectors in write packed semaphore cmd equal in len");
+                        "Not all data std::vectors in write packed semaphore cmd equal in len");
                     multicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedMulticastSubCmd{
                         .noc_xy_addr = this->device->get_noc_multicast_encoding(
                             this->noc_index, std::get<CoreRange>(dst_noc_info.first)),
@@ -786,7 +786,7 @@ void EnqueueProgramCommand::assemble_device_commands(ProgramCommandSequence& pro
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
                     TT_ASSERT(
                         transfer_info.data.size() == write_packed_len,
-                        "Not all data vectors in write packed semaphore cmd equal in len");
+                        "Not all data std::vectors in write packed semaphore cmd equal in len");
                     unicast_sem_sub_cmds[i].emplace_back(CQDispatchWritePackedUnicastSubCmd{
                         .noc_xy_addr = this->device->get_noc_unicast_encoding(
                             this->noc_index, std::get<CoreCoord>(dst_noc_info.first))});
@@ -2791,7 +2791,7 @@ inline namespace v0 {
 void EnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    vector<uint32_t>& dst,
+    std::vector<uint32_t>& dst,
     bool blocking) {
     // TODO(agrebenisan): Move to deprecated
     ZoneScoped;
@@ -2821,7 +2821,7 @@ void EnqueueReadBuffer(
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    vector<uint32_t>& src,
+    std::vector<uint32_t>& src,
     bool blocking) {
     // TODO(agrebenisan): Move to deprecated
     EnqueueWriteBuffer(cq, buffer, src.data(), blocking);

@@ -24,6 +24,7 @@ constexpr uint32_t MAX_ARGS = 255;
 //
 // Times dispatching program to M cores, N processors, of various sizes, CBs, runtime args
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;

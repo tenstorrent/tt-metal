@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(const Tensor &input, Tensor&
 
     // runtime args
     uint32_t reader_nargs = 10;
-    vector<uint32_t> reader_rt_args(reader_nargs);
+    std::vector<uint32_t> reader_rt_args(reader_nargs);
     reader_rt_args[0] = input_stick_nbytes;
     reader_rt_args[1] = input_nsticks_per_core / in_w;
     reader_rt_args[2] = scale_factor_h;

@@ -254,7 +254,7 @@ void watcher_init(Device *device) {
     for (tt::llrt::RunTimeDebugFeatures delay_feature = tt::llrt::RunTimeDebugFeatureReadDebugDelay;
          (int)delay_feature <= tt::llrt::RunTimeDebugFeatureAtomicDebugDelay;
          delay_feature = (tt::llrt::RunTimeDebugFeatures)((int)delay_feature + 1)) {
-        vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(delay_feature);
+        std::vector<chip_id_t> chip_ids = tt::llrt::OptionsG.get_feature_chip_ids(delay_feature);
         bool this_chip_enabled = tt::llrt::OptionsG.get_feature_all_chips(delay_feature) ||
                                  std::find(chip_ids.begin(), chip_ids.end(), device->id()) != chip_ids.end();
         if (this_chip_enabled) {
@@ -275,7 +275,7 @@ void watcher_init(Device *device) {
             }
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-                vector<CoreCoord> delayed_cores = tt::llrt::OptionsG.get_feature_cores(delay_feature)[core_type];
+                std::vector<CoreCoord> delayed_cores = tt::llrt::OptionsG.get_feature_cores(delay_feature)[core_type];
                 for (tt_xy_pair logical_core : delayed_cores) {
                     CoreCoord phys_core;
                     bool valid_logical_core = true;

@@ -97,7 +97,7 @@ void ClearNocData(Device *device) {
         CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
         for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
             uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
-            vector<uint32_t> initbuf = vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
+            std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
             tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, addr);
         }
     }

@@ -1,10 +1,20 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "data_format.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include <unordered_map>
-#include <set>
+
+#include <iostream>                                    // for basic_ostream
+#include <map>                                         // for operator!=
+#include <set>                                         // for set
+#include <string>                                      // for char_traits
+#include <unordered_map>                               // for unordered_map
+
+#include "fmt/base.h"                                  // for format_string
+#include "tt_metal/common/assert.hpp"                  // for tt_throw, TT_FATAL
+#include "tt_metal/common/base_types.hpp"              // for UnpackToDestMode
+#include "hostdevcommon/common_runtime_address_map.h"  // for NUM_CIRCULAR_B...
+
 namespace tt {
 
 static const std::set<DataFormat> ALL_VALID_FORMATS = {

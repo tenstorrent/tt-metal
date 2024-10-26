@@ -53,6 +53,7 @@ constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 //
 // Times dispatching program to M cores, N processors, of various sizes, CBs, runtime args
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;

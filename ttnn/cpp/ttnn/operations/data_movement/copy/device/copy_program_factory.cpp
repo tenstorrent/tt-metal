@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     if (convert_dtype) {
-        vector<uint32_t> compute_kernel_args_group_1 = {
+        std::vector<uint32_t> compute_kernel_args_group_1 = {
             num_units_per_core_group_1
         };
         auto eltwise_unary_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -113,7 +113,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor &input, const Tenso
         );
 
         if (!core_group_2.ranges().empty()) {
-             vector<uint32_t> compute_kernel_args_group_2 = {
+             std::vector<uint32_t> compute_kernel_args_group_2 = {
                 num_units_per_core_group_2
             };
             auto eltwise_unary_kernel_group_2 = tt::tt_metal::CreateKernel(

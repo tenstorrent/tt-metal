@@ -157,7 +157,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         core,
         tt::tt_metal::WriterDataMovementConfig({output_cb_index, out_is_dram}));
 
-    vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
+    std::vector<uint32_t> compute_kernel_args = {uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
     auto tilize_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -292,7 +292,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         const std::vector<BlockRep>& assignment = core_assignments.at(i);
 
         // reader runtime args
-        vector<uint32_t> reader_rt_args = {
+        std::vector<uint32_t> reader_rt_args = {
             src0_buffer->address(),
             unpadded_row_size_bytes,
             padded_row_size_bytes,
@@ -425,7 +425,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    vector<uint32_t> writer_ct_args = {
+    std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };
     unary_writer_kernel_id = CreateKernel(
@@ -436,7 +436,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     /** compute
      */
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };

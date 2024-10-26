@@ -28,6 +28,7 @@
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
 
+using std::vector;
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow

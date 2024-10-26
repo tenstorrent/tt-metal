@@ -7,6 +7,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 uint32_t NUM_TILES = 2048;
