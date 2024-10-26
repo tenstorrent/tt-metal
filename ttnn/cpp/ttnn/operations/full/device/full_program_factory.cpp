@@ -24,7 +24,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
     auto num_tiles = output.volume() / TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, num_tiles);
+        tt::tt_metal::split_work_to_cores(grid, num_tiles);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);

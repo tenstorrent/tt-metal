@@ -4,10 +4,11 @@
 
 #include "moreh_helper_functions.hpp"
 
-#include "common/constants.hpp"
 #include <magic_enum.hpp>
-#include "tt_metal/detail/util.hpp"
+
+#include "common/constants.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "tt_metal/detail/util.hpp"
 
 namespace tt {
 namespace operations {
@@ -50,6 +51,8 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     return std::make_tuple(new_all_cores, new_core_group_1, new_core_group_2);
 }
 
+// TODO(hyungsuk.choi): change function name. This function name duplicates a function in `tt::tt_metal` and causes
+// ambiguous behavior due to the `CoreCoord` constructor in `CoreRange`.
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     CoreRange core_range, uint32_t units_to_divide) {
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
@@ -134,14 +137,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id = CreateComputeKernel(
-            program,
-            file_name,
-            arg,
-            defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode,
-            unpack_to_dest_mode);
+            program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode, unpack_to_dest_mode);
         compute_kernel_ids.push_back(compute_kernel_id);
     }
     return compute_kernel_ids;
@@ -298,9 +294,7 @@ void check_tensor(
     check_tensor(tensor.value(), op_name, tensor_name, data_types, layout, check_dtype, check_layout);
 }
 
-bool is_hw_dim(uint32_t dim, uint32_t rank) {
-    return (dim >= rank - 2);
-}
+bool is_hw_dim(uint32_t dim, uint32_t rank) { return (dim >= rank - 2); }
 
 uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_inner = 1;
@@ -440,7 +434,7 @@ ttnn::SmallVector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape &shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -452,10 +446,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
         other_dims_product *= shape[i];
     }
 
-    return { W, H, other_dims_product};
+    return {W, H, other_dims_product};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
+    const ttnn::SimpleShape &shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -471,9 +466,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
     uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
 
-    return { Wt, Ht, inner_tile_size, reduce_tile_size};
+    return {Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
 }  // namespace primary
 }  // namespace operations
-}  // namespace tt
+}  // namespace ttnn
