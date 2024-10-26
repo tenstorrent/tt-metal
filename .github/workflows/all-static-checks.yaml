@@ -33,6 +33,12 @@ jobs:
             --from-ref ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }} \
             --to-ref HEAD
         continue-on-error: false
+  check-black:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Do Nothing
+        run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
+
 
   check-spdx-licenses:
     runs-on: ubuntu-latest
