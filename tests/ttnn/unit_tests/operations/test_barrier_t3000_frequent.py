@@ -150,6 +150,8 @@ def test_run_barrier_impl(
     all_gather_topology,
     enable_async,
 ):
+    if mesh_device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
     run_normal(
         mesh_device,
         num_devices,
@@ -208,6 +210,8 @@ def test_run_barrier_impl_pcie(
     all_gather_topology,
     enable_async,
 ):
+    if pcie_mesh_device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
     run_normal(
         pcie_mesh_device,
         num_devices,
@@ -273,6 +277,8 @@ def test_barrier_sharded(
     trace_mode,
     num_iter,
 ):
+    if t3k_mesh_device.get_num_devices() < num_devices:
+        pytest.skip("Not T3000!")
     n_worker = None
     n_buffer = None
     t3k_mesh_device.enable_async(enable_async)
