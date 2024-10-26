@@ -127,8 +127,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            set -eu # basic bash hygiene
-            Confirm theory: does GHA have set -e active by default when no shell is set?
+            set -eu # basic shell hygiene
 
             # /tmp is a tmpfs; more efficient than persisted storage
             mkdir -p /tmp/ccache
