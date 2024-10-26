@@ -20,7 +20,6 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history so 'origin/main' is available
           fetch-refs: true  # Ensure all refs are fetched
-          ref: ${{ github.head_ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v4
