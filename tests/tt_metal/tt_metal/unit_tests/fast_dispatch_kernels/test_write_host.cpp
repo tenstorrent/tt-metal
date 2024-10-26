@@ -12,6 +12,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/common/math.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 // TODO: Remove dependency on "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h" and remove globals

@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
-    vector<uint32_t> compute_args = { Wt, block_size };
+    std::vector<uint32_t> compute_args = { Wt, block_size };
 
     auto compute_kernels_id = CreateKernel(
         program,

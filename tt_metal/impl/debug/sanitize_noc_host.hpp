@@ -24,7 +24,7 @@ namespace tt {
 
 #define DEBUG_VALID_ETH_ADDR(a, l) (((a) >= MEM_ETH_BASE) && ((a) + (l) <= MEM_ETH_BASE + MEM_ETH_SIZE))
 
-static bool coord_found_p(vector<CoreCoord>coords, CoreCoord core) {
+static bool coord_found_p(std::vector<CoreCoord>coords, CoreCoord core) {
     for (CoreCoord item : coords) {
         if (item == core) return true;
     }

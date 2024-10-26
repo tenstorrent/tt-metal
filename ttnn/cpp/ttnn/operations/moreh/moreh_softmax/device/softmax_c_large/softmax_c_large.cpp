@@ -128,10 +128,10 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             output.buffer()->address(), num_tiles_per_core, tile_offset, outer_stride, inner_size, dim_size};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);

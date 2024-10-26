@@ -13,6 +13,7 @@
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 namespace local_test_functions {

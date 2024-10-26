@@ -14,6 +14,7 @@
 #include "ttnn/operations/numpy/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
+using std::vector;
 using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 using namespace ttnn::operations::sliding_window;

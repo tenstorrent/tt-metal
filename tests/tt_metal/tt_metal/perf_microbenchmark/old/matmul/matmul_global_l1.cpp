@@ -17,6 +17,7 @@
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
+using std::vector;
 using namespace tt;
 
 // took from bmm_op.cpp
