@@ -15,18 +15,18 @@ struct SliceOperation {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        std::span<const T> begins,
-        std::span<const T> ends,
-        std::span<const T> step,
+        tt::stl::Span<const T> begins,
+        tt::stl::Span<const T> ends,
+        tt::stl::Span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     template<typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        std::span<const T> output_tensor_start,
-        std::span<const T> output_tensor_end,
-        std::span<const T> step,
+        tt::stl::Span<const T> output_tensor_start,
+        tt::stl::Span<const T> output_tensor_end,
+        tt::stl::Span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
@@ -39,7 +39,7 @@ struct SliceOperation {
         const ttnn::SmallVector<T>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(queue_id, input_tensor, std::span<const T>(begins.begin(), begins.end()), std::span<const T>(ends.begin(), ends.end()), std::span<const T>(step.begin(), step.end()), memory_config_arg, optional_output_tensor);
+        return invoke(queue_id, input_tensor, tt::stl::Span<const T>(begins), tt::stl::Span<const T>(ends), tt::stl::Span<const T>(step), memory_config_arg, optional_output_tensor);
     }
 
     template<typename T>
@@ -50,7 +50,7 @@ struct SliceOperation {
         const ttnn::SmallVector<T>& step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(input_tensor, std::span<const T>(begins.begin(), begins.end()), std::span<const T>(ends.begin(), ends.end()), std::span<const T>(step.begin(), step.end()), memory_config_arg, optional_output_tensor);
+        return invoke(input_tensor, tt::stl::Span<const T>(begins), tt::stl::Span<const T>(ends), tt::stl::Span<const T>(step), memory_config_arg, optional_output_tensor);
     }
 
     template<typename T, std::size_t N>

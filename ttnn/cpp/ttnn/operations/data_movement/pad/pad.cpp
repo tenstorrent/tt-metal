@@ -116,7 +116,7 @@ static ttnn::Tensor pad_impl(
 ttnn::Tensor ExecutePad::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const std::pair<uint32_t, uint32_t>> padding,
+    tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {

@@ -64,7 +64,7 @@ void log_external_operation(
 #endif
 
 template <typename T>
-Tensor create_owned_tensor(T* data_ptr, size_t num_elements, std::span<const uint32_t> shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
+Tensor create_owned_tensor(T* data_ptr, size_t num_elements, tt::stl::Span<const uint32_t> shape, DataType data_type, Layout layout, const std::optional<Tile>& optional_tile = std::nullopt)
 {
     auto data = std::vector(data_ptr, data_ptr + num_elements);
     auto buffer = owned_buffer::create(std::move(data));

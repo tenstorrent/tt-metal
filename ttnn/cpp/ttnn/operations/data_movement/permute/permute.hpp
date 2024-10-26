@@ -13,16 +13,16 @@ struct ExecutePermute {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        std::span<const int64_t> dims,
+        tt::stl::Span<const int64_t> dims,
         const std::optional<MemoryConfig>& memory_config,
         bool composite = true);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        std::span<const int64_t> dims,
+        tt::stl::Span<const int64_t> dims,
         const std::optional<MemoryConfig>& memory_config);
 
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, std::span<const int64_t> dims);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int64_t> dims);
 };
 
 }  // namespace operations::data_movement

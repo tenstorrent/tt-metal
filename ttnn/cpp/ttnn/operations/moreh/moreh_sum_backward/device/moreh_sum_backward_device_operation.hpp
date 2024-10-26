@@ -57,7 +57,7 @@ struct MorehSumBackwardOperation {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& output_grad,
         const std::optional<Tensor>& input,
-        std::span<const int64_t> dims,
+        tt::stl::Span<const int64_t> dims,
         bool keepdim,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,

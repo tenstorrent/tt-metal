@@ -120,7 +120,7 @@ std::tuple<MorehSumBackwardOperation::operation_attributes_t, MorehSumBackwardOp
 MorehSumBackwardOperation::invoke(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
-    std::span<const int64_t> dims,
+    tt::stl::Span<const int64_t> dims,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,

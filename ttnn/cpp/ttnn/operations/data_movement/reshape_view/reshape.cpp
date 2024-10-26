@@ -131,7 +131,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    std::span<const int32_t> shape_vector
+    tt::stl::Span<const int32_t> shape_vector
     ) {
     return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector));
 }

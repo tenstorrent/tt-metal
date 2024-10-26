@@ -116,7 +116,7 @@ Padding::Padding(const std::initializer_list<PadDimension> pad_dimensions, PadVa
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
 
-Padding::Padding(std::span<const PadDimension> pad_dimensions, PadValue pad_value) :
+Padding::Padding(tt::stl::Span<const PadDimension> pad_dimensions, PadValue pad_value) :
     rank_(pad_dimensions.size()), pad_dimensions_{}, pad_value_(pad_value) {
     std::copy(std::begin(pad_dimensions), std::end(pad_dimensions), std::begin(this->pad_dimensions_));
 }
@@ -166,7 +166,7 @@ LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-LegacyShape::LegacyShape(std::span<const uint32_t> dimensions) :
+LegacyShape::LegacyShape(tt::stl::Span<const uint32_t> dimensions) :
     rank_(dimensions.size()), dimensions_{}, padding_(dimensions.size()) {
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
@@ -176,7 +176,7 @@ LegacyShape::LegacyShape(const std::initializer_list<uint32_t> dimensions, const
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));
 }
-LegacyShape::LegacyShape(std::span<const uint32_t> dimensions, const Padding& padding) :
+LegacyShape::LegacyShape(tt::stl::Span<const uint32_t> dimensions, const Padding& padding) :
     rank_(dimensions.size()), dimensions_{}, padding_(padding) {
     TT_ASSERT(this->padding_.rank_ == this->rank_);
     std::copy(std::begin(dimensions), std::end(dimensions), std::begin(this->dimensions_));

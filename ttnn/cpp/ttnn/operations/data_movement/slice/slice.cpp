@@ -19,9 +19,9 @@ template<typename T>
 ttnn::Tensor SliceOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const T> begins,
-    std::span<const T> ends,
-    std::span<const T> step,
+    tt::stl::Span<const T> begins,
+    tt::stl::Span<const T> ends,
+    tt::stl::Span<const T> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
 
@@ -181,9 +181,9 @@ ttnn::Tensor SliceOperation::invoke(
 template<typename T>
 ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    std::span<const T> begins,
-    std::span<const T> ends,
-    std::span<const T> step,
+    tt::stl::Span<const T> begins,
+    tt::stl::Span<const T> ends,
+    tt::stl::Span<const T> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
         return SliceOperation::invoke<T>(ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg);
@@ -306,9 +306,9 @@ ttnn::Tensor SliceOperation::invoke(
     const std::array<T, N> &step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
-        std::span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
-        std::span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
-        std::span<const T> step_vec(step.begin(), step.end());
+        tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
+        tt::stl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
+        tt::stl::Span<const T> step_vec(step.begin(), step.end());
         return SliceOperation::invoke<T>(queue_id, input_tensor, start, end, step_vec, memory_config_arg);
     }
 
@@ -326,17 +326,17 @@ ttnn::Tensor SliceOperation::invoke(
 template ttnn::Tensor SliceOperation::invoke<int>(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const int> begins,
-    std::span<const int> ends,
-    std::span<const int> step,
+    tt::stl::Span<const int> begins,
+    tt::stl::Span<const int> ends,
+    tt::stl::Span<const int> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<int>(
     const ttnn::Tensor& input_tensor,
-    std::span<const int> begins,
-    std::span<const int> ends,
-    std::span<const int> step,
+    tt::stl::Span<const int> begins,
+    tt::stl::Span<const int> ends,
+    tt::stl::Span<const int> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor);
 
@@ -344,17 +344,17 @@ template ttnn::Tensor SliceOperation::invoke<int>(
 template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const uint32_t> begins,
-    std::span<const uint32_t> ends,
-    std::span<const uint32_t> step,
+    tt::stl::Span<const uint32_t> begins,
+    tt::stl::Span<const uint32_t> ends,
+    tt::stl::Span<const uint32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const ttnn::Tensor& input_tensor,
-    std::span<const uint32_t> begins,
-    std::span<const uint32_t> ends,
-    std::span<const uint32_t> step,
+    tt::stl::Span<const uint32_t> begins,
+    tt::stl::Span<const uint32_t> ends,
+    tt::stl::Span<const uint32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor);
 

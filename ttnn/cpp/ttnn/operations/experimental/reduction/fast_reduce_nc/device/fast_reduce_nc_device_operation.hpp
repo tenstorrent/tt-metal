@@ -29,7 +29,7 @@ struct FastReduceNCDeviceOperation {
 Tensor fast_reduce_nc(
     uint8_t queue_id,
     const ttnn::Tensor &input,
-    std::span<const int32_t> dims,
+    tt::stl::Span<const int32_t> dims,
     const std::optional<const ttnn::Tensor> output = std::nullopt,
     const MemoryConfig &output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);

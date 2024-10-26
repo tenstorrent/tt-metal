@@ -128,7 +128,7 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
     return output;
 }
 
-ttnn::Tensor permute_launch(const ttnn::Tensor &a, std::span<const int64_t> dims, const MemoryConfig& output_mem_config) {
+ttnn::Tensor permute_launch(const ttnn::Tensor &a, tt::stl::Span<const int64_t> dims, const MemoryConfig& output_mem_config) {
     std::vector<ttnn::Tensor> output_tensors = {ttnn::Tensor(operation::get_workers_for_op_output({a}))};
     operation::launch_with_autoformat(
         [dims, output_mem_config]  (const std::vector<ttnn::Tensor>& input_tensors, const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors, const std::vector<std::optional<ttnn::Tensor>>& optional_output_tensors) mutable -> std::vector<ttnn::Tensor> {
@@ -147,7 +147,7 @@ ttnn::Tensor permute_launch(const ttnn::Tensor &a, std::span<const int64_t> dims
 
 Tensor composite_invoke(
     const ttnn::Tensor& input_tensor,
-    std::span<const int64_t> dims,
+    tt::stl::Span<const int64_t> dims,
     const std::optional<MemoryConfig>& memory_config) {
 
     auto output_tensor = permute_launch(input_tensor, dims, memory_config.value_or(input_tensor.memory_config()));
@@ -159,7 +159,7 @@ Tensor composite_invoke(
 ttnn::Tensor ExecutePermute::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    std::span<const int64_t> dims,
+    tt::stl::Span<const int64_t> dims,
     const std::optional<MemoryConfig>& memory_config,
     bool composite) {
 
@@ -175,7 +175,7 @@ ttnn::Tensor ExecutePermute::invoke(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
 
-    auto adjust_order = [](std::span<const int64_t> dims) {
+    auto adjust_order = [](tt::stl::Span<const int64_t> dims) {
         ttnn::SmallVector<int64_t> new_order;
         TT_FATAL(dims.size() <= 4, "Error");
         int additional_ranks = 4 - dims.size();
@@ -218,12 +218,12 @@ ttnn::Tensor ExecutePermute::invoke(
 
 ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
-    std::span<const int64_t> dims,
+    tt::stl::Span<const int64_t> dims,
     const std::optional<MemoryConfig>& memory_config) {
     return invoke(DefaultQueueId, input_tensor, dims, memory_config);
 }
 
-ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, std::span<const int64_t> dims) {
+ttnn::Tensor ExecutePermute::invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int64_t> dims) {
     return invoke(input_tensor, dims, std::nullopt);
 }
 

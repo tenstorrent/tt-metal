@@ -212,7 +212,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
     auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, std::span(shape.begin(), shape.end()), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
 }
 
 template <typename T, template <typename> typename BufferType>
@@ -220,7 +220,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::Legac
     auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, std::span(shape.begin(), shape.end()), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
 }
 
 // ======================================================================================
