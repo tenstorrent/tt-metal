@@ -1272,7 +1272,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,
         act_num_subblocks,
         in0_block_num_tiles,

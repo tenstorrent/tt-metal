@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)rotated_input_cb_index,
         (std::uint32_t)cos_cb_index,

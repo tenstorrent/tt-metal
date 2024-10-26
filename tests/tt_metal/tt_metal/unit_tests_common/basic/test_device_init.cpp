@@ -17,6 +17,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 

@@ -28,8 +28,8 @@ struct one_core_data_t {
     CoreCoord phys_core;
     int bank_id;
     int bank_offset;
-    vector<bool> valid;
-    vector<uint32_t> data;
+    std::vector<bool> valid;
+    std::vector<uint32_t> data;
 };
 
 class DeviceData {
@@ -342,7 +342,7 @@ inline bool DeviceData::validate_one_core(Device *device,
                                           uint32_t result_addr) {
     int fail_count = 0;
     const std::vector<uint32_t>& dev_data = one_core_data.data;
-    const vector<bool>& dev_valid = one_core_data.valid;
+    const std::vector<bool>& dev_valid = one_core_data.valid;
     const CoreCoord logical_core = one_core_data.logical_core;
     const CoreCoord phys_core = one_core_data.phys_core;
     const CoreType core_type = one_core_data.core_type;
@@ -366,7 +366,7 @@ inline bool DeviceData::validate_one_core(Device *device,
 
     // Read results from device and compare to expected for this core.
     result_addr += bank_offset;
-    vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+    std::vector<uint32_t> results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
 
     log_info(tt::LogTest, "Validating {} bytes from {} bank {} log_core {}: phys_core: {} at addr: 0x{:x}",
              size_bytes, core_string, bank_id, logical_core.str(), phys_core.str(), result_addr);
@@ -536,7 +536,7 @@ inline uint32_t get_min_required_buffer_addr(Device *device, bool is_dram){
     return min_required_positive_offset;
 }
 
-inline void generate_random_payload(vector<uint32_t>& cmds,
+inline void generate_random_payload(std::vector<uint32_t>& cmds,
                                     uint32_t length) {
 
     for (uint32_t i = 0; i < length; i++) {
@@ -545,7 +545,7 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
     }
 }
 
-inline void generate_random_payload(vector<uint32_t>& cmds,
+inline void generate_random_payload(std::vector<uint32_t>& cmds,
                                     const CoreRange& workers,
                                     DeviceData& data,
                                     uint32_t length_words,
@@ -579,7 +579,7 @@ inline void generate_random_payload(vector<uint32_t>& cmds,
 // Generate a random payload for a paged write command. Note: Doesn't currently support using the base_addr here.
 inline void generate_random_paged_payload(Device *device,
                                           CQDispatchCmd cmd,
-                                          vector<uint32_t>& cmds,
+                                          std::vector<uint32_t>& cmds,
                                           DeviceData& data,
                                           uint32_t start_page,
                                           bool is_dram) {
@@ -618,8 +618,8 @@ inline void generate_random_paged_payload(Device *device,
     }
 }
 
-inline void generate_random_packed_payload(vector<uint32_t>& cmds,
-                                           vector<CoreCoord>& worker_cores,
+inline void generate_random_packed_payload(std::vector<uint32_t>& cmds,
+                                           std::vector<CoreCoord>& worker_cores,
                                            DeviceData& data,
                                            uint32_t size_words,
                                            bool repeat = false) {
@@ -628,7 +628,7 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
     const uint32_t bank_id = 0; // No interleaved pages here.
 
     bool first_core = true;
-    vector<uint32_t>results;
+    std::vector<uint32_t>results;
     CoreCoord first_worker = worker_cores[0];
     for (uint32_t i = 0; i < size_words; i++) {
         uint32_t datum = (use_coherent_data_g) ? ((first_worker.x << 16) | (first_worker.y << 24) | coherent_count++) : std::rand();
@@ -648,7 +648,7 @@ inline void generate_random_packed_payload(vector<uint32_t>& cmds,
     }
 }
 
-inline void generate_random_packed_large_payload(vector<uint32_t>& generated_data,
+inline void generate_random_packed_large_payload(std::vector<uint32_t>& generated_data,
                                                  CoreRange range,
                                                  DeviceData& data,
                                                  uint32_t size_words) {
@@ -676,7 +676,7 @@ inline void generate_random_packed_large_payload(vector<uint32_t>& generated_dat
     }
 }
 
-inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
+inline void add_bare_dispatcher_cmd(std::vector<uint32_t>& cmds,
                                     CQDispatchCmd cmd) {
     static_assert(sizeof(CQDispatchCmd) % sizeof(uint32_t) == 0, "CQDispatchCmd size must be a multiple of uint32_t size");
     const size_t num_uint32s = sizeof(CQDispatchCmd) / sizeof(uint32_t);
@@ -688,7 +688,7 @@ inline void add_bare_dispatcher_cmd(vector<uint32_t>& cmds,
     }
 }
 
-inline size_t debug_prologue(vector<uint32_t>& cmds) {
+inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
     size_t prior = cmds.size();
 
     if (debug_g) {
@@ -707,7 +707,7 @@ inline size_t debug_prologue(vector<uint32_t>& cmds) {
     return prior;
 }
 
-inline void debug_epilogue(vector<uint32_t>& cmds,
+inline void debug_epilogue(std::vector<uint32_t>& cmds,
                            size_t prior_end) {
     if (debug_g) {
         // Doing a checksum on the full command length is problematic in the kernel
@@ -731,7 +731,7 @@ inline void debug_epilogue(vector<uint32_t>& cmds,
     }
 }
 
-inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
+inline void add_dispatcher_cmd(std::vector<uint32_t>& cmds,
                                CQDispatchCmd cmd,
                                uint32_t length) {
 
@@ -744,7 +744,7 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
     debug_epilogue(cmds, prior_end);
 }
 
-inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
+inline void add_dispatcher_cmd(std::vector<uint32_t>& cmds,
                                const CoreRange& workers,
                                DeviceData& device_data,
                                CQDispatchCmd cmd,
@@ -762,7 +762,7 @@ inline void add_dispatcher_cmd(vector<uint32_t>& cmds,
 }
 
 inline void add_dispatcher_paged_cmd(Device *device,
-                                     vector<uint32_t>& cmds,
+                                     std::vector<uint32_t>& cmds,
                                      DeviceData& device_data,
                                      CQDispatchCmd cmd,
                                      uint32_t start_page,
@@ -775,8 +775,8 @@ inline void add_dispatcher_paged_cmd(Device *device,
 }
 
 inline void add_dispatcher_packed_cmd(Device *device,
-                                      vector<uint32_t>& cmds,
-                                      vector<CoreCoord>& worker_cores,
+                                      std::vector<uint32_t>& cmds,
+                                      std::vector<CoreCoord>& worker_cores,
                                       DeviceData& device_data,
                                       CQDispatchCmd cmd,
                                       uint32_t size_words,
@@ -798,7 +798,7 @@ inline void add_dispatcher_packed_cmd(Device *device,
 
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
-                                                  vector<uint32_t>& cmds,
+                                                  std::vector<uint32_t>& cmds,
                                                   CoreCoord worker_core,
                                                   DeviceData& device_data,
                                                   uint32_t length) {
@@ -821,7 +821,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(Device *device,
 }
 
 inline void gen_dispatcher_unicast_write_cmd(Device *device,
-                                             vector<uint32_t>& cmds,
+                                             std::vector<uint32_t>& cmds,
                                              CoreCoord worker_core,
                                              DeviceData& device_data,
                                              uint32_t length) {
@@ -842,7 +842,7 @@ inline void gen_dispatcher_unicast_write_cmd(Device *device,
 }
 
 inline void gen_dispatcher_multicast_write_cmd(Device *device,
-                                             vector<uint32_t>& cmds,
+                                             std::vector<uint32_t>& cmds,
                                              CoreRange worker_core_range,
                                              DeviceData& device_data,
                                              uint32_t length) {
@@ -868,7 +868,7 @@ inline void gen_dispatcher_multicast_write_cmd(Device *device,
 }
 
 inline void gen_dispatcher_paged_write_cmd(Device *device,
-                                             vector<uint32_t>& cmds,
+                                             std::vector<uint32_t>& cmds,
                                              DeviceData& device_data,
                                              bool is_dram,
                                              uint32_t start_page,
@@ -913,8 +913,8 @@ inline void gen_dispatcher_paged_write_cmd(Device *device,
 
 
 inline void gen_dispatcher_packed_write_cmd(Device *device,
-                                            vector<uint32_t>& cmds,
-                                            vector<CoreCoord>& worker_cores,
+                                            std::vector<uint32_t>& cmds,
+                                            std::vector<CoreCoord>& worker_cores,
                                             DeviceData& device_data,
                                             uint32_t size_words,
                                             bool repeat = false) {
@@ -938,7 +938,7 @@ inline void gen_dispatcher_packed_write_cmd(Device *device,
 }
 
 inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
-                                                vector<uint32_t>& cmds,
+                                                std::vector<uint32_t>& cmds,
                                                 DeviceData& device_data) {
 
     // Note: this cmd doesn't clamp to a max size which means it can overflow L1 buffer
@@ -952,7 +952,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
         if (xfer_size_bytes < min_xfer_size_bytes_g) xfer_size_bytes = min_xfer_size_bytes_g;
     }
 
-    vector<CoreCoord> gets_data;
+    std::vector<CoreCoord> gets_data;
     while (gets_data.size() == 0) {
         for (auto & [core, one_worker] : device_data.get_data()) {
             if (device_data.core_and_bank_present(core, 0) &&
@@ -984,14 +984,14 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device *device,
 
 inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
                                                       CoreRange workers,
-                                                      vector<uint32_t>& cmds,
+                                                      std::vector<uint32_t>& cmds,
                                                       DeviceData& device_data,
                                                       uint32_t space_available) {
 
     int ntransactions = perf_test_g ? (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS / 2) :
         ((std:: rand() % CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) + 1);
 
-    vector<uint32_t> sizes;
+    std::vector<uint32_t> sizes;
     for (int i = 0; i < ntransactions; i++) {
         constexpr uint32_t max_pages = 4;
         uint32_t xfer_size_16b = (std::rand() % (dispatch_buffer_page_size_g * max_pages / hal.get_alignment(HalMemType::L1))) + 1;
@@ -1022,7 +1022,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     cmd.write_packed_large.alignment = hal.get_alignment(HalMemType::L1);
     add_bare_dispatcher_cmd(cmds, cmd);
 
-    vector<uint32_t> data;
+    std::vector<uint32_t> data;
     for (int i = 0; i < ntransactions; i++) {
         uint32_t xfer_size_bytes = sizes[i];
 
@@ -1061,7 +1061,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(Device *device,
     return false;
 }
 
-inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds,
+inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds,
                                           DeviceData& device_data,
                                           uint32_t length) {
 
@@ -1075,7 +1075,7 @@ inline void gen_dispatcher_host_write_cmd(vector<uint32_t>& cmds,
     add_dispatcher_cmd(cmds, device_data.get_host_core(), device_data, cmd, length, false, true);
 }
 
-inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t length) {
+inline void gen_bare_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, uint32_t length) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -1087,7 +1087,7 @@ inline void gen_bare_dispatcher_host_write_cmd(vector<uint32_t>& cmds, uint32_t 
     add_bare_dispatcher_cmd(cmds, cmd);
 }
 
-inline void gen_dispatcher_set_write_offset_cmd(vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
+inline void gen_dispatcher_set_write_offset_cmd(std::vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
@@ -1100,7 +1100,7 @@ inline void gen_dispatcher_set_write_offset_cmd(vector<uint32_t>& cmds, uint32_t
     add_dispatcher_cmd(cmds, cmd, payload_length);
 }
 
-inline void gen_dispatcher_terminate_cmd(vector<uint32_t>& cmds) {
+inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {
 
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));

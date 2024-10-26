@@ -8,6 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 

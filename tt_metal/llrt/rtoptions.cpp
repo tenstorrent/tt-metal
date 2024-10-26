@@ -220,7 +220,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {
 void RunTimeOptions::ParseFeatureCoreRange(
     RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type) {
     char *str = std::getenv(env_var.c_str());
-    vector<CoreCoord> cores;
+    std::vector<CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
@@ -280,7 +280,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
 }
 
 void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var) {
-    vector<int> chips;
+    std::vector<int> chips;
     char *env_var_str = std::getenv(env_var.c_str());
 
     // If the environment variable is not empty, parse it.

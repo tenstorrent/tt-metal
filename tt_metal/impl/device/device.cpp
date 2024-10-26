@@ -556,7 +556,7 @@ void Device::initialize_and_launch_firmware() {
     go_msg.signal = RUN_MSG_INIT;
 
     // Populate core info, which will be written to device
-    vector<uint32_t> core_info_vec(sizeof(core_info_msg_t) / sizeof(uint32_t));
+    std::vector<uint32_t> core_info_vec(sizeof(core_info_msg_t) / sizeof(uint32_t));
     core_info_msg_t *core_info = (core_info_msg_t *) core_info_vec.data();
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
@@ -593,7 +593,7 @@ void Device::initialize_and_launch_firmware() {
 
     // Determine which noc-coords are harvested
     // TODO(PGK/Almeet): fix this w/ new UMD
-    vector<uint32_t> harvested_rows;
+    std::vector<uint32_t> harvested_rows;
     uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
     for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
         bool row_harvested = (harvested_noc_rows >> y) & 0x1;
@@ -2735,7 +2735,7 @@ void Device::configure_command_queue_programs() {
         uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
         uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
         uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
-        vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+        std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);

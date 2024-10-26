@@ -56,7 +56,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
-    vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
+    std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
         reader_compile_time_args = {
             (uint32_t)src_cb_id,
@@ -102,7 +102,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
             get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
         auto create_compute_kernel = [&](const auto& core_group, uint32_t num_units_per_core) {
             if (!core_group.ranges().empty()) {
-                vector<uint32_t> compute_kernel_args = {
+                std::vector<uint32_t> compute_kernel_args = {
                     (uint32_t)src_cb_id,
                     (uint32_t)dst_cb_id,
                     (uint32_t)num_units_per_core,
