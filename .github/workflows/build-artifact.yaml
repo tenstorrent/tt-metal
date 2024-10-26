@@ -127,7 +127,7 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
-            set -euo pipefail # basic bash hygiene
+            set -eu # basic bash hygiene
             Confirm theory: does GHA have set -e active by default when no shell is set?
 
             # /tmp is a tmpfs; more efficient than persisted storage
