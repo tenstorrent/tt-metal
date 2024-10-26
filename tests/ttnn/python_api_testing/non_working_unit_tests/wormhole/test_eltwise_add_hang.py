@@ -42,7 +42,7 @@ test_sweep_args = [
     (
         [(150, 72), (150, 72)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         17799073,
@@ -50,7 +50,7 @@ test_sweep_args = [
     (
         [(3, 201, 228), (3, 201, 228)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         3121221,
@@ -58,7 +58,7 @@ test_sweep_args = [
     (
         [(6, 6, 230, 138), (6, 6, 230, 138)],
         [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        [ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT],
         (ttnn.DRAM_MEMORY_CONFIG),
         (ttnn.DRAM_MEMORY_CONFIG),
         10286194,
