@@ -9,7 +9,7 @@ on:
 
 jobs:
   pre-commit:
-    name: Run Pre-commit Hooks and Propose Fixes
+    name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: 3.11
 
-      - name: Run Pre-commit and Fix Issues
+      - name: Run Pre-commit
         uses: pre-commit/action@v3.0.1
         with:
           extra_args: |
