@@ -7,7 +7,7 @@
 
 #include <unistd.h>
 
-void memset_l1(vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
+void memset_l1(std::vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory vector to L1 for all cores at a specific start address.
     const metal_SocDescriptor &sdesc = tt::Cluster::instance().get_soc_desc(chip_id);
     for (auto &worker_core : sdesc.physical_workers) {
@@ -15,7 +15,7 @@ void memset_l1(vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) 
     }
 }
 
-void memset_dram(vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
+void memset_dram(std::vector<uint32_t> mem_vec, uint32_t chip_id, uint32_t start_addr) {
     // Utility function that writes a memory to all channels and subchannels at a specific start address.
     const metal_SocDescriptor &sdesc = tt::Cluster::instance().get_soc_desc(chip_id);
     for (uint32_t dram_src_channel_id = 0; dram_src_channel_id < sdesc.dram_cores.size(); dram_src_channel_id++) {

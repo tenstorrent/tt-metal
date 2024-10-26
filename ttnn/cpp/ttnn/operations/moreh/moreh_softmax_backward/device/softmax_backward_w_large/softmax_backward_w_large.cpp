@@ -132,7 +132,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
         uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
         if (mask_w == 0)
             mask_w = tt::constants::TILE_WIDTH;
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),
             num_tiles_per_core,
@@ -141,7 +141,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create(
             *reinterpret_cast<uint32_t*>(&scaler),
             mask_w};
 
-        vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
+        std::vector<uint32_t> writer_args = {input_grad.buffer()->address(), num_tiles_per_core, tile_offset, Wt};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

@@ -29,6 +29,7 @@ constexpr uint32_t DEFAULT_BATCH_SIZE_K = 512;
 //
 // Test read/write bw and latency from host/dram/l1
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;

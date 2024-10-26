@@ -14,9 +14,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <map>                                                       // for map
+#include <map>
 #include <memory>
-#include <set>                                                       // for set
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>                                                     // for get
@@ -26,7 +26,7 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include "tt_metal/common/base.hpp" // TODO: Eliminate this file, catchall include and is ARCH_NAME dependent
+#include "tt_metal/common/base.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "tt_metal/common/test_common.hpp"
@@ -445,7 +445,7 @@ inline uint64_t get_sys_addr(uint32_t chip_x, uint32_t chip_y, uint32_t noc_x, u
     return result;
 }
 
-void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
+void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
@@ -463,7 +463,7 @@ void Cluster::write_dram_vec(vector<uint32_t> &vec, tt_target_dram dram, uint64_
 }
 
 void Cluster::read_dram_vec(
-    vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
+    std::vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
     int chip_id, d_chan, d_subchannel;
     std::tie(chip_id, d_chan, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
@@ -509,7 +509,7 @@ void Cluster::read_core(
 }
 
 void Cluster::read_core(
-    vector<uint32_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
+    std::vector<uint32_t> &data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr, bool small_access) const {
     data.resize(size_in_bytes / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr, small_access);
 }

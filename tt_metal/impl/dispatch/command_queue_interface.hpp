@@ -482,21 +482,21 @@ class SystemMemoryManager {
     chip_id_t device_id;
     uint8_t num_hw_cqs;
     const std::function<void(uint32_t, uint32_t, const uint8_t *)> fast_write_callable;
-    vector<uint32_t> completion_byte_addrs;
+    std::vector<uint32_t> completion_byte_addrs;
     char *cq_sysmem_start;
-    vector<SystemMemoryCQInterface> cq_interfaces;
+    std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size;
     uint32_t channel_offset;
-    vector<int> cq_to_event;
-    vector<int> cq_to_last_completed_event;
-    vector<std::mutex> cq_to_event_locks;
-    vector<tt_cxy_pair> prefetcher_cores;
-    vector<tt::Writer> prefetch_q_writers;
-    vector<uint32_t> prefetch_q_dev_ptrs;
-    vector<uint32_t> prefetch_q_dev_fences;
+    std::vector<int> cq_to_event;
+    std::vector<int> cq_to_last_completed_event;
+    std::vector<std::mutex> cq_to_event_locks;
+    std::vector<tt_cxy_pair> prefetcher_cores;
+    std::vector<tt::Writer> prefetch_q_writers;
+    std::vector<uint32_t> prefetch_q_dev_ptrs;
+    std::vector<uint32_t> prefetch_q_dev_fences;
 
     bool bypass_enable;
-    vector<uint32_t> bypass_buffer;
+    std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
 
     WorkerConfigBufferMgr config_buffer_mgr;
@@ -578,7 +578,7 @@ class SystemMemoryManager {
                 prefetch_q_base + dispatch_constants::get(core_type, num_hw_cqs).prefetch_q_entries() *
                                                           sizeof(dispatch_constants::prefetch_q_entry_type);
         }
-        vector<std::mutex> temp_mutexes(num_hw_cqs);
+        std::vector<std::mutex> temp_mutexes(num_hw_cqs);
         cq_to_event_locks.swap(temp_mutexes);
 
         for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -686,7 +686,7 @@ class SystemMemoryManager {
 
     chip_id_t get_device_id() const { return this->device_id; }
 
-    vector<SystemMemoryCQInterface>& get_cq_interfaces() { return this->cq_interfaces; }
+    std::vector<SystemMemoryCQInterface>& get_cq_interfaces() { return this->cq_interfaces; }
 
     void *issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
         if (this->bypass_enable) {
