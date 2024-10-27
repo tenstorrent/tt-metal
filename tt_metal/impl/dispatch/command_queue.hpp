@@ -31,6 +31,8 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 }  // namespace v0
 
+struct Allocator;
+
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
     ENQUEUE_READ_BUFFER,
