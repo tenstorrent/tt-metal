@@ -31,8 +31,6 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 }  // namespace v0
 
-struct Allocator;
-
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
     ENQUEUE_READ_BUFFER,
@@ -476,11 +474,6 @@ using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescripto
 using CompletionReaderQueue = LockFreeQueue<CompletionReaderVariant>;
 }  // namespace detail
 
-struct AllocBufferMetadata {
-    Buffer* buffer;
-    std::reference_wrapper<Allocator> allocator;
-};
-
 struct RuntimeArgsMetadata {
     CoreCoord core_coord;
     std::shared_ptr<RuntimeArgs> runtime_args_ptr;
@@ -588,7 +581,6 @@ struct CommandInterface {
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
     Program* program;
-    std::optional<AllocBufferMetadata> alloc_md;
     std::optional<RuntimeArgsMetadata> runtime_args_md;
     std::optional<const Buffer*> shadow_buffer;
     std::optional<HostDataType> src;
