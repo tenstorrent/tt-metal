@@ -51,8 +51,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(ENABLE_LIBCXX)
     add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
     add_link_options(
-        $<$<LINK_LANG_AND_ID:CXX,Clang>:-stdlib=-lc++>
-        $<$<LINK_LANG_AND_ID:CXX,Clang>:-stdlib=-lc++abi>
+        $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
+        $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
     )
 endif()
 
