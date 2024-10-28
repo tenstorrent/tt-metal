@@ -161,7 +161,7 @@ run_t3000_llama3.1-70b_tests() {
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.1-70B weights
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/
 
   LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
   LLAMA_DIR=$llama70b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?

@@ -136,8 +136,8 @@ def upper_pad_sequence_length(length, padding_size):
 def setup_llama_env(llama_version="llama3", max_batch_size=32, max_context_len=4096):
     if os.getenv("CI") == "true":
         if llama_version == "llama3-tg":
-            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama-3/llama-3-70b-repacked/"
-            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama-3/tokenizer.model"
+            ckpt_dir = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/"
+            tokenizer_path = "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/tokenizer.model"
             cache_path = Path("/mnt/MLPerf/tt_dnn-models/llama-3/llama-data-cache/weights-cache-tg")
         else:
             raise ValueError(f"Unknown llama version: {llama_version}")
