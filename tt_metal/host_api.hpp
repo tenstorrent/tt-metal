@@ -260,6 +260,17 @@ uint32_t CreateSemaphore(
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 
 /**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
+
+/**
 *  Allocates a sharded DRAM or L1 buffer on device
 *
 *  Return value: std::shared_ptr<Buffer>
@@ -269,6 +280,17 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 *  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.

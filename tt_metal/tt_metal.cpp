@@ -1090,9 +1090,26 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+}
+
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
     return Buffer::create(
         config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
         config.size,
         config.page_size,
         config.buffer_type,
