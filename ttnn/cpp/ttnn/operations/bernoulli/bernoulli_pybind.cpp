@@ -4,28 +4,32 @@
 
 #include "bernoulli_pybind.hpp"
 
-#include <optional>
-
 #include "bernoulli.hpp"
 #include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::bernoulli {
 void bind_bernoulli_operation(py::module &module) {
     std::string doc =
-        R"doc(Bernoulli(input: Tensor, output: Optional[Tensor] = None, dtype: Optional[DataType] = None, memory_config: Optional[MemoryConfig] = None, compute_kernel_config: Optional[ComputeKernelConfig] = None) -> Tensor
-    Generates a tensor to draw binary random numbers (0 or 1) from a Bernoulli distribution.
-    This operation allows configuration of memory allocation using `memory_config` and computation settings via `compute_kernel_config`.
+        R"doc(
+        Generates a tensor to draw binary random numbers (0 or 1) from a Bernoulli distribution.
 
-    Args:
-        * :attr:`input`: The input tensor of probability values for the Bernoulli distribution.
-        * :attr:`output`: The output tensor.
-        * :attr:`dtype`: The output tensor dtype (default float32).
-        * :attr:`memory_config`: The memory configuration for the generated tensor.
-        * :attr:`compute_kernel_config`: Optional configuration for the compute kernel used during generation.
+        Args:
+            input (ttnn.Tensor): The input tensor of probability values for the Bernoulli distribution.
 
-    Returns:
-        Tensor: A new tensor with the same shape as `input` contains only 1 or 0.
-    )doc";
+        Keyword args:
+            output (ttnn.Tensor, optional): The output tensor.
+            dtype (ttnn.DataType, optional): Output tensor dtype, default float32.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Example:
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=torch.bfloat16)), device=device)
+            >>> output = ttnn.bernoulli(input)
+
+        )doc";
 
     bind_registered_operation(
         module,
