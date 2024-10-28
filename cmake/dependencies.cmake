@@ -75,3 +75,9 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 ############################################################################################################################
 
 CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+
+############################################################################################################################
+# range-v3 : https://github.com/ericniebler/range-v3
+############################################################################################################################
+
+CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
