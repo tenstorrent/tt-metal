@@ -339,7 +339,7 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
     auto const& lower_half_of_cores =
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1)));
     auto const& upper_half_of_cores = CoreRangeSet(
-        CoreRange(CoreCoord(workers_per_direction, 0), CoreCoord(num_edm_channels - 1, num_links - 1)));
+        CoreRange(CoreCoord(0, num_links), CoreCoord(workers_per_direction - 1, (2 * num_links) - 1)));
     if (topology_config.ring_index == 0) {
         log_trace(tt::LogOp, "Start of line, putting CCL send cores in lower half");
         return {upper_half_of_cores, lower_half_of_cores};
@@ -650,7 +650,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [is_linear, enable_bidirectional, num_edm_channels_per_link](std::size_t x) {
                 static constexpr std::size_t bidirectional_directions = 2;
-                return is_linear ? (x < (num_edm_channels_per_link / bidirectional_directions)):
+                return is_linear ? ((x % num_edm_channels_per_link) < (num_edm_channels_per_link / bidirectional_directions)):
                     enable_bidirectional ? (x % bidirectional_directions == 0) : true;
             };
 
