@@ -49,6 +49,7 @@ constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(16);
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(17);
 
+constexpr uint32_t disable_header_check = get_compile_time_arg_val(18);
 
 // predicts size and payload of packets from each destination, should have
 // the same random seed as the corresponding traffic_gen_tx
@@ -104,6 +105,7 @@ void kernel_main() {
 
         bool packet_available = false;
         while (!packet_available) {
+#ifdef CHECK_TIMEOUT
             if (timeout_cycles > 0) {
                 uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
                 if (cycles_since_progress > timeout_cycles) {
@@ -112,6 +114,7 @@ void kernel_main() {
                     break;
                 }
             }
+#endif
             uint32_t num_words_available;
             packet_available = input_queue->input_queue_full_packet_available_to_send(num_words_available);
             if (!packet_available) {
@@ -123,10 +126,12 @@ void kernel_main() {
             }
         }
 
+#ifdef CHECK_TIMEOUT
         if (timeout) {
             break;
         }
-
+#endif
+        // === parse packet header ===
         curr_packet_header_ptr = input_queue->get_curr_packet_header_ptr();
         uint32_t src_endpoint_id = input_queue->get_curr_packet_src();
         uint32_t src_endpoint_index = src_endpoint_id - src_endpoint_start_id;
@@ -159,17 +164,19 @@ void kernel_main() {
             }
             src_endpoint_last_packet[src_endpoint_index] = true;
         } else {
-            src_endpoint_rnd_state = &(src_rnd_state[src_endpoint_index]);
-            src_endpoint_rnd_state->next_packet_rnd_to_dest(num_dest_endpoints, endpoint_id, dest_endpoint_start_id,
-                                                            max_packet_size_words, UINT64_MAX);
-            if (src_endpoint_rnd_state->curr_packet_size_words != curr_packet_size_words ||
-                src_endpoint_rnd_state->packet_rnd_seed != curr_packet_tag) {
-                    check_failed = true;
-                    mismatch_addr = reinterpret_cast<uint32_t>(curr_packet_header_ptr);
-                    mismatch_val = curr_packet_tag;
-                    expected_val = src_endpoint_rnd_state->packet_rnd_seed;
-                    test_results[PQ_TEST_MISC_INDEX+3] = 0xee000003;
-                    break;
+            if constexpr (!disable_header_check) { // disabled when src pkt header is not randomly generated
+                src_endpoint_rnd_state = &(src_rnd_state[src_endpoint_index]);
+                src_endpoint_rnd_state->next_packet_rnd_to_dest(num_dest_endpoints, endpoint_id, dest_endpoint_start_id,
+                                                                max_packet_size_words, UINT64_MAX);
+                if (src_endpoint_rnd_state->curr_packet_size_words != curr_packet_size_words ||
+                    src_endpoint_rnd_state->packet_rnd_seed != curr_packet_tag) {
+                        check_failed = true;
+                        mismatch_addr = reinterpret_cast<uint32_t>(curr_packet_header_ptr);
+                        mismatch_val = curr_packet_tag;
+                        expected_val = src_endpoint_rnd_state->packet_rnd_seed;
+                        test_results[PQ_TEST_MISC_INDEX+3] = 0xee000003;
+                        break;
+                }
             }
         }
 
@@ -182,8 +189,9 @@ void kernel_main() {
         input_queue->input_queue_advance_words_cleared(1);
         words_cleared++;
 
+        // === parse packet payload ===
         uint32_t curr_packet_payload_words = curr_packet_size_words-1;
-        if (!disable_data_check) {
+        if constexpr (!disable_data_check) {
             uint32_t words_before_wrap = input_queue->get_queue_words_before_rptr_cleared_wrap();
             uint32_t words_after_wrap = 0;
             if (words_before_wrap < curr_packet_payload_words) {
