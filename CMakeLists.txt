@@ -56,9 +56,7 @@ if(ENABLE_LIBCXX)
     )
 endif()
 
-add_compile_options(
-    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>
-)
+add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>)
 
 include(CTest)
 
