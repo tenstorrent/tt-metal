@@ -11,7 +11,7 @@
 #include <cstdint>
 #include <vector>
 #include <optional>
-#include <span>
+#include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
@@ -26,8 +26,8 @@ enum TensorLayout {
 template <class T, template <typename...> typename BufferType>
 std::vector<T> convert_to_tile_layout(
     const BufferType<T>& data,
-    std::optional<std::span<const uint32_t>> tile_shape = std::nullopt,
-    std::optional<std::span<const uint32_t>> face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -80,8 +80,8 @@ std::vector<T> convert_to_tile_layout(
 template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(
     const BufferTyp<T>& data,
-    std::optional<std::span<const uint32_t>> tile_shape = std::nullopt,
-    std::optional<std::span<const uint32_t>> face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -116,7 +116,7 @@ std::vector<T> convert_to_flat_layout(
 
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> untilize_nchw(const BufferType<T>& in, std::span<const uint32_t> shape, std::optional<std::span<const uint32_t>> tile_shape = std::nullopt) {
+inline std::vector<T> untilize_nchw(const BufferType<T>& in, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
@@ -160,7 +160,7 @@ inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + til
 
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, std::span<const uint32_t> shape, std::optional<std::span<const uint32_t>> tile_shape = std::nullopt) {
+inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     int H = shape[shape.size() - 2], W = shape[shape.size() - 1];
     auto batch_size = 1;
@@ -222,11 +222,11 @@ struct TensAddr {
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout(
     const BufferType<T>& inp,
-    std::span<const uint32_t> shape,
+    tt::stl::Span<const uint32_t> shape,
     TensorLayout inL,
     TensorLayout outL,
-    std::optional<std::span<const uint32_t>> tile_shape = std::nullopt,
-    std::optional<const std::span<const uint32_t>> face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<const tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     switch (inL) {
         case TILED_SWIZZLED:
