@@ -765,7 +765,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     uint32_t in1_per_core_w = per_core_N_unpad;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles

@@ -11,6 +11,7 @@
 #include "common/bfloat16.hpp"
 #include "test_gold_impls.hpp"
 
+using std::vector;
 using namespace tt;
 
 inline std::vector<uint32_t> gold_standard_untilize(std::vector<uint32_t> src_vec, std::vector<uint32_t> shape) {

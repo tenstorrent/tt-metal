@@ -560,7 +560,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
-    vector<T> data_vec;
+    std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));

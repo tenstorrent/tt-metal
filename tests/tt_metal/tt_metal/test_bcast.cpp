@@ -16,6 +16,7 @@
 #include "test_gold_impls.hpp"
 #include "constants.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace constants;
 

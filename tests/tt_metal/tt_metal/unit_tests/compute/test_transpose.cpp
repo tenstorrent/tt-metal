@@ -19,6 +19,7 @@
 #include "test_golden_impls.hpp"
 #include "common/test_tiles.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;

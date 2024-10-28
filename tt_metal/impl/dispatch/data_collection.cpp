@@ -35,7 +35,7 @@ public:
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream &outfile,  map<uint32_t, uint32_t> &raw_data) {
+    void Dump(std::ofstream &outfile,  std::map<uint32_t, uint32_t> &raw_data) {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -74,7 +74,7 @@ public:
 
         // Track stats for all RISCS, as well as per RISC
         DispatchStats total_stats;
-        map<uint32_t, uint32_t> total_data;
+        std::map<uint32_t, uint32_t> total_data;
         for (auto &riscv_and_data : data) {
             // Go through all data and update stats
             DispatchStats riscv_stats;
@@ -98,7 +98,7 @@ public:
     }
 
 private:
-    map<RISCV, map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
+    std::map<RISCV, std::map<uint32_t, uint32_t>> data; // RISCV -> transaction size -> count
     data_collector_t type;
 };
 
@@ -117,21 +117,21 @@ public:
     };
 
     void RecordData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv);
-    void RecordKernelGroups(Program &program, CoreType core_type, vector<KernelGroup> &kernel_groups);
+    void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups);
     void RecordProgramRun(Program &program);
     void DumpData();
 
 private:
-    map<uint64_t, vector<DispatchData>> program_id_to_dispatch_data;
-    map<uint64_t, map<CoreType, vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
-    map<uint64_t, int> program_id_to_call_count;
+    std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
+    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>> program_id_to_kernel_groups;
+    std::map<uint64_t, int> program_id_to_call_count;
 };
 
 void DataCollector::RecordData(Program &program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     uint64_t program_id = program.get_id();
     if (program_id_to_dispatch_data.count(program_id) == 0) {
         // If no existing data for this program, initialize starting values.
-        program_id_to_dispatch_data[program_id] = vector<DispatchData>();
+        program_id_to_dispatch_data[program_id] = std::vector<DispatchData>();
         for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
             data_collector_t curr_type = static_cast<data_collector_t>(idx);
             DispatchData data(curr_type);
@@ -142,7 +142,7 @@ void DataCollector::RecordData(Program &program, data_collector_t type, uint32_t
     program_id_to_dispatch_data[program_id].at(type).Update(transaction_size, riscv);
 }
 
-void DataCollector::RecordKernelGroups(Program &program, CoreType core_type, vector<KernelGroup> &kernel_groups) {
+void DataCollector::RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups) {
     uint64_t program_id = program.get_id();
     // Make a copy of relevant info, since user may destroy program before we dump.
     for (KernelGroup &kernel_group : kernel_groups) {
@@ -189,7 +189,7 @@ void DataCollector::DumpData() {
     std::ofstream outfile = std::ofstream("dispatch_data.txt");
 
     // Extra DispatchData objects to collect data across programs
-    vector<DispatchData *> cross_program_data;
+    std::vector<DispatchData *> cross_program_data;
     for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
         cross_program_data.push_back(new DispatchData(idx));
     }
@@ -202,7 +202,7 @@ void DataCollector::DumpData() {
         // Dump kernel ids for each kernel group in this program
         for (auto &core_type_and_kernel_groups : program_id_to_kernel_groups[program_id]) {
             CoreType core_type = core_type_and_kernel_groups.first;
-            vector<std::pair<kernel_id_array_t, CoreRangeSet>> &kernel_groups = core_type_and_kernel_groups.second;
+            std::vector<std::pair<kernel_id_array_t, CoreRangeSet>> &kernel_groups = core_type_and_kernel_groups.second;
             outfile << fmt::format("\t{} Kernel Groups: {}\n", core_type, kernel_groups.size());
             for (auto &ids_and_ranges : kernel_groups) {
                 // Dump kernel ids in this group
@@ -266,7 +266,7 @@ void RecordDispatchData(Program &program, data_collector_t type, uint32_t transa
     DataCollector::inst->RecordData(program, type, transaction_size, riscv);
 }
 
-void RecordKernelGroups(Program &program, CoreType core_type, vector<KernelGroup> &kernel_groups) {
+void RecordKernelGroups(Program &program, CoreType core_type, std::vector<KernelGroup> &kernel_groups) {
     // Do nothing if we're not enabling data collection.
     if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled())
         return;
