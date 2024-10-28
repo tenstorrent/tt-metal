@@ -48,15 +48,19 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+if(ENABLE_LIBCXX)
+    add_compile_options(
+        $<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>
+    )
+    add_link_options(
+        $<$<LINK_LANG_AND_ID:CXX,Clang>:-stdlib=-lc++>
+        $<$<LINK_LANG_AND_ID:CXX,Clang>:-stdlib=-lc++abi>
+    )
 endif()
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsized-deallocation")
-endif()
+add_compile_options(
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>
+)
 
 include(CTest)
 
