@@ -3,8 +3,61 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <deque>
-#include "tt_metal/host_api.hpp"
+#include "impl/kernels/kernel.hpp"
+
+inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
+    const uint32_t num_unique_rt_args,
+    const uint32_t num_common_rt_args,
+    const uint32_t unique_base,
+    const uint32_t common_base) {
+    TT_FATAL(
+        num_unique_rt_args + num_common_rt_args <= tt::tt_metal::max_runtime_args,
+        "Number of unique runtime args and common runtime args exceeds the maximum limit of {} runtime args",
+        tt::tt_metal::max_runtime_args);
+
+    std::vector<uint32_t> common_rt_args;
+    for (uint32_t i = 0; i < num_common_rt_args; i++) {
+        common_rt_args.push_back(common_base + i);
+    }
+
+    std::vector<uint32_t> unique_rt_args;
+    for (uint32_t i = 0; i < num_unique_rt_args; i++) {
+        unique_rt_args.push_back(unique_base + i);
+    }
+
+    return std::make_pair(unique_rt_args, common_rt_args);
+}
+
+// Create randomly sized pair of unique and common runtime args vectors, with careful not to exceed max between the two.
+// Optionally force the max size for one of the vectors.
+inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(
+    const bool force_max_size = false, const uint32_t unique_base = 0, const uint32_t common_base = 100) {
+    uint32_t num_rt_args_unique = rand() % (tt::tt_metal::max_runtime_args + 1);
+    uint32_t num_rt_args_common =
+        num_rt_args_unique < tt::tt_metal::max_runtime_args ? rand() % (tt::tt_metal::max_runtime_args - num_rt_args_unique + 1) : 0;
+
+    if (force_max_size) {
+        if (rand() % 2) {
+            num_rt_args_unique = tt::tt_metal::max_runtime_args;
+            num_rt_args_common = 0;
+        } else {
+            num_rt_args_common = tt::tt_metal::max_runtime_args;
+            num_rt_args_unique = 0;
+        }
+    }
+
+    log_trace(
+        tt::LogTest,
+        "{} - num_rt_args_unique: {} num_rt_args_common: {} force_max_size: {}",
+        __FUNCTION__,
+        num_rt_args_unique,
+        num_rt_args_common,
+        force_max_size);
+
+    return create_runtime_args(num_rt_args_unique, num_rt_args_common, unique_base, common_base);
+}
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
 inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
