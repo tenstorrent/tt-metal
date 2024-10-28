@@ -2335,7 +2335,7 @@ def test_conv_for_vanilla_unet(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat16, ttnn.float32],
 )
 @pytest.mark.parametrize("fp32_accum", [False, True], ids=["no_fp32_accum", "fp32_accum"])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
@@ -2381,6 +2381,9 @@ def test_non_tile_multiple_height_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
+    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 and input_height == 240)):
+        pytest.skip("Skipping test because it won't fit in L1!")
+
     if (
         (weights_dtype == ttnn.bfloat16 and batch_size == 20 and output_channels == 128 and input_height == 56)
         or (weights_dtype == ttnn.bfloat16 and batch_size == 20 and output_channels == 64)
@@ -2388,8 +2391,8 @@ def test_non_tile_multiple_height_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    if has_bias and packer_l1_acc and fp32_accum:
-        pytest.skip("skipping due to pack_untilize_dst issue!")
+    if has_bias and packer_l1_acc and (fp32_accum or activations_dtype is ttnn.float32):
+        pytest.skip("skipping due to pack_untilize_dst issue! --> #14236")
 
     use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
     run_conv(
