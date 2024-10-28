@@ -12,6 +12,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
+using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
