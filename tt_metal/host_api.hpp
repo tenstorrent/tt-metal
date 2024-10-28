@@ -255,7 +255,7 @@ uint32_t CreateSemaphore(
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 
@@ -266,7 +266,8 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
 
@@ -277,7 +278,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, Devi
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 
@@ -288,7 +289,8 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
