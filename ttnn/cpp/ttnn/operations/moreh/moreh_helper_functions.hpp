@@ -293,16 +293,16 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
 uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape);
+void expand_to_max_dim(ttnn::SmallVector<uint32_t> &dim, const ttnn::SimpleShape &shape);
 
 void validate_input_with_dim(const Tensor &input, const int64_t &dim);
 
 void validate_output_with_keepdim(const Tensor &input, const Tensor &output, const int64_t &dim, const bool &keepdim);
 
-void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank);
+void initialize_dims_with_range(ttnn::SmallVector<int64_t> &dims, uint32_t input_rank);
 
-std::vector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank);
+ttnn::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> &dim, uint32_t input_rank);
 
 std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape);
 
