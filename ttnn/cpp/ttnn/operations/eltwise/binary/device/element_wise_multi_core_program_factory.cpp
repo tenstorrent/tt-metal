@@ -77,7 +77,7 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     uint32_t block_height = 0, block_width = 0, block_size = 0, output_width = 0, last_unpadded_block_height = 0,
              last_unpadded_block_width = 0;
     CoreCoord end_core;
-    vector<CoreCoord> cores;
+    std::vector<CoreCoord> cores;
 
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().grid;

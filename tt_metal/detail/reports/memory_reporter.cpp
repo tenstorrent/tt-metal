@@ -100,14 +100,14 @@ void populate_reports(const Device *device, std::ofstream &memory_usage_summary_
     write_memory_usage(device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 }
 
-void MemoryReporter::flush_program_memory_usage(const Program &program, const Device *device) {
+void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Device *device) {
     if (not this->program_memory_usage_summary_report_.is_open()) {
         this->init_reports();
     }
 
-    this->program_memory_usage_summary_report_ << program.get_id();
-    this->program_l1_usage_summary_report_ << program.get_id();
-    this->program_detailed_memory_usage_report_ << program.get_id();
+    this->program_memory_usage_summary_report_ << program_id;
+    this->program_l1_usage_summary_report_ << program_id;
+    this->program_detailed_memory_usage_report_ << program_id;
 
     populate_reports(device, this->program_memory_usage_summary_report_, this->program_detailed_memory_usage_report_, this->program_l1_usage_summary_report_);
 }

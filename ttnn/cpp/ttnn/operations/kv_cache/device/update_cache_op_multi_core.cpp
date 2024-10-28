@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(const Tensor& cache_tens
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         src0_cb_index,
         src1_cb_index,
         interm0_cb_index,

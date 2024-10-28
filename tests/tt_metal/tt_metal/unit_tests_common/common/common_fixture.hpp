@@ -16,8 +16,7 @@ class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
-        static std::unordered_map<uint64_t, uint32_t> trace_captured;
-        uint64_t program_id = program.get_id();
+        const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
@@ -48,7 +47,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    vector<tt::tt_metal::v1::DeviceHandle> devices_;
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
     bool slow_dispatch_;
     bool has_remote_devices_;
 
@@ -70,7 +69,7 @@ protected:
         // An extra flag for if we have remote devices, as some tests are disabled for fast
         // dispatch + remote devices.
         this->has_remote_devices_ = num_devices > num_pci_devices;
-        vector<chip_id_t> ids;
+        std::vector<chip_id_t> ids;
         for (unsigned int id = 0; id < num_devices; id++) {
             if (SkipTest(id))
                 continue;

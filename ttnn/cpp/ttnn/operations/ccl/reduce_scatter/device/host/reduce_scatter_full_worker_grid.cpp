@@ -210,7 +210,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
 
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
     std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
@@ -253,7 +253,7 @@ static void set_reduce_scatter_worker_rt(
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
-    WorkerAttributes &worker_attributes,
+    WorkerAttributes const& worker_attributes,
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {

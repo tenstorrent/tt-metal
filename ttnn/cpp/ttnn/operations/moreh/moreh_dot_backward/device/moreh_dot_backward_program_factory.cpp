@@ -105,7 +105,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto writer_kernel_id =
         tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file =
