@@ -27,7 +27,6 @@
 #include "third_party/umd/device/tt_silicon_driver_common.hpp"
 #include "debug/assert.h"
 #include "dev_msgs.h"
-#include "debug/dprint.h"
 
 #if defined(KERNEL_BUILD)
 constexpr uint8_t noc_index = NOC_INDEX;
@@ -1546,7 +1545,6 @@ void noc_async_write_multicast_exclude_region(
     uint8_t noc = noc_index) {
     WAYPOINT("NMEW");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
-    uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
     ncrisc_noc_fast_write_any_len_exclude_region(
         noc,
         write_cmd_buf,
@@ -1590,16 +1588,9 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 FORCE_INLINE
 void noc_async_write_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NWBW");
-    uint32_t i = 1;
-    while (!ncrisc_noc_nonposted_writes_flushed(noc)) {
-        if (i == 6400000) {
-            i = 1;
-            uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-            DPRINT << "barrier transaction " << temp << ENDL();
-        }
-        i++;
-    }
-    uint32_t temp = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+    while (!ncrisc_noc_nonposted_writes_flushed(noc))
+        ;
+
     WAYPOINT("NWBD");
 }
 

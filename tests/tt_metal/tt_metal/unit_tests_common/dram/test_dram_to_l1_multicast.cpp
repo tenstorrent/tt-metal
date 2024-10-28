@@ -82,6 +82,7 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 
     log_debug(LogTest, "Start = {}, {}", core_start_physical.x, core_start_physical.y);
     log_debug(LogTest, "End = {}, {}", core_end_physical.x, core_end_physical.y);
+    log_debug(LogTest, "Exclude = {}, {}", core_exclude_physical.x, core_exclude_physical.y);
     auto mcast_reader_kernel = tt_metal::CreateKernel(
         program,
         cfg.kernel_file,
