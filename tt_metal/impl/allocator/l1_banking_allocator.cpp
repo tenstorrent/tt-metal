@@ -5,12 +5,25 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <limits>
+#include <cstddef>                        // for size_t
+#include <functional>                     // for function
+#include <iterator>                       // for back_insert_iterator, back_...
+#include <optional>
 #include <random>
+#include <unordered_map>
+#include <vector>
 
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"        // for Allocator, base_alloc, Bank...
+#include "tt_metal/impl/allocator/allocator_types.hpp"  // for AllocatorConfig, AllocCoreType
+#include "tt_metal/impl/buffers/buffer_constants.hpp"   // for BufferType
+#include "tt_metal/common/assert.hpp"                   // for TT_ASSERT, tt_throw, TT_THROW
+#include "tt_metal/common/core_coord.hpp"               // for CoreCoord
+#include "third_party/umd/device/xy_pair.h"             // for xy_pair, operator==, hash
+#include <fmt/base.h>                                   // for format_string
+
+// FIXME: NEED TO ELIMINATE for ARCH_NAME, consider moving MEM_MAILBOX_BASE behind HAL
+#include "dev_mem_map.h"                                // for MEM_MAILBOX_BASE
+
 namespace tt {
 
 namespace tt_metal {
@@ -70,8 +83,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
             logical_core.y,
             logical_core.x);
         CoreCoord noc_core({
-            static_cast<size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
-            static_cast<size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
             });
         TT_ASSERT (
             alloc_config.core_type_from_noc_coord_table.find(noc_core) != alloc_config.core_type_from_noc_coord_table.end(),
