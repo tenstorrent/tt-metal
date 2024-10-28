@@ -88,6 +88,9 @@ run_t3000_llama3_vision_tests() {
   n300=N300
   t3k=T3K
 
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/reference/llama_models/requirements.txt
+
   for fake_device in "$n300" "$t3k"; do
     FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/multimodal_demo_chat.py -k "tt and 1" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $fake_device completed"
