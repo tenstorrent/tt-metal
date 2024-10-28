@@ -99,7 +99,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";

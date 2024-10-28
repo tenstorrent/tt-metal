@@ -162,7 +162,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
              embedding_defines));
 
     if (num_blocks_per_core_group_1 > 0) {
-        vector<uint32_t> compute_args_1 = {
+        std::vector<uint32_t> compute_args_1 = {
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks embeddings_tilized(
     }
 
     if (num_blocks_per_core_group_2 > 0) {
-        vector<uint32_t> compute_args_2 = {
+        std::vector<uint32_t> compute_args_2 = {
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };

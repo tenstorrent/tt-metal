@@ -145,6 +145,15 @@ on:
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.elu_bw.elu_bw
+          - eltwise.unary_backward.celu_bw.celu_bw
+          - eltwise.unary_backward.selu_bw.selu_bw
+          - eltwise.unary_backward.silu_bw.silu_bw
+          - eltwise.unary_backward.floor_bw.floor_bw
+          - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
+          - eltwise.unary_backward.hardswish_bw.hardswish_bw
+          - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
@@ -211,6 +220,8 @@ on:
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
+          - eltwise.binary_backward.rsub_bw.rsub_bw
+          - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
@@ -228,6 +239,7 @@ on:
           - eltwise.ternary.where.where_pytorch2
           - reduction.topk.topk
           - reduction.argmax.argmax
+          - embedding.embedding
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -257,6 +269,7 @@ on:
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
+          - data_movement.nonzero.nonzero
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window

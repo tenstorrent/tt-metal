@@ -44,9 +44,15 @@ void validate_buffer_size_and_page_size(
         "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
 
     if (is_sharded(buffer_layout)) {
-        TT_FATAL(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
-    } else if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        TT_FATAL(
+            shard_parameters != std::nullopt,
+            "Buffer was specified as sharded but does not have shard_parameters specified");
+    } else {
+        TT_FATAL(
+            shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
+        if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+            TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        }
     }
 }
 
@@ -125,7 +131,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     auto shard_spec = buffer.shard_spec();
 
     bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
-    uint32_t num_cores = buffer.num_cores();
+    uint32_t num_cores = buffer.num_cores().value();
 
     buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
     TT_FATAL(num_cores == buffer_page_mapping.all_cores_.size(), "Buffer has {} cores, but page mapping expects {} cores", num_cores, buffer_page_mapping.all_cores_.size());
@@ -196,7 +202,7 @@ Buffer::Buffer(
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up),
+    bottom_up_(bottom_up.value_or(this->is_dram())),
     buffer_page_mapping_(nullptr) {
     TT_FATAL(this->device_ != nullptr && this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
 
@@ -223,9 +229,7 @@ std::shared_ptr<Buffer> Buffer::create(
     }
 
     buffer->device_->push_work([buffer] {
-        bool bottom_up = buffer->bottom_up_.value_or(buffer->is_dram());
-        buffer->address_ = detail::AllocateBuffer(buffer.get(), bottom_up);
-        detail::BUFFER_MAP.insert({buffer->device_->id(), buffer->address_}, buffer.get());
+        buffer->address_ = detail::AllocateBuffer(buffer.get());
 
         std::unique_lock lock(buffer->allocation_mutex_);
         buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
@@ -257,7 +261,6 @@ void Buffer::deallocate_impl() {
 
     if (device_->initialized_ && size_ != 0) {
         // address_ is only modified from this thread, no sync required
-        detail::BUFFER_MAP.erase({device_->id(), address_});
         detail::DeallocateBuffer(this);
     }
 
@@ -306,7 +309,7 @@ uint32_t Buffer::num_dev_pages() const {
         return this->num_pages();
     }
 
-    return this->shard_spec().size() * this->num_cores();
+    return this->shard_spec().size() * this->num_cores().value();
 }
 
 CoreType Buffer::core_type() const {
@@ -399,9 +402,9 @@ void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
     this->buffer_page_mapping_ = nullptr;
 }
 
-uint32_t Buffer::num_cores() const {
+std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_))
-        return 1;
+        return std::nullopt;
 
     return this->shard_spec().tensor_shard_spec.grid.num_cores();
 }
@@ -431,10 +434,6 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 DeviceAddr ShardSpecBuffer::size() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
-}
-
-namespace detail {
-buffer_map_t BUFFER_MAP = {};
 }
 
 }  // namespace tt_metal

@@ -67,7 +67,7 @@ namespace primary {
             core,
             tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
-        vector<uint32_t> compute_kernel_args = {
+        std::vector<uint32_t> compute_kernel_args = {
             num_tiles, // per_core_block_cnt
             1 // per_core_block_size
         };

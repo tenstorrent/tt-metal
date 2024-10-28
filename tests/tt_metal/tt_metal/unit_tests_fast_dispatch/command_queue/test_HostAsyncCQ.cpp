@@ -16,6 +16,7 @@
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/impl/buffers/circular_buffer.hpp"
 
+using std::vector;
 using namespace tt::tt_metal;
 
 namespace host_cq_test_utils {
