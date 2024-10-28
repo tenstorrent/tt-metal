@@ -9,21 +9,27 @@
 
 namespace ttnn::operations::uniform {
 void bind_uniform_operation(py::module &module) {
-    auto doc =
-        R"doc(uniform(input: Tensor, from: float = 0, to: float = 1, memory_config: Optional[MemoryConfig] = None, compute_kernel_config: Optional[ComputeKernelConfig] = None) -> Tensor
-    Generates a tensor with values drawn from a uniform distribution [`from`, `to`). The input tensor provides the shape for the output tensor, while the data type remains unchanged.
-    This operation allows configuration of memory allocation using `memory_config` and computation settings via `compute_kernel_config`.
+    std::string doc =
+        R"doc(
+        Update in-place the input tensor with values drawn from the continuous uniform distribution 1 / (`to` - `from`).
 
-    Args:
-        * :attr:`input`: The tensor that provides the shape for the generated uniform tensor.
-        * :attr:`from`: The lower bound of the uniform distribution. Defaults to 0.
-        * :attr:`to`: The upper bound of the uniform distribution. Defaults to 1.
-        * :attr:`memory_config`: The memory configuration for the generated tensor.
-        * :attr:`compute_kernel_config`: Optional configuration for the compute kernel used during generation.
+        Args:
+            input (ttnn.Tensor): The tensor that provides the shape for the generated uniform tensor.
+            from (float32): The lower bound of the uniform distribution. Defaults to 0.
+            to (float32): The upper bound of the uniform distribution. Defaults to 1.
 
-    Returns:
-        Tensor: A new tensor with the same shape as `input` and values drawn from the specified uniform distribution.
-    )doc";
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: The `input` tensor with updated values drawn from the specified uniform distribution.
+
+        Example:
+            >>> input = ttnn.to_device(ttnn.from_torch(torch.ones(3, 3), dtype=torch.bfloat16)), device=device)
+            >>> ttnn.uniform(input)
+
+        )doc";
 
     bind_registered_operation(
         module,

@@ -4,22 +4,28 @@
 
 #pragma once
 
-#include <map>
-#include <mutex>
+#include <array>
+#include <atomic>
+#include <cstdint>
 #include <condition_variable>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <tuple>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
 #include "common/bfloat16.hpp"
 #include "common/core_coord.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "third_party/json/json.hpp"
+
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
