@@ -86,15 +86,7 @@ class TtModelArgs:
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
         else:
-            self.DEFAULT_CKPT_DIR = os.getenv(
-                "LLAMA_CKPT_DIR", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
-            )
-            self.DEFAULT_TOKENIZER_PATH = os.getenv(
-                "LLAMA_TOKENIZER_PATH", "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/"
-            )
-            self.DEFAULT_CACHE_PATH = os.getenv(
-                "LLAMA_CACHE_PATH", f"/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/{self.device_name}/"
-            )
+            assert "Please set $LLAMA_DIR to a valid checkpoint directory"
 
         if not dummy_weights:
             # Assert if all folders and files exist
