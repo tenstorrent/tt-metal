@@ -150,4 +150,11 @@ MorehAdamWDeviceOperation::invoke(
             max_exp_avg_sq_out}};
 }
 
+tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    auto operation_attributes_without_step_and_lr = operation_attributes;
+    operation_attributes_without_step_and_lr.step = 0;
+    operation_attributes_without_step_and_lr.lr = 0.0f;
+    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+}
 }  // namespace ttnn::operations::moreh::moreh_adamw

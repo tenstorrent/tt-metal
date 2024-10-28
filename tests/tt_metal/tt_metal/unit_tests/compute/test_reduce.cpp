@@ -20,6 +20,7 @@
 #include "common/test_tiles.hpp"
 #include "common/bfloat16.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::test_utils;
@@ -78,7 +79,7 @@ float get_scaler(const ReduceConfig &test_config) {
 }
 
 void set_math_fid_masks_binary(uint16_t &srca_fid_mask, uint16_t &srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_env_arch_name());
+    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }

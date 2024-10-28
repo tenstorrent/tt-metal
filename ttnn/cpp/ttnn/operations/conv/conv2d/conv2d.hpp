@@ -36,8 +36,9 @@ struct Conv2dConfig {
     uint32_t input_channels_alignment = 32;
     bool deallocate_activation = false;
     bool reallocate_halo_output = false;
-    uint32_t act_block_h_override = 0;
+    uint32_t act_block_h_override = 0; // This argument is ignored when shard_layout == WIDTH_SHARDED.
     uint32_t act_block_w_div = 1; //Amount by which the maximum possible act_block_width is divided. Max act_block_w = (in_channels * window_w * window_h)/total_num_cores;
+                                  //Ignored when shard_layout == HEIGHT_SHARDED or BLOCK_SHARDED
     bool reshard_if_not_optimal = false; // if true, override_sharding_config should not be set to true
     bool override_sharding_config = false; // if true, reshard_if_not_optimal should not be set to true
     std::optional<TensorMemoryLayout> shard_layout;
@@ -101,7 +102,6 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 
 uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
-template <typename T>
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -109,7 +109,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t output_channels,
-    T * device,
+    const CoreCoord& compute_grid_size,
     ShardOrientation block_shard_orientation,
     bool is_out_tiled=true);
 
@@ -123,10 +123,16 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
 
 std::pair<uint32_t, uint32_t> determine_largest_subblock_size(uint32_t block_height, uint32_t block_width, bool fp32_accum);
 
-OptimizedConvBlockConfig determine_per_core_conv_block_config(const sliding_window::ParallelConfig& parallel_config, const OptimizedConvParallelizationConfig& conv_op_parallel_config, uint32_t padded_in_channels, uint32_t act_block_h_override, uint32_t window_w, bool fp32_accum, bool use_shallow_conv_variant);
+OptimizedConvBlockConfig determine_per_core_conv_block_config(
+    const sliding_window::ParallelConfig& parallel_config,
+    const OptimizedConvParallelizationConfig& conv_op_parallel_config,
+    uint32_t padded_in_channels,
+    uint32_t act_block_h_override,
+    uint32_t window_w,
+    bool fp32_accum);
 
 template<typename T>
-std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T * device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -134,18 +140,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t height,
     uint32_t width,
     uint32_t in_channels,
-    uint32_t out_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t weights_width,
-    uint32_t input_width,
-    uint32_t groups);
+    uint32_t out_channels);
 
-template<typename T>
-std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_tensor_if_required(
-    T * device,
+template <typename T>
+std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool, bool> shard_or_reshard_tensor_if_required(
+    T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -153,13 +152,7 @@ std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, bool> shard_or_reshard_
     uint32_t width,
     uint32_t in_channels,
     uint32_t out_channels,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t weights_width,
-    uint32_t input_width,
-    uint32_t groups);
+    bool is_mm_conv);
 
 void validate_weight_and_bias_tensors(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor);
 

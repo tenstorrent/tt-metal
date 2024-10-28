@@ -12,7 +12,6 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "common.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
@@ -54,6 +53,7 @@ constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 //
 // Times dispatching program to M cores, N processors, of various sizes, CBs, runtime args
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;

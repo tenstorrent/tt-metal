@@ -24,7 +24,7 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
             TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
@@ -56,7 +56,7 @@ class MultiCommandQueueMultiDeviceFixture : public ::testing::Test {
             TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
 
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
@@ -104,7 +104,7 @@ protected:
                 GTEST_SKIP();
             }
         }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const int device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id, num_hw_cqs, 0, buffer_size);;
     }

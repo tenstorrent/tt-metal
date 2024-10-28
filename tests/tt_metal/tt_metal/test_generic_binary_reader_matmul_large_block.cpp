@@ -16,6 +16,7 @@
 // This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 
 // Given a tensor that is row-major datums, make it tilized

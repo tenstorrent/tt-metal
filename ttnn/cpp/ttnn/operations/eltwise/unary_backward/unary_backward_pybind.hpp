@@ -177,7 +177,7 @@ void bind_unary_backward_rsqrt(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op_reciprocal(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -192,6 +192,9 @@ void bind_unary_backward_op_reciprocal(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {3}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -200,7 +203,8 @@ void bind_unary_backward_op_reciprocal(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -347,7 +351,8 @@ void bind_unary_backward_two_float_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -357,18 +362,21 @@ void bind_unary_backward_two_float_with_default(
             input_tensor (ComplexTensor or ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float, optional): {3} , Default to {4}
-            {5} (float, optional): {6} , Default to {7}
+            {2} (float, optional): {3} , Defaults to {4}.
+            {5} (float, optional): {6} , Defaults to {7}.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {9}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
             >>> input = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> output = {1}(grad_tensor, input, {2} = {3}, {5} = {6})
+            >>> output = {1}(grad_tensor, input, {2} = {4}, {5} = {7})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -378,7 +386,8 @@ void bind_unary_backward_two_float_with_default(
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -535,7 +544,8 @@ void bind_unary_backward_float_string_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     string parameter_b_value,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {7}
@@ -552,6 +562,9 @@ void bind_unary_backward_float_string_default(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {8}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
@@ -565,7 +578,8 @@ void bind_unary_backward_float_string_default(
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -957,7 +971,7 @@ void bind_unary_backward_opt(py::module& module, const unary_backward_operation_
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -972,6 +986,9 @@ void bind_unary_backward(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {3}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -980,7 +997,8 @@ void bind_unary_backward(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        note);
 
     bind_registered_operation(
         module,
@@ -1008,7 +1026,8 @@ void bind_unary_backward_gelu(
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     string parameter_a_value,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {5}
@@ -1023,6 +1042,9 @@ void bind_unary_backward_gelu(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (uint8, optional): command queue id. Defaults to `0`.
 
+        Note:
+            {6}
+
 
         Example:
 
@@ -1035,7 +1057,8 @@ void bind_unary_backward_gelu(
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
-        description);
+        description,
+        supported_dtype);
     bind_registered_operation(
         module,
         operation,
@@ -1082,7 +1105,14 @@ void py_module(py::module& module) {
         "max",
         "Maximum value",
         1.0,
-        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hardtanh activation function on :attr:`input_tensor`, :attr:`min`, :attr:`max` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
 
 
     detail::bind_unary_backward_float_with_default(
@@ -1210,7 +1240,16 @@ void py_module(py::module& module) {
         "threshold",
         "Threshold value",
         20.0,
-        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_float_string_default(
         module,
@@ -1221,7 +1260,16 @@ void py_module(py::module& module) {
         "Mode of Rounding",
         "None",
         R"doc(Performs backward operations for Unary rdiv on :attr:`input_tensor`, :attr:`scalar` with given :attr:`grad_tensor` using given :attr:`round_mode`.
-        :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc");
+        :attr:`round_mode` can be 'None', 'trunc', or 'floor'.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_shape(
         module,
@@ -1237,7 +1285,16 @@ void py_module(py::module& module) {
         "Approximation type",
         "none",
         R"doc(Performs backward operations for gelu on :attr:`input_tensor_a` or :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_unary_optional_float(
         module,
@@ -1266,14 +1323,32 @@ void py_module(py::module& module) {
         ttnn::multigammaln_bw,
         R"doc(Performs backward operations for multigammaln on :attr:`input_tensor` with given :attr:`grad_tensor` and value of P is taken as 4.
         mvlgamma is refered as multigammaln.
-        Input value must be greater than 2.5f)doc");
+        Input value must be greater than 2.5f)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_prod_bw(module, ttnn::prod_bw);
 
     detail::bind_unary_backward(
         module,
         ttnn::lgamma_bw,
-        R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for lgamma on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_optional(
         module,
@@ -1284,22 +1359,49 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::hardsigmoid_bw,
-        R"doc(Performs backward operations for hardsigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for hardsigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::cos_bw,
-        R"doc(Performs backward operations for cos on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for cosine on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::acosh_bw,
-        R"doc(Performs backward operations for inverse cosine (acos) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for inverse hyperbolic cosine (acosh) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_op(
         module,
         ttnn::acos_bw,
-        R"doc(Performs backward operations for inverse hyperbolic cosine (acosh) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for inverse cosine (acos) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1467,17 +1569,44 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::relu_bw,
-        R"doc(Performs backward operations for relu on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for relu on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::logit_bw,
-        R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::floor_bw,
-        R"doc(Performs backward operations for floor on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for floor on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE, ROW MAJOR           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_float(
         module,
@@ -1488,12 +1617,30 @@ void py_module(py::module& module) {
     detail::bind_unary_backward(
         module,
         ttnn::round_bw,
-        R"doc(Performs backward operations for round on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for round on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE, ROW MAJOR           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward(
         module,
         ttnn::log_bw,
-        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1803,7 +1950,16 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op_reciprocal(
         module,
         ttnn::reciprocal_bw,
-        R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_op(
         module,

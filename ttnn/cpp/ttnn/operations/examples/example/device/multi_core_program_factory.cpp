@@ -68,7 +68,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
         1                            // per_core_block_size
     };
@@ -84,7 +84,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
             .compile_args = compute_kernel_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_tiles_per_core_group_2,  // per_core_block_cnt
             1                            // per_core_block_size
         };

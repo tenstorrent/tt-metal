@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
 
+using std::map;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
@@ -90,7 +91,7 @@ std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_ut
     uint16_t srcb_fid_mask = 0xFFFF;
 
     std::vector<tt::test_utils::df::bfloat16> golden(num_cols * num_rows);
-    auto arch = get_arch_from_string(get_env_arch_name());
+    auto arch = get_arch_from_string(get_umd_arch_name());
 
     switch (math_fidelity) {
         case MathFidelity::HiFi4:

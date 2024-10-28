@@ -15,6 +15,8 @@ Tensor _addcmul(
     const Tensor& input_c,
     float value,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE || input_b.storage_type() == StorageType::DEVICE || input_c.storage_type() == StorageType::DEVICE, "Ternary operation requires input tensors to be on Device.");
+
     Tensor t_mul = ttnn::multiply(input_b, input_c, std::nullopt, output_mem_config);
     Tensor t_factor = ttnn::multiply(t_mul, value, std::nullopt, output_mem_config);
     t_mul.deallocate();
@@ -29,6 +31,8 @@ Tensor _addcdiv(
     const Tensor& input_c,
     float value,
     const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE || input_b.storage_type() == StorageType::DEVICE || input_c.storage_type() == StorageType::DEVICE, "Ternary operation requires input tensors to be on Device.");
+
     Tensor t_div = ttnn::multiply(input_b, ttnn::reciprocal(input_c, output_mem_config), std::nullopt, output_mem_config);
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();

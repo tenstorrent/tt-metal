@@ -375,6 +375,8 @@ void MAIN {
     constexpr uint32_t k_chunk_size = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(18);
     constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(19);
+    constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(21) == 1;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -423,23 +425,26 @@ void MAIN {
     }
 
     // Get cur_pos
-    uint32_t cur_pos = 0;
-    // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
-    if (cur_pos_arg != UINT32_MAX){
-        cur_pos = cur_pos_arg;
-    }
-    else {
-        constexpr uint32_t cb_index_id = tt::CB::dataflow0;
-        cb_wait_front(cb_index_id, 1);
-        volatile uint32_t *index_addr_ptr;
-        cb_get_tile(cb_index_id, 0, &index_addr_ptr);
-        cur_pos = index_addr_ptr[4+cur_batch];
-        cb_release_tile(cb_index_id);
-    }
+    constexpr uint32_t cur_pos_base = St*32-1;
+    uint32_t cur_pos = cur_pos_base; // default to non-causal, which we do attention on the entire kv cache. In this case we set cur_pos to the last position
+    if constexpr(is_causal) {
+        // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
+        if (cur_pos_arg != UINT32_MAX){
+            cur_pos = cur_pos_arg;
+        }
+        else {
+            constexpr uint32_t cb_index_id = tt::CB::dataflow0;
+            cb_wait_front(cb_index_id, 1);
+            volatile uint32_t *index_addr_ptr;
+            cb_get_tile(cb_index_id, 0, &index_addr_ptr);
+            cur_pos = index_addr_ptr[4+cur_batch];
+            cb_release_tile(cb_index_id);
+        }
 
-    if (cur_pos == UINT32_MAX) {
-        // cur_pos of -1 indicates that the user should be skipped
-        return;
+        if (cur_pos == UINT32_MAX) {
+            // cur_pos of -1 indicates that the user should be skipped
+            return;
+        }
     }
     // Sequence length assignment
     auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size);
@@ -464,11 +469,19 @@ void MAIN {
             /* QK *= SCALE */
             mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
 
-            // For decode, we only apply mask at the last chunk on reducer cor
-            if (k_chunk == k_chunk_end - 1 && do_reduce) {
-                /* QK += MASK */
-                reconfig_data_format(cb_qk_im, cb_mask_in);
-                add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+            if constexpr(is_causal){
+                // For decode, we only apply mask at the last chunk on reducer core for causal mode
+                if (k_chunk == k_chunk_end - 1 && do_reduce) {
+                    /* QK += MASK */
+                    reconfig_data_format(cb_qk_im, cb_mask_in);
+                    add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                }
+            }
+            else {
+                if constexpr(use_attention_mask){
+                    reconfig_data_format(cb_qk_im, cb_mask_in);
+                    add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                }
             }
 
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);

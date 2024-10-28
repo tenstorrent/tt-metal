@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(const Tensor &a, const Te
         all_device_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         (uint32_t) transpose_hw_bool, // transpose_hw for matmul_init
     }; // bmm compute kernel the B, Mt, Nt are just 3 for loops that technically act as 1 large loop, so only set Nt for simplicity
 

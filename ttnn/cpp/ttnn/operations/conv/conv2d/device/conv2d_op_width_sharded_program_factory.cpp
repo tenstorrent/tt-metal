@@ -572,10 +572,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         compute_defines["SPLIT_READER"] = "1";
     }
 
-    if (false) {
+    if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
-
+    uint32_t num_output_tiles = per_core_out_matrix_height_ntiles*per_core_out_matrix_width_ntiles;
+    uint32_t use_non_tile_height = false;
     compute_kernel_args = {
         act_block_w_ntiles,           //in0_block_w
         act_num_subblocks,            //in0_num_sublocks
@@ -602,6 +603,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
         bias_ntiles_per_core,
 
+        num_output_tiles,
+        use_non_tile_height,
+
         total_num_cores,              //in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
@@ -617,14 +621,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     CircularBufferConfig cb_for_l1_array_config =
         CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
             .set_page_size(cb_for_l1_array, 32 * 2);
-    auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
 
     CircularBufferConfig cb_sharded_act_config =
             CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
                 .set_page_size(sharded_act_cb, shard_shape[1] * datum_size(act_df));
         cb_sharded_act_config.set_globally_allocated_address(*a.buffer());
 
-    auto cb_sharded_act = tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_act_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sharded_act_config);
 
     CircularBufferConfig cb_act_config =
         CircularBufferConfig(act_block_num_tiles_split * tilized_act_tile_size, {{act_cb, tilized_act_df}})
@@ -676,7 +680,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
-    uint32_t num_output_tiles = per_core_out_matrix_height_ntiles*per_core_out_matrix_width_ntiles;
 
 
         // Share buffer if same data format
