@@ -58,7 +58,11 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
         } else {
             TT_FATAL(C % TILE_HEIGHT == 0, "Error");
         }
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
+        TT_FATAL(
+            input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
+        TT_FATAL(
+            !(input_tensor.is_sharded() && input_tensor.get_layout() == Layout::TILE),
+            "HC transpose does not support sharded+tilized inputs");
     } else if (this->dim == TransposeOpDim::CW) {
         TT_FATAL(C % TILE_WIDTH == 0, "Error");
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
