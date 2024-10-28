@@ -12,7 +12,6 @@
 #include "tests/tt_metal/tt_metal/unit_tests/common/device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -83,7 +82,7 @@ bool dram_ping(
 }  // namespace unit_tests::basic::device
 
 TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
-    auto arch = tt::get_arch_from_string(get_env_arch_name());
+    auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::Device* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
@@ -93,7 +92,7 @@ TEST_F(BasicFixture, SingleDeviceHarvestingPrints) {
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
         default:
-            TT_THROW("Unsupported arch {}", get_env_arch_name());
+            TT_THROW("Unsupported arch {}", get_umd_arch_name());
     }
     auto logical_grid_size = device->logical_grid_size();
     if (logical_grid_size == unharvested_logical_grid_size) {

@@ -28,34 +28,6 @@ def calculate_hidden_dim(dim, ffn_dim_multiplier, multiple_of):
     return hidden_dim
 
 
-# TODO Add other default params for models in the family
-DEFAULT_LLAMA3_2_3B_PARAMS = {
-    "dim": 3072,
-    "ffn_dim_multiplier": 1.0,
-    "multiple_of": 256,
-    "n_heads": 24,
-    "n_kv_heads": 8,
-    "n_layers": 28,
-    "norm_eps": 1e-05,
-    "rope_theta": 500000.0,
-    "use_scaled_rope": True,
-    "vocab_size": 128256,
-}
-
-DEFAULT_LLAMA3_1_8B_PARAMS = {
-    "dim": 4096,
-    "ffn_dim_multiplier": 1.3,
-    "multiple_of": 1024,
-    "n_heads": 32,
-    "n_kv_heads": 8,
-    "n_layers": 32,
-    "norm_eps": 1e-05,
-    "rope_theta": 500000.0,
-    "use_scaled_rope": True,
-    "vocab_size": 128256,
-}
-
-
 class TtModelArgs:
     paged_attention_config = None
 
@@ -93,11 +65,18 @@ class TtModelArgs:
         "OUTPUT_MM",
     )
 
+    LOCAL_LLAMA_PARAMS = {
+        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct/",
+        "LLAMA3_2_1B_PARAMS": "models/demos/llama3/model_params/Llama3.2-1B-Instruct",
+        "LLAMA3_2_3B_PARAMS": "models/demos/llama3/model_params/Llama3.2-3B-Instruct",
+        "LLAMA3_2_11B_PARAMS": "models/demos/llama3/model_params/Llama3.2-11B-Vision-Instruct",
+    }
+
     def __init__(self, mesh_device, instruct=False, dummy_weights=False, max_batch_size=1):
         # Add this near the top of the class, with other class attributes
-        self.num_devices = mesh_device.get_num_devices()
-        device = mesh_device.get_devices()[0]
-        self.device_name = {1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
+        device = mesh_device.get_devices()[0] if mesh_device else None
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
 
         # A single device cannot fit the full 128k context length
         if self.num_devices == 1:
@@ -147,13 +126,21 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-        if (
-            dummy_weights
-        ):  # TODO Choose the correct dummy weights for the correct model specified (take model as arg input?)
-            logger.info(f"Note: Using dummy weights, weight caching disabled")
-            self._set_llama_params_from_dict(DEFAULT_LLAMA3_2_3B_PARAMS)
-        else:
+
+        if not dummy_weights:
             self._set_llama_params(self.DEFAULT_CKPT_DIR)
+        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
+            if "3.1-8B" in LLAMA_DIR:
+                local_params = "LLAMA3_1_8B_PARAMS"
+            elif "3.2-1B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_1B_PARAMS"
+            elif "3.2-3B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_3B_PARAMS"
+            elif "3.2-11B" in LLAMA_DIR:
+                local_params = "LLAMA3_2_11B_PARAMS"
+            else:
+                raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+            self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -205,11 +192,11 @@ class TtModelArgs:
                 }
             )
 
-            # Compute kernels. FP32 acc is needed for accuracy.
+            # Compute kernels. FP32 acc does not appear to be needed for accuracy in model tests or demo runs.
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
+                fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
             self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
@@ -330,20 +317,6 @@ class TtModelArgs:
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-
-            self.model_config["MLP_KERNEL_CONFIG_HIFI2"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,  # full precision for bfp8 @ bfp8
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-            self.model_config["MLP_KERNEL_CONFIG_HIFI4"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,  # full precision for bf16 @ bfp8
-                math_approx_mode=True,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
             )
 
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
@@ -482,13 +455,13 @@ class TtModelArgs:
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
             )
-            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
                 k=self.dim,
                 n=(self.head_dim * self.n_kv_heads) // self.num_devices,
                 grid_size=(8, 8),
                 in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
+                fuse_batch=seq_len <= max_seq,
             )
             self.model_config["VISION_XATTN_SCORE_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
                 m=seq_len,
@@ -513,6 +486,26 @@ class TtModelArgs:
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=False,
+            )
+
+            self.model_config["VISION_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=seq_len,
+                k=self.vision_dim * 6,
+                n=self.dim // self.num_devices,
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=False,
+            )
+
+            self.model_config["CROSS_TRANSFORMER_TEXT_OUTPUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
+                m=min(seq_len, max_seq),
+                k=self.dim,
+                n=self.vocab_size
+                // 4
+                // self.num_devices,  # TODO: Remove magic number 8 from cross attention transformer text
+                grid_size=(8, 8),
+                in0_block_w=1,
+                fuse_batch=seq_len <= max_seq,
             )
 
     def _set_llama_params_from_dict(self, params):
@@ -609,10 +602,10 @@ class TtModelArgs:
         if self.dummy_weights:
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
-            state_dict = {k: torch.randn_like(v) for k, v in state_dict.items()}
+            state_dict_prefix = self.get_state_dict_prefix("", None)
+            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         else:
             state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
-            # state_dict = torch.load(self.consolidated_weights_path, map_location=torch.device("cpu"))
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, 32))]
@@ -625,15 +618,14 @@ class TtModelArgs:
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = 12
-        tile_size = 32
-        padded_size = math.ceil(n / (tile_size * dram_cores)) * (tile_size * dram_cores)
+        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
-    @staticmethod
     def matmul_config(
+        self,
         m: int,
         k: int,
         n: int,
@@ -642,8 +634,8 @@ class TtModelArgs:
         fuse_batch: bool = False,
         fused_activation=None,
     ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-        per_core_M = math.ceil(m / (32 * grid_size[1]))
-        per_core_N = math.ceil(n / (32 * grid_size[0]))
+        per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
+        per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
         out_subblock_h = 1
         out_subblock_w = 4
@@ -652,9 +644,12 @@ class TtModelArgs:
                 break
             out_subblock_w -= 1
 
+        if in0_block_w is None:
+            in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
-            in0_block_w=1,  # in0_block_w if in0_block_w is not None else max(1, k // (32 * grid_size[0])), # FIXME
+            in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
             per_core_M=per_core_M,

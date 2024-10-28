@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core_coord.h"
+#include "core_coord.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
 

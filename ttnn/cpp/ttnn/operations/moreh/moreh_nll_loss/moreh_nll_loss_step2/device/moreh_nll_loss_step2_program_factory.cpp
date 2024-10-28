@@ -148,7 +148,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input_addr,
             target_addr,
             weight_addr,
@@ -161,7 +161,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             input.element_size(),
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             output_addr,
             units_per_core,
             tile_offset,
@@ -327,7 +327,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input_addr,
             target_addr,
             weight_addr,
@@ -341,7 +341,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             input.element_size(),
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             output_addr,
             units_per_core,
             tile_offset,
@@ -516,7 +516,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             TT_THROW("Core not in specified core ranges");
         }
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             input_addr,
             target_addr,
             weight_addr,
@@ -532,7 +532,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             input.element_size(),
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             output_addr,
             units_per_core,
             tile_offset,

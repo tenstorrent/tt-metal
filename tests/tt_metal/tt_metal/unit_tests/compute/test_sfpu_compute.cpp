@@ -12,12 +12,13 @@
 #include "device_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+using std::map;
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
@@ -105,7 +106,7 @@ struct SfpuConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreRangeSet cores = {{}};
+    CoreRangeSet cores = CoreRangeSet();
     std::string sfpu_op = "";
     bool approx_mode = true;
 };
@@ -398,7 +399,7 @@ TEST_F(DeviceFixture, DISABLED_AllCoreSingleTileSfpuApproxCompute) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = {{}},
+        .cores = CoreRangeSet(),
         .approx_mode = true};
 
     auto arch = this->arch_;
@@ -437,7 +438,7 @@ TEST_F(DeviceFixture, DISABLED_AllCoreMultiTileSfpuApproxCompute) {
         .tile_byte_size = 2 * 32 * 32,
         .l1_input_data_format = tt::DataFormat::Float16_b,
         .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = {{}},
+        .cores = CoreRangeSet(),
         .approx_mode = true};
 
     auto arch = this->arch_;

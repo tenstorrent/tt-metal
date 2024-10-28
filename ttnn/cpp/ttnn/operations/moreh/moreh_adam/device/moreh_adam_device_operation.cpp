@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -156,4 +157,13 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
             max_exp_avg_sq_in,
             {param_out, exp_avg_out, exp_avg_sq_out, max_exp_avg_sq_out}}};
 }
+auto MorehAdamOperation::compute_program_hash(
+    const MorehAdamOperation::operation_attributes_t& operation_attributes,
+    const MorehAdamOperation::tensor_args_t& tensor_args) -> tt::stl::hash::hash_t {
+    auto operation_attributes_without_step_and_lr = operation_attributes;
+    operation_attributes_without_step_and_lr.step = 0;
+    operation_attributes_without_step_and_lr.lr = 0.0f;
+    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+}
+
 }  // namespace ttnn::operations::moreh::moreh_adam

@@ -16,13 +16,14 @@
 #include "tests/tt_metal/tt_metal/unit_tests_fast_dispatch/common/command_queue_fixture.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // FIXME: Should remove dependency on this
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/device/device.hpp"
 
+using std::map;
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::tt_metal;

@@ -229,3 +229,40 @@ def test_moreh_adamw_compute_kernel_options(
 ):
     torch.manual_seed(0)
     run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, compute_kernel_options)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 32]],  # single
+)
+@pytest.mark.parametrize("lr", [1e-2])
+@pytest.mark.parametrize("betas", [[0.5, 0.555]])
+@pytest.mark.parametrize("eps", [1e-08])
+@pytest.mark.parametrize("weight_decay", [0.3])
+@pytest.mark.parametrize("amsgrad", [True])
+def test_moreh_adamw_cache(shape, lr, betas, eps, weight_decay, amsgrad, device, use_program_cache):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for step in range(1, 5):
+        run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    for i in range(1, 4):
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
+
+    num_program_cache_entries_list = []
+    for _ in range(4):
+        # generate a new lr between (0, 1)
+        lr = torch.rand(1).item()
+
+        run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, 8, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    for i in range(1, 4):
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]

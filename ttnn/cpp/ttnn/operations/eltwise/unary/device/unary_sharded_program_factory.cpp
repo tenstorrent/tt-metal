@@ -109,12 +109,12 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                 // per_core_block_cnt
         num_tile_per_core  // per_core_block_size
     };
 
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }

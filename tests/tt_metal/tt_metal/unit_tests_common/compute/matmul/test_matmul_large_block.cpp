@@ -16,13 +16,14 @@
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "tests/tt_metal/tt_metal/unit_tests_common/compute/matmul/matmul_utils.hpp"
 
+using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 
 namespace unit_tests_common::matmul::test_matmul_large_block {
 
 void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
-    auto arch = get_arch_from_string(get_env_arch_name());
+    auto arch = get_arch_from_string(get_umd_arch_name());
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
         case MathFidelity::HiFi3: { break; }

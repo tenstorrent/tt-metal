@@ -5,7 +5,7 @@
 #include <vector>
 #include <string>
 
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 #include "hw/inc/debug/ring_buffer.h"
 #include "hw/inc/dev_msgs.h"
 #include "impl/device/device.hpp"
@@ -114,11 +114,11 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t *mbox_data) {
 namespace tt::watcher {
 
 WatcherDeviceReader::WatcherDeviceReader(
-    FILE *f, Device *device, vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &)) :
+    FILE *f, Device *device, std::vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
-        vector<uint32_t> read_data;
+        std::vector<uint32_t> read_data;
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
@@ -131,7 +131,7 @@ WatcherDeviceReader::WatcherDeviceReader(
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
-        vector<uint32_t> read_data;
+        std::vector<uint32_t> read_data;
         for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(

@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
-    vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en };
+    std::vector<uint32_t> compute_args = { Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en };
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -412,7 +412,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Grayskull Device Setup
+    //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Device *device = a.device();
 
@@ -422,8 +422,20 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    if (fp32_dest_acc_en) {
-        TT_ASSERT(subblock_wt <= 4, "subblock width must less than 4 in fp32 mode");
+    if (dst_full_sync_en == false) {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(subblock_wt <= 4, "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false", subblock_wt);
+        }
+        else {
+            TT_FATAL(subblock_wt <= 8, "subblock_wt={}, but subblock width must less than 8 tiles when dst_full_sync_en is false", subblock_wt);
+        }
+    } else {
+        if (fp32_dest_acc_en) {
+            TT_FATAL(subblock_wt <= 8, "subblock_wt={}, but subblock width must less than 8 tiles in fp32 mode when dst_full_sync_en is true", subblock_wt);
+        }
+        else {
+            TT_FATAL(subblock_wt <= 16, "subblock_wt={}, but subblock width must less than 16 tiles when dst_full_sync_en is true", subblock_wt);
+        }
     }
 
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -604,9 +616,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     CoreCoord start_core = {0, 0};
     CoreRangeSet all_cores = shard_spec.grid;
     CoreRange sender_cores(start_core, start_core);
-    CoreRangeSet all_to_all_cores({});
-    CoreRangeSet all_to_all_workers_except_sender({});
-    CoreRangeSet not_all_to_all_workers({});
+    CoreRangeSet all_to_all_cores;
+    CoreRangeSet all_to_all_workers_except_sender;
+    CoreRangeSet not_all_to_all_workers;
     uint32_t num_cores_x_mcast, num_cores_y_mcast;
     if (mcast_1d) {
         sender_cores = {start_core, start_core};
@@ -707,18 +719,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_y - 1}};
-            all_to_all_cores = CoreRangeSet({CoreRange(
-                {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+            all_to_all_cores = CoreRangeSet(CoreRange(
+                {(std::size_t)start_core.x, (std::size_t)start_core.y},
+                {(std::size_t)start_core.x + num_cores_all_to_all - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x + 1, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_all_to_all - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x + 1, (std::size_t)start_core.y},
+                    {(std::size_t)start_core.x + num_cores_all_to_all - 1,
+                     (std::size_t)start_core.y + num_cores_y - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x + num_cores_all_to_all, (std::size_t) start_core.y},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                not_all_to_all_workers = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x + num_cores_all_to_all, (std::size_t)start_core.y},
+                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = num_cores_x;
             num_cores_y_mcast = 1;
@@ -726,18 +739,19 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             sender_cores = {
                 {(std::size_t) start_core.x, (std::size_t) start_core.y},
                 {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y}};
-            all_to_all_cores = CoreRangeSet({CoreRange(
-                {(std::size_t) start_core.x, (std::size_t) start_core.y},
-                {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
+            all_to_all_cores = CoreRangeSet(CoreRange(
+                {(std::size_t)start_core.x, (std::size_t)start_core.y},
+                {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_all_to_all - 1}));
             if (use_mcast && num_cores_all_to_all > 1) {
-                all_to_all_workers_except_sender = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x, (std::size_t) start_core.y + 1},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_all_to_all - 1})});
+                all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x, (std::size_t)start_core.y + 1},
+                    {(std::size_t)start_core.x + num_cores_x - 1,
+                     (std::size_t)start_core.y + num_cores_all_to_all - 1}));
             }
             if (num_none_all_to_all_workers > 0) {
-                not_all_to_all_workers = CoreRangeSet({CoreRange(
-                    {(std::size_t) start_core.x, (std::size_t) start_core.y + num_cores_all_to_all},
-                    {(std::size_t) start_core.x + num_cores_x - 1, (std::size_t) start_core.y + num_cores_y - 1})});
+                not_all_to_all_workers = CoreRangeSet(CoreRange(
+                    {(std::size_t)start_core.x, (std::size_t)start_core.y + num_cores_all_to_all},
+                    {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
             }
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;

@@ -2,7 +2,7 @@ name: "[internal] Remove Stale Branches"
 
 on:
   schedule:
-    - cron: "0 0 * * *" # Runs every night at midnight
+    - cron: "0 */6 * * *"   # Runs at midnight, 6AM, noon, 6pm
   workflow_dispatch: # Allows manual trigger
 
 jobs:

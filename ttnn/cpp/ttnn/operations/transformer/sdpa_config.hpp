@@ -5,7 +5,7 @@
 #pragma once
 
 #include <cstddef>
-#include "common/core_coord.h"
+#include "common/core_coord.hpp"
 
 namespace ttnn::operations::transformer {
 
