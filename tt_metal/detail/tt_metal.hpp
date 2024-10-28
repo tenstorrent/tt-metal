@@ -279,5 +279,7 @@ inline namespace v0 {
         DeviceAddr AllocateBuffer(Buffer* buffer);
 
         void DeallocateBuffer(Buffer *buffer);
+
+        void SynchronizeWorkerThreads(const std::vector<Device*>& workers);
     }  // namespace detail
 }  // namespace tt::tt_metal

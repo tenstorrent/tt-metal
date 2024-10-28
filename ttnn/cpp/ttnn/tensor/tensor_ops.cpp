@@ -23,20 +23,6 @@
 #include "ttnn/core.hpp"
 
 
-namespace{
-    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-        // Push empty work to threads and ensure its been picked up
-        for (auto target_device : workers) {
-            target_device->work_executor.push_work([](){});
-        }
-        // Block until work has been picked up, to flush the queue
-        for (auto target_device : workers) {
-            while(not target_device->work_executor.worker_queue.empty());
-        }
-    }
-}
-
-
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const MemoryConfig& mem_config) {
@@ -147,7 +133,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     }
 
     if (blocking) {
-        SynchronizeWorkerThreads(workers);
+        tt::tt_metal::detail::SynchronizeWorkerThreads(workers);
     }
     // Update main_thread_ref_count for tensor after pushing to queue.
     input_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
