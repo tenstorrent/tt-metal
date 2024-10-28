@@ -14,6 +14,7 @@
  * recover from a "bad" state.
 */
 
+using std::vector;
 using namespace tt::tt_metal;
 
 int main(int argc, char **argv) {
