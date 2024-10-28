@@ -1501,8 +1501,8 @@ void noc_async_write_multicast_loopback_src(
 
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call to an L-shaped destination which is defined by 
- * a grid and an exclusion zone. 
+ * Tensix core executing this function call to an L-shaped destination which is defined by
+ * a grid and an exclusion zone.
  * The destinations are specified using a uint64_t encoding referencing an
  * on-chip grid of nodes located at NOC coordinate range
  * (x_start,y_start,x_end,y_end) and a local address created using

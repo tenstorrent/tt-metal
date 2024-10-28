@@ -38,7 +38,7 @@ void kernel_main() {
         dst_noc_y_end,
         dst_addr);
     uint32_t noc_exclude_addr = get_noc_exclude_addr(
-        exclude_start_x, 
+        exclude_start_x,
         exclude_start_y,
         exclude_dir_x,
         exclude_dir_y);

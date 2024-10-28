@@ -169,7 +169,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
         uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) | NOC_CMD_RESP_MARKED;
-        
+
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
@@ -386,7 +386,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_exclude
     bool multicast_path_reserve,
     uint32_t exclude_region = 0) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
-        
         while (!noc_cmd_buf_ready(noc, cmd_buf));
         ncrisc_noc_fast_write_exclude_region(
             noc,
