@@ -42,6 +42,8 @@ namespace detail{
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
     std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
     void AddConfigBuffer(Program &program, std::shared_ptr<Buffer> config_buffer);
+
+    class Internal_;
 }
 
 typedef std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX> kernel_id_array_t;
@@ -169,6 +171,7 @@ class Program {
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
+    friend detail::Internal_;
 
     const ProgramTransferInfo &get_program_transfer_info() const noexcept;
     const std::shared_ptr<Buffer> &get_kernels_buffer() const noexcept;
