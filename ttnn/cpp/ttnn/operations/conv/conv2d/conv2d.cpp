@@ -439,9 +439,11 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_sh
         }
     }
 
-    bool use_non_tile_height = shard_layout == TensorMemoryLayout::HEIGHT_SHARDED && out_channels <= 256 && conv_config.act_block_h_override == 0 &&
-        conv_config.dtype == DataType::BFLOAT16 && conv_config.output_layout == Layout::ROW_MAJOR;
-    use_non_tile_height = use_non_tile_height && conv_config.input_channels_alignment != 16;  // shalow conv varient
+    // shallow conv variriant not supported
+    // out_channels <= 256 incorrect output from pack_untilize_dst if output > 256 Tracking --> #14236
+    // bf8 not supported due to limation of sharding dim multipl of 32
+    bool use_non_tile_height = (shard_layout == TensorMemoryLayout::HEIGHT_SHARDED) && out_channels <= 256 && conv_config.act_block_h_override == 0 &&
+        (conv_config.dtype == DataType::BFLOAT16 || conv_config.dtype == DataType::FLOAT32) && conv_config.output_layout == Layout::ROW_MAJOR && conv_config.input_channels_alignment != 16; //shalow conv varient
 
     ParallelConfig parallel_config = input_tensor_parallel_config;
     if (conv_config.reshard_if_not_optimal || needs_shard_or_reshard) {

@@ -143,7 +143,9 @@ std::vector<tt::tt_metal::LegacyShape> OptimizedConvNew::compute_output_shapes(c
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w = this->use_non_tile_height ?  parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height : parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
+    auto padded_shape_w = this->use_non_tile_height ?
+        parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height
+        : parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
