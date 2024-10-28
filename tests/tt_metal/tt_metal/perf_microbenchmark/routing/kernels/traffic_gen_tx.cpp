@@ -48,7 +48,7 @@ static_assert(is_power_of_2(max_packet_size_words), "max_packet_size_words must 
 static_assert(max_packet_size_words < queue_size_words, "max_packet_size_words must be less than queue_size_words");
 static_assert(max_packet_size_words > 2, "max_packet_size_words must be greater than 2");
 
-constexpr uint32_t src_endpoint_start_id = get_compile_time_arg_val(15); // TODO: unused
+constexpr uint32_t src_endpoint_start_id = get_compile_time_arg_val(15);
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(16);
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(17);

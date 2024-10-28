@@ -47,7 +47,6 @@ jobs:
       TT_METAL_SLOW_DISPATCH_MODE: 1
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      DEVICE_NAME: ${{ inputs.runner-label }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - uses: ./.github/actions/prepare-metal-run
