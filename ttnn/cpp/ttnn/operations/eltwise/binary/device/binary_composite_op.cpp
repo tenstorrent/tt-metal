@@ -151,13 +151,13 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return res;
 }
 
-Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config);
-    Tensor in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
-    Tensor in_b_neq_zero = ttnn::nez(input_b, output_mem_config);
-    Tensor result = ttnn::where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero);
-    return result;
-}
+// Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+//     Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config);
+//     Tensor in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
+//     Tensor in_b_neq_zero = ttnn::nez(input_b, output_mem_config);
+//     Tensor result = ttnn::where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero);
+//     return result;
+//}
 
 Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
@@ -324,13 +324,13 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
         result);
 }
 
-Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
-    Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
-    in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
-    Tensor result = ttnn::where(input_a, input_b, in_b_eq_zero, output_mem_config, input_a);
-    return result;
-}
+// Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+//     Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
+//     Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
+//     in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
+//     Tensor result = ttnn::where(input_a, input_b, in_b_eq_zero, output_mem_config, input_a);
+//     return result;
+// }
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
