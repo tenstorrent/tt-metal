@@ -77,8 +77,8 @@ MorehMeanOperation::shape_return_value_t MorehMeanOperation::compute_output_shap
         return Shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
     }
 
-    std::vector<uint32_t> shape;
-    std::vector<Padding::PadDimension> pad_dimensions;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
     const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
     auto input_padding = input_shape.value.padding();

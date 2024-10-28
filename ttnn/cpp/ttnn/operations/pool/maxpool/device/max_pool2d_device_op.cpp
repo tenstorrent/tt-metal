@@ -71,7 +71,7 @@ MaxPool2D::shape_return_value_t MaxPool2D::compute_output_shapes(const operation
     uint32_t out_nhw_padded = tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
-    const auto out_dims = std::vector<uint32_t>({1, 1, out_nhw_padded, out_c_padded});
+    const ttnn::SmallVector<uint32_t> out_dims({1, 1, out_nhw_padded, out_c_padded});
     const auto padding = Padding(
         {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
         Padding::PadValue::NegativeInfinity);
