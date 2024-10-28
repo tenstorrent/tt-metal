@@ -976,7 +976,7 @@ void py_module(py::module& module) {
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc");
 
-    detail::bind_binary_composite(
+    detail::bind_binary_operation(
         module,
         ttnn::logical_xor,
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
@@ -1006,12 +1006,11 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
         )doc");
 
-    detail::bind_binary_composite(
+    detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_xor_,
         R"doc(Compute inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc((\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)
-        )doc",
+
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
