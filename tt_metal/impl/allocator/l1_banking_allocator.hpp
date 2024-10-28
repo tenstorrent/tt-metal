@@ -5,18 +5,14 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
-#include <map>
-#include <unordered_map>
-#include <variant>
-#include <memory>
 
 #include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+struct AllocatorConfig;
 
 namespace allocator {
 

@@ -5,12 +5,26 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <limits>
+#include <cstddef>
+#include <functional>
+#include <iterator>
+#include <optional>
 #include <random>
+#include <unordered_map>
+#include <vector>
 
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/allocator/allocator_types.hpp"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/core_coord.hpp"
+#include "third_party/umd/device/xy_pair.h"
+#include <fmt/base.h>
+
+// FIXME: NEED TO ELIMINATE for ARCH_NAME
+// consider moving MEM_MAILBOX_BASE behind HAL
+#include "dev_mem_map.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -70,8 +84,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
             logical_core.y,
             logical_core.x);
         CoreCoord noc_core({
-            static_cast<size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
-            static_cast<size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_x.at(logical_core.x)),
+            static_cast<std::size_t>(alloc_config.worker_log_to_physical_routing_y.at(logical_core.y)),
             });
         TT_ASSERT (
             alloc_config.core_type_from_noc_coord_table.find(noc_core) != alloc_config.core_type_from_noc_coord_table.end(),
