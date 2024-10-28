@@ -50,10 +50,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(ENABLE_LIBCXX)
     add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
-    add_link_options(
-        $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
-        $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
-    )
+    #add_link_options(
+    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
+    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
+    #)
+endif()
+
+# Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
 endif()
 
 add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>)
