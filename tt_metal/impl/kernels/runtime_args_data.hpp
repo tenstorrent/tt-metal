@@ -31,7 +31,7 @@ struct RuntimeArgsData {
     }
 
     inline bool in_bounds_or_throw(std::size_t index) const {
-        if(!in_bounds(index) [[unlikely]] {
+        if(!in_bounds(index)) [[unlikely]] {
             throw std::out_of_range(
                 "Index " + std::to_string(index) + " is larger than runtime args size " + std::to_string(rt_args_count)
             );
