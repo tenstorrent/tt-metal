@@ -27,18 +27,12 @@ void disable_and_clear_program_cache(Device &device) {
 }
 
 float sfpu_positive_nan(DataType dtype) {
-    union {
-        uint32_t i;
-        float f;
-    } u;
     switch (dtype) {
         case DataType::BFLOAT16: {
-            u.i = { 0x7FFF };
-            return u.f;
+            return float(0x7FFF) ;
         }
         case DataType::FLOAT32: {
-            u.i = { 0x7FFFFFFF };
-            return u.f;
+            return float(0x7FFF) ;
         }
         default:
             return std::numeric_limits<float>::quiet_NaN();
@@ -46,18 +40,12 @@ float sfpu_positive_nan(DataType dtype) {
 }
 
 float sfpu_negative_nan(DataType dtype) {
-    union {
-        uint32_t i;
-        float f;
-    } u;
     switch (dtype) {
         case DataType::BFLOAT16: {
-            u.i = { 0xFFFF };
-            return u.f;
+            return float(0xFFFF) ;
         }
         case DataType::FLOAT32: {
-            u.i = { 0xFFFFFFFF };
-            return u.f;
+            return float(0xFFFFFFFF) ;
         }
         default:
             return -std::numeric_limits<float>::quiet_NaN();
