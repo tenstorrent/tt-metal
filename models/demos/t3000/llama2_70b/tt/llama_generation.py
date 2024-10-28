@@ -188,6 +188,7 @@ class TtLlamaModelForGeneration:
         tt_logits,
         page_table=None,
         tt_page_table=None,
+        read_from_device=True,
     ):
         batch = tokens.shape[0]
 
@@ -207,12 +208,20 @@ class TtLlamaModelForGeneration:
 
         # Run TT model
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        if read_from_device:
+            logits = self.read_forward_trace(tt_logits, unpadded_batch=batch)
+            return logits
+        else:
+            return tt_logits
+
+    def read_forward_trace(self, tt_logits, unpadded_batch=None):
         updated_tt_logits = ttnn.from_device(tt_logits)
 
         logits = self._process_logits(updated_tt_logits)
 
         logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
-        logits = logits[:batch]  # Remove padded users
+        if unpadded_batch is not None:
+            logits = logits[:unpadded_batch]  # Remove padded users
 
         return logits
 
