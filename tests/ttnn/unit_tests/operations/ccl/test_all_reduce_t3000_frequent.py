@@ -10,6 +10,9 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import skip_for_grayskull
 
+TILE_HEIGHT = 32
+TILE_WIDTH = 32
+
 
 def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links, input_dtype, layout):
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
@@ -19,7 +22,7 @@ def is_unsupported_case(input_shape, math_op, mem_config, num_devices, num_links
     num_l1_banks = 64
     if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
-    if (input_shape[2] == 32 or input_shape[3] == 32) and input_dtype == ttnn.bfloat8_b:
+    if (input_shape[-2] == TILE_HEIGHT or input_shape[-1] == TILE_WIDTH) and input_dtype == ttnn.bfloat8_b:
         return True, "This combination is not supported for now"
 
     return False, ""
