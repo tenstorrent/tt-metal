@@ -30,7 +30,6 @@ jobs:
       - name: Ensure weka mount is active
         run: |
           sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
           ls -al /mnt/MLPerf/bit_error_tests
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
