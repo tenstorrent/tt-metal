@@ -6,10 +6,10 @@
 
 #include <array>
 #include <atomic>
-#include <cstdint>                                              // for uint32_t
+#include <cstdint>
 #include <condition_variable>
 #include <map>
-#include <memory>                                               // for shared_ptr
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
@@ -20,11 +20,11 @@
 #include "common/bfloat16.hpp"
 #include "common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
-#include "third_party/umd/device/xy_pair.h"                     // for hash
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/common/assert.hpp"                           // for TT_ASSERT
-#include "third_party/json/json.hpp"                            // for json
+#include "tt_metal/common/assert.hpp"
+#include "third_party/json/json.hpp"
 
 #include "llrt/hal.hpp"
 
