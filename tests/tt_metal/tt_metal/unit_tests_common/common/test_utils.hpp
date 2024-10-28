@@ -17,12 +17,12 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
         "Number of unique runtime args and common runtime args exceeds the maximum limit of {} runtime args",
         tt::tt_metal::max_runtime_args);
 
-    vector<uint32_t> common_rt_args;
+    std::vector<uint32_t> common_rt_args;
     for (uint32_t i = 0; i < num_common_rt_args; i++) {
         common_rt_args.push_back(common_base + i);
     }
 
-    vector<uint32_t> unique_rt_args;
+    std::vector<uint32_t> unique_rt_args;
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         unique_rt_args.push_back(unique_base + i);
     }
