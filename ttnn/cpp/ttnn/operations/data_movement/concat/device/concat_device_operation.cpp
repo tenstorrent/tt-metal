@@ -168,7 +168,7 @@ Tensor concat_impl(std::vector<Tensor> &input_tensors, const std::int64_t dim, c
                     }
                 }
                 // row major should default to row major and tilized to tilized implementations, but the below loop turned RM to tilized when possible
-                Layout target_layout = Layout::TILE;
+                Layout target_layout = input_tensors[0].get_layout();
                 // this should be dead code when instantiating layout to match the input
                 for (const auto &input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
