@@ -570,7 +570,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     compiler_flags
     metal_header_directories
     metal_common_libs
-    tt_metal
+    Metalium::Metal
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
