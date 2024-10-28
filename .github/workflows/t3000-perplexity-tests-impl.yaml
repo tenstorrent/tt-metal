@@ -10,10 +10,10 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_perplexity_tests, timeout: 480, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_perplexity_tests, timeout: 49, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_llama_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama70b_perplexity_tests, timeout: 30, owner_id: U05RWH3QUPM}, #Salar Hosseini
-          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral8x7b_perplexity_tests, timeout: 50, owner_id: U03PUAKE719}, # Miguel Tairum
+          { name: "t3k_falcon7b_tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_perplexity_tests, timeout: 300, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "t3k_falcon40b_tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_perplexity_tests, timeout: 300, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "t3k_llama_70b_tests", arch: wormhole_b0, cmd: run_t3000_llama70b_perplexity_tests, timeout: 300, owner_id: U05RWH3QUPM}, #Salar Hosseini
+          { name: "t3k_mixtral_tests", arch: wormhole_b0, cmd: run_t3000_mixtral8x7b_perplexity_tests, timeout: 300, owner_id: U03PUAKE719}, # Miguel Tairum
         ]
 
     name: ${{ matrix.test-group.name }}
