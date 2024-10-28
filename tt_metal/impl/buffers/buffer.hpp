@@ -144,7 +144,7 @@ struct BufferPageMapping {
 inline namespace v0 {
 
 class Buffer final {
-    struct Private {};
+    struct Private { explicit Private() = default; };
 
    public:
     static std::shared_ptr<Buffer> create(
