@@ -67,16 +67,16 @@ FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
 }
 
 std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> FullOperation::invoke(
-    const std::vector<uint32_t> shape,
-    const std::variant<float, int> fill_value,
+    ttnn::SmallVector<uint32_t> shape,
+    std::variant<float, int> fill_value,
     const Tensor& any,
     const std::optional<DataType>& dtype,
     const std::optional<Layout>& layout,
     const std::optional<MemoryConfig>& memory_config) {
     return {
         operation_attributes_t{
-            shape,
-            fill_value,
+            std::move(shape),
+            std::move(fill_value),
             dtype.value_or(any.get_dtype()),
             layout.value_or(any.get_layout()),
             memory_config.value_or(any.memory_config()),

@@ -37,7 +37,7 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(const ttnn::Tensor& input_a, uint32
     }
 
     rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr);
-    std::vector<uint32_t> final_shape;
+    SmallVector<uint32_t> final_shape;
     final_shape.reserve(input_rank);
     for (uint32_t i = 0; i < rm_input.get_shape().rank(); i++) {
         final_shape.push_back(rm_input.get_shape()[i]);

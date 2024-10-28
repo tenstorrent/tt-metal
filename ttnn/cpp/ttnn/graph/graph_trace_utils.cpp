@@ -25,7 +25,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
     std::string_view shape_values = shape_string.substr(start, end - start);
 
     // Vector to hold the parsed shape values
-    std::vector<uint32_t> shape;
+    SmallVector<uint32_t> shape;
     const char* str = shape_values.data();
     const char* end_str = str + shape_values.size();
 

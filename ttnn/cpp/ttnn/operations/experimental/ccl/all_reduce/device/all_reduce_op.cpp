@@ -92,7 +92,7 @@ Tensor all_reduce(
                 merged_dim_size *= shape[i];
             }
 
-            std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
+            ttnn::SmallVector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
 
             auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 

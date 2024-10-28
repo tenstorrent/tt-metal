@@ -69,11 +69,11 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
             break;
         // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
-            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({2, 1, 0, 3}), output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config);
         case TransposeOpDim::NW:
-            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({3, 1, 2, 0}), output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config);
         case TransposeOpDim::CW:
-            return ttnn::permute((const ttnn::Tensor)a, std::vector<int64_t>({0, 3, 2, 1}), output_mem_config);
+            return ttnn::permute((const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config);
         case TransposeOpDim::CN:
             tiled_only = true; // CN only has a tiled implementation at the moment
             break;
@@ -173,12 +173,12 @@ ttnn::Tensor ExecuteTranspose::invoke(
     auto input_shape = input_typecasted.get_logical_shape();
 
     // create_output_tensor shape is useless when we potentially have new padding to deal with
-    std::vector<uint32_t> output_shape;
+    SmallVector<uint32_t> output_shape;
     output_shape.reserve(input_shape.rank());
     for (int i = 0; i < input_shape.rank(); ++i) {
         output_shape.push_back(input_shape[i]);
     }
-    std::vector<uint32_t> padded_output_shape = output_shape;
+    SmallVector<uint32_t> padded_output_shape = output_shape;
 
     std::swap(output_shape[normalized_dim1], output_shape[normalized_dim2]);
     std::swap(padded_output_shape[normalized_dim1], padded_output_shape[normalized_dim2]);

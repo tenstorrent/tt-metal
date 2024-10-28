@@ -144,7 +144,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
+        const std::array reader_runtime_args{
             input_addr,
             static_cast<uint32_t>(is_dram(input)),
             num_tiles,
@@ -154,12 +154,12 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         // writer
-        const std::vector<uint32_t> writer_runtime_args{
+        const std::array writer_runtime_args{
             output_addr, static_cast<uint32_t>(is_dram(tmp_pow_sum)), tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
-        const std::vector<uint32_t> compute_runtime_args{
+        const std::array compute_runtime_args{
             num_tiles,
             p,
             static_cast<uint32_t>(p_is_negative),

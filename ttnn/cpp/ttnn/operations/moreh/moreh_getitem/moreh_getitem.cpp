@@ -8,7 +8,7 @@ namespace ttnn::operations::moreh::moreh_getitem {
 Tensor MorehGetItem::invoke(
     const Tensor& input,
     const std::vector<Tensor>& index_tensors,
-    const std::vector<uint32_t> index_dims,
+    const ttnn::SmallVector<uint32_t> index_dims,
     const std::optional<Tensor>& output,
     // const CoreRange core_range,
     const std::optional<MemoryConfig> memory_config) {

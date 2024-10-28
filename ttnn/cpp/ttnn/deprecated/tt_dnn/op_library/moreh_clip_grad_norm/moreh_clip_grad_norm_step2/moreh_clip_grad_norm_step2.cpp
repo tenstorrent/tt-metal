@@ -101,16 +101,16 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step2_impl(
     const auto output_addr = total_norm.buffer()->address();
 
     // reader
-    const std::vector<uint32_t> reader_runtime_args{
+    const std::array reader_runtime_args{
         input_addr, static_cast<uint32_t>(is_dram(tmp_pow_sum)), num_tiles, *reinterpret_cast<uint32_t*>(&decimal)};
     SetRuntimeArgs(program, reader_kernels_id, single_core, reader_runtime_args);
 
     // writer
-    const std::vector<uint32_t> writer_runtime_args{output_addr, static_cast<uint32_t>(is_dram(total_norm))};
+    const std::array writer_runtime_args{output_addr, static_cast<uint32_t>(is_dram(total_norm))};
     SetRuntimeArgs(program, writer_kernels_id, single_core, writer_runtime_args);
 
     // compute
-    const std::vector<uint32_t> compute_runtime_args{num_tiles, p, static_cast<uint32_t>(p_is_negative)};
+    const std::array compute_runtime_args{num_tiles, p, static_cast<uint32_t>(p_is_negative)};
     SetRuntimeArgs(program, compute_kernels_id, single_core, compute_runtime_args);
 
     ////////////////////////////////////////////////////////////////////////////

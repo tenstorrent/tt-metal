@@ -23,7 +23,7 @@ namespace operations::reduction {
         static Tensor invoke(
             const Tensor& input,
             const Tensor& output,
-            std::vector<int64_t> &dims,
+            ttnn::SmallVector<int64_t> &dims,
             const std::optional<MemoryConfig>& memory_config = std::nullopt);
     };
 

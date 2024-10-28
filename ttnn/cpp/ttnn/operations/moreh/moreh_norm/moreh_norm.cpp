@@ -10,22 +10,22 @@ namespace ttnn::operations::moreh::moreh_norm {
 Tensor MorehNorm::invoke(
     const Tensor& input,
     float p,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
     bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     if (!dim.has_value()) {
-        std::vector<int64_t> dims(input.get_legacy_shape().rank());
+        ttnn::SmallVector<int64_t> dims(input.get_legacy_shape().rank());
         std::iota(dims.begin(), dims.end(), 0);
         dim = std::make_optional(dims);
     }
     if (auto single_dim = std::get_if<int64_t>(&dim.value()))
         return ttnn::prim::moreh_norm(input, p, *single_dim, keepdim, output, memory_config, compute_kernel_config);
 
-    auto dims = std::get<std::vector<int64_t>>(dim.value());
+    auto dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
     if (dims.empty()) {
-        std::vector<int64_t> all_dims(input.get_legacy_shape().rank());
+        ttnn::SmallVector<int64_t> all_dims(input.get_legacy_shape().rank());
         std::iota(all_dims.begin(), all_dims.end(), 0);
         dims = all_dims;
     }

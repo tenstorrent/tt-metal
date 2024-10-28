@@ -398,7 +398,7 @@ Tensor _variance_impl(
     const Tensor& mean_y,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     constexpr float correction = 0.0f;
     auto shape_wh = y.get_legacy_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
@@ -412,7 +412,7 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
 
 Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     return _variance_impl(y, mean_y, output_memory_config);
 }
@@ -435,7 +435,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  output
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
@@ -551,13 +551,13 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<Tensor> t_split;
     tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    std::vector<uint32_t> s_a = {0, 0, 0, 0};
-    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    std::vector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = std::vector<uint32_t>({1,1,1,1});
+    auto step = ttnn::SmallVector<uint32_t>({1,1,1,1});
     Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 

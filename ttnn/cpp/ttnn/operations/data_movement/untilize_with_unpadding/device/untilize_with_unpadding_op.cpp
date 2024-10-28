@@ -73,7 +73,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
 
 std::vector<tt::tt_metal::LegacyShape> UntilizeWithUnpadding::compute_output_shapes(
     const std::vector<Tensor>& input_tensors) const {
-    std::vector<uint32_t> out_shape;
+    SmallVector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {

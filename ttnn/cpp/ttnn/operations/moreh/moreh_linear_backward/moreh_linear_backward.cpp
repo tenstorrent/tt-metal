@@ -18,7 +18,7 @@ std::tuple<bool, bool, bool> MorehLinearBackward::get_required_outputs(const std
     return {are_required_outputs[0], are_required_outputs[1], are_required_outputs[2]};
 }
 
-void get_tensor_dim(std::vector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -66,15 +66,15 @@ inline void moreh_linear_backward_validate(
     }
 }
 
-std::vector<int64_t> find_reduce_dim(
+ttnn::SmallVector<int64_t> find_reduce_dim(
     const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape) {
-    std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
     int32_t rank = std::max(a_shape.rank(), b_shape.rank());
     log_debug(tt::LogOp, "find_reduce_dim :{} rank {} a {} b {}", __LINE__, rank, a_shape.rank(), b_shape.rank());
-    std::vector<int64_t> dims;
+    ttnn::SmallVector<int64_t> dims;
     // batch dims
     for (int i = 0; i < rank - 2; ++i) {
         int idx = rank - 1 - i;
@@ -91,8 +91,8 @@ bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
     const auto& a_shape = tensor_a.get_shape().value;
     const auto& b_shape = tensor_b.get_shape().value;
-    std::vector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-    std::vector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+    ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
     get_tensor_dim(b_dim, b_shape);
     for (auto i = 2; i < tt::tt_metal::MAX_NUM_DIMENSIONS; ++i) {
@@ -179,7 +179,7 @@ std::vector<std::optional<Tensor>> MorehLinearBackward::invoke(
                 weight_grad_memory_config,
                 compute_kernel_config);
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
-            std::vector<int64_t> dims =
+            ttnn::SmallVector<int64_t> dims =
                 find_reduce_dim(temp_weight_grad.get_legacy_shape(), weight_grad.value().get_legacy_shape());
             ttnn::moreh_sum(
                 temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, compute_kernel_config);

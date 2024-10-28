@@ -183,7 +183,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             "Out_block_h must be divisible by out_subblock_h!");
     }
 
-    ttnn::Shape ashape_with_channels_padded(std::vector<uint32_t>{ashape[0], ashape[1], ashape[2], input_channels_padded});
+    ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
 
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];

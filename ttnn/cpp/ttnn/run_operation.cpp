@@ -306,7 +306,7 @@ std::vector<LegacyShape> extract_legacy_shapes(
     legacy_shapes.reserve(simple_shapes.size());
     for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
         auto [data_type, layout] = layout_provider(idx);
-        legacy_shapes.emplace_back(simple_shapes[idx].as_vector(), get_physical_shape(simple_shapes[idx], data_type, layout).as_vector());
+        legacy_shapes.emplace_back(simple_shapes[idx].view(), get_physical_shape(simple_shapes[idx], data_type, layout).view());
     }
     return legacy_shapes;
 }

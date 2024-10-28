@@ -8,6 +8,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
 fetch_boost_library(core)
 fetch_boost_library(smart_ptr)
+fetch_boost_library(container)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)

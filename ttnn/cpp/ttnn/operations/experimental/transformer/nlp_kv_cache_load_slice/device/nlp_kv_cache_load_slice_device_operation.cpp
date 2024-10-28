@@ -42,7 +42,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor> &inp
             "Can only unpad tilized tensor with full tiles");
 }
 std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    std::vector<uint32_t> out_shape;
+    SmallVector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {

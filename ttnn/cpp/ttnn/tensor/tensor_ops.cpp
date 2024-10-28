@@ -296,9 +296,9 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
-    std::vector<uint32_t> shape;
-    std::vector<uint32_t> padded_shape;
-    std::vector<uint32_t> input_tensor_start;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<uint32_t> padded_shape;
+    ttnn::SmallVector<uint32_t> input_tensor_start;
 
     for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
         shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
@@ -335,8 +335,8 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
         input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
             input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
-    std::vector<uint32_t> output_tensor_start{};
-    std::vector<uint32_t> output_tensor_end{};
+    ttnn::SmallVector<uint32_t> output_tensor_start{};
+    ttnn::SmallVector<uint32_t> output_tensor_end{};
     for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
@@ -427,7 +427,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
 }
 
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
-    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.as_vector()));
+    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.view()));
 }
 
 }

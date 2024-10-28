@@ -62,10 +62,10 @@ MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_
     if (operation_attributes.untilize_out)
         return ttnn::Shape(tt::tt_metal::LegacyShape({num_elems}));
 
-    std::vector<uint32_t> output_size = {
+    SmallVector<uint32_t> output_size = {
         tt::constants::TILE_HEIGHT, tt::round_up(num_elems, tt::constants::TILE_WIDTH)};
 
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
+    auto dimensions_pads = SmallVector<Padding::PadDimension>();
     dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
     dimensions_pads.push_back(
         Padding::PadDimension{.front = 0, .back = tt::round_up(num_elems, tt::constants::TILE_WIDTH) - num_elems});

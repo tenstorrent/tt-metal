@@ -168,7 +168,7 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
     // - The lambda is reused for both logical shapes and padded shapes, ensuring consistency.
     // -------------------------------------------------------------------------
     auto compute_broadcasted_output = [rank_a, rank_b, larger_rank](const auto& shape_a, const auto& shape_b) {
-        std::vector<uint32_t> output_shape(larger_rank, 1);
+        SmallVector<uint32_t> output_shape(larger_rank, 1);
         for (int i = -1; i >= -larger_rank; --i) {
             auto dim_a = (i >= -rank_a) ? shape_a[i] : 1;
             auto dim_b = (i >= -rank_b) ? shape_b[i] : 1;
