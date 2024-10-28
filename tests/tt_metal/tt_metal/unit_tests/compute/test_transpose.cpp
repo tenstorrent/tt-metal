@@ -187,7 +187,7 @@ void run_single_core_transpose(tt_metal::Device* device, const TransposeConfig& 
 
 } // namespace unit_tests::compute::transpose
 
-TEST_F(DeviceFixture, ComputeTransposeWH) {
+TEST_F(DeviceFixture, TensixComputeTransposeWH) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .single_tile_size = 2 * 1024,
@@ -196,7 +196,7 @@ TEST_F(DeviceFixture, ComputeTransposeWH) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(DeviceFixture, ComputeTransposeWHShortInit) {
+TEST_F(DeviceFixture, TensixComputeTransposeWHShortInit) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = true,
         .single_tile_size = 2 * 1024,

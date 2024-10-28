@@ -51,7 +51,7 @@ std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(const chip_id_t 
 // shelves and 4 links between adjacent Galaxy chips that are on the same
 // shelf, and currently tt::Cluster does not expose a way of determining
 // which shelf a particular Galaxy chip is on.
-TEST_F(TGFixture, ValidateNumLinksBetweenAdjacentGalaxyChips) {
+TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
     for (Device* device : this->devices_)
     {
         const chip_id_t device_id = device->id();
@@ -85,7 +85,7 @@ TEST_F(TGFixture, ValidateNumLinksBetweenAdjacentGalaxyChips) {
 
 // Validate that each MMIO chip links to two separate Galaxy chips,
 // and that each Galaxy chip links to at most one MMIO chip
-TEST_F(GalaxyFixture, ValidateLinksBetweenMMIOAndGalaxyChips) {
+TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
     for (Device* device : this->devices_)
     {
         const chip_id_t device_id = device->id();

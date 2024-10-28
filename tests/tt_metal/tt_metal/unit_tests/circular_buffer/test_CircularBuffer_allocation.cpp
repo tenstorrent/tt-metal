@@ -39,7 +39,7 @@ void validate_cb_address(Program &program, Device *device, const CoreRangeSet &c
     }
 }
 
-TEST_F(DeviceFixture, TestCircularBuffersSequentiallyPlaced) {
+TEST_F(DeviceFixture, TensixTestCircularBuffersSequentiallyPlaced) {
   for (unsigned int id = 0; id < num_devices_; id++) {
     Program program;
     CBConfig cb_config;

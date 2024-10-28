@@ -237,7 +237,7 @@ bool test_write_host(Device *device, uint32_t data_size, std::pair<uint32_t, uin
 
 namespace basic_tests {
 
-TEST_F(DeviceSingleCardFixture, TestWriteHostBasic) {
+TEST_F(DeviceSingleCardFixture, TensixTestWriteHostBasic) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, dispatch_buffer_page_size_g));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 256));
@@ -245,13 +245,13 @@ TEST_F(DeviceSingleCardFixture, TestWriteHostBasic) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g));
 }
 
-TEST_F(DeviceSingleCardFixture, TestWriteHostWrap) {
+TEST_F(DeviceSingleCardFixture, TensixTestWriteHostWrap) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {hugepage_buffer_size_g - 1 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, {hugepage_buffer_size_g - 1 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {hugepage_buffer_size_g - 2 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, {hugepage_buffer_size_g - 2 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {hugepage_buffer_size_g - 3 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}, {hugepage_buffer_size_g - 3 * dispatch_buffer_page_size_g + dev_hugepage_base, 0}));
 }
 
-TEST_F(DeviceSingleCardFixture, TestWriteHostStall) {
+TEST_F(DeviceSingleCardFixture, TensixTestWriteHostStall) {
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base, 1}, {dev_hugepage_base + 5 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 11 * dispatch_buffer_page_size_g, 0)));
     EXPECT_TRUE(local_test_functions::test_write_host(device_, 10 * dispatch_buffer_page_size_g, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1}, {dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 0}, std::make_pair(dev_hugepage_base + 3 * dispatch_buffer_page_size_g, 1)));

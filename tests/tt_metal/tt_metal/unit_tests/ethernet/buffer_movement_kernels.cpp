@@ -280,7 +280,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 }  // namespace unit_tests::erisc::kernels
 
-TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip0ToChip1) {
+TEST_F(N300DeviceFixture, ActiveEthEthKernelsSendDramBufferChip0ToChip1) {
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
@@ -298,7 +298,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip0ToChip1) {
     }
 }
 
-TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip1ToChip0) {
+TEST_F(N300DeviceFixture, ActiveEthEthKernelsSendDramBufferChip1ToChip0) {
     const auto& sender_device = devices_.at(1);
     const auto& receiver_device = devices_.at(0);
 
@@ -316,7 +316,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendDramBufferChip1ToChip0) {
     }
 }
 
-TEST_F(N300DeviceFixture, EthKernelsSendInterleavedBufferChip0ToChip1) {
+TEST_F(N300DeviceFixture, ActiveEthEthKernelsSendInterleavedBufferChip0ToChip1) {
     GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
@@ -368,7 +368,7 @@ TEST_F(N300DeviceFixture, EthKernelsSendInterleavedBufferChip0ToChip1) {
     }
 }
 
-TEST_F(DeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
+TEST_F(DeviceFixture, ActiveEthEthKernelsSendInterleavedBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {

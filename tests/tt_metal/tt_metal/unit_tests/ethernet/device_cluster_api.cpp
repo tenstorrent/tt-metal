@@ -23,7 +23,7 @@ namespace unit_tests::multichip::cluster {
 // Run this on Nebula X2 only, validate etherent core apis are correct
 // Known connectivity: chip 0 (x=9, y=6) <--> chip 1 (x=9, y=0)
 //                     chip 0 (x=1, y=6) <--> chip 1 (x=1, y=0)
-TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
+TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     const auto& device_0 = this->devices_.at(0);
     const auto& device_1 = this->devices_.at(1);
 
@@ -79,13 +79,13 @@ TEST_F(N300DeviceFixture, ValidateEthernetConnectivity) {
     ASSERT_TRUE(chip_1_eth_noc_coords_returned == chip_1_eth_noc_coords_expected);
 }
 
-TEST_F(N300DeviceFixture, InvalidLogicalEthernetCore) {
+TEST_F(N300DeviceFixture, EthInvalidLogicalEthernetCore) {
     const auto& device_0 = this->devices_.at(0);
     EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(1, 0)));
     EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(0, 16)));
 }
 
-TEST_F(N300DeviceFixture, ValidateAllEthernetCoreMapping) {
+TEST_F(N300DeviceFixture, EthValidateAllEthernetCoreMapping) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
         {CoreCoord(0, 0), CoreCoord(9, 0)},
         {CoreCoord(0, 1), CoreCoord(1, 0)},
@@ -112,7 +112,7 @@ TEST_F(N300DeviceFixture, ValidateAllEthernetCoreMapping) {
     }
 }
 
-TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
+TEST_F(N300DeviceFixture, EthValidatePhysicalCoreConversion) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
         {CoreCoord(0, 0), CoreCoord(9, 0)},
         {CoreCoord(0, 1), CoreCoord(1, 0)},
@@ -141,7 +141,7 @@ TEST_F(N300DeviceFixture, ValidatePhysicalCoreConversion) {
     EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::PCIE));
 }
 
-TEST_F(N300DeviceFixture, ValidateEthernetSockets) {
+TEST_F(N300DeviceFixture, ActiveEthValidateEthernetSockets) {
     const auto& device_0 = this->devices_.at(0);
     const auto& device_1 = this->devices_.at(1);
 

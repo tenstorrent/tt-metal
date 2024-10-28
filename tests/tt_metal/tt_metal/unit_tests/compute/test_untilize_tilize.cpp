@@ -307,7 +307,7 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 Following tests are for Unpack Tilize
 ***************************************/
 
-TEST_F(DeviceFixture, ComputeUnpackTilize) {
+TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -330,7 +330,7 @@ TEST_F(DeviceFixture, ComputeUnpackTilize) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeUnpackTilizeA_B) {
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeA_B) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
@@ -349,7 +349,7 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeA_B) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
+TEST_F(DeviceFixture, TensixComputeUnpackTilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -377,7 +377,7 @@ TEST_F(DeviceFixture, ComputeUnpackTilizeShortInit) {
 Following tests are for Unpack Untilize
 ***************************************/
 
-TEST_F(DeviceFixture, ComputeUnpackUntilize) {
+TEST_F(DeviceFixture, TensixComputeUnpackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -400,7 +400,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilize) {
     }
 }
 
-TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
+TEST_F(DeviceFixture, TensixComputeUnpackUntilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -427,7 +427,7 @@ TEST_F(DeviceFixture, ComputeUnpackUntilizeShortInit) {
 /**************************************
 Following tests are for pack untilize
 ***************************************/
-TEST_F(DeviceFixture, ComputePackUntilize) {
+TEST_F(DeviceFixture, TensixComputePackUntilize) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -450,7 +450,7 @@ TEST_F(DeviceFixture, ComputePackUntilize) {
     }
 }
 
-TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
+TEST_F(DeviceFixture, TensixComputePackUntilizeShortInit) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -474,7 +474,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeShortInit) {
     }
 }
 
-TEST_F(DeviceFixture, ComputePackUntilizeDst) {
+TEST_F(DeviceFixture, TensixComputePackUntilizeDst) {
     vector<vector<uint32_t> > num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for(auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
@@ -495,7 +495,7 @@ TEST_F(DeviceFixture, ComputePackUntilizeDst) {
 //Tests pack_untilize with tiny tile dims.
 //Row dim 1x32, which is faces = 2, rows = 1
 //Row dim 1x16, which is faces = 1, rows = 1
-TEST_F(DeviceFixture, ComputePackUntilizeDstTinyTile) {
+TEST_F(DeviceFixture, TensixComputePackUntilizeDstTinyTile) {
     vector<vector<uint32_t> > test_config_values = {{1, 1, 1, 1}, {1, 1, 2, 1}, {1, 2, 2, 1}};
     uint32_t face_c_dim = 16;
     for(auto test_config_value : test_config_values) {
