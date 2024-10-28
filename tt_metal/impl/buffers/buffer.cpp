@@ -4,13 +4,21 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "llrt/llrt.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
+
+#include <algorithm>
+#include <mutex>
+#include <string>
+#include <utility>
+#include "tt_metal/common/base.hpp"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "fmt/base.h"
+#include "tt_stl/reflection.hpp"
 
 namespace tt {
 
