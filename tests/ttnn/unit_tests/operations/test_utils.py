@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
 from models.utility_functions import is_wormhole_b0
 import copy
 import pytest
@@ -177,3 +178,22 @@ def get_lib_dtype(lib, dtype):
             "int32": lib.int32,
         }
         return dtype_map.get(dtype, None)
+
+
+def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
+    """
+    Maps a ttnn.DataType to the corresponding torch dtype that can handle them.
+    Parameters:
+    ttnn_dtype: ttnn.DataType
+        The ttnn data type to be mapped.
+    Returns:
+    torch.dtype or None
+        The corresponding torch dtype if the mapping exists, otherwise None.
+    """
+    dtype_map = {
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat8_b: torch.bfloat16,
+        ttnn.int32: torch.int32,
+    }
+    return dtype_map.get(ttnn_dtype, None)
