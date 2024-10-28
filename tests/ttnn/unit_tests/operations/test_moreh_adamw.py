@@ -147,13 +147,12 @@ def run_moreh_adamw(
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert tt_param_out.shape.with_tile_padding() == list(model.weight.shape)
-
-    param_result = tt_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
-    exp_avg_result = tt_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
-    exp_avg_sq_result = tt_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
+    param_result = ttnn.to_torch(tt_param_out).reshape(shape)
+    exp_avg_result = ttnn.to_torch(tt_exp_avg_out).reshape(shape)
+    exp_avg_sq_result = ttnn.to_torch(tt_exp_avg_sq_out).reshape(shape)
+    print(param_result.shape, model.weight.shape)
     if amsgrad:
-        max_exp_avg_sq_result = tt_max_exp_avg_sq_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch_dtype)
+        max_exp_avg_sq_result = ttnn.to_torch(tt_max_exp_avg_sq_out).reshape(shape)
     else:
         max_exp_avg_sq_result = None
 
@@ -233,7 +232,7 @@ def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step
 
 @pytest.mark.parametrize(
     "shape",
-    [[32, 32]],  # single
+    [[5, 3], [32, 32]],
 )
 @pytest.mark.parametrize("lr", [1e-2])
 @pytest.mark.parametrize("betas", [[0.5, 0.555]])
