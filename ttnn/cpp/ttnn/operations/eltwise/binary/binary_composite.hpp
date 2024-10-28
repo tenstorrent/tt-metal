@@ -233,9 +233,6 @@ constexpr auto maximum = ttnn::register_operation_with_auto_launch_op<
 constexpr auto atan2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::atan2",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
-constexpr auto logical_xor = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_xor",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR>>();
 constexpr auto nextafter = ttnn::register_operation_with_auto_launch_op<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
@@ -263,9 +260,6 @@ constexpr auto div_no_nan = ttnn::register_operation_with_auto_launch_op<
 constexpr auto floor_div = ttnn::register_operation_with_auto_launch_op<
     "ttnn::floor_div",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
-constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_xor_",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
 constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>>();

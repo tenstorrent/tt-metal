@@ -23,10 +23,8 @@ enum class BinaryCompositeOpType {
     MINIMUM,
     MAXIMUM,
     ATAN2,
-    LOGICAL_XOR,
     DIV_NO_NAN,
     FLOOR_DIV,
-    LOGICAL_XOR_,
     SCATTER,
     OUTER,
     POLYVAL,
@@ -37,7 +35,6 @@ Tensor _xlogy(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _minimum(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _maximum(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atan2(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _logical_xor(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _nextafter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _addalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _subalpha(const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
@@ -46,7 +43,6 @@ Tensor _div_no_nan(const Tensor&, const Tensor&, const std::optional<MemoryConfi
 Tensor _div_no_nan_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
-Tensor _logical_xor_(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _scatter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _outer(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _polyval(const Tensor&, const std::vector<float>&, const std::optional<MemoryConfig>&);
@@ -95,20 +91,6 @@ template <>
 struct OpHandler<BinaryCompositeOpType::ATAN2> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
         return _atan2(t1, t2, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<BinaryCompositeOpType::LOGICAL_XOR> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _logical_xor(t1, t2, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<BinaryCompositeOpType::LOGICAL_XOR_> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _logical_xor_(t1, t2, mem_cfg);
     }
 };
 

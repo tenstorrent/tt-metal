@@ -187,6 +187,9 @@ constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_or = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_or",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_OR>>();
+constexpr auto logical_xor = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logical_xor",
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_XOR>>();
 constexpr auto ldexp = ttnn::register_operation_with_auto_launch_op<
     "ttnn::ldexp",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LDEXP>>();
@@ -220,6 +223,9 @@ constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::logical_or_",
     operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_OR>>();
+constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::logical_xor_",
+    operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_XOR>>();
 constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::eq_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::EQ>>();
