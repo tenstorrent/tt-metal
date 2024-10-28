@@ -16,20 +16,11 @@ FORCE_INLINE void perform_rs_loop(
     //In the Ring Start case, we first send the signal to the sender and then we wait on the ethernet
     noc_semaphore_inc(channel_sem_addr, 1);
     uint32_t count = 0;
-    while(eth_channel_syncs->bytes_sent == 0) {
-        if (count == MIN_WAIT)
-        {
-            count = 0;
-            run_routing();
-        }
-        else
-        {
-            asm volatile ("");
-            count ++;
-        }
-    }
+    const uint32_t page_size = 16;
+    constexpr uint32_t bytes_to_wait_for = page_size + sizeof(eth_channel_sync_t);
+    eth_wait_for_bytes_on_channel_sync_addr(bytes_to_wait_for, eth_channel_syncs,MIN_WAIT);
     eth_channel_syncs->bytes_sent = 0;
-    while (eth_txq_is_busy());
+    wait_for_eth_txq_cmd_space(MIN_WAIT);
     send_eth_receiver_channel_done(eth_channel_syncs);
 }
 
@@ -39,34 +30,13 @@ FORCE_INLINE void perform_loop(
     )
 {
     uint32_t count = 0;
-    while(eth_channel_syncs->bytes_sent == 0) {
-        if (count == MIN_WAIT)
-        {
-            count = 0;
-            run_routing();
-        }
-        else
-        {
-            asm volatile ("");
-            count ++;
-        }
-    }
+    const uint32_t page_size = 16;
+    constexpr uint32_t bytes_to_wait_for = page_size + sizeof(eth_channel_sync_t);
+    eth_wait_for_bytes_on_channel_sync_addr(bytes_to_wait_for, eth_channel_syncs,MIN_WAIT);
     eth_channel_syncs->bytes_sent = 0;
     noc_semaphore_inc(channel_sem_addr, 1);
     count = 0;
-    while (eth_txq_is_busy())
-    {
-        if (count == MIN_WAIT)
-        {
-            count = 0;
-            run_routing();
-        }
-        else
-        {
-            asm volatile ("");
-            count ++;
-        }
-    }
+    wait_for_eth_txq_cmd_space(MIN_WAIT);
     send_eth_receiver_channel_done(eth_channel_syncs);
 }
 

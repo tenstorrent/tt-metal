@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -116,11 +116,6 @@ operation::ProgramWithCallbacks barrier_with_workers(
     std::vector<Tensor> output_tensors = {output_tensor};
     //Configure operational parameters
     auto const& op_config =ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    //Get the configuration file, works for both sharded or unsharded
-    const std::unique_ptr<ttnn::ccl::CclOpTensorConfig> input_tensor_config =
-        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
-    const std::unique_ptr<ttnn::ccl::CclOpTensorConfig> output_tensor_config =
-        ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(output_tensor);
 
     //Get the device from the tensor
     const auto& device = input_tensor.device();

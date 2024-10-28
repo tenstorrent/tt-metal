@@ -27,6 +27,30 @@ FORCE_INLINE bool eth_txq_is_busy() {
     return internal_::eth_txq_is_busy(0);
 }
 
+/**
+ * Wait until the ethernet transaction queue is no longer busy ingesting a command
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
+ * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | wait_min  | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
+ */
+FORCE_INLINE void wait_for_eth_txq_cmd_space( uint32_t wait_min = 0) {
+    uint32_t count = 0;
+    while(eth_txq_is_busy())
+    {
+        if (count == wait_min)
+        {
+            run_routing();
+            count = 0;
+        }
+        else
+        {
+            count ++;
+        }
+    }
+}
 
 /**
  * A blocking call that waits until the value of a local L1 memory address on
@@ -409,25 +433,29 @@ bool eth_bytes_are_available_on_channel(uint8_t channel) {
  * | channel                     | Which transaction channel to check                      | uint32_t | 0..7        | True     |
  */
 FORCE_INLINE
-void eth_wait_for_bytes_on_channel(uint32_t num_bytes, uint8_t channel) {
+void eth_wait_for_bytes_on_channel_sync_addr(uint32_t num_bytes, volatile eth_channel_sync_t* eth_channel_syncs, uint32_t wait_min = 1000000) {
     // assert(channel < 4);
     uint32_t count = 0;
-    uint32_t poll_count = 1000000;
-    uint32_t num_bytes_sent = erisc_info->channels[channel].bytes_sent;
-    while (num_bytes_sent == 0) {
-        uint32_t received_this_iter = erisc_info->channels[channel].bytes_sent;
+    uint32_t num_bytes_sent = eth_channel_syncs->bytes_sent;
+    while (num_bytes_sent != num_bytes) {
+        uint32_t received_this_iter = eth_channel_syncs->bytes_sent;
         if (received_this_iter != num_bytes_sent) {
             // We are currently in the process of receiving data on this channel, so we just just wait a
             // bit longer instead of initiating a context switch
             num_bytes_sent = received_this_iter;
+        } else if (count == wait_min) {
+            count = 0;
+            run_routing();
         } else {
             count++;
-            if (count > poll_count) {
-                count = 0;
-                run_routing();
-            }
         }
     }
+}
+
+FORCE_INLINE
+void eth_wait_for_bytes_on_channel(uint32_t num_bytes, uint8_t channel, uint32_t wait_min = 1000000) {
+    // assert(channel < 4);
+    eth_wait_for_bytes_on_channel_sync_addr(num_bytes, &(erisc_info->channels[channel]),wait_min);
 }
 
 /**
@@ -468,8 +496,8 @@ void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
     channel_sync->receiver_ack = 0;
     internal_::eth_send_packet(
         0,
-        ((uint32_t)(channel_sync)) >> 4,
-        ((uint32_t)(channel_sync)) >> 4,
+        ((uint32_t)(&(channel_sync->bytes_sent))) >> 4,
+        ((uint32_t)(&(channel_sync->bytes_sent))) >> 4,
         1);
 }
 
