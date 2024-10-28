@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
+from models.utility_functions import skip_for_grayskull
 from collections import Counter
 from loguru import logger
 
@@ -55,6 +56,7 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
 
 
 # fmt: off
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape",
     [
         [2003],
@@ -86,6 +88,7 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc):
     run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -108,6 +111,7 @@ def test_bernoulli_callback(shape, in_dtype, out_dtype, device, is_out_alloc, us
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 4, 70, 40]],
