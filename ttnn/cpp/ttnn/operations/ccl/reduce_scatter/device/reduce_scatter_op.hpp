@@ -49,6 +49,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 }
 }; // namespace ccl
 
+namespace ccl{
+namespace reduce_scatter_detail{
 ReduceScatter create_reduce_scatter_struct (
     const Tensor& input_tensor,
     const ttnn::operations::binary::BinaryOpType binary_op_type,
@@ -60,6 +62,8 @@ ReduceScatter create_reduce_scatter_struct (
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology
 );
+} // namespace reduce_scatter_detail
+} // namespace ccl
 
 namespace operations{
 namespace ccl{
