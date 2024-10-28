@@ -985,7 +985,7 @@ void bind_unary_backward_opt(py::module& module, const unary_backward_operation_
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward(
-    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& note = "") {
+    py::module& module, const unary_backward_operation_t& operation, const std::string& description, const std::string& supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -1012,7 +1012,7 @@ void bind_unary_backward(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        note);
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -1408,7 +1408,7 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
@@ -1464,7 +1464,7 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
@@ -1493,6 +1493,8 @@ void py_module(py::module& module) {
            |     Dtypes                 |         Layouts                 |     Ranks         |
            +----------------------------+---------------------------------+-------------------+
            |    BFLOAT16                |       TILE, ROW_MAJOR           |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT8_B               |       TILE                      |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
