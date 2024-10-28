@@ -38,9 +38,9 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    // Not using firmware_kernel_common_init since it is copying to registers
+    // Not using do_crt1 since it is copying to registers???
+    // bss already cleared in entry code.
     // TODO: need to find free space that routing FW is not using
-    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     risc_init();
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
