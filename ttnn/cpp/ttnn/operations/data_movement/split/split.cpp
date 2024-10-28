@@ -46,10 +46,10 @@ namespace detail {
             auto start = i*chunk_len;
             auto end = start + chunk_len;
 
-            std::vector<uint32_t> start_shape(preproc_shape.size(), 0);
+            ttnn::SmallVector<uint32_t> start_shape(preproc_shape.size(), 0);
             start_shape[dim] = start;
 
-            std::vector<uint32_t> end_shape(preproc_shape.size());
+            ttnn::SmallVector<uint32_t> end_shape(preproc_shape.size());
             for (int j = 0; j < end_shape.size(); j++) {
                 if (j == dim) {
                     end_shape[j] = end;
@@ -61,7 +61,7 @@ namespace detail {
             Tensor output_chunk = ttnn::slice(preprocessed,
                                               start_shape,
                                               end_shape,
-                                              std::vector<uint32_t>(end_shape.size(), 1),
+                                              ttnn::SmallVector<uint32_t>(end_shape.size(), 1),
                                               mem_config);
             if (input_rank < 4) {
                 output_chunk = ttnn::squeeze_from_4D(output_chunk, input_rank);
@@ -102,13 +102,13 @@ namespace detail {
         }
 
         const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
-        const Tensor &reshaped_tensor = ttnn::reshape_on_device(input_tensor, std::vector<int32_t>{1, -1, Y, X}, mem_config);
+        const Tensor &reshaped_tensor = ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
 
         auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
 
         std::vector<Tensor> results;
         results.reserve(part_reshaped.size());
-        for (auto &part : part_reshaped) results.emplace_back(ttnn::reshape_on_device(part, std::vector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
+        for (auto &part : part_reshaped) results.emplace_back(ttnn::reshape_on_device(part, ttnn::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
 
         return results;
     }
