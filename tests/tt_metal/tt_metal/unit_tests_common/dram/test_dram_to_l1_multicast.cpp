@@ -19,8 +19,8 @@ struct DRAMtoL1MulticastConfig{
     std::uint32_t dest_buffer_addr;
     std::uint32_t target_grid_offset;
     std::string kernel_file;
-    CoreCoord exclude_start = {0, 0};
-    CoreCoord exclude_direction = {0, 0};
+    CoreCoord exclude_start;
+    CoreCoord exclude_direction;
 };
 
 bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, const DRAMtoL1MulticastConfig &cfg){
@@ -123,10 +123,6 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 }
 
 TEST_F(CommonFixture, DRAMtoL1Multicast){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -137,10 +133,6 @@ TEST_F(CommonFixture, DRAMtoL1Multicast){
     }
 }
 TEST_F(CommonFixture, DRAMtoL1MulticastLoopbackSrc){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,
@@ -151,10 +143,6 @@ TEST_F(CommonFixture, DRAMtoL1MulticastLoopbackSrc){
     }
 }
 TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 0, //source core is in exclusion zone, don't count twice
@@ -172,10 +160,6 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
 }
 
 TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -193,10 +177,6 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
 }
 
 TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -214,10 +194,6 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
 }
 
 TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownRight){
-    if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
-        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
-        GTEST_SKIP();
-    }
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,

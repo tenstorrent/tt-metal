@@ -1348,7 +1348,7 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  * there is no restriction on the number of destinations, i.e. the
  * multicast destinations can span the full chip. However, as mentioned
  * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is 119.
+ * maximum number of destinations is number of cores - 1.
  *
  * Return value: None
  *
@@ -1356,8 +1356,8 @@ void noc_semaphore_set_remote(std::uint32_t src_local_l1_addr, std::uint64_t dst
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
+ * | size                   | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                                        | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                                       | True     |
  */
 template<uint32_t max_page_size=NOC_MAX_BURST_SIZE + 1>
 inline
@@ -1411,7 +1411,7 @@ void noc_async_write_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                    | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..119                                                    | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                  | True     |
  */
 inline
 void noc_semaphore_set_multicast(
@@ -1453,7 +1453,7 @@ void noc_semaphore_set_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|-----------------------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                    | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..119                                                    | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting | uint32_t | 0..(number of cores)                                                | True     |
  */
 inline
 void noc_semaphore_set_multicast_loopback_src(
@@ -1501,7 +1501,7 @@ void noc_async_write_multicast_loopback_src(
 
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
- * Tensix core executing this function call to an L- shaped destination which is defined by 
+ * Tensix core executing this function call to an L-shaped destination which is defined by 
  * a grid and an exclusion zone. 
  * The destinations are specified using a uint64_t encoding referencing an
  * on-chip grid of nodes located at NOC coordinate range
@@ -1511,19 +1511,18 @@ void noc_async_write_multicast_loopback_src(
  * an on-chip and directions relative to it created using *get_noc_exclude_addr* function.
  *
  * The destination nodes can only be a set of Tensix cores + L1 memory address.
- * The destination nodes must form a rectangular grid. The destination L1
+ * The destination nodes must form an L-shaped grid (where dst_noc_addr_multicast defines a grid
+ * and exclude_region define a subgrid to exclude, the inner part of the L). The destination L1
  * memory address must be the same on all destination nodes.
  *
  * With this API, the multicast sender cannot be part of the multicast
- * destinations. If the multicast sender has to be in the multicast
- * destinations (i.e. must perform a local L1 write), the other API variant
- * *noc_async_write_multicast_loopback_src* can be used.
+ * destinations.
  *
  * Note: The number of destinations needs to be non-zero. Besides that,
  * there is no restriction on the number of destinations, i.e. the
  * multicast destinations can span the full chip. However, as mentioned
  * previously, the multicast source cannot be part of the destinations. So, the
- * maximum number of destinations is 119.
+ * maximum number of destinations is number of cores - 1.
  *
  * Return value: None
  *
@@ -1532,7 +1531,7 @@ void noc_async_write_multicast_loopback_src(
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | size                   | Size of data transfer in bytes | uint32_t | 0..1MB | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..119                                                        | True     |
+ * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                      | True     |
  * | exclude_region         | Encoding of the excluded regin (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  */
 inline
