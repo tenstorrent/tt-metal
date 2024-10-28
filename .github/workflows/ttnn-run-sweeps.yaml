@@ -220,6 +220,12 @@ on:
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
           - eltwise.binary_backward.hypot_bw.hypot_bw
+          - eltwise.binary_backward.add_bw.add_bw
+          - eltwise.binary_backward.sub_bw.sub_bw
+          - eltwise.binary_backward.mul_bw.mul_bw
+          - eltwise.binary_backward.div_bw.div_bw
+          - eltwise.binary_backward.fmod_bw.fmod_bw
+          - eltwise.binary_backward.remainder_bw.remainder_bw
           - eltwise.binary_backward.rsub_bw.rsub_bw
           - eltwise.binary_backward.squared_difference_bw.squared_difference_bw
           - eltwise.composite.binary.addalpha.addalpha
