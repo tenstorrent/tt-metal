@@ -174,7 +174,7 @@ def run(
 
     # Create random weight and indices tensors in PyTorch
     weight = torch_random(weight_shape, -0.1, 0.1, dtype=torch.bfloat16)
-    indices = torch.randint(0, weight_shape[0], indices_shape, dtype=torch.int64)
+    indices = torch.randint(0, weight_shape[0], indices_shape, dtype=torch.int32)
 
     # Create a PyTorch embedding layer and apply it
     torch_embedding = torch.nn.Embedding.from_pretrained(weight, padding_idx=padding_idx)
@@ -182,7 +182,7 @@ def run(
 
     # Convert the weight and indices to ttnn tensor format
     ttnn_weight = ttnn.from_torch(weight, device=device, layout=layout, dtype=dtype)
-    ttnn_indices = ttnn.from_torch(indices, device=device, layout=layout, dtype=dtype)
+    ttnn_indices = ttnn.from_torch(indices, device=device, layout=layout, dtype=ttnn.uint32)
 
     # Measure performance of the embedding operation in ttnn
     start_time = start_measuring_time()
@@ -206,6 +206,6 @@ def run(
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     # Compare the results and return performance and accuracy check
-    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.9)
+    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
     return [result, e2e_perf]
