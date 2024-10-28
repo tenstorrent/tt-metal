@@ -555,6 +555,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "vision-encoder": "pytest models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py",
         "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
         "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
+        "perf": "pytest models/demos/llama3/tests/test_llama_perf.py -k 1024",
     }
 
     # Check if the command is a shortcut and replace it if necessary

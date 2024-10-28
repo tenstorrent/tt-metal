@@ -52,8 +52,10 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
         expected_inference_time = 0.07
     elif "3.2-11B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.085
+    elif "3.1-70B" in model_args.DEFAULT_CACHE_PATH:
+        expected_inference_time = 0.14
     else:
-        assert False, f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B]"
+        assert False, f"Llama model not found. Supported Llama models: [3.2-1B, 3.2-3B, 3.1-8B, 3.2-11B, 3.1-70B]"
 
     # model_args.n_layers = 1
     # Clear global profiler state before starting measurements
@@ -69,6 +71,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
 
     # Embedding on host
     embd = HostEmbedding(model_args)
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = kv_cache_len
@@ -149,21 +152,31 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
 
-    for i in range(generation_length):
-        current_pos = generation_start_pos + i
-        pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-        tt_decode_input = pt_decode_input
-        decode_input = model_args.prepare_inputs_ttnn_decode(
-            tt_decode_input,
-            ttnn.L1_MEMORY_CONFIG,
-        )
+    # Initialize tt_out_tok with the first token
+    tt_out_tok = ttnn.from_torch(
+        torch.nn.functional.pad(
+            encoded_prompts_tensor[:, 0].unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0
+        ),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint32,
+    )
 
-        current_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.int32,
-        )
+    # Generate first input on host
+    pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
+    # Send first input to device
+    tt_decode_input = pt_decode_input
+    decode_input = tt_model.args.prepare_inputs_ttnn_decode(
+        tt_decode_input,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+
+    current_pos = ttnn.from_torch(
+        torch.tensor([generation_start_pos] * batch),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.int32,
+    )
 
     for i in range(generation_length):
         # Run TT model
