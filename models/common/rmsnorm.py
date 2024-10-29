@@ -44,7 +44,7 @@ class RMSNorm(LightweightModule):
         state_dict_prefix=None,
         weight_cache_path=None,
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        weight_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat16,
         is_distributed=None,
         eps: float = 1e-05,
         sharded_program_config=None,
@@ -68,6 +68,9 @@ class RMSNorm(LightweightModule):
 
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
+        # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)
+        is_mesh_device = device.__class__.__name__ == "MeshDevice"
+
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=device,
@@ -75,7 +78,7 @@ class RMSNorm(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
         self.weight_distributed = ttnn.as_tensor(
@@ -85,7 +88,7 @@ class RMSNorm(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2) if is_mesh_device else None,
         )
 
         self.sharded_output_config = sharded_output_config
