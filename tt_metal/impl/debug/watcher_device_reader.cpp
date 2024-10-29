@@ -2,18 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <ctype.h>
+#include <iostream>
 #include <vector>
+#include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
+#include "tt_metal/common/metal_soc_descriptor.h"
+
+// FIXME: Avoid dependence on ARCH_NAME specific includes
+#include "dev_mem_map.h" // for MEM_BRISC_STAC...
+#include "eth_l1_address_map.h" // for address_map
+#include "hostdevcommon/common_runtime_address_map.h" // for NOC_0_X, NOC_0_Y
+#include "hw/inc/dev_msgs.h"
+
+#include "third_party/umd/device/tt_arch_types.h"
+#include "third_party/umd/device/xy_pair.h"
+#include <fmt/base.h>
+#include "llrt/llrt.hpp"
+#include "llrt/tt_cluster.hpp"
 
 #include "common/core_coord.hpp"
 #include "hw/inc/debug/ring_buffer.h"
-#include "hw/inc/dev_msgs.h"
 #include "impl/device/device.hpp"
 #include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 
 #include "watcher_device_reader.hpp"
+
+#include "llrt/hal.hpp"
 
 using std::string;
 namespace { // Helper functions
@@ -294,13 +315,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor &logical_core, bool is_active_
     fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
-    uint64_t mailbox_addr = MEM_MAILBOX_BASE;
+    uint64_t mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     if (is_eth_core) {
         if (is_active_eth_core) {
-            mailbox_addr = eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE;
+            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX);
         }
         else {
-            mailbox_addr = MEM_IERISC_MAILBOX_BASE;
+            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX);
         }
     }
 
