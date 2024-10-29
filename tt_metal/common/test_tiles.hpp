@@ -143,49 +143,49 @@ std::vector<T> convert_to_flat_layout(
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int tile_start = tile_idx * tile_HW;
 
-        auto top_left = data.begin() + tile_start;
-        auto top_right = top_left + (num_faces_col - 1) * face_HW;
-        auto bottom_left = top_left + (num_faces_row - 1) * num_faces_col * face_HW;
-        auto bottom_right = top_left + (num_faces_row - 1) * num_faces_col * face_HW + face_HW;
-
-        if (transpose_face_order && (num_faces_row > 1) && (num_faces_col > 1)) {
-            std::swap(top_right, bottom_left);
-        }
-
         if (transpose_face) {
-            for(int col = 0; col < tile_W; col++) {
-                int index = tile_idx * tile_HW + col;
-                for(int row = 0; row < tile_H; row++) {
-                    if(row < face_H and col < face_W) {
-                        result.push_back(*top_left++);
-                    } else if(row < face_H and col >= face_W) {
-                        result.push_back(*top_right++);
-                    } else if(row >= face_H and col < face_W) {
-                        result.push_back(*bottom_left++);
-                    } else if(row >= face_H and col >= face_W) {
-                        result.push_back(*bottom_right++);
-                    } else {
-                        TT_ASSERT(false);
+            if (num_faces_row >= 1 && num_faces_col <= 1) { // 32x16
+                for(int face_y = 0; face_y < num_faces_row; face_y++) {
+                    int start = tile_start + face_y * (face_H * tile_W);
+                    for(int col = 0; col < face_W; col++) {
+                        for(int row = 0; row < face_H; row++) {
+                            result.push_back(data[start + col + row * face_W]);
+                        }
                     }
-                    index += tile_W;
+                }
+            } else if (num_faces_row <= 1 && num_faces_col >= 1) { // 16x32
+                for(int col = 0; col < face_W; col++) {
+                    int start = tile_start + col;
+                    for(int face_x = 0; face_x < num_faces_col; face_x++) {
+                        int offset = face_x * face_HW;
+                        for(int row = 0; row < face_H; row++) {
+                            result.push_back(data[start + offset + row * face_W]);
+                        }
+                    }
+                }
+            } else {
+                for(int face_x = 0; face_x < num_faces_col; face_x++) {
+                    for(int col = 0; col < face_W; col++) {
+                        int start = tile_start + face_x * face_HW + col;
+                        for(int face_y = 0; face_y < num_faces_row; face_y++) {
+                            int offset = face_y * (face_H * tile_W);
+                            for(int row = 0; row < face_H; row++) {
+                                result.push_back(data[start + offset + row * face_W]);
+                            }
+                        }
+                    }
                 }
             }
         } else {
-            int index = tile_idx * tile_HW;
-            for(int row = 0; row < tile_H; row++) {
-                for(int col = 0; col < tile_W; col++) {
-                    if(row < face_H and col < face_W) {
-                        result.push_back(*top_left++);
-                    } else if(row < face_H and col >= face_W) {
-                        result.push_back(*top_right++);
-                    } else if(row >= face_H and col < face_W) {
-                        result.push_back(*bottom_left++);
-                    } else if(row >= face_H and col >= face_W) {
-                        result.push_back(*bottom_right++);
-                    } else {
-                        TT_ASSERT(false);
+            for(int face_y = 0; face_y < num_faces_row; face_y++) {
+                for(int row = 0; row < face_H; row++) {
+                    int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
+                    for(int face_x = 0; face_x < num_faces_col; face_x++) {
+                        int offset = face_x * face_HW;
+                        for(int col = offset; col < offset + face_W; col++) {
+                            result.push_back(data[start + col]);
+                        }
                     }
-                    index++;
                 }
             }
         }

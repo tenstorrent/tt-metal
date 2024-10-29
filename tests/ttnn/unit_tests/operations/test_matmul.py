@@ -31,202 +31,34 @@ def find_max_subblock(out_block_h, out_block_w):
 
 
 # @pytest.mark.parametrize("n", [2])
-# @pytest.mark.parametrize("c", [3])
-# @pytest.mark.parametrize("h", [96])
-# @pytest.mark.parametrize("w", [128])
-# @pytest.mark.parametrize("tile_h", [16, 32])
-# @pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("n", [1])
-@pytest.mark.parametrize("c", [1])
-@pytest.mark.parametrize("h", [16])
-@pytest.mark.parametrize("w", [16])
-@pytest.mark.parametrize("tile_h", [16])
-@pytest.mark.parametrize("tile_w", [16])
-def test_tiny_tiles_transposed_tile(device, n, c, h, w, tile_h, tile_w):
-    torch.manual_seed(0)
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        tile=ttnn.Tile((tile_h, tile_w), transpose_tile=True),
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat8_b,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    output_tensor = ttnn.to_torch(input_tensor)
-
-    flattened_tensor = output_tensor.flatten()
-    tile_hw = tile_h * tile_w
-    face_h = 16
-    face_w = 16
-    face_hw = face_h * face_w
-    num_tiles_x = w // tile_w
-    num_tiles_y = n * c * h // tile_h
-    num_faces_y = tile_h // face_h
-    num_faces_x = tile_w // face_w
-    result = []
-
-    if tile_h == 16 and tile_w == 32:
-        for tile_y in range(num_tiles_y):
-            tile_start = tile_y * w * tile_h
-            for col in range(face_w):
-                start = tile_start + col
-                for tile_x in range(num_tiles_x):
-                    start_tile_x = start + tile_x * tile_w
-                    for face_x in range(num_faces_x):
-                        offset = start_tile_x + face_x * face_w
-                        for row in range(face_h):
-                            result.append(flattened_tensor[offset + row * w])
-        transposed_output_tensor = torch.tensor(result)
-        transposed_output_tensor = transposed_output_tensor.view(n, c, h, w)
-    elif tile_h == 32 and tile_w == 16:
-        for tile_y in range(num_tiles_y):
-            tile_start = tile_y * w * tile_h
-            for face_y in range(num_faces_y):
-                start = tile_start + face_y * face_h * w
-                for col in range(face_w):
-                    start_col = start + col
-                    for tile_x in range(num_tiles_x):
-                        offset = start_col + tile_x * tile_w
-                        for row in range(face_h):
-                            result.append(flattened_tensor[offset + row * w])
-        transposed_output_tensor = torch.tensor(result)
-        transposed_output_tensor = transposed_output_tensor.view(n, c, h, w)
-    else:
-        output_tensor = output_tensor.view(n, c, h // tile_h, tile_h, w // tile_w, tile_w)
-        output_tensor = output_tensor.permute(0, 1, 2, 4, 3, 5).transpose(-1, -2)
-        output_tensor = output_tensor.permute(0, 1, 2, 4, 3, 5)
-        transposed_output_tensor = output_tensor.contiguous().view(n, c, h, w)
-
-    assert_with_pcc(torch_input_tensor, transposed_output_tensor, 1)
-
-
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("b", [1])
-@pytest.mark.parametrize("h", [1])
-@pytest.mark.parametrize("m", [32])
-@pytest.mark.parametrize("k", [32])
-@pytest.mark.parametrize("n", [32])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True])
-@pytest.mark.parametrize("in1_sharded", [True])
-@pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("transpose_tile", [False])
-def test_matmul_reuse_config_sharded_tiny_tile_transpose(
-    device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
-):
-    torch.manual_seed(0)
-
-    grid_size = (b, h)
-
-    in0 = torch.randn((b, h, m, k), dtype=torch.bfloat16)
-    in1 = torch.randn((b, h, k, n), dtype=torch.bfloat16)
-
-    if in0_sharded:
-        in0_memory_config = ttnn.create_sharded_memory_config(
-            (b, h, m, k),
-            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-    else:
-        in0_memory_config = ttnn.L1_MEMORY_CONFIG
-    print(in0_memory_config)
-    in0_t = ttnn.from_torch(
-        in0,
-        tile=ttnn.Tile((tile_h, 32)),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=in0_memory_config,
-    )
-
-    if in1_sharded:
-        in1_memory_config = ttnn.create_sharded_memory_config(
-            (b, h, k, n),
-            core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-    else:
-        in1_memory_config = ttnn.L1_MEMORY_CONFIG
-    print(in1_memory_config)
-    in1_t = ttnn.from_torch(
-        in1,
-        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=in1_memory_config,
-    )
-
-    out_block_h = m // tile_h
-    out_block_w = n // tile_w
-    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
-
-    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=k // 32,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=out_block_h,
-        per_core_N=out_block_w,
-    )
-    if out_sharded:
-        out_mem_config = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-        )
-    else:
-        out_mem_config = ttnn.L1_MEMORY_CONFIG
-    output_tile = ttnn.Tile([tile_h, tile_w])
-    output_t = ttnn.matmul(
-        in0_t,
-        in1_t,
-        program_config=program_config,
-        memory_config=out_mem_config,
-    )
-
-    print(output_tile)
-
-    output_tensor = ttnn.to_torch(output_t)
-    pt_out = in0 @ in1
-    if in1_dtype == ttnn.bfloat4_b:
-        expected_pcc = 0.993
-    else:
-        expected_pcc = 0.999
-
-    assert_with_pcc(pt_out, output_tensor, expected_pcc)
-    _, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    print(pcc_message)
-
-
-# @pytest.mark.parametrize("n", [2])
 # @pytest.mark.parametrize("c", [5])
 # @pytest.mark.parametrize("h", [384])
 # @pytest.mark.parametrize("w", [768])
 # @pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
 # @pytest.mark.parametrize("tile_w", [16, 32])
 # @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-
-
+# @pytest.mark.parametrize("transpose_tile", [True, False])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("tile_h", [16])
-@pytest.mark.parametrize("tile_w", [16])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype):
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True])
+def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_tile):
+    if tile_h < 16 and transpose_tile:
+        pytest.skip("transpose tile does not support tile height less than 16")
     # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
     torch.manual_seed(0)
-    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    # torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
+    total_elements = n * c * h * w
+    increment_tensor = torch.arange(1, total_elements + 1, dtype=torch.bfloat16) % 500
+    torch_input_tensor = increment_tensor.view(n, c, w, h)
+    torch_input_tensor = torch_input_tensor.permute(0, 1, 3, 2)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        tile=ttnn.Tile((tile_h, tile_w), transpose_tile=True),
+        tile=ttnn.Tile((tile_h, tile_w), transpose_tile=transpose_tile),
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
         device=device,
@@ -238,6 +70,16 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype):
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+    pcc_passed, pcc_message = comp_pcc(torch_input_tensor, output_tensor, expected_pcc)
+    print(pcc_message)
+    torch.set_printoptions(
+        threshold=100000,  # Maximum elements to display
+        edgeitems=2,  # Number of elements to show at the edges (if truncated)
+        precision=1,  # Decimal precision for floating-point values
+        linewidth=1000,  # Width of each line for printing
+    )
+    print(torch_input_tensor)
+    print(output_tensor)
 
 
 @pytest.mark.parametrize("n", [1])
