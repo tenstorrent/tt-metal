@@ -16,6 +16,9 @@ run_t3000_ttmetal_tests() {
   ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
   ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
 
+    # Tool tests use C++ unit tests so include them here.
+    ./tests/scripts/run_tools_tests.sh
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
