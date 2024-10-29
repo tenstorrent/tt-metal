@@ -12,7 +12,9 @@ import llama_models.llama3.reference_impl.generation as llama_reference_generati
 
 from llama_models.llama3.api.datatypes import ImageMedia
 
-THIS_DIR = Path(__file__).parent.parent.resolve() / "reference/llama_models/models/scripts/"
+from pkg_resources import resource_filename
+
+IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 import torch
 import pytest
@@ -85,16 +87,16 @@ def test_llama_multimodal_demo_text(
         model = create_multimodal_model(generator.args, mesh_device)
         generator.model = model
 
-    with open(THIS_DIR / "resources/dog.jpg", "rb") as f:
+    with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    with open(THIS_DIR / "resources/pasta.jpeg", "rb") as f:
+    with open(IMG_PATH / "pasta.jpeg", "rb") as f:
         img2 = PIL_Image.open(f).convert("RGB")
 
-    with open(THIS_DIR / "resources/ocr_image.jpeg", "rb") as f:
+    with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
 
-    with open(THIS_DIR / "resources/clutter.jpeg", "rb") as f:
+    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
         clutter = PIL_Image.open(f).convert("RGB")
 
     interleaved_contents = [

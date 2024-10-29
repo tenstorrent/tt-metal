@@ -13,7 +13,9 @@ import llama_models.llama3.reference_impl.generation as llama_reference_generati
 
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 
-THIS_DIR = Path(__file__).parent.parent.resolve() / "reference/llama_models/models/scripts/"
+from pkg_resources import resource_filename
+
+IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 import torch
 import pytest
@@ -70,7 +72,7 @@ def test_llama_multimodal_demo_chat(
 
     # image understanding
     dialogs = []
-    with open(THIS_DIR / "resources/dog.jpg", "rb") as f:
+    with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
     dialogs = [
