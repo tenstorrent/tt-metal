@@ -45,6 +45,7 @@ class TtLlamaImageAttention(LightweightModule):
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
         self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
+        self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
 
@@ -140,106 +141,10 @@ class TtLlamaImageAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-    def forward(self, x, mask):
-        return self.forward_tt(x, mask)
-        if os.environ.get("ATTN") == "tt":
-            return self.forward_tt(x, mask)
-        else:
-            return self.forward_pt(x, mask)
-
-    def forward_pt(self, x_11SH, mask=None):
+    def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
-        x_torch = ttnn.to_torch(x_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        x_torch = x_torch[0].unsqueeze(0)
-        wqkv = ttnn.to_torch(self.wqkv, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        wqkv = wqkv.view(2, wqkv.shape[0] // 2, wqkv.shape[1])
 
-        wqkv = wqkv.reshape(2, self.hidden_size, 3 * self.n_heads // 2, -1)
-        wqkv = wqkv[..., : self.head_dim]
-        # wqkv = wqkv.reshape(2, self.hidden_size, -1)
-        wqkv = wqkv.reshape(2, self.hidden_size, 3, self.n_heads // 2, -1).permute(1, 2, 0, 3, 4)
-        wqkv = wqkv.reshape(self.hidden_size, 3, self.n_heads, -1).reshape(self.hidden_size, -1)
-
-        # xqkv_fused_torch = torch.matmul(x_torch, wqkv).bfloat16().float()
-        xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.T).bfloat16().float()
-        # xqkv_fused_torch = torch.nn.functional.linear(x_torch, wqkv.tranpose).bfloat16().float()
-        # n, s, d = xqkv_fused_torch.shape[-3:]
-        s, d = xqkv_fused_torch.shape[-2:]
-        xqkv = xqkv_fused_torch.reshape(s, 3, d // 3)
-        q = xqkv[..., 0, :]
-        k = xqkv[..., 1, :]
-        v = xqkv[..., 2, :]
-        # xq = q.reshape(n, s, self.n_heads//2, -1).transpose(1, 2)
-        # xk = k.reshape(n, s, self.n_heads//2, -1).transpose(1, 2)
-        # xv = v.reshape(n, s, self.n_heads//2, -1).transpose(1, 2)
-        xq = q.reshape(s, self.n_heads, -1).transpose(0, 1)
-        xk = k.reshape(s, self.n_heads, -1).transpose(0, 1)
-        xv = v.reshape(s, self.n_heads, -1).transpose(0, 1)
-
-        mask_torch = ttnn.to_torch(mask, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        mask_torch = mask_torch[0]
-        attn_output = (
-            torch.nn.functional.scaled_dot_product_attention(xq, xk, xv, attn_mask=mask_torch, scale=self.scale)
-            .bfloat16()
-            .float()
-        )  # [...,:self.head_dim]
-
-        # attn_output = attn_output.transpose(1, 2).reshape(n, s, -1).transpose(0, 1).reshape(s, -1)
-        attn_output = attn_output.transpose(0, 1).reshape(s, -1)
-
-        wo = ttnn.to_torch(self.wo, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        wo = wo.view(2, wo.shape[0] // 2, wo.shape[1])  # .reshape(-1, wo.shape[1])
-
-        wo = (
-            wo.transpose(1, 2)
-            .reshape(2, self.hidden_size, self.n_heads // 2, -1)[..., : self.head_dim]
-            .reshape(2, self.hidden_size, -1)
-            .transpose(1, 2)
-            .reshape(-1, self.hidden_size)
-        )
-
-        out = torch.nn.functional.linear(attn_output, wo.T).bfloat16().float()
-        # out = torch.sum(out, dim=0).unsqueeze(0).unsqueeze(0).bfloat16().float()
-        out = out.view(1, 1, 4224, -1)
-
-        out_tt = ttnn.from_torch(
-            out,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        return out_tt
-
-    def forward_tt(self, x_11SH, mask=None):
-        seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-        ###
-        # QKV matmuls
-        ###
-
-        # reshaping long sequence to matmul fit on device
-
-        # x_torch = ttnn.to_torch(x_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # x_torch = x_torch.view(2, seq_len, -1)
-        # wqkv = ttnn.to_torch(self.wqkv, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # wqkv = wqkv.view(2, wqkv.shape[0]//2, wqkv.shape[1])
-
-        # xqkv_fused_torch = torch.bmm(x_torch, wqkv).unsqueeze(1)
-        # xqkv_fused = ttnn.from_torch(
-        #     xqkv_fused_torch,
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     layout=ttnn.TILE_LAYOUT,
-        # )
-
-        # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = 1056
-        # MAX_MM_SEQ_LEN = 1024
-
-        # DEBUG: Don't batch it up
-        # MAX_MM_SEQ_LEN = 10000
+        MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
@@ -255,8 +160,6 @@ class TtLlamaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        # ttnn.deallocate(x_11SH)
-
         # split qkv into heads
         (
             q_heads_1QSD,
@@ -271,11 +174,9 @@ class TtLlamaImageAttention(LightweightModule):
         )
 
         ttnn.deallocate(xqkv_fused)
-        # sdpa_cfg = self.model_config["SDPA_PROGCFG"](seq_len)
+        # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            q_chunk_size=128,
-            k_chunk_size=128,
+            compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
         )
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,
@@ -292,28 +193,6 @@ class TtLlamaImageAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
         ttnn.deallocate(v_heads_1VSD)
 
-        # q_heads_torch = ttnn.to_torch(q_heads_1QSD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # k_heads_torch = ttnn.to_torch(k_heads_1KSD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # v_heads_torch = ttnn.to_torch(v_heads_1VSD, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # mask_torch = ttnn.to_torch(mask, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-
-        # attn_output_torch = torch.nn.functional.scaled_dot_product_attention(
-        #     q_heads_torch,
-        #     k_heads_torch,
-        #     v_heads_torch,
-        #     attn_mask=mask_torch,
-        #     scale=self.scale,
-        # )
-
-        # attn_output_1QSD = ttnn.from_torch(
-        #     attn_output_torch,
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     layout=ttnn.TILE_LAYOUT,
-        # )
-
         ###
         # Output matmul
         ###
@@ -322,24 +201,6 @@ class TtLlamaImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
-
-        # attn_output_torch = ttnn.to_torch(attn_output_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # # breakpoint()
-        # wo = ttnn.to_torch(self.wo, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        # wo = wo.view(2, 1, wo.shape[0]//2, wo.shape[1])
-        # output = torch.matmul(attn_output_torch, wo)
-        # output = torch.sum(output, dim=0).unsqueeze(0).unsqueeze(0)
-
-        # output_11SH = ttnn.from_torch(
-        #     output,
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     layout=ttnn.TILE_LAYOUT,
-        # )
-        # return output_11SH
-        # breakpoint()
 
         # reshaping long sequence to matmul fit on device
         if seq_len > MAX_MM_SEQ_LEN:
