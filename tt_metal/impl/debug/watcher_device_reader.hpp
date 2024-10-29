@@ -4,6 +4,23 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+#include "tt_metal/common/core_coord.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "llrt/hal.hpp"
+
+// FIXME: ARCH_NAME specific, needed for several pointer types here
+#include "dev_msgs.h"
+
 namespace tt::watcher {
 
 #define GET_WATCHER_DEV_ADDR_FOR_CORE(dev, core, sub_type)              \
