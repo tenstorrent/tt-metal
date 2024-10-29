@@ -77,6 +77,63 @@ run_t3000_mixtral8x7b_perplexity_tests() {
   fi
 }
 
+run_t3000_llama3_perplexity_tests_single_card() {
+  # Split long set of tests into two groups
+  # This one runs all the N150 and N300 tests
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_single_card"
+
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  for FAKE_DEVICE in N150 N300; do
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+    done
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_perplexity_tests_single_card $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_perplexity_tests_t3000() {
+  # Split long set of tests into two groups
+  # This one runs all the T3K tests
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_perplexity_tests_t3000"
+
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/
+
+  for FAKE_DEVICE in T3K; do
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
+      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+    done
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_perplexity_tests_t3000 $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_tests() {
   # Run Falcon-7B perplexity tests
   run_t3000_falcon7b_perplexity_tests
@@ -89,6 +146,10 @@ run_t3000_tests() {
 
   # Run Mixtral8x7B perplexity tests
   run_t3000_mixtral8x7b_perplexity_tests
+
+  # Run llama3 perplexity tests
+  run_t3000_llama3_perplexity_tests_single_card
+  run_t3000_llama3_perplexity_tests_t3000
 }
 
 fail=0
