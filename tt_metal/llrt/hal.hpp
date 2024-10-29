@@ -39,17 +39,18 @@ enum class HalProcessorClassType : uint8_t {
 };
 
 enum class HalL1MemAddrType : uint8_t {
-    BARRIER = 0,
-    LAUNCH = 1,
-    WATCHER = 2,
-    DPRINT = 3,
-    PROFILER = 4,
-    KERNEL_CONFIG = 5,
-    UNRESERVED = 6,
-    CORE_INFO = 7,
-    GO_MSG = 8,
-    LAUNCH_MSG_BUFFER_RD_PTR = 9,
-    COUNT = 10
+    BARRIER,
+    MAILBOX,
+    LAUNCH,
+    WATCHER,
+    DPRINT,
+    PROFILER,
+    KERNEL_CONFIG,
+    UNRESERVED,
+    CORE_INFO,
+    GO_MSG,
+    LAUNCH_MSG_BUFFER_RD_PTR,
+    COUNT // Keep this last so it always indicates number of enum options
 };
 
 enum class HalDramMemAddrType : uint8_t {
