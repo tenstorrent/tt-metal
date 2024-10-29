@@ -15,6 +15,7 @@
 #include "third_party/umd/device/device_api_metal.h"
 #include "tt_metal/third_party/umd/device/tt_cluster_descriptor.h"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
+#include "index_map.hpp"
 
 // clang-format off
 #include "noc/noc_parameters.h"
@@ -264,7 +265,7 @@ class Cluster {
 
     // There is one device driver per PCIe card. This map points id of the MMIO device points to the associated device
     // driver
-    std::unordered_map<chip_id_t, std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
+    tt::IndexMap<std::unique_ptr<tt_device>> mmio_device_id_to_driver_;
 
     // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
@@ -272,20 +273,20 @@ class Cluster {
     std::string cluster_desc_path_;
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
     // There is an entry for every device that can be targeted (MMIO and remote)
-    std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
+    tt::IndexMap<metal_SocDescriptor> sdesc_per_chip_;
 
     // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the
     // grouping
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
+    tt::IndexMap<std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
     // Save mapping of device id to associated MMIO device id for fast lookup
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
+    tt::IndexMap<chip_id_t> device_to_mmio_device_;
 
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     bool is_tg_cluster_;
 
     // Tunnels setup in cluster
-    std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};
+    tt::IndexMap<std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device
@@ -296,10 +297,10 @@ class Cluster {
     //          2 -> 1
     //          1 -> 0
     //          3 -> 1
-    std::unordered_map<chip_id_t, uint16_t> device_to_host_mem_channel_;
+    tt::IndexMap<uint16_t> device_to_host_mem_channel_;
 
     // Mapping of each devices' ethernet routing mode
-    std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
+    tt::IndexMap<std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
     tt_device_l1_address_params l1_address_params = {
         (uint32_t)MEM_NCRISC_FIRMWARE_BASE,
@@ -338,7 +339,7 @@ class Cluster {
         RESPONSE_ROUTING_CMD_QUEUE_BASE,
         CMD_BUF_PTR_MASK};
 
-    std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
+    tt::IndexMap<std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
 };
 
 }  // namespace tt

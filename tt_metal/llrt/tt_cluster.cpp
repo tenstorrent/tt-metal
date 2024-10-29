@@ -272,7 +272,7 @@ void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
     for (const auto it : input) {
         chip_id_t id = it.first;
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
+        this->sdesc_per_chip_.insert(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id)));
     }
 }
 
@@ -639,7 +639,7 @@ void Cluster::set_tunnels_from_mmio_device() {
         TT_ASSERT(this->cluster_desc_->is_chip_mmio_capable(mmio_chip_id));
 
         if (all_eth_connections.find(mmio_chip_id) == all_eth_connections.end()) {
-            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
+            this->tunnels_from_mmio_device.insert(mmio_chip_id, {});
             continue;
         }
 
@@ -647,7 +647,7 @@ void Cluster::set_tunnels_from_mmio_device() {
         device_ids.erase(mmio_chip_id);
 
         if (device_ids.size() == 0) {
-            this->tunnels_from_mmio_device.insert({mmio_chip_id, {}});
+            this->tunnels_from_mmio_device.insert(mmio_chip_id, {});
             continue;
         }
 
@@ -716,7 +716,7 @@ void Cluster::set_tunnels_from_mmio_device() {
             }
             dev_vec.insert(dev_vec.begin(), mmio_chip_id);
         }
-        this->tunnels_from_mmio_device.insert({mmio_chip_id, tunnels_from_mmio});
+        this->tunnels_from_mmio_device.insert(mmio_chip_id, tunnels_from_mmio);
     }
 }
 
@@ -724,7 +724,7 @@ void Cluster::set_tunnels_from_mmio_device() {
 void Cluster::initialize_ethernet_sockets() {
     for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
         if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
-            this->ethernet_sockets_.insert({chip_id, {}});
+            this->ethernet_sockets_.insert(chip_id, {});
         }
         for (const auto &[connected_chip_id, eth_cores] :
              this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
@@ -733,7 +733,7 @@ void Cluster::initialize_ethernet_sockets() {
                 this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
             }
             if (this->ethernet_sockets_.find(connected_chip_id) == this->ethernet_sockets_.end()) {
-                this->ethernet_sockets_.insert({connected_chip_id, {}});
+                this->ethernet_sockets_.insert(connected_chip_id, {});
             }
             if (this->ethernet_sockets_.at(connected_chip_id).find(chip_id) ==
                 this->ethernet_sockets_.at(connected_chip_id).end()) {
@@ -760,7 +760,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
-                this->device_eth_routing_info_.insert({chip_id, {}});
+                this->device_eth_routing_info_.insert(chip_id, {});
             }
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
