@@ -72,8 +72,8 @@ namespace data_movement {
                     while (res.get_shape().rank() > input_rank) {
                         const auto shape = res.get_shape();
                         const auto full_shape = res.get_shape().with_tile_padding();
-                        std::vector<uint32_t> shape_vec{};
-                        std::vector<uint32_t> full_shape_vec{};
+                        SmallVector<uint32_t> shape_vec{};
+                        SmallVector<uint32_t> full_shape_vec{};
                         for (int i = 1; i < shape.rank(); i++) {
                             shape_vec.push_back(shape[i]);
                             full_shape_vec.push_back(full_shape[i]);
@@ -116,8 +116,8 @@ namespace data_movement {
                             TT_FATAL(input_tensor.get_layout() == ttnn::TILE_LAYOUT, "ttnn.concat: expected all input tensors to be in tile layout");
                             auto untilized_tensor = ttnn::untilize(input_tensor);
                             // untilized, so now we have a padded rm tensor
-                            untilized_tensor.set_shape(ttnn::Shape {input_tensor.get_logical_shape().as_vector(),
-                                                                    untilized_tensor.get_padded_shape().as_vector()});
+                            untilized_tensor.set_shape(ttnn::Shape {input_tensor.get_logical_shape().view(),
+                                                                    untilized_tensor.get_padded_shape().view()});
                             return untilized_tensor;
                         }
                     );
@@ -277,13 +277,13 @@ ttnn::Tensor ConcatOperation::invoke(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-        auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
-        auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
-        auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
-        std::vector<ttnn::Tensor> itensors(input_tensors);
-        auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
-        return massaged_concat(input_tensors, dim);
-    }
+    auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
+    auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
+    auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
+    std::vector<ttnn::Tensor> itensors(input_tensors);
+    auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
+    return massaged_concat(input_tensors, dim);
+}
 
 ttnn::Tensor ConcatOperation::invoke(
     const std::vector<ttnn::Tensor>& input_tensors,
