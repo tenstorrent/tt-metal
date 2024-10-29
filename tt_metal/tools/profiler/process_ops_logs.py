@@ -110,6 +110,7 @@ def import_tracy_op_logs(logFolder):
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
                         opData = json.loads(jsonStr)
+                        opData["trace_id"] = None
                         if "op_hash" in opData.keys():
                             assert "device_id" in opData.keys()
                             deviceID = int(opData["device_id"])
@@ -119,9 +120,8 @@ def import_tracy_op_logs(logFolder):
                             else:
                                 cached_ops[deviceID] = {opHash: opData.copy()}
                             del cached_ops[deviceID][opHash]["global_call_count"]
-                        opData["trace_id"] = None
-                        if deviceID in traceIDs:
-                            opData["trace_id"] = traceIDs[deviceID]
+                            if deviceID in traceIDs:
+                                opData["trace_id"] = traceIDs[deviceID]
                     else:  # cached device op
                         opDataList = opDataStr.split(":", 1)[-1].split(",")
                         assert len(opDataList) > 3, "Wrong cached op info format"
