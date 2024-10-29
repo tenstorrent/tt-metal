@@ -419,7 +419,7 @@ namespace ttnn::types {
 
 uint32_t Shape::operator[](std::int64_t index) const {
     const auto dimension = value[index];
-    auto [front_pad, back_pad] = value.padding().pad_dimensions_[index];
+    auto [front_pad, back_pad] = value.padding()[index];
     return dimension - (front_pad + back_pad);
 }
 
