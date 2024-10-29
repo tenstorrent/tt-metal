@@ -89,9 +89,6 @@ def test_llama_mlp_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
-    print(f"{tt_output_torch.shape=}")
-    print(f"{reference_output.shape=}")
-
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 

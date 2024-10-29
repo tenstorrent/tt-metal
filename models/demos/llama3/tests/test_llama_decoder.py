@@ -104,7 +104,6 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds, en
             .permute(2, 1, 0, 3)
             .squeeze(1)[: model_args.max_batch_size, :, :]
         )  # [seq, batch, dim]
-        print(f"{tt_output_torch.shape=}")
 
         freqs_cis_i = freqs_cis[current_pos, :].unsqueeze(0)
 

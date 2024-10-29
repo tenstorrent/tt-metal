@@ -149,9 +149,6 @@ def test_llama_model_inference(mesh_device, seq_len, use_program_cache, reset_se
         if run_ref_pt:  # Run reference model
             ref_output = reference_model(pt_decode_input, start_pos, mode="prefill")
 
-        print(f"{ref_output.shape=}")
-        print(f"{tt_output_torch.shape=}")
-
         # Measure PCC if also running reference model
         if run_ref_pt:
             passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)

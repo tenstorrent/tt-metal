@@ -76,7 +76,7 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
-        print(f"[Decoder] Generating token {i}")
+        logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
@@ -116,5 +116,5 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
         debug_max = lambda t: ttnn.to_torch(
             t, mesh_composer=ttnn.ConcatMeshToTensor(model_args.mesh_device, dim=-1)
         ).max()
-        print(f"decode_input max: {debug_max(decode_input)=}, {decode_input.memory_config()=}")
-        print(f"tt_out max: {debug_max(tt_out)=}, {tt_out.memory_config()=}")
+        logger.info(f"decode_input max: {debug_max(decode_input)=}, {decode_input.memory_config()=}")
+        logger.info(f"tt_out max: {debug_max(tt_out)=}, {tt_out.memory_config()=}")
