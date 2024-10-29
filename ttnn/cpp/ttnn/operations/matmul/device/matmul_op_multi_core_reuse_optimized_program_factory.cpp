@@ -66,9 +66,9 @@ operation::ProgramWithCallbacks create_program(
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
     auto in1_tile_shape = in1_tile.get_tile_shape();
-    if (in1_tile.get_transpose_of_faces()) {
-        std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    }
+    // if (in1_tile.get_transpose_of_faces()) {
+    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
+    // }
     // cannot use the output tensor tile directly as that might be changed by user override
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile_shape[1]});
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
@@ -499,9 +499,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     const auto& bshape = b.get_legacy_shape();
     auto in0_tile_shape = a.get_tile().get_tile_shape();
     auto in1_tile_shape = b.get_tile().get_tile_shape();
-    if (b.get_tile().get_transpose_of_faces()) {
-        std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    }
+    // if (b.get_tile().get_transpose_of_faces()) {
+    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
+    // }
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
