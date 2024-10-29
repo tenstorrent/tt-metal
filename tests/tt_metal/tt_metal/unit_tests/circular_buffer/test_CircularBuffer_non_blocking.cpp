@@ -61,7 +61,7 @@ std::vector<uint32_t> generate_rt_args(uint32_t master_semaphore, uint32_t slave
     return rt_args;
 }
 
-TEST_F(DeviceFixture, TestCircularBufferNonBlockingAPIs) {
+TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     Program program;
     Device *device = devices_.at(0);
 
