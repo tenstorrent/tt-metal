@@ -123,6 +123,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
     }
     if (are_required_outputs.at(1)) {
         ttnn::neg(queue_id, grad, output_mem_config, other_grad);
+        ttnn::multiply(queue_id, other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
         result[1] = other_grad;
     }
 
