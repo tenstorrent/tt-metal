@@ -14,7 +14,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor &input_tensor,
     const tt::tt_metal::LegacyShape &output_tensor_shape,
-    float pad_value,
+    const std::variant<int, float> pad_value,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
@@ -32,51 +32,15 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
         .at(0);
 }
 
-
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::LegacyShape &output_tensor_shape,
-    int pad_value,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return operation::run(
-               TilizeWithValPadding{
-                   output_tensor_shape,
-                   pad_value,
-                   memory_config.value_or(input_tensor.memory_config()),
-                   output_dtype.value_or(input_tensor.get_dtype()),
-                   use_multicore},
-               {input_tensor},
-               {},
-               {},
-               queue_id)
-        .at(0);
-}
-
-
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const ttnn::Tensor &input_tensor,
     const tt::tt_metal::LegacyShape &output_tensor_shape,
-    float pad_value,
+    const std::variant<int, float> pad_value,
     const std::optional<MemoryConfig> &memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
-    return invoke(
-        DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
-}
 
-
-ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    const ttnn::Tensor &input_tensor,
-    const tt::tt_metal::LegacyShape &output_tensor_shape,
-    int pad_value,
-    const std::optional<MemoryConfig> &memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(
-        DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
+    return invoke(DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 
@@ -92,14 +56,15 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     shape[2] = tt::round_up(shape[2], TILE_HEIGHT);
     shape[3] = tt::round_up(shape[3], TILE_WIDTH);
 
+    std::variant<int, float> pad_value;
     if(input_tensor.get_dtype() == DataType::BFLOAT16) {
-        return ExecuteTilizeWithValPadding::invoke(
-            queue_id, input_tensor, shape, (float)0.0, memory_config, output_dtype, use_multicore);
+        pad_value = (float)0.0;
     }
     else {
-        return ExecuteTilizeWithValPadding::invoke(
-            queue_id, input_tensor, shape, (int)0, memory_config, output_dtype, use_multicore);
+        pad_value = (int)0;
     }
+    return ExecuteTilizeWithValPadding::invoke(
+            queue_id, input_tensor, shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(

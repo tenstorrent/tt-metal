@@ -52,9 +52,18 @@ static Tensor reduce_impl(
             out_shape[1] = 1;
 
             auto formatted_input_tensor = input_tensor_arg;
-            float pad_value = (reduce_type == ReduceType::Max)   ? -std::numeric_limits<float>::infinity()
-                              : (reduce_type == ReduceType::Min) ? std::numeric_limits<float>::infinity()
-                                                                 : 0;
+            std::variant <int, float> pad_value;
+            if(input_tensor_arg.get_dtype() == ttnn::DataType::BFLOAT16) {
+                pad_value = (float)((reduce_type == ReduceType::Max)   ? -std::numeric_limits<float>::infinity()
+                                  : (reduce_type == ReduceType::Min) ? std::numeric_limits<float>::infinity()
+                                                                     : 0.0);
+            }
+            else {
+                pad_value = (int)((reduce_type == ReduceType::Max)   ? -std::numeric_limits<int>::infinity()
+                                  : (reduce_type == ReduceType::Min) ? std::numeric_limits<int>::infinity()
+                                                                     : 0);
+
+            }
 
             if (!AutoFormat::check_input_tensor_format(input_tensor_arg, input_tensor_pad_shape)) {
                 formatted_input_tensor = AutoFormat::format_input_tensor(
@@ -72,9 +81,15 @@ static Tensor reduce_impl(
             out_shape[0] = 1;
 
             auto formatted_input_tensor = input_tensor_arg;
+            std::variant <int, float> pad_value;
+            if(input_tensor_arg.get_dtype() == ttnn::DataType::BFLOAT16) {
+                pad_value = (float) 0.0;
+            } else {
+                pad_value = (int) 0;
+            }
             if (!AutoFormat::check_input_tensor_format(input_tensor_arg, input_tensor_pad_shape)) {
                 formatted_input_tensor = AutoFormat::format_input_tensor(
-                    input_tensor_arg, input_tensor_arg.device(), input_tensor_pad_shape, 0.0, Layout::TILE);
+                    input_tensor_arg, input_tensor_arg.device(), input_tensor_pad_shape, pad_value, Layout::TILE);
             }
             Tensor output = ttnn::transpose(formatted_input_tensor, 0, -2, memory_config);
             output = reduce_impl<reduce_type>(output, 2, keepdim, memory_config, compute_kernel_config, scalar, false);

@@ -82,12 +82,7 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     if (input_tensor_a.memory_config().is_sharded() || this->use_multicore) {
         return detail::tilize_with_val_padding_multi_core(input_tensor_a, output_tensor, this->pad_value);
     }
-    if(std::holds_alternative<int>(this->pad_value)) {
-        return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
-    }
-    else {
-        return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
-    }
+    return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

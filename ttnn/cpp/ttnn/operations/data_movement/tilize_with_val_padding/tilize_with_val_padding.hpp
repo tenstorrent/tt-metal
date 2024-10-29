@@ -17,7 +17,7 @@ struct ExecuteTilizeWithValPadding {
         uint8_t queue_id,
         const ttnn::Tensor &input_tensor,
         const tt::tt_metal::LegacyShape &output_tensor_shape,
-        float pad_value,
+        const std::variant<int, float> pad_value,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false);
@@ -25,24 +25,7 @@ struct ExecuteTilizeWithValPadding {
     static ttnn::Tensor invoke(
         const ttnn::Tensor &input_tensor,
         const tt::tt_metal::LegacyShape &output_tensor_shape,
-        float pad_value,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
-
-    static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::LegacyShape &output_tensor_shape,
-        int pad_value,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
-        std::optional<DataType> output_dtype = std::nullopt,
-        bool use_multicore = false);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::LegacyShape &output_tensor_shape,
-        int pad_value,
+        const std::variant<int, float> pad_value,
         const std::optional<MemoryConfig> &memory_config = std::nullopt,
         std::optional<DataType> output_dtype = std::nullopt,
         bool use_multicore = false);

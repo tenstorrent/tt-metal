@@ -172,7 +172,14 @@ Tensor reduce(
     auto parallelization_strategy =
         Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
-    float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
+    std::variant<int, float> pad_value;
+    if(input_tensor.get_dtype() == ttnn::DataType::BFLOAT16) {
+        pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : (float)0.0;
+    }
+    else {
+        pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<int>::infinity() : (int)0;
+
+    }
 
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
         ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
@@ -196,6 +203,8 @@ Tensor reduce(
                 }
                 auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
                 auto formatted_input_tensor = input_tensor;
+
+
                 if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
                     formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                         input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
@@ -240,7 +249,7 @@ Tensor reduce(
                     {input_tensor},
                     {},
                     {},
-                    pad_value);
+                    pad_value.index() == 0 ? (float) std::get<int>(pad_value) : (float)std::get<float>(pad_value));
             },
             {input_tensor},
             output_tensors);

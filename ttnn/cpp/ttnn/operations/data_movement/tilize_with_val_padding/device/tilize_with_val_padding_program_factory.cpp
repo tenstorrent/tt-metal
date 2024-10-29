@@ -18,7 +18,7 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
-    const Tensor& a, Tensor& output, std::variant<float, int> pad_value) {
+    const Tensor& a, Tensor& output, const std::variant<int, float> pad_value) {
     auto output_shape = output.get_legacy_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -206,7 +206,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, std::variant<float, int> pad_value) {
+    const Tensor& a, Tensor& output, const std::variant<int, float> pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -375,7 +375,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
 // This purely supports input width shard -> output width shard for now
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
-    const Tensor& a, Tensor& output, std::variant<float, int> pad_value) {
+    const Tensor& a, Tensor& output, const std::variant<int, float> pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
@@ -514,7 +514,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
-    const Tensor& a, Tensor& output, std::variant<float, int> pad_value) {
+    const Tensor& a, Tensor& output, const std::variant<int, float> pad_value) {
     if (a.memory_config().is_sharded()) {
         return tilize_with_val_padding_multi_core_sharded(a, output, pad_value);
     } else {

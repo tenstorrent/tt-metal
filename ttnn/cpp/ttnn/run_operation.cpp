@@ -318,7 +318,7 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    const float pad_value,
+    const std::variant<int, float> pad_value,
     const bool pad_c,
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;

@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::auto_format{
 
 struct FormatParams {
     tt::tt_metal::LegacyShape pad_shape;
-    float pad_value;
+    std::variant<int, float> pad_value;
     Layout target_layout;
 };
 
@@ -92,7 +92,7 @@ class AutoFormat {
 
         static Tensor move_tensor_to_mem_config(const Tensor &input, const MemoryConfig& mem_config);
 
-        static Tensor format_input_tensor(const Tensor &input, Device * device, const tt::tt_metal::LegacyShape& padded_shape, float pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
+        static Tensor format_input_tensor(const Tensor &input, Device * device, const tt::tt_metal::LegacyShape& padded_shape, std::variant<int, float> pad_value, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 
         static Tensor format_output_tensor(const Tensor &output, const tt::tt_metal::LegacyShape& shape, Device* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config = std::nullopt);
 };

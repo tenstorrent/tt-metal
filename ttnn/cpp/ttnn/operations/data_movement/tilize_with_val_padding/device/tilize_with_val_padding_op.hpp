@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 
 struct TilizeWithValPadding {
     const tt::tt_metal::LegacyShape output_tensor_shape;
-    const std::variant<float, int> pad_value;
+    const std::variant<int, float> pad_value;
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     const bool use_multicore;

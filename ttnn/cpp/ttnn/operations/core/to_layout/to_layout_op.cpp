@@ -174,8 +174,17 @@ Tensor to_layout_impl(
                 tensor = ttnn::pad(0, tensor, padding, 0, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
+                std::variant<int, float> pad_value;
+                if(tensor.get_dtype() == ttnn::DataType::BFLOAT16) {
+                    pad_value = (float)0.0;
+                }
+                //UINT32
+                else {
+                    TT_FATAL(tensor.get_dtype() == ttnn::DataType::UINT32, "Tilize only bfloat16 or uint32");
+                    pad_value = (int)0;
+                }
                 tensor = ttnn::tilize_with_val_padding(
-                    tensor, padded_output_shape, 0, output_memory_config, dtype, use_multicore_tilize);
+                    tensor, padded_output_shape, pad_value, output_memory_config, dtype, use_multicore_tilize);
             }
 
             return ttnn::reshape(tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape, padded_output_shape}));
