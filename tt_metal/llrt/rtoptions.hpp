@@ -132,6 +132,7 @@ class RunTimeOptions {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
     bool skip_deleting_built_cache = false;
+    bool use_new_fd_init = false;
 
     RunTimeOptions();
 
@@ -304,6 +305,8 @@ public:
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
+    inline bool get_use_new_fd_init() { return use_new_fd_init; }
+    inline void set_use_new_fd_init(bool enable) { use_new_fd_init = enable; }
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
 
