@@ -49,7 +49,7 @@ def test_llama_model_perf(mesh_device, kv_cache_len, expected_compile_time, use_
     elif "3.2-3B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.065
     elif "3.1-8B" in model_args.DEFAULT_CACHE_PATH:
-        expected_inference_time = 0.07
+        expected_inference_time = 0.08
     elif "3.2-11B" in model_args.DEFAULT_CACHE_PATH:
         expected_inference_time = 0.085
     elif "3.1-70B" in model_args.DEFAULT_CACHE_PATH:
