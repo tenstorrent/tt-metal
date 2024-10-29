@@ -241,7 +241,17 @@ std::shared_ptr<Buffer> Buffer::create(
     }
 
     buffer->device_->push_work([buffer] {
-        buffer->address_ = detail::AllocateBuffer(buffer.get());
+        AllocationStatus next_status = AllocationStatus::ALLOCATED;
+        try {
+            buffer->address_ = detail::AllocateBuffer(buffer.get());
+        } catch(...) {
+            std::unique_lock lock(buffer->allocation_mutex_);
+            buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
+            lock.unlock();
+            buffer->allocation_cv_.notify_all();
+
+            throw;
+        }
 
         std::unique_lock lock(buffer->allocation_mutex_);
         buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
@@ -289,7 +299,8 @@ void Buffer::deleter(Buffer* buffer) {
 }
 
 void Buffer::deallocate_impl() {
-    if (allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+    auto status = allocation_status_.load(std::memory_order::relaxed);
+    if (status == AllocationStatus::DEALLOCATED || status == AllocationStatus::ALLOCATION_FAILED) {
         return;
     }
 

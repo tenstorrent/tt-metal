@@ -236,6 +236,7 @@ class Buffer final {
    private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
+        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
