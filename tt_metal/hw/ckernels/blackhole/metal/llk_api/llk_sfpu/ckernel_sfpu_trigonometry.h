@@ -17,32 +17,35 @@ namespace sfpu {
 
 static const float PI = 3.1415927f;
 static const float PI_2 = 1.5707964f;
+static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 
 template <bool APPROXIMATION_MODE>
-static vFloat sfpu_xcot(vFloat x);
+static vFloat sfpu_tan(vFloat x);
 
 template <>
-sfpi_inline vFloat sfpu_xcot<true>(vFloat x) {
-    x *= x;
+sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
+    const vFloat xx = x * x;
 
-    return ((-0xf.28e58p-12f
-        * x - 0x4.f8cc1p-8f)
-        * x - 0x5.5b78b8p-4f)
-        * x + 0x1.00081cp+0f;
+    return x * ((((0.07407404f
+        * xx - 0.0031158808f)
+        * xx + 0.1559396f)
+        * xx + 0.33035427)
+        * xx + 1.0000609f);
 }
 
 template <>
-sfpi_inline vFloat sfpu_xcot<false>(vFloat x) {
-    x *= x;
+sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
+    const vFloat xx = x * x;
 
-    return (((((-0x6.0847c8p-20f
-        * x - 0x7.19fff8p-20f)
-        * x - 0xf.a306ap-16f)
-        * x - 0x8.914dp-12f)
-        * x - 0x5.b10dcp-8f)
-        * x - 0x5.55538p-4f)
-        * x + 0xf.fffffp-4f;
+    return x * (((((((0.010222361f
+        * xx - 0.015764693f)
+        * xx + 0.02789032f)
+        * xx + 0.012122508f)
+        * xx + 0.05659461f)
+        * xx + 0.1329926f)
+        * xx + 0.33334994f)
+        * xx + 0.9999999f);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -50,9 +53,20 @@ inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v = PI * (v - int32_to_float(whole_v, 0));
-        dst_reg[0] = v * sfpu_reciprocal<8>(sfpu_xcot<APPROXIMATION_MODE>(v));
+        v -= int32_to_float(float_to_int16(v, 0), 0);
+
+        const vFloat absv = sfpi::abs(v);
+
+        v_if (absv <= FRAC_1_PI) {
+            v = sfpu_tan<APPROXIMATION_MODE>(PI * v);
+        }
+        v_else {
+            v = sfpu_tan<APPROXIMATION_MODE>(PI * setsgn(0.5f - absv, v));
+            v = sfpu_reciprocal<8>(v);
+        }
+        v_endif;
+
+        dst_reg[0] = v;
         dst_reg++;
     }
 }
