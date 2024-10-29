@@ -147,9 +147,9 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
 
     uint32_t num_copies_this_core;
     for (auto core : cores) {
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_copies_this_core = num_copies_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_copies_this_core = num_copies_per_core_group_2;
         }
 

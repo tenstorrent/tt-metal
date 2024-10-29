@@ -184,7 +184,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        if (!full_cores.core_coord_in_core_ranges(core)) {
+        if (!full_cores.contains(core)) {
             continue;
         }
         // reader runtime args
@@ -478,7 +478,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        if (!full_cores.core_coord_in_core_ranges(core)) {
+        if (!full_cores.contains(core)) {
             continue;
         }
         // reader runtime args

@@ -149,9 +149,9 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_cols_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
@@ -175,7 +175,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         SetRuntimeArgs(
             program, writer_kernel_id, core, {bias_grad.buffer()->address(), num_cols_per_core, tile_offset});
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             SetRuntimeArgs(
                 program,
                 compute_kernel_1_id,
@@ -185,7 +185,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
                  num_cols_per_core,  // Wt_per_core
                  static_cast<uint32_t>(do_mask_h),
                  static_cast<uint32_t>(do_mask_w && core_has_last_wt)});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
             SetRuntimeArgs(
                 program,

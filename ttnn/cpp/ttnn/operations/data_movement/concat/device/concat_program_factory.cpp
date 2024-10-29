@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         auto input_shard_spec = input_tensors[0].shard_spec().value();
         uint32_t curr_num_input_tensors;
         uint32_t curr_num_output_rows;
-        if (input_cores.core_coord_in_core_ranges(core)) {
+        if (input_cores.contains(core)) {
             curr_num_input_tensors = num_input_tensors;
             curr_num_output_rows = num_output_rows_per_core;
         } else {
@@ -392,7 +392,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
                 uint32_t curr_num_output_rows;
-                if (input_cores.core_coord_in_core_ranges(core)) {
+                if (input_cores.contains(core)) {
                     curr_num_input_tensors = num_input_tensors;
                     curr_num_output_rows = num_output_rows_per_core;
                 } else {

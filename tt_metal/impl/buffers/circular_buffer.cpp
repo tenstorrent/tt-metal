@@ -60,7 +60,7 @@ bool CircularBuffer::is_on_logical_corerange(const CoreRange &logical_cr) const 
 }
 
 bool CircularBuffer::is_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_ranges_.core_coord_in_core_ranges(logical_core);
+    return this->core_ranges_.contains(logical_core);
 }
 
 bool CircularBuffer::uses_buffer_index(uint32_t buffer_index) const {

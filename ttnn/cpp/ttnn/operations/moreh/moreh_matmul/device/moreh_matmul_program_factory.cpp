@@ -430,13 +430,13 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_output_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
             std::vector<uint32_t> compute_rt_args;
             compute_rt_args.push_back(num_tiles_written);
             compute_rt_args.insert(compute_rt_args.end(), output_stride.begin(), output_stride.end());
             tt::tt_metal::SetRuntimeArgs(program, compute_kernel_1_id, core, compute_rt_args);
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             TT_FATAL(compute_kernel_2_id.has_value(), "Core not in specified core ranges");
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
             std::vector<uint32_t> compute_rt_args;

@@ -137,9 +137,9 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_cols_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");
@@ -175,9 +175,9 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              static_cast<uint32_t>(dim),
              flip});
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_cumsum_tiles, num_tiles_per_core});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
             SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_cumsum_tiles, num_tiles_per_core});
         } else {
