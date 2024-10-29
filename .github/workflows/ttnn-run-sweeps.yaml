@@ -240,7 +240,7 @@ on:
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
-          - eltwise.ternary.lerp
+          - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
           - reduction.topk.topk

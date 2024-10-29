@@ -100,10 +100,10 @@ def run(
     )
 
     start_time = start_measuring_time()
+
     output_tensor = ttnn.tanh_bw(grad_tensor, input_tensor_a, memory_config=output_memory_config)[0]
     output_tensor = ttnn.to_torch(output_tensor)
+
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
-
-
