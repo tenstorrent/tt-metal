@@ -128,6 +128,7 @@ class RunTimeOptions {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
     bool skip_deleting_built_cache = false;
+    bool use_new_fd_init = false;
 
     RunTimeOptions();
 
@@ -298,6 +299,8 @@ public:
     inline void set_dispatch_data_collection_enabled(bool enable) { enable_dispatch_data_collection = enable; }
 
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
+    inline bool get_use_new_fd_init() { return use_new_fd_init; }
+    inline void set_use_new_fd_init(bool enable) { use_new_fd_init = enable; }
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
 

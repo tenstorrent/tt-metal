@@ -10,6 +10,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 
 using namespace tt::tt_metal;
 
@@ -314,13 +315,12 @@ bool DevicePool::is_device_active(chip_id_t id) const {
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
+    std::set<chip_id_t> devices_to_activate;
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             TT_ASSERT(device_id == mmio_device_id, "Skipping remote devices is only available for mmio devices");
-            if (not this->is_device_active(device_id)) {
-                this->activate_device(device_id);
-            }
+            devices_to_activate.insert(device_id);
         }
     } else {
         std::vector<chip_id_t> all_device_ids = {};
@@ -329,10 +329,17 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             for (const auto& mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (not this->is_device_active(mmio_controlled_device_id)) {
-                    this->activate_device(mmio_controlled_device_id);
-                }
+                devices_to_activate.insert(mmio_controlled_device_id);
             }
+        }
+    }
+
+    if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
+        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    }
+    for (const auto& device_id : devices_to_activate) {
+        if (not this->is_device_active(device_id)) {
+            this->activate_device(device_id);
         }
     }
 }

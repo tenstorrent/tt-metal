@@ -31,6 +31,7 @@
 
 // FIXME: ARCH_NAME specific
 #include "eth_l1_address_map.h"
+#include "impl/dispatch/topology.hpp"
 
 namespace tt {
 
@@ -170,25 +171,37 @@ void Device::get_associated_dispatch_virtual_cores(
                 my_dispatch_cores[demux_location.chip].insert(virtual_core);
                 log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), virtual_core.str());
             }
-                CoreCoord virtual_core;
-                tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
-                virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
-                // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
-                tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
-                if (virtual_core_dispatch_s != virtual_core) {
-                    my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
-                }
-                tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
-                virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
-                tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, cq_id);
-                virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
-                tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, cq_id);
-                virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
+        }
+        CoreCoord virtual_core;
+        tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, 0);
+        virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+        my_dispatch_cores[mux_location.chip].insert(virtual_core);
+        tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, 0);
+        virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+        my_dispatch_cores[demux_location.chip].insert(virtual_core);
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            tt_cxy_pair prefetch_location =
+                dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+            my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
+        }
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            tt_cxy_pair dispatch_location =
+                dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+            my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
+        }
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
+            tt_cxy_pair dispatch_location =
+                dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+            tt_cxy_pair dispatch_s_location =
+                dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
+            CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
+            if (virtual_core_dispatch_s != virtual_core) {
+                my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
+            }
         }
     }
 }
@@ -565,6 +578,10 @@ void Device::reset_cores() {
     for (auto &id_and_cores : dispatch_cores) {
         for (auto it = id_and_cores.second.begin(); it != id_and_cores.second.end(); it++) {
             const auto &virtual_core = *it;
+            // For new FD init, we've already initialized dispatch cores on other devices, so don't reset here.
+            if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init() && id_and_cores.first != this->id())
+                continue;
+
             // Only need to manually reset ethernet dispatch cores, tensix cores are all reset below.
             if (tt::Cluster::instance().is_ethernet_core(virtual_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
@@ -909,7 +926,6 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
 
                     uint32_t downstream_cb_base = mux_settings.cb_start_address + mux_settings.cb_size_bytes * mux_sem[mux_index];
                     uint32_t downstream_cb_pages = mux_settings.cb_pages;
-                    settings.upstream_cores.push_back(tt_cxy_pair(0, 0, 0));
                     settings.downstream_cores.push_back(mux_settings.worker_virtual_core);
                     settings.compile_args.resize(28);
                     auto& compile_args = settings.compile_args;
@@ -1025,7 +1041,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                 auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
                 bool is_tunnel_start = tunneler_settings.tunnel_stop == 0;
                 auto &compile_args = tunneler_settings.compile_args;
-                uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
+                        uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
                 uint32_t return_vc = fwd_vc_count;
                 compile_args.resize(48);
                 compile_args[0] = 0xDACADACA; // 0: endpoint_id_start_index
@@ -1143,7 +1159,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     compile_args[22] = 0; // 22: test_results_addr (disabled)
                     compile_args[23] = 0; // 23: test_results_size (disabled)
                     compile_args[24] = 0; // 24: timeout_cycles
-                    compile_args[25] = 0xF; // 25: output_depacketize_mask
+                    compile_args[25] = 0x3; // 25: output_depacketize_mask
                     arg_index = 26;
                     uint32_t demux_sem = demux_settings.producer_semaphore_id;
                     for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
@@ -1550,8 +1566,8 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     uint32_t dest_map_array[4] = {1, 1, 1, 1}; // needs to be based on tunnel stop.
                     dest_map_array[demux_d_settings.tunnel_stop-1] = 0;
                     uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
+                    // compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
+                    // compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
                     compile_args[22] = 0; // 22: test_results_addr (disabled)
                     compile_args[23] = 0; // 23: test_results_size (disabled)
                     compile_args[24] = 0; // 24: timeout_cycles
@@ -1685,7 +1701,7 @@ void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt
                     dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_virtual_core);
                     dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_virtual_core);
                     dispatch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_virtual_core);
-                    dispatch_d_settings.compile_args.resize(32);
+                    dispatch_d_settings.compile_args.resize(31);
                     auto& compile_args = dispatch_d_settings.compile_args;
                     compile_args[0] = dispatch_d_settings.cb_start_address;
                     compile_args[1] = dispatch_d_settings.cb_log_page_size;
@@ -2211,6 +2227,20 @@ bool Device::distributed_dispatcher() const {
     return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
 }
 
+void Device::compile_command_queue_programs_new() {
+    ZoneScoped;
+    auto command_queue_program_ptr = std::make_unique<Program>();
+    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
+    if (this->is_mmio_capable()) {
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+        this->setup_tunnel_for_remote_devices();
+    } else {
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
+    }
+}
+
 void Device::compile_command_queue_programs() {
     ZoneScoped;
     auto command_queue_program_ptr = std::make_unique<Program>();
@@ -2223,6 +2253,10 @@ void Device::compile_command_queue_programs() {
     constexpr NOC my_noc_index = NOC::NOC_0;
     constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
     constexpr NOC dispatch_s_noc_index = NOC::NOC_1;
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id());
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    tt_cxy_pair unused_core = tt_cxy_pair(this->id(), 0, 0);
+    CoreCoord unused_virtual_core = this->virtual_core_from_logical_core(unused_core, dispatch_core_type);
     static_assert(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
     static_assert(my_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
     for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
@@ -2237,8 +2271,6 @@ void Device::compile_command_queue_programs() {
         uint32_t cq_size = this->sysmem_manager().get_cq_size();
 
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
-            CoreType dispatch_core_type = dispatch_core_config.get_core_type();
             tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
             tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
             CoreCoord prefetch_virtual_core = this->virtual_core_from_logical_core(prefetch_core, dispatch_core_type);
@@ -2258,16 +2290,16 @@ void Device::compile_command_queue_programs() {
             constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
             constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
 
-            const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type);
             const uint32_t prefetch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type);
+            const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type);
             const uint32_t prefetch_dispatch_s_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_pages(), dispatch_core_type); // sync with dispatch_s
             const uint32_t dispatch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type);
 
             // dispatch_s location and flow control vars initialized as invalid. Will be set if dispatch_s is enabled for the given configuration.
-            tt_cxy_pair dispatch_s_core = tt_cxy_pair(0xff, 0xff, 0xff);
-            CoreCoord dispatch_s_virtual_core = {0xff, 0xff};
+            tt_cxy_pair dispatch_s_core = unused_core;
+            CoreCoord dispatch_s_virtual_core = unused_virtual_core;
             uint32_t dispatch_s_buffer_base = 0xff;
-            uint32_t dispatch_s_sem = 0xff; // used by dispatch_s to sync with prefetch
+            uint32_t dispatch_s_sem = 0; // used by dispatch_s to sync with prefetch
             uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);; // used by dispatch_d to signal that dispatch_s can send go signal
             if (this->dispatch_s_enabled()) {
                 // Skip allocating dispatch_s for multi-CQ configurations with ethernet dispatch
@@ -2328,7 +2360,7 @@ void Device::compile_command_queue_programs() {
                 prefetch_core,
                 prefetch_virtual_core,
                 dispatch_core_type,
-                CoreCoord{0, 0},
+                unused_virtual_core,
                 dispatch_virtual_core,
                 dispatch_s_virtual_core,
                 std::map<string, string> {},
@@ -2388,7 +2420,7 @@ void Device::compile_command_queue_programs() {
                 dispatch_virtual_core,
                 dispatch_core_type,
                 prefetch_virtual_core,
-                CoreCoord{0, 0},
+                unused_virtual_core,
                 dispatch_s_virtual_core,
                 std::map<string, string> {},
                 my_noc_index,
@@ -2419,7 +2451,7 @@ void Device::compile_command_queue_programs() {
                     dispatch_core_type,
                     prefetch_virtual_core,
                     dispatch_virtual_core,
-                    CoreCoord{0, 0},
+                    unused_virtual_core,
                     std::map<string, string> {},
                     dispatch_s_noc_index,
                     dispatch_s_noc_index,
@@ -2484,9 +2516,9 @@ void Device::compile_command_queue_programs() {
                     prefetch_core,
                     prefetch_settings.worker_virtual_core,
                     prefetch_settings.dispatch_core_type,
-                    prefetch_settings.upstream_cores[0],
+                    unused_virtual_core,
                     prefetch_settings.downstream_cores[0],
-                    CoreCoord{0, 0},
+                    unused_virtual_core,
                     std::map<string, string> {},
                     my_noc_index,
                     my_noc_index,
@@ -2534,7 +2566,7 @@ void Device::compile_command_queue_programs() {
                 CoreCoord{0, 0},
                 CoreCoord{0, 0},
                 std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
+                my_noc_index,  // Only one Remote Tunneler - use NOC for CQ 0
                 my_noc_index,
                 my_noc_index,
                 true
@@ -2557,7 +2589,7 @@ void Device::compile_command_queue_programs() {
                     CoreCoord{0, 0},
                     CoreCoord{0, 0},
                     std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                    my_noc_index, // Only one Demux - use NOC for CQ 0
+                    my_noc_index,// Only one Demux - use NOC for CQ 0
                     my_noc_index,
                     my_noc_index
                 );
@@ -2577,8 +2609,8 @@ void Device::compile_command_queue_programs() {
                     dispatch_settings.worker_virtual_core,
                     dispatch_settings.dispatch_core_type,
                     dispatch_settings.upstream_cores[0],
-                    CoreCoord{0xffffffff, 0xffffffff},
-                    CoreCoord{0, 0},
+                    unused_virtual_core,
+                    unused_virtual_core,
                     std::map<string, string> {},
                     my_noc_index,
                     dispatch_upstream_noc_index,
@@ -2667,7 +2699,7 @@ void Device::compile_command_queue_programs() {
                 prefetch_d_settings.dispatch_core_type,
                 prefetch_d_settings.upstream_cores[0],
                 prefetch_d_settings.downstream_cores[0],
-                prefetch_d_settings.downstream_cores[1], // need to update
+                (this->dispatch_s_enabled())? prefetch_d_settings.downstream_cores[1] : unused_virtual_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 my_noc_index,
@@ -2695,7 +2727,7 @@ void Device::compile_command_queue_programs() {
                 dispatch_d_settings.dispatch_core_type,
                 dispatch_d_settings.upstream_cores[0],
                 dispatch_d_settings.downstream_cores[0],
-                dispatch_d_settings.downstream_cores[1], // need to update
+                (this->dispatch_s_enabled())? dispatch_d_settings.downstream_cores[1] : unused_virtual_core, // need to update
                 std::map<string, string> {},
                 my_noc_index,
                 dispatch_upstream_noc_index,
@@ -2718,14 +2750,13 @@ void Device::compile_command_queue_programs() {
                     dispatch_s_settings.dispatch_core_type,
                     dispatch_s_settings.upstream_cores[0],
                     dispatch_s_settings.downstream_cores[0],
-                    CoreCoord{0, 0},
+                    unused_virtual_core,
                     std::map<string, string> {},
                     dispatch_s_noc_index,
                     dispatch_s_noc_index,
                     dispatch_s_noc_index,
                     false,
-                    true
-                );
+                    true);
                 cq_id = (cq_id + 1) % num_hw_cqs;
             }
         }
@@ -2761,6 +2792,60 @@ void Device::compile_command_queue_programs() {
     }
 }
 
+void Device::configure_command_queue_programs_new() {
+    chip_id_t device_id = this->id();
+    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+    Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
+
+    std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
+    std::vector<uint32_t> pointers;
+    uint32_t cq_size = this->sysmem_manager().get_cq_size();
+    TT_ASSERT(this->command_queue_programs.size() == 1);
+
+    Program& command_queue_program = *this->command_queue_programs[0];
+    uint8_t num_hw_cqs = this->num_hw_cqs();
+
+    // Reset host-side command queue pointers for all channels controlled by this mmio device
+    if (this->is_mmio_capable()) {
+        for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
+            uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            pointers.resize(cq_start/sizeof(uint32_t));
+            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                // Reset the host manager's pointer for this command queue
+                this->sysmem_manager_->reset(cq_id);
+
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+
+                log_warning(
+                    "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
+                    get_absolute_cq_offset(channel, cq_id, cq_size),
+                    pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
+                    pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
+                    pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
+                    pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
+                tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
+            }
+        }
+    }
+
+    // Write device-side cq pointers
+    configure_dispatch_cores(this);
+
+    // Run the cq program
+    command_queue_program.finalize(this);
+    detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
+    tt::Cluster::instance().l1_barrier(this->id());
+}
+
 // Writes issue and completion queue pointers to device and in sysmem and loads fast dispatch program onto dispatch cores
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
@@ -2777,6 +2862,8 @@ void Device::configure_command_queue_programs() {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1 ? 2 : 1;
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
+            program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
 
@@ -2800,6 +2887,13 @@ void Device::configure_command_queue_programs() {
         pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
         pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
+        log_warning(
+            "Sysmem: Addr={:#08x} - {:#08x} {:#08x} {:#08x} {:#08x}",
+            get_absolute_cq_offset(channel, cq_id, cq_size),
+            pointers[host_issue_q_rd_ptr / sizeof(uint32_t)],
+            pointers[host_issue_q_wr_ptr / sizeof(uint32_t)],
+            pointers[host_completion_q_wr_ptr / sizeof(uint32_t)],
+            pointers[host_completion_q_rd_ptr / sizeof(uint32_t)]);
         tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
     }
 
@@ -2831,11 +2925,13 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_q0_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
         uint32_t completion_q1_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
         std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {get_absolute_cq_offset(channel, cq_id, cq_size) + cq_start};
+        log_warning("Configure Prefetch H (device {} core {})", mmio_device->id(), prefetch_location.str());
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_base, prefetch_q, dispatch_core_type);
         if (not this->is_mmio_capable()) {
             // Initialize event counters to 0 on dispatch_d on r-chip
+            log_warning("Configure Dispatch D Counters (device {} core {})", this->id(), remote_dispatcher_location.str());
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
             detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
         }
@@ -2844,6 +2940,7 @@ void Device::configure_command_queue_programs() {
         uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
         uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
         std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
+        log_warning("Configure CQ Writer (device {} core {})", mmio_device->id(), completion_q_writer_location.str());
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
         detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
@@ -2851,6 +2948,15 @@ void Device::configure_command_queue_programs() {
 
         // Initialize address where workers signal completion to dispatch core(s).
         // TODO: Should only initialize dispatch_s_sync_sem if this->dispatch_s_enabled()?
+        if (this->distributed_dispatcher()) {
+            tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
+            log_warning("Configure Dispatch S (device {} core {})", this->id(), dispatch_s_location.str());
+        }
+        log_warning("Configure Dispatch (device {} core {})", mmio_device->id(), dispatch_location.str());
+        if (device_id != mmio_device_id) {
+            tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+            log_warning("Configure Dispatch (device {} core {})", this->id(), dispatch_d_location.str());
+        }
         for (uint32_t i = 0; i < dispatch_message_entries; i++) {
             uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
             uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
@@ -2874,7 +2980,7 @@ void Device::configure_command_queue_programs() {
     command_queue_program.finalize(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-    if (device_id != mmio_device_id) {
+    if (device_id != mmio_device_id && !llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
             //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
             Program& mmio_command_queue_program = *this->command_queue_programs[1];
@@ -2912,19 +3018,37 @@ void Device::init_command_queue_device() {
 
     if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
-        this->compile_command_queue_programs();
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
+            log_warning("Running new FD init");
+            this->compile_command_queue_programs_new();
+        } else {
+            log_warning("Running old FD init");
+            this->compile_command_queue_programs();
+        }
         detail::DisablePersistentKernelCache();
     } else {
-        this->compile_command_queue_programs();
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
+            log_warning("Running new FD init");
+            this->compile_command_queue_programs_new();
+        } else {
+            log_warning("Running old FD init");
+            this->compile_command_queue_programs();
+        }
     }
 
     if (this->is_mmio_capable()) {
         TT_ASSERT(this->command_queue_programs.size() == 1);
     } else {
         uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1 ? 2 : 1;
+        if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init())
+            program_size = 1;
         TT_ASSERT(this->command_queue_programs.size() == program_size);
     }
-    this->configure_command_queue_programs();
+    if (llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
+        this->configure_command_queue_programs_new();
+    } else {
+        this->configure_command_queue_programs();
+    }
     Program& command_queue_program = *this->command_queue_programs[0];
 
     // TODO: should get a const ref
@@ -2940,7 +3064,7 @@ void Device::init_command_queue_device() {
         }
     }
 
-    if (!this->is_mmio_capable()) {
+    if (!this->is_mmio_capable() && !llrt::RunTimeOptions::get_instance().get_use_new_fd_init()) {
         if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
             Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
