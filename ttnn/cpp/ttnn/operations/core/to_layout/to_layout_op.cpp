@@ -94,14 +94,14 @@ Tensor to_layout_impl(
 
     auto tensor = tensor_arg;
 
-    std::vector<uint32_t> output_shape;
+    SmallVector<uint32_t> output_shape;
     if (layout == ttnn::TILE_LAYOUT and intended_shape.rank() < 2) {
         output_shape.push_back(1);
         tensor = ttnn::reshape(
             tensor,
             ttnn::Shape(
-                std::vector<std::uint32_t>{1, intended_shape[0]},
-                std::vector<std::uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
+                SmallVector<uint32_t>{1, intended_shape[0]},
+                SmallVector<uint32_t>{1, tensor_arg.get_shape().with_tile_padding()[0]}));
     }
     for (auto index = 0; index < intended_shape.rank(); ++index) {
         output_shape.push_back(intended_shape[index]);
@@ -144,7 +144,7 @@ Tensor to_layout_impl(
                 output_memory_config =
                     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
-            std::vector<uint32_t> output_tensor_end;
+            SmallVector<uint32_t> output_tensor_end;
             for (auto index = 0; index < tensor.get_shape().rank(); ++index) {
                 output_tensor_end.push_back(tensor.get_shape()[index] - 1);
             }
@@ -154,7 +154,7 @@ Tensor to_layout_impl(
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
-            std::vector<uint32_t> padded_output_shape;
+            SmallVector<uint32_t> padded_output_shape;
 
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
                 if (index >= tensor.get_shape().rank() - 2) {
@@ -166,7 +166,7 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                std::vector<std::pair<uint32_t, uint32_t>> padding = {
+                SmallVector<std::pair<uint32_t, uint32_t>> padding = {
                     {0, 0},
                     {0, 0},
                     {0, padded_output_shape[2] - output_shape[2]},
@@ -192,8 +192,8 @@ Tensor to_layout_impl(
             tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
         } else if (layout == ttnn::TILE_LAYOUT) {
-            std::vector<uint32_t> padded_output_shape;
-            std::vector<uint32_t> padded_input_start;
+            SmallVector<uint32_t> padded_output_shape;
+            SmallVector<uint32_t> padded_input_start;
             for (int index = 0; index < tensor.get_shape().rank(); ++index) {
                 if (index >= tensor.get_shape().rank() - 2) {
                     padded_output_shape.push_back(ttnn::pad_to_multiple_of_tile_size(tensor.get_shape()[index]));
