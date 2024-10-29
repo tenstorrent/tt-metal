@@ -75,6 +75,13 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define NOC_MULTICAST_WRITE_VC 4
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5 // Only to be used by the dispatch cores
 
+#define EXCLUDE_ENABLED 1
+#define EXCLUDE_ENABLED_OFFSET 22
+#define EXCLUDE_DIRECTION_Y_OFFSET 21
+#define EXCLUDE_DIRECTION_X_OFFSET 20
+#define EXCLUDE_START_Y_OFFSET 14
+#define EXCLUDE_START_X_OFFSET 8
+
 FORCE_INLINE
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
 
@@ -624,11 +631,16 @@ std::uint32_t  get_noc_exclude_addr(
     std::uint32_t exclude_start_x,
     std::uint32_t exclude_start_y,
     std::uint32_t exclude_dir_x,
-    std::uint32_t exclude_dir_y) {
+    std::uint32_t exclude_dir_y,
+    uint8_t noc = noc_index) {
         /*
             Get an encoding which contians the definition of the exclusion area
         */
-        return (1 << 22 | exclude_dir_y << 21 | exclude_dir_x << 20 | exclude_start_y << 14 | exclude_start_x << 8);
+        return (EXCLUDE_ENABLED << EXCLUDE_ENABLED_OFFSET |
+            exclude_dir_y << EXCLUDE_DIRECTION_Y_OFFSET |
+            exclude_dir_x << EXCLUDE_DIRECTION_X_OFFSET |
+            DYNAMIC_NOC_Y(noc, exclude_start_y) << EXCLUDE_START_Y_OFFSET  |
+            DYNAMIC_NOC_X(noc, exclude_start_x) << EXCLUDE_START_X_OFFSET);
 }
 
 
@@ -1525,6 +1537,8 @@ void noc_async_write_multicast_loopback_src(
  *
  * Return value: None
  *
+ * NOTE: only supported on Blackhole
+ *
  * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
@@ -1533,6 +1547,7 @@ void noc_async_write_multicast_loopback_src(
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                      | True     |
  * | exclude_region         | Encoding of the excluded regin (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  */
+#ifdef ARCH_BLACKHOLE
 inline
 void noc_async_write_multicast_exclude_region(
     std::uint32_t src_local_l1_addr,
@@ -1559,6 +1574,7 @@ void noc_async_write_multicast_exclude_region(
         exclude_region);
     WAYPOINT("NMED");
 }
+#endif
 
 /**
  * This blocking call waits for all the outstanding enqueued *noc_async_read*
@@ -1590,7 +1606,6 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NWBW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc))
         ;
-
     WAYPOINT("NWBD");
 }
 
