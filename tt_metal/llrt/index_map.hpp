@@ -17,48 +17,51 @@ namespace tt {
 template <typename T>
 class IndexMap {
 public:
-    class Iterator {
+    class Iterator final {
     public:
-        Iterator(const std::vector<std::optional<T>>& data, size_t idx): data_(data), idx_(idx) {
-            for (;idx_ < data_.size() && !data_[idx_].has_value(); idx_++);
+        Iterator(const std::vector<std::optional<T>>* data, size_t idx) noexcept: data_(data), idx_(idx) {
+            for (;idx_ < data_->size() && !(*data_)[idx_].has_value(); idx_++) {}
         }
-        Iterator(const Iterator&) = default;
-        Iterator& operator=(const Iterator&) = default;
-        bool operator==(const Iterator& other) const {
+        ~Iterator() = default;
+        Iterator(const Iterator&) noexcept = default;
+        Iterator& operator=(const Iterator&) noexcept = default;
+        Iterator(Iterator&&) noexcept = default;
+        Iterator& operator=(Iterator&&) noexcept = default;
+        [[nodiscard]] bool operator==(const Iterator& other) const noexcept {
             return idx_ == other.idx_;
         }
-        bool operator!=(const Iterator& other) const {
+        [[nodiscard]] bool operator!=(const Iterator& other) const noexcept {
             return idx_ != other.idx_;
         }
 
-        Iterator& operator++() {
+        Iterator& operator++() noexcept {
             idx_++;
-            for (;idx_ < data_.size() && !data_[idx_].has_value(); idx_++);
+            for (;idx_ < data_->size() && !(*data_)[idx_].has_value(); idx_++) {}
             return *this;
         }
 
-        std::pair<size_t, const T&> operator*() const {
-            return {idx_, data_[idx_].value()};
+        [[nodiscard]] std::pair<size_t, const T&> operator*() const noexcept {
+            return {idx_, (*data_)[idx_].value()};
         }
     private:
-        const std::vector<std::optional<T>>& data_;
+        const std::vector<std::optional<T>>* data_;
         size_t idx_ = 0;
     };
 
     IndexMap() = default;
 
-    void clear() {
+    void clear() noexcept {
         data_.clear();
         size_ = 0;
     }
 
-    T& at(size_t idx) {
+    [[nodiscard]] T& at(size_t idx) {
         return data_.at(idx).value();
     }
-    const T& at(size_t idx) const {
+    [[nodiscard]] const T& at(size_t idx) const {
         return data_.at(idx).value();
     }
-    bool contains(size_t idx) const {
+    [[nodiscard]] bool contains(size_t idx) const noexcept {
         if (idx >= data_.size()) {
             return false;
         }
@@ -86,28 +89,28 @@ public:
         return false;
     }
 
-    Iterator find(size_t idx) const {
+    [[nodiscard]] Iterator find(size_t idx) const noexcept {
         if (idx >= data_.size()) {
             return end();
         }
         if (!data_[idx].has_value()) {
             return end();
         }
-        return Iterator(data_, idx);
+        return Iterator(&data_, idx);
     }
 
-    size_t size() const {
+    [[nodiscard]] size_t size() const noexcept {
         return size_;
     }
-    bool empty() const {
+    [[nodiscard]] bool empty() const noexcept {
         return size_ == 0;
     }
 
-    Iterator begin() const {
-        return Iterator(data_, 0);
+    [[nodiscard]] Iterator begin() const noexcept {
+        return Iterator(&data_, 0);
     }
-    Iterator end() const {
-        return Iterator(data_, data_.size());
+    [[nodiscard]] Iterator end() const noexcept {
+        return Iterator(&data_, data_.size());
     }
 
 private:
