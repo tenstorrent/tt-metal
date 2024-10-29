@@ -1,5 +1,4 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
 
 import pandas as pd
@@ -44,14 +43,11 @@ def perf_report(original_file_path):
 
     def clean_attributes(attributes):
         attributes_list = attributes.split(";")
-
         filtered_attributes = []
-
         for attr in attributes_list:
             attr = attr.strip()
             if not any(field in attr for field in fields_to_remove):
                 filtered_attributes.append(attr)
-
         return "; ".join(filtered_attributes).strip("; ")
 
     filtered_df["ATTRIBUTES"] = filtered_df["ATTRIBUTES"].apply(clean_attributes)
@@ -123,6 +119,9 @@ def perf_report(original_file_path):
 
     filtered_df = pd.concat([filtered_df, avg_row.to_frame().T], ignore_index=True)
 
+    avg_df = avg_row.to_frame().T
+    avg_df.columns = filtered_df.columns
+
     base, ext = os.path.splitext(original_file_path)
     modified_file_path = f"{base}_modified{ext}"
 
@@ -130,4 +129,4 @@ def perf_report(original_file_path):
 
     print(f"Filtered CSV created successfully at: {modified_file_path}")
 
-    print(tabulate(filtered_df, headers="keys", tablefmt="pretty"))
+    return avg_df
