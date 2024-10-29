@@ -945,6 +945,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 conv_config.input_channels_alignment == 16,
                 compute_kernel_config,
                 conv_config.enable_act_double_buffer,
+                conv_config.enable_weights_double_buffer,
                 conv_config.enable_split_reader,
                 conv_config.enable_subblock_padding);
             if (conv_config.deallocate_activation) {
@@ -990,6 +991,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.input_channels_alignment == 16,
             compute_kernel_config,
             conv_config.enable_act_double_buffer,
+            conv_config.enable_weights_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding,
             use_non_tile_height);
