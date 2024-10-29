@@ -729,7 +729,7 @@ def run_llama3_demo(
 def test_llama_demo(
     mesh_device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches, single_layer
 ):
-    if not (is_ci_env and instruct_weights == True):
+    if is_ci_env and (instruct_weights == False or "long" in input_prompts or single_layer == True):
         pytest.skip("CI demo test only runs instruct weights to reduce CI pipeline load (both are supported)")
 
     mesh_device.enable_async(True)
