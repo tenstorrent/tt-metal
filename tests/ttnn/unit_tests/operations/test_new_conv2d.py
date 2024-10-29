@@ -385,9 +385,6 @@ def test_conv_features(
     fp32_accum,
     packer_l1_acc,
 ):
-    if shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and filter > 3:
-        pytest.skip("Block sharding only supports filter size <= 3")
-
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 

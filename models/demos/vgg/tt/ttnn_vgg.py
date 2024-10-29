@@ -104,6 +104,7 @@ def ttnn_vgg16(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=True,
+                enable_weights_double_buffer=True,
             )
 
             tt_weight = parameters.features[conv_feature_ids[iter_conv_id]].weight
@@ -224,6 +225,7 @@ def ttnn_vgg11(
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
+                enable_weights_double_buffer=True,
             )
 
             tt_weight = parameters.features[conv_feature_ids_2[iter_conv_id]].weight
