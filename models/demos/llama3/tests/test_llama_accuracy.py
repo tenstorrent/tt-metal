@@ -16,12 +16,13 @@ from models.demos.llama3.tt.llama_common import (
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 
 
 @torch.no_grad()
 @pytest.mark.timeout(900)
-@pytest.mark.parametrize("prefill_len", [0])
-@pytest.mark.parametrize("decode_len", [1000])
+@pytest.mark.parametrize("prefill_len", [512])
+@pytest.mark.parametrize("decode_len", [128])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -33,8 +34,10 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import T
 )
 def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
+    min_top1_acc = 75
+    min_top5_acc = 96
 
-    mesh_device.enable_async(True)
+    mesh_device.enable_async(False)
 
     # Load model args and tokenizer
     model_args = TtModelArgs(mesh_device)
@@ -46,7 +49,12 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
     logger.info("Finished loading weights...")
 
     # Load the reference data
-    reference_data_file = "ref-tokens-1b-1000.pt"
+    model_size = model_args.model_name.split("-")[1].lower()  # e.g., "1b", "3b", "8b", "70b"
+    reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
+    logger.info(f"Loading reference data from {reference_data_file}")
+    assert os.path.exists(
+        reference_data_file
+    ), f"Reference data file {reference_data_file} does not exist, generate it with generate_reference_outputs.sh"
     reference_data = torch.load(reference_data_file)
     reference_tokens = reference_data["reference_tokens"]
     top5_tokens = reference_data["top5_tokens"]
@@ -69,13 +77,28 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
 
     # Skip prefill if prefill_len is 0
     if prefill_len > 0:
-        # For prefill, process prefill_len tokens
-        batch_size = 1
-        prefill_ids = input_ids[:, :prefill_len]  # Shape [1, prefill_len]
-        pt_prefill_input = embd(prefill_ids).view(batch_size, prefill_len, -1)
+        logger.info(f"Starting prefill...")
+        batch_id = 0
+        input_prompts = [tokenizer.decode(reference_tokens[0, :prefill_len].tolist())]
+        (
+            input_tokens_prefill_pt,
+            encoded_prompts,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_prompts,
+            tokenizer,
+            model_args,
+            instruct=False,
+            max_generated_tokens=decode_len,
+            max_prefill_len=prefill_len,
+        )
+        pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(1)]
 
         # Pre-compute the rotational embedding matrix and send to device
-        rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_len)
+        rot_mats = get_prefill_rot_mat(
+            model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=prefill_lens[0]
+        )
         transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
         transformation_mats = ttnn.from_torch(
             transformation_mat_torch,
@@ -86,14 +109,22 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Run prefill
-        decode_input = model_args.prepare_inputs_ttnn_prefill(
-            pt_prefill_input,
+        prefill_input = model_args.prepare_inputs_ttnn_prefill(
+            pt_prefill_input[batch_id],
         )
-        tt_out = tt_model(decode_input, None, rot_mats, transformation_mats, user_id=0, mode="prefill")
-        ttnn.deallocate(tt_out)
+
+        tt_out = tt_model(
+            prefill_input,
+            None,  # Current position
+            rot_mats,
+            transformation_mats,
+            user_id=batch_id,
+            mode="prefill",
+            get_last_token=((decoding_pos[batch_id] - 1) // 32) * 32,
+        )
 
     # Start decoding
+    logger.info(f"Starting decode...")
     generation_start_pos = prefill_len
     generation_length = decode_len
     current_pos = ttnn.from_torch(
@@ -111,8 +142,8 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
     )
 
     # Print table header
-    print(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
-    print("-" * 128)
+    logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
+    logger.info("-" * 128)
 
     top1_correct = []
     top5_correct = []
@@ -204,7 +235,7 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
         ref_top5_str = " ".join(f"{sanitize(t):<14}" for t in ref_top5_text)
 
         # Print table row
-        print(f"{progress_str:<15}{correct:<8}{true_text:<15}{tt_argmax_text:<15}{ref_top5_str}")
+        logger.info(f"{progress_str:<15}{correct:<8}{true_text:<15}{tt_argmax_text:<15}{ref_top5_str}")
 
     # Compute accuracies over every 100 tokens
     num_tokens = len(top1_correct)
@@ -215,20 +246,19 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
         top1_acc = 100 * sum(top1_correct[start:end]) / (end - start)
         top5_acc = 100 * sum(top5_correct[start:end]) / (end - start)
         max_width = len(str(decode_len))
-        print(
+        logger.info(
             f"Tokens {start:{max_width}d}-{end:{max_width}d}: Top-1 accuracy: {top1_acc:3.0f} %, Top-5 accuracy: {top5_acc:3.0f} %"
         )
 
     # Report total accuracies
     total_top1_acc = 100 * sum(top1_correct) / num_tokens
     total_top5_acc = 100 * sum(top5_correct) / num_tokens
-    print(
+    logger.info(
         f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.0f} %, Top-5 accuracy: {total_top5_acc:3.0f} %"
     )
 
-    # Print error summary
-    print("\nError Summary (only showing errors where reference top-1 matches true token):")
-    print("-" * 120)
+    logger.info("\nError Summary (only showing errors where reference top-1 matches true token):")
+    logger.info("-" * 120)
     for error in errors:
         true_token = input_ids[0, error["position"] + 1].item()
         if error["expected_ids"][0] == true_token:
@@ -237,8 +267,8 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
             incorrect = sanitize(error["incorrect"])
             expected = " | ".join(sanitize(t) for t in error["expected"])
             true_word = sanitize(tokenizer.decode([true_token]))
-            print(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
+            logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
-    # Optionally, you can add assertions to check if the accuracies meet expectations
-    assert total_top1_acc > 0.2, f"Top-1 accuracy {total_top1_acc:.4f} is too low"
-    assert total_top5_acc > 0.5, f"Top-5 accuracy {total_top5_acc:.4f} is too low"
+    logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+    assert total_top1_acc > min_top1_acc, f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >{min_top1_acc}%)"
+    assert total_top5_acc > min_top5_acc, f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >{min_top5_acc}%)"

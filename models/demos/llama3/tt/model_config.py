@@ -339,8 +339,9 @@ class TtModelArgs:
             )
 
             assert self.n_kv_heads % self.num_devices == 0, "n_kv_heads must be divisible by num_devices"
+            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.num_devices)
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (((self.n_kv_heads // self.num_devices) * seq_len // 64), self.head_dim),
+                (((self.n_kv_heads // self.num_devices) * seq_len // (8 * 8)), self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,

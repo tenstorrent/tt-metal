@@ -35,6 +35,7 @@ class TtLlamaAttention(LightweightModule):
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = configuration.paged_attention_config
+        self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
 
         self.n_local_heads = self.n_heads // configuration.num_devices
         self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
@@ -427,7 +428,7 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(k_heads_1KSD)
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -436,7 +437,7 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(v_heads_1VSD)
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
         else:
             v_fill = v_heads_1VSD_8b
@@ -456,7 +457,7 @@ class TtLlamaAttention(LightweightModule):
                 user_id,
             )
 
-        if seq_len > 256:
+        if seq_len >= self.min_kv_prefill_shard_seqlen:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 

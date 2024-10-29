@@ -40,7 +40,7 @@ def test_llama_rms_norm_inference(mesh_device, use_program_cache, reset_seeds, e
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
-    # Create the inner RMSNorm
+    # Create the inner RMSNormxw
     tt_inner_norm = TtRMSNorm(
         device=mesh_device,
         dim=model_args.dim,
