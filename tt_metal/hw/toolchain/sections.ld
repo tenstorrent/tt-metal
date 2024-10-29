@@ -39,9 +39,19 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+
+PHDRS {
+  attributes 0x70000003;
+  text PT_LOAD;
+  data PT_LOAD;
+#if defined(TYPE_FIRMWARE)
+  stack PT_GNU_STACK;
+#endif
+}
+
 SECTIONS
 {
-  .text TEXT_START :
+  .text TEXT_START : ALIGN(4)
   {
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
@@ -55,13 +65,13 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_CODE
+  } > REGION_CODE :text
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
     KEEP (*(.init .fini))
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
-  } > REGION_CODE
+  } > REGION_CODE :text
 
   . = ALIGN(. + MEM_PAD, MEM_ALIGN);
 
@@ -75,7 +85,7 @@ SECTIONS
 #endif
 
   PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .data DATA_START :
+  .data DATA_START : ALIGN(4)
   {
      . = .; /* Force section emission.  */
      __ldm_data_start = .;
@@ -108,14 +118,14 @@ SECTIONS
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     __ldm_data_end = .;
-  } > REGION_DATA
+  } > REGION_DATA :data
   .ctors.dtors :
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
     ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
-  } > REGION_DATA
-  .bss ALIGN(4):
+  } > REGION_DATA :data
+  .bss : ALIGN(4)
   {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
@@ -127,7 +137,7 @@ SECTIONS
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } > REGION_DATA
+  } > REGION_DATA :data
 
 #ifdef TYPE_FIRMWARE
   . = ALIGN(MEM_ALIGN);
@@ -137,11 +147,12 @@ SECTIONS
 #ifdef TYPE_FIRMWARE
   .stack :
   {
-    __stack_bottom = .;
    . += FIRMWARE_STACK_SIZE;
     __stack_top = .;
-  } > REGION_STACK
+  } > REGION_STACK :stack
 #endif
+
+  .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }
