@@ -9,6 +9,11 @@
 
 namespace tt {
 
+/**
+ * IndexMap is a container, which mimics std::map with an assumption that all keys are indexes.
+ * Provides vector-like performance, consumes the size proportional to the maximum used index.
+ * Implemented as an auto-resizing vector of optionals.
+ */
 template <typename T>
 class IndexMap {
 public:
