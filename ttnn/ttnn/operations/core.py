@@ -184,22 +184,21 @@ def from_torch(
     """
 
     shape_with_padding = None
-    # if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-    #     if len(tensor.shape) < 2:
-    #         raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
-    #     if layout != ttnn.TILE_LAYOUT:
-    #         raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-    #     # Tilize tensor
-    #     tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile)
-    #     shape_with_padding = tensor.shape
-    #     tensor = tensor.reshape(tensor.shape.with_tile_padding())
-    #     tensor = ttnn.to_torch(tensor)
+    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
+        if len(tensor.shape) < 2:
+            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires at least 2 dimensions!")
+        if layout != ttnn.TILE_LAYOUT:
+            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
+        # Tilize tensor
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile)
+        shape_with_padding = tensor.shape
+        tensor = tensor.reshape(tensor.shape.with_tile_padding())
+        tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
         if device is None:
             raise RuntimeError("device must be specified when memory_config is specified")
 
-    print("create tensor")
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
         tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
@@ -209,8 +208,7 @@ def from_torch(
         else:
             tensor = ttnn.Tensor(tensor, dtype)
 
-    print("change alyout")
-    if layout is not None:
+    if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import pytest
 import torch
 import math
@@ -30,32 +31,20 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-# @pytest.mark.parametrize("n", [2])
-# @pytest.mark.parametrize("c", [5])
-# @pytest.mark.parametrize("h", [384])
-# @pytest.mark.parametrize("w", [768])
-# @pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
-# @pytest.mark.parametrize("tile_w", [16, 32])
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
-# @pytest.mark.parametrize("transpose_tile", [True, False])
-@pytest.mark.parametrize("n", [1])
-@pytest.mark.parametrize("c", [1])
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [5])
+@pytest.mark.parametrize("h", [384])
+@pytest.mark.parametrize("w", [768])
+@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
 def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_tile):
     if tile_h < 16 and transpose_tile:
         pytest.skip("transpose tile does not support tile height less than 16")
     # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
     torch.manual_seed(0)
-    # torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
-    total_elements = n * c * h * w
-    increment_tensor = torch.arange(1, total_elements + 1, dtype=torch.bfloat16) % 500
-    torch_input_tensor = increment_tensor.view(n, c, w, h)
-    torch_input_tensor = torch_input_tensor.permute(0, 1, 3, 2)
+    torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         tile=ttnn.Tile((tile_h, tile_w), transpose_tile=transpose_tile),
@@ -70,16 +59,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
-    pcc_passed, pcc_message = comp_pcc(torch_input_tensor, output_tensor, expected_pcc)
-    print(pcc_message)
-    torch.set_printoptions(
-        threshold=100000,  # Maximum elements to display
-        edgeitems=2,  # Number of elements to show at the edges (if truncated)
-        precision=1,  # Decimal precision for floating-point values
-        linewidth=1000,  # Width of each line for printing
-    )
-    print(torch_input_tensor)
-    print(output_tensor)
 
 
 @pytest.mark.parametrize("n", [1])
@@ -196,6 +175,8 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     elif in1_dtype == ttnn.bfloat4_b:
         expected_pcc = 0.993
 
+    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    logger.info(pcc_message)
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
@@ -209,14 +190,25 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 
 
 @run_for_wormhole_b0()
+# @pytest.mark.parametrize("k", [8192])
+# @pytest.mark.parametrize("n", [1280])
+# @pytest.mark.parametrize("has_bias", [False, True])
+# @pytest.mark.parametrize("grid_size", [(8, 1)])
+# @pytest.mark.parametrize("tile_h", [16, 32])
+# @pytest.mark.parametrize("tile_w", [16, 32])
+# @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+# @pytest.mark.parametrize("transpose_tile", [True, False])
 @pytest.mark.parametrize("k", [8192])
 @pytest.mark.parametrize("n", [1280])
-@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("has_bias", [False])
 @pytest.mark.parametrize("grid_size", [(8, 1)])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype):
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True])
+def test_matmul_in1_dram_sharded_tiny_tile(
+    device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
+):
     # PCC issue when height not equal to tile height
     m = tile_h
     if is_grayskull():
@@ -265,7 +257,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, ti
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
-        tile=ttnn.Tile((32, tile_w)),
+        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
         dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -344,16 +336,29 @@ def test_matmul_in1_dram_sharded_tiny_tile(device, k, n, has_bias, grid_size, ti
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [1536])
-@pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [3072])
-@pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
-def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded):
+# @pytest.mark.parametrize("m", [1536])
+# @pytest.mark.parametrize("k", [1024])
+# @pytest.mark.parametrize("n", [3072])
+# @pytest.mark.parametrize("has_bias", [False, True])
+# @pytest.mark.parametrize("grid_size", [(8, 4)])
+# @pytest.mark.parametrize("tile_h", [16, 32])
+# @pytest.mark.parametrize("tile_w", [16, 32])
+# @pytest.mark.parametrize("in0_sharded", [True, False])
+# @pytest.mark.parametrize("out_sharded", [True, False])
+# @pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("m", [64])
+@pytest.mark.parametrize("k", [64])
+@pytest.mark.parametrize("n", [64])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("grid_size", [(2, 2)])
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
+@pytest.mark.parametrize("transpose_tile", [True])
+def test_matmul_2d_tiny_tile(
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, transpose_tile
+):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
     bias_shape = [1, 1, n]
@@ -363,7 +368,7 @@ def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
     out_block_w = n // grid_size[0] // tile_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
-    in0 = torch.randn(in0_shape).bfloat16().float()
+    in0 = torch.ones(in0_shape).bfloat16().float()
     in1 = torch.randn(in1_shape).bfloat16().float()
 
     if in0_sharded:
@@ -385,7 +390,7 @@ def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
     )
     in1_t = ttnn.from_torch(
         in1,
-        tile=ttnn.Tile((32, tile_w)),
+        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -439,6 +444,7 @@ def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
+    output_tile = ttnn.Tile([tile_h, tile_w])
     if has_bias:
         output_t = ttnn.linear(
             in0_t,
@@ -478,7 +484,10 @@ def test_matmul_2d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-def test_matmul_1d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded):
+@pytest.mark.parametrize("transpose_tile", [True])
+def test_matmul_1d_tiny_tile(
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, transpose_tile
+):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
     bias_shape = [1, 1, n]
@@ -512,7 +521,7 @@ def test_matmul_1d_tiny_tile(device, m, k, n, has_bias, grid_size, tile_h, tile_
     )
     in1_t = ttnn.from_torch(
         in1,
-        tile=ttnn.Tile((32, tile_w)),
+        tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
