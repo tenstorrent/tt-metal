@@ -23,19 +23,23 @@ namespace tt::tt_metal {
 
 enum DispatchWorkerType : uint32_t {
     PREFETCH = 0,
-    PREFETCH_D = 1,
-    DISPATCH = 2,
-    DISPATCH_D = 3,
-    DISPATCH_S = 4,
-    MUX = 5,
-    MUX_D = 6,
-    DEMUX = 7,
-    DEMUX_D = 8,
-    US_TUNNELER_LOCAL = 9,
-    US_TUNNELER_REMOTE = 10,
-    DS_TUNNELER_LOCAL = 11,
-    DS_TUNNELER_REMOTE = 12,
-    COUNT = 13
+    PREFETCH_HD = 1,
+    PREFETCH_H = 2,
+    PREFETCH_D = 3,
+    DISPATCH = 4,
+    DISPATCH_HD = 5,
+    DISPATCH_H = 6,
+    DISPATCH_D = 7,
+    DISPATCH_S = 8,
+    MUX = 9,
+    MUX_D = 10,
+    DEMUX = 11,
+    DEMUX_D = 12,
+    US_TUNNELER_LOCAL = 13,
+    US_TUNNELER_REMOTE = 14,
+    PACKET_ROUTER_MUX = 15,
+    PACKET_ROUTER_DEMUX = 16,
+    COUNT = 17
 };
 
 enum DispatchCoreType: uint32_t {
@@ -136,7 +140,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord issue_queue_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.prefetcher = tt_cxy_pair(mmio_device_id, issue_queue_coord.x, issue_queue_coord.y);
-        log_debug(tt::LogMetal, "Allocated Prefetch Core: {} for Device {}", assignment.prefetcher.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Prefetch Core: {} for Device {} Channel {}", assignment.prefetcher.value().str(), device_id, channel);
         return assignment.prefetcher.value();
     }
 
@@ -161,7 +165,7 @@ class dispatch_core_manager {
         }
         CoreCoord prefetch_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.prefetcher_d = tt_cxy_pair(device_id, prefetch_d_coord.x, prefetch_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Prefetch D Core: {} for Device {}", assignment.prefetcher_d.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Prefetch D Core: {} for Device {} Channel {}", assignment.prefetcher_d.value().str(), device_id, channel);
         return assignment.prefetcher_d.value();
     }
 
@@ -187,7 +191,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord mux_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.mux = tt_cxy_pair(mmio_device_id, mux_coord.x, mux_coord.y);
-        log_debug(tt::LogMetal, "Allocated Mux Core: {} for Device {}", assignment.mux.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Mux Core: {} for Device {} Channel {}", assignment.mux.value().str(), device_id, channel);
         return assignment.mux.value();
     }
 
@@ -213,7 +217,7 @@ class dispatch_core_manager {
         // mux_d is on remote device
         CoreCoord mux_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.mux_d = tt_cxy_pair(device_id, mux_d_coord.x, mux_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Mux D Core: {} for Device {}", assignment.mux_d.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Mux D Core: {} for Device {} Channel {}", assignment.mux_d.value().str(), device_id, channel);
         return assignment.mux_d.value();
     }
 
@@ -231,7 +235,7 @@ class dispatch_core_manager {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
         CoreCoord demux_coord = this->get_next_available_dispatch_core(mmio_device_id);
         assignment.demux = tt_cxy_pair(mmio_device_id, demux_coord.x, demux_coord.y);
-        log_debug(tt::LogMetal, "Allocated Demux Core: {} for Device {}", assignment.demux.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Demux Core: {} for Device {} Channel {}", assignment.demux.value().str(), device_id, channel);
         return assignment.demux.value();
     }
 
@@ -256,7 +260,7 @@ class dispatch_core_manager {
         // demux_d is on remote device
         CoreCoord demux_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.demux_d = tt_cxy_pair(device_id, demux_d_coord.x, demux_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Demux D Core: {} for Device {}", assignment.demux_d.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Demux D Core: {} for Device {} Channel {}", assignment.demux_d.value().str(), device_id, channel);
         return assignment.demux_d.value();
     }
 
@@ -276,7 +280,8 @@ class dispatch_core_manager {
         assignment.tunneler = us_core;
         assignment.tunneler_d = ds_core;
 
-        log_debug(tt::LogMetal, "Allocated Tunneler Core: {} for Device {}", us_core.str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Tunneler Remote Core: {} for Device {} Channel {}", us_core.str(), device_id, channel);
+        log_warning(tt::LogMetal, "Allocated Tunneler Local Core: {} for Device {} Channel {}", ds_core.str(), device_id, channel);
         return assignment.tunneler.value();
     }
 
@@ -310,7 +315,7 @@ class dispatch_core_manager {
         assignment.completion_queue_writer = tt_cxy_pair(mmio_device_id, completion_queue_coord.x, completion_queue_coord.y);
         TT_ASSERT(not assignment.dispatcher.has_value(), "Command dispatcher core {} must match completion queue interface core for MMIO device {}", assignment.dispatcher.value().str(), device_id);
         assignment.dispatcher = assignment.completion_queue_writer;
-        log_debug(tt::LogMetal, "Allocated Completion Queue Writer Core: {} for Device {}", assignment.completion_queue_writer.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Completion Queue Writer Core: {} for Device {} Channel {}", assignment.completion_queue_writer.value().str(), device_id, channel);
         return assignment.completion_queue_writer.value();
     }
 
@@ -337,7 +342,7 @@ class dispatch_core_manager {
         assignment.dispatcher = tt_cxy_pair(mmio_device_id, dispatcher_coord.x, dispatcher_coord.y);
         TT_ASSERT(not assignment.completion_queue_writer.has_value(), "Command dispatcher core must match completion queue interface core for MMIO device {}", device_id);
         assignment.completion_queue_writer = assignment.dispatcher;
-        log_debug(tt::LogMetal, "Allocated Dispatcher Core: {} for Device {}", assignment.dispatcher.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Dispatcher Core: {} for Device {} Channel {}", assignment.dispatcher.value().str(), device_id, channel);
         return assignment.dispatcher.value();
     }
 
@@ -366,7 +371,7 @@ class dispatch_core_manager {
         }
         CoreCoord dispatcher_d_coord = this->get_next_available_dispatch_core(device_id);
         assignment.dispatcher_d = tt_cxy_pair(device_id, dispatcher_d_coord.x, dispatcher_d_coord.y);
-        log_debug(tt::LogMetal, "Allocated Dispatcher D Core: {} for Device {}", assignment.dispatcher_d.value().str(), device_id);
+        log_warning(tt::LogMetal, "Allocated Dispatcher D Core: {} for Device {} Channel {}", assignment.dispatcher_d.value().str(), device_id, channel);
         return assignment.dispatcher_d.value();
     }
 
@@ -389,6 +394,7 @@ class dispatch_core_manager {
             dispatcher_s_coord = this->get_next_available_dispatch_core(device_id);
         }
         assignment.dispatcher_s = tt_cxy_pair(device_id, dispatcher_s_coord.x, dispatcher_s_coord.y);
+        log_warning(tt::LogMetal, "Allocated Dispatcher S Core: {} for Device {} Channel {}", assignment.dispatcher_s.value().str(), device_id, channel);
         return assignment.dispatcher_s.value();
     }
 

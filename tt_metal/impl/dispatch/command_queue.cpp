@@ -1956,22 +1956,6 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC noc_index) :
         this->size_B = this->size_B / 4;
     }
 
-    CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    if (this->device->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
-        // dispatch_s exists with this configuration. Workers write to dispatch_s
-        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device->id(), channel, id);
-    }
-    else {
-        if (device->is_mmio_capable()) {
-            enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_core(device->id(), channel, id);
-        } else {
-            enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
-        }
-    }
-    this->physical_enqueue_program_dispatch_core =
-        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
-
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device->id(), channel, this->id);
 
@@ -2013,6 +1997,26 @@ void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_alig
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id);
     this->manager.fetch_queue_reserve_back(this->id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id);
+}
+
+void HWCommandQueue::update_dispatch_core() {
+    CoreCoord enqueue_program_dispatch_core;
+    CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
+    if (this->device->num_hw_cqs() == 1 or core_type == CoreType::WORKER) {
+        // dispatch_s exists with this configuration. Workers write to dispatch_s
+        enqueue_program_dispatch_core = dispatch_core_manager::instance().dispatcher_s_core(device->id(), channel, id);
+    } else {
+        if (device->is_mmio_capable()) {
+            enqueue_program_dispatch_core =
+                dispatch_core_manager::instance().dispatcher_core(device->id(), channel, id);
+        } else {
+            enqueue_program_dispatch_core =
+                dispatch_core_manager::instance().dispatcher_d_core(device->id(), channel, id);
+        }
+    }
+    this->physical_enqueue_program_dispatch_core =
+        device->physical_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 }
 
 void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {

@@ -528,6 +528,9 @@ class HWCommandQueue {
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
     void reset_worker_state(bool reset_launch_msg_state);
 
+    // Temporary to get dispatch assignments matching with new implementation
+    void update_dispatch_core();
+
    private:
     uint32_t id;
     uint32_t size_B;

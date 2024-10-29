@@ -8,6 +8,33 @@ if [[ -z "$TT_METAL_HOME" ]]; then
 fi
 
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
+    # Temporary dispatch compile args testing
+    echo "FD Compile Args Test - 1CQ"
+    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+    TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+    find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+    if diff kernel_args_old.csv kernel_args_new.csv; then
+        echo "FD Compile Args Test - 1CQ PASS"
+    else
+        echo "FD Compile Args Test - 1CQ FAIL"
+        exit 1
+    fi
+    if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
+        echo "FD Compile Args Test - 2CQ"
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_old.csv
+        TT_METAL_GTEST_ETH_DISPATCH=1 TT_METAL_GTEST_NUM_HW_CQS=2 TT_METAL_NEW=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherRingBufferBrisc
+        find . -name "kernel_args.csv" | xargs -I {} cp {} kernel_args_new.csv
+        if diff kernel_args_old.csv kernel_args_new.csv; then
+            echo "FD Compile Args Test - 2CQ PASS"
+        else
+            echo "FD Compile Args Test - 2CQ FAIL"
+            exit 1
+        fi
+    fi
+    exit 0
+
     # Watcher dump tool testing
     echo "Running watcher dump tool tests..."
 
