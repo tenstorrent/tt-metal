@@ -33,6 +33,8 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/third_party/umd/device/tt_xy_pair.h"
 
+using namespace tt::tt_metal;
+
 using std::map;
 using std::pair;
 using std::set;
