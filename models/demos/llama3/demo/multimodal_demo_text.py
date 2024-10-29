@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
+
 from pathlib import Path
 from typing import Optional
 from loguru import logger
@@ -8,19 +8,13 @@ from loguru import logger
 from PIL import Image as PIL_Image
 from termcolor import cprint
 
-import importlib
+import llama_models.llama3.reference_impl.generation as llama_reference_generation
 
-llama_reference_generation = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.generation"
-)
+from llama_models.llama3.api.datatypes import ImageMedia
 
-# Must import from reference for formatter to understand type of ImageMedia
-datatypes = importlib.import_module("models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.api.datatypes")
-ImageMedia = datatypes.ImageMedia
+from pkg_resources import resource_filename
 
-# THIS_DIR = Path(__file__).parent.resolve()
-# TODO: Generalize not to cglagovich home :)
-THIS_DIR = Path("/home/cglagovich/tt-metal/models/demos/t3000/llama2_70b/reference/llama-models/models/scripts/")
+IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 import torch
 import pytest
@@ -59,14 +53,19 @@ def create_multimodal_model(model_args, mesh_device, dtype=ttnn.bfloat16):
     "target",
     ("tt", "cpu"),
 )
+@pytest.mark.parametrize(
+    "warmup_iters",
+    (0, 1),
+)
 def test_llama_multimodal_demo_text(
     mesh_device,
     target,
-    temperature: float = 0,
+    warmup_iters,
+    temperature: float = 0.5,
     top_p: float = 0.9,
     max_seq_len: int = 512,
     max_batch_size: int = 4,
-    max_gen_len: Optional[int] = None,
+    max_gen_len: Optional[int] = 200,
     model_parallel_size: Optional[int] = None,
 ):
     mesh_device.enable_program_cache()
@@ -88,41 +87,38 @@ def test_llama_multimodal_demo_text(
         model = create_multimodal_model(generator.args, mesh_device)
         generator.model = model
 
-    with open(THIS_DIR / "resources/dog.jpg", "rb") as f:
+    with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-    with open(THIS_DIR / "resources/pasta.jpeg", "rb") as f:
+    with open(IMG_PATH / "pasta.jpeg", "rb") as f:
         img2 = PIL_Image.open(f).convert("RGB")
 
-    with open(THIS_DIR / "resources/ocr_image.jpeg", "rb") as f:
+    with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
-    # with open(THIS_DIR / "resources/clutter.jpeg", "rb") as f:
-    #     clutter = PIL_Image.open(f).convert("RGB")
+
+    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
+        clutter = PIL_Image.open(f).convert("RGB")
 
     interleaved_contents = [
         # text only
-        # "The color of the sky is blue but sometimes it can also be",
+        "The color of the sky is blue but sometimes it can also be",
         # image understanding
-        # [
-        #     ImageMedia(image=img),
-        #     "If I had to write a haiku for this one",
-        # ],
+        [ImageMedia(image=img), "If I had to write a haiku for this one"],
+        [ImageMedia(image=img2), "Couting the number of individual spaghetti strands in this image"],
         [ImageMedia(image=ocr_image), "The full text in this image is as follows"],
-        # [
-        #     ImageMedia(image=clutter),
-        #     "The count of vases, books, and miscellaneous items in this image is",
-        # ]
+        [ImageMedia(image=clutter), "The count of vases, books, and miscellaneous items in this image is"],
     ]
 
     print(f"Running text completion on {target}")
-    for content in interleaved_contents:
-        result = generator.text_completion(
-            content,
-            max_gen_len=max_gen_len,
-            temperature=temperature,
-            top_p=top_p,
-        )
+    for _ in range(warmup_iters + 1):
+        for content in interleaved_contents:
+            result = generator.text_completion(
+                content,
+                max_gen_len=max_gen_len,
+                temperature=temperature,
+                top_p=top_p,
+            )
 
-        cprint(f"{content}", end="")
-        cprint(f"{result.generation}", color="yellow")
-        print("\n==================================\n")
+            cprint(f"{content}", end="")
+            cprint(f"{result.generation}", color="yellow")
+            print("\n==================================\n")

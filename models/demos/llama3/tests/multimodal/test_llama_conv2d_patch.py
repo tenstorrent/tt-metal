@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import math
 import pytest
 from loguru import logger
 import os
@@ -21,52 +20,12 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import (
-    nearest_32,
-)
 from models.demos.llama3.tt.multimodal.llama_conv2d_patch import (
     TtLlamaConv2dPatch,
 )
 
 from models.demos.llama3.tt.model_config import TtModelArgs
-
-import importlib
-
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-
-
-# ##### Torch op #####
-# class Conv2dPatch(torch.nn.Module):
-#     """Conv2D Patching layer with model parallelism.
-#     Column parallel over unfolded input.
-#     Arguments:
-#         in_channels: Input channels.
-#         out_channels: Output channels.
-#         kernel_size: Size of convolution kernel.
-#         stride (default 1): Stride for convolution.
-#         bias (default False): Use bias in Conv2d.
-#     Input: (bsz, in_channels, width, height)
-#     Output: (bsz, num_tokens, out_channels)
-#     """
-
-#     def __init__(self, in_channels, out_channels, kernel_size, stride, bias) -> None:
-#         super().__init__()
-#         if isinstance(kernel_size, int):
-#             kernel_size = (kernel_size, kernel_size)
-#         self._unfold = torch.nn.Unfold(kernel_size=kernel_size, stride=stride)
-#         self._linear = torch.nn.Linear(
-#             in_channels * kernel_size[0] * kernel_size[1],
-#             out_channels,
-#             bias=bias,
-#         )
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         x = self._unfold(x)
-#         x = x.permute(0, 2, 1)
-#         x = F.linear(x, self._linear.weight)
-#         return x
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -79,28 +38,13 @@ llama_reference_mod = importlib.import_module(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "input_shape, in_channels, out_channels, kernel_size, stride, bias",
-    [
-        # ((1, 3, 32 * 32, 32 * 32), 3, 512, 32, 32, False),
-        ((1, 3, 14 * 32, 14 * 32), 3, 1280, 14, 14, False),  # Llama3.2 case
-    ],
-)
 def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
-    # Input params
-    input_shape,
-    # Conv2d patch params
-    in_channels,
-    out_channels,
-    kernel_size,
-    stride,
-    bias,
     ensure_gc,
 ):
-    pcc = 0.9999
+    pcc_required = 0.9999
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -116,7 +60,14 @@ def test_llama_conv2d_inference(
     num_devices = model_args.num_devices
 
     ##### Create input tensor for the all gather #####
-    B, NCH, H, W = input_shape
+    B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)
+    in_channels, out_channels, kernel_size, stride, bias = (
+        3,
+        model_args.vision_dim,
+        model_args.vision_patch_size,
+        model_args.vision_patch_size,
+        False,
+    )
 
     assert NCH == in_channels, "Number of channels in input tensor should match in_channels for the Conv2d patch."
     assert type(kernel_size) == int, "Only symmetric kernel_size is currently supported."
@@ -126,7 +77,7 @@ def test_llama_conv2d_inference(
     assert W % kernel_size == 0, "Width should be divisible by kernel_size."
 
     ##### Prepare inputs #####
-    input_tensor = torch.randn(input_shape)
+    input_tensor = torch.randn((B, NCH, H, W))
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
     ##### Perform the torch ops #####
@@ -165,8 +116,4 @@ def test_llama_conv2d_inference(
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-    if passing:
-        logger.info(f"Llama_Conv2dPatch Passed!")
-    else:
-        logger.warning(f"Llama_Conv2dPatch Failed!")
-        assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

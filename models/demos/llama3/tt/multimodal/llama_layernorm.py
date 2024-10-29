@@ -82,46 +82,7 @@ class TtLayerNorm(LightweightModule):
             )
             self.sharded_output_config = self.sharded_input_config
 
-    def forward(self, x):
-        return self.forward_tt(x)
-        if os.environ.get("LN") == "tt":
-            return self.forward_tt(x)
-        else:
-            return self.forward_pt(x)
-
-    def forward_pt(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
-        # If input is sharded do sharded RMSNorm and optionally return sharded output
-
-        x = ttnn.to_torch(
-            x,
-            device=self.device,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )[0].float()
-        weight = ttnn.to_torch(
-            self.weight,
-            device=self.device,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )[0, 0].float()
-        bias = ttnn.to_torch(
-            self.bias,
-            device=self.device,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-        )[0, 0].float()
-
-        out = torch.nn.functional.layer_norm(x, x.shape[-1:], weight=weight, bias=bias, eps=self.eps)
-        out = out
-
-        out = ttnn.from_torch(
-            out,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        return out
-
-    def forward_tt(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         if in_sharded:
             x = ttnn.layer_norm(
                 x,

@@ -11,7 +11,7 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import TtLlamaVisionEncoder
+from models.demos.llama3.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
 
 from models.demos.falcon7b_common.tests.test_utils import (
     synchronize_devices,

@@ -47,7 +47,8 @@ class TtLlamaCrossAttention(LightweightModule):
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
-        self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
+
+        self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
 
@@ -131,7 +132,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
     def compute_xattn_kv_cache(self, xattn_tokens):
         bsz, seqlen_y = xattn_tokens.shape[1], xattn_tokens.shape[2]
-        MAX_MM_SEQ_LEN = 1056
+        MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
         if seqlen_y > MAX_MM_SEQ_LEN:
             xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
@@ -156,29 +157,42 @@ class TtLlamaCrossAttention(LightweightModule):
             xk = ttnn.reshape(xk, [1, bsz, seqlen_y, -1])
             xv = ttnn.reshape(xv, [1, bsz, seqlen_y, -1])
 
-        xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            xk, xk, num_heads=self.n_local_kv_heads, num_kv_heads=self.n_local_kv_heads // 2, transpose_k_heads=False
-        )
-        xv, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            xv, xv, num_heads=self.n_local_kv_heads, num_kv_heads=self.n_local_kv_heads // 2, transpose_k_heads=False
-        )
+        if self.n_local_kv_heads == 1:
+            # Only a simple reshape required, no need to split
+            xk = ttnn.reshape(xk, [bsz, 1, seqlen_y, -1])
+            xv = ttnn.reshape(xv, [bsz, 1, seqlen_y, -1])
+        else:
+            # 1, B, S, D -> B, NH, S, DH?
+            xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                xk,
+                xk,
+                num_heads=self.n_local_kv_heads,
+                num_kv_heads=self.n_local_kv_heads // 2,
+                transpose_k_heads=False,
+            )
+            xv, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                xv,
+                xv,
+                num_heads=self.n_local_kv_heads,
+                num_kv_heads=self.n_local_kv_heads // 2,
+                transpose_k_heads=False,
+            )
 
         xk = self.k_norm(xk)
+
+        # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
+        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
+        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
         return [xk, xv]
 
-        ### EVERYTHING BELOW IS BROKEN OMG
-        # BEWARNED! TMs are dangerous!
-        # WORKAROUND
+        ### Below is how I would like to implement TMs, but it results in poor PCC
         xk = ttnn.to_layout(xk, layout=ttnn.ROW_MAJOR_LAYOUT)
         xv = ttnn.to_layout(xv, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         xk = xk.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
         xv = xv.reshape(bsz, seqlen_y, self.n_local_kv_heads, self.head_dim)
-        # xk = ttnn.to_memory_config(xk, ttnn.L1_MEMORY_CONFIG)
-        # xk = ttnn.to_memory_config(xk, ttnn.DRAM_MEMORY_CONFIG)
-        return xk
 
-        xk = ttnn.transpose(xk, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        xk = ttnn.transpose(xk, 1, 2)
         xv = ttnn.transpose(xv, 1, 2)
 
         xk = ttnn.to_layout(xk, layout=ttnn.TILE_LAYOUT)
@@ -191,10 +205,7 @@ class TtLlamaCrossAttention(LightweightModule):
         return [xk, xv]
 
     def forward_decode(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
-        # batch = x_11SH.shape[-2]
         batch = xattn_cache[0].shape[0]
-        # assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-        # 1, B, D
 
         xq = ttnn.linear(
             x_11SH,
@@ -223,9 +234,6 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
-
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
 
         scores = ttnn.matmul(
             xq,
@@ -283,7 +291,7 @@ class TtLlamaCrossAttention(LightweightModule):
     def forward_prefill(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
         seq_len = x_11SH.shape[-2]
         # B, S, D
-        # assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
+        assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
 
         if seq_len > 1024:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 1024, 1024, -1])
@@ -310,20 +318,12 @@ class TtLlamaCrossAttention(LightweightModule):
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
 
-        # NOTE: Using naive SDPA for now since FlashDecode does not allow non-causal mask
-        # xq = ttnn.reshape(xq, [self.n_local_heads // self.n_local_kv_heads, self.n_local_kv_heads, seq_len, self.head_dim])
-        # NOTE: repeat doesn't work, need to use repeat_interleave
-        # xk = ttnn.repeat(xk, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        # xv = ttnn.repeat(xv, ttnn.Shape((self.n_local_heads // self.n_local_kv_heads, 1, 1, 1)))
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
-
         scores = ttnn.matmul(
             xq,
             ttnn.transpose(xk, -1, -2),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["VISION_XATTN_SCORE_PROGCFG"](seq_len, cache_seq_len),
         )
 
@@ -332,8 +332,6 @@ class TtLlamaCrossAttention(LightweightModule):
         scores = ttnn.add(scores, xattn_mask)
         scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
 
-        # TODO: scale_mask_softmax doesn't work for this xattn_mask shape
-        # scores = ttnn.scale_mask_softmax(scores, self.scale, xattn_mask, numeric_stable=True)
         output = ttnn.matmul(
             scores,
             xv,

@@ -184,7 +184,14 @@ def main(stdscr):
                         commands = parse_list(command_input, allow_space=False)
 
                         # Generate combinations (reordered)
-                        combinations = [(c, m, d) for c in commands for m in models for d in devices]
+                        # combinations = [(c, m, d) for c in commands for m in models for d in devices]
+                        combinations = [
+                            (c, m, d)
+                            for c in commands
+                            for m in models
+                            for d in devices
+                            if not (m in ["11b", "11b-b"] and d == "n150")
+                        ]
 
                         # Create output entries
                         for command, model, device in combinations:
@@ -230,7 +237,7 @@ def main(stdscr):
             else:
                 # Ignore enter key when exiting
                 continue
-        elif c == curses.KEY_BACKSPACE or c == 127 or c == ord("x"):
+        elif c == curses.KEY_BACKSPACE or c == 127:
             if current_line < len(input_fields):
                 current_field = current_line
                 # Remove last character from current field
@@ -506,6 +513,19 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model": "pytest models/demos/llama3/tests/test_llama_model.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-full]",
         "model-prefill": "pytest models/demos/llama3/tests/test_llama_model_prefill.py::test_llama_model_inference[wormhole_b0-True-mesh_device0-4096]",
         "model-quick": "pytest models/demos/llama3/tests/test_llama_model.py -k quick",
+        "vision-mlp": "pytest models/demos/llama3/tests/multimodal/test_llama_image_mlp.py",
+        "vision-attn": "pytest models/demos/llama3/tests/multimodal/test_llama_image_attention.py",
+        "vision-block": "pytest models/demos/llama3/tests/multimodal/test_llama_image_block.py",
+        "vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_image_transformer.py",
+        "vision-xattn": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention.py",
+        "vision-xblock": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_block.py",
+        "vision-conv": "pytest models/demos/llama3/tests/multimodal/test_llama_conv2d_patch.py",
+        "vision-class": "pytest models/demos/llama3/tests/multimodal/test_llama_class_embedding.py",
+        "vision-tile-pos": "pytest models/demos/llama3/tests/multimodal/test_llama_tile_position_embedding.py",
+        "vision-pos": "pytest models/demos/llama3/tests/multimodal/test_llama_positional_embedding.py",
+        "vision-encoder": "pytest models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py",
+        "vision-text-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py",
+        "vision-vision-xfmr": "pytest models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -657,6 +677,7 @@ def get_llama_dir(model):
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
+        "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
     }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):

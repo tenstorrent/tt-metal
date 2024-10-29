@@ -31,8 +31,6 @@ from models.demos.llama3.tt.multimodal.llama_positional_embedding import (
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 
-import importlib
-
 
 ##### Torch op #####
 class PositionalEmbedding(nn.Module):
@@ -78,45 +76,29 @@ class PositionalEmbedding(nn.Module):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "image_size, patch_size",
-    [
-        ((448, 448), (14, 14)),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_shape, max_num_tiles",
-    [
-        ((1, 4, 4, 1024 + 1, 1280), 4),
-    ],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-    ],
+    "bsz, num_concurrent_media, num_chunks",
+    [(1, 4, 4)],
 )
 def test_llama_positional_embedding_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
-    layout,
-    # Positional Embedding params
-    image_size,
-    patch_size,
-    max_num_tiles,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.9999
+    layout = ttnn.TILE_LAYOUT
+    pcc_required = 0.9999
 
     mesh_device.enable_async(True)
 
@@ -127,15 +109,13 @@ def test_llama_positional_embedding_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    (
-        bsz,
-        num_concurrent_media,
-        num_chunks,
-        ntok,
-        dim,
-    ) = input_shape
+    ntok = model_args.vision_chunk_ntok
+    dim = model_args.vision_dim
+    image_size = (model_args.vision_chunk_size, model_args.vision_chunk_size)
+    patch_size = (model_args.vision_patch_size, model_args.vision_patch_size)
 
     ##### Check parms #####
+    max_num_tiles = model_args.vision_max_num_chunks
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"
 
     ##### Prepare inputs #####
@@ -198,13 +178,8 @@ def test_llama_positional_embedding_inference(
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-
-    if passing:
-        logger.info(f"Llama_PositionalEmbedding Passed!")
-    else:
-        logger.warning(f"Llama_PositionalEmbedding Failed!")
-        assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
