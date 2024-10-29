@@ -115,6 +115,12 @@ RunTimeOptions::RunTimeOptions() {
         enable_dispatch_data_collection = true;
     }
 
+    if (getenv("TT_METAL_OLD_FD_INIT")) {
+        this->use_new_fd_init = false;
+    } else {
+        this->use_new_fd_init = true;
+    }
+
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
         this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
     }
