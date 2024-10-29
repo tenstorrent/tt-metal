@@ -118,7 +118,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
 }
 
 std::vector<tt::tt_metal::LegacyShape> SliceDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
-    std::vector<uint32_t> out_shape;
+    SmallVector<uint32_t> out_shape;
     auto rank = input_tensors[0].get_legacy_shape().rank();
     out_shape.reserve(rank);
 

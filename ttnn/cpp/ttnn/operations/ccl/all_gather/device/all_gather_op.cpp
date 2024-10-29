@@ -12,6 +12,8 @@
 #include "eth_l1_address_map.h"
 
 namespace ttnn {
+namespace ccl{
+namespace all_gather_detail{
 
 AllGather create_all_gather_struct(
     const Tensor& input_tensor,
@@ -24,44 +26,14 @@ AllGather create_all_gather_struct(
     const ttnn::ccl::Topology topology
 ) {
     uint32_t num_devices = devices.size();
-
-    uint32_t device_index = 0; // Initialize device index
-    std::optional<uint32_t> receiver_device_id = std::nullopt; // Initialize receiver device ID
-    std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
-
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices[i] == input_tensor.device()) {
-            device_index = i;
-            switch(topology){
-                case ttnn::ccl::Topology::Ring:{
-                    // Ring topology
-                    receiver_device_id = devices[(i + 1) % num_devices]->id(); // Next device in the ring
-                    sender_device_id = devices[(i + num_devices - 1) % num_devices]->id(); // Previous device in the ring
-                    break;
-                }
-                case ttnn::ccl::Topology::Linear:{
-                    // Linear topology
-                    bool is_last_chip_in_clockwise_direction = i == (num_devices - 1);
-                    bool is_last_chip_in_counter_clockwise_direction = i == 0;
-                    receiver_device_id = is_last_chip_in_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i+1)->id());
-                    sender_device_id = is_last_chip_in_counter_clockwise_direction ?
-                        std::nullopt :
-                        std::optional<chip_id_t>(devices.at(i-1)->id());
-                    break;
-                }
-                default:
-                    TT_FATAL(false, "Invalid Topology {}, Accepted topologies are Ring and Linear currently", topology);
-            }
-            break;
-        }
-    }
+    auto [device_index, sender_device_id, receiver_device_id] =
+                get_device_index_and_sender_receiver_ids(input_tensor, devices, topology);
 
     return ttnn::AllGather{
         dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};
 }
-
+} // namespace all_gather_detail
+} // namespace ccl
 
 AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op) {
     if (fuse_op) {
@@ -206,6 +178,7 @@ Tensor all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
+    TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2){
@@ -221,7 +194,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
                 {input_tensor});
         },
         {input_tensor},
