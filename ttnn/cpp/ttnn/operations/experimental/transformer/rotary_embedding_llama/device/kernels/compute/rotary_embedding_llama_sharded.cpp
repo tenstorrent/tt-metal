@@ -16,12 +16,12 @@ namespace NAMESPACE {
 void MAIN {
 
     constexpr uint32_t onetile = 1;
-    uint32_t in_cb = get_compile_time_arg_val(0);
-    uint32_t cos_cb = get_compile_time_arg_val(1);
-    uint32_t sin_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t in_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t cos_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t sin_cb = get_compile_time_arg_val(2);
     constexpr uint32_t trans_mat_cb = get_compile_time_arg_val(3);
 
-    uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t rotated_in_interm_cb = get_compile_time_arg_val(4);
     constexpr uint32_t cos_interm_cb = get_compile_time_arg_val(5);
     constexpr uint32_t sin_interm_cb = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
@@ -38,7 +38,7 @@ void MAIN {
 
 
     // Get the sin/cos matrices
-    // TODO: To parallelize acorss batch, this should be in a batch loop
+    // TODO: To parallelize across multiple batch, this should be in a batch loop
     cb_reserve_back(sin_cb, Wt);
     cb_reserve_back(cos_cb, Wt);
 

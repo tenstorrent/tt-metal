@@ -448,14 +448,14 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     tt_metal::CircularBufferConfig cb_cos_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
-            .set_page_size(cos_interm_cb_index, input_single_tile_size);
+            .set_page_size(cos_interm_cb_index, cos_single_tile_size);
     auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CB::c_intermed2;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
-            .set_page_size(sin_interm_cb_index, input_single_tile_size);
+            .set_page_size(sin_interm_cb_index, sin_single_tile_size);
     auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
     uint32_t output_cb_index = CB::c_out0;  // output operands start at index 16
