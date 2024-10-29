@@ -15,6 +15,8 @@
 
 #include "watcher_device_reader.hpp"
 
+using namespace tt::tt_metal;
+
 using std::string;
 namespace { // Helper functions
 

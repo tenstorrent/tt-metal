@@ -24,7 +24,7 @@ typedef struct {
 class WatcherDeviceReader {
     public:
      WatcherDeviceReader(
-         FILE *f, Device *device, std::vector<std::string> &kernel_names, void (*set_watcher_exception_message)(const std::string &));
+         FILE *f, tt_metal::Device *device, std::vector<std::string> &kernel_names, void (*set_watcher_exception_message)(const std::string &));
      ~WatcherDeviceReader();
      void Dump(FILE *file = nullptr);
 
@@ -48,7 +48,7 @@ class WatcherDeviceReader {
     std::string GetKernelName(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t type);
 
     FILE *f;
-    Device *device;
+    tt_metal::Device *device;
     std::vector<std::string> &kernel_names;
     void (* set_watcher_exception_message)(const std::string &);
 
