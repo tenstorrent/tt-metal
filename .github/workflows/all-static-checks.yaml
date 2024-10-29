@@ -95,8 +95,7 @@ jobs:
       pull-requests: write
       # OPTIONAL: auto-closing conversations requires the `contents` permission
       contents: write
-    # if: github.event_name == 'pull_request'  # Only run this job on pull request events
-    if : false
+    if: github.event_name == 'pull_request'  # Only run this job on pull request events
     steps:
     - uses: actions/checkout@v4
       with:
@@ -123,10 +122,10 @@ jobs:
     - name: Analyze
       run: |
         git diff -U0 "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" | clang-tidy-diff-17.py -p1 -path build -export-fixes clang-tidy-result/fixes.yml -j4
-      timeout-minutes: 10
+      timeout-minutes: 5
       continue-on-error: true
     - name: Run clang-tidy-pr-comments action
-      uses: platisd/clang-tidy-pr-comments@837ad8077b1f554dab31a8a43e8bb12c89d2f144
+      uses: platisd/clang-tidy-pr-comments@1b7395ce6f5a4186acabbba24cdd1e846f001aa8
       with:
         # The GitHub token (or a personal access token)
         github_token: ${{ secrets.GITHUB_TOKEN }}
