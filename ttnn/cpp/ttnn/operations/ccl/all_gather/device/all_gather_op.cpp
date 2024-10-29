@@ -25,7 +25,7 @@ AllGather create_all_gather_struct(
 ) {
     uint32_t num_devices = devices.size();
     auto [device_index, sender_device_id, receiver_device_id] =
-                getDeviceIndexAndSenderReceiverIDs(input_tensor, devices, topology);
+                get_device_index_and_sender_receiver_ids(input_tensor, devices, topology);
 
     return ttnn::AllGather{
         dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};

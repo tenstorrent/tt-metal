@@ -18,7 +18,7 @@
 namespace ttnn {
 namespace ccl {
 
-std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> getDeviceIndexAndSenderReceiverIDs(
+std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
     const Tensor& input_tensor,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology& topology);
