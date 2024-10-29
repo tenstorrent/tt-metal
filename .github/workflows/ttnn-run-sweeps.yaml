@@ -108,6 +108,12 @@ on:
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.softplus.softplus
+          - eltwise.unary_backward.fill_zero_bw
+          - eltwise.unary_backward.log_sigmoid_bw
+          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.neg_bw
+          - eltwise.unary_backward.hardshrink_bw
+          - eltwise.unary_backward.softshrink_bw
           - eltwise.unary_backward.acos_bw
           - eltwise.unary_backward.acosh_bw
           - eltwise.unary_backward.atan_bw
@@ -154,6 +160,9 @@ on:
           - eltwise.unary_backward.tanhshrink_bw.tanhshrink_bw
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
           - eltwise.unary_backward.rpow_bw.rpow_bw
+          - eltwise.unary_complex.conj
+          - eltwise.unary_complex.reciprocal
+          - eltwise.unary_complex.reciprocal_bw
           - eltwise.unary.lgamma
           - eltwise.unary.logit
           - eltwise.unary.mish
@@ -215,6 +224,9 @@ on:
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
+          - eltwise.binary_backward.ldexp_bw
+          - eltwise.binary_backward.logaddexp_bw
+          - eltwise.binary_backward.logaddexp2_bw
           - eltwise.binary_backward.embedding_bw.embedding_bw
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
@@ -246,6 +258,7 @@ on:
           - reduction.topk.topk
           - reduction.argmax.argmax
           - embedding.embedding
+          - eltwise.ternary_backward.addcmul_bw
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
