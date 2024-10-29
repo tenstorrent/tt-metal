@@ -67,7 +67,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
                     result = ttnn::where(ttnn::eq(result, size), res_index, result, output_memory_config);
-                    std::vector<int64_t> permute_dims = {3, 0, 1, 2};
+                    ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
                     if (is_width) {
                         res_index = ttnn::add(res_index, result, std::nullopt, output_memory_config);
                     } else {
@@ -105,7 +105,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     Tensor res_index = ttnn::zeros_like(result);
                     result = ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
                     if (is_channel) {
-                        std::vector<int64_t> permute_dims = {1, 0, 2, 3};
+                        ttnn::SmallVector<int64_t> permute_dims = {1, 0, 2, 3};
                         Tensor transpose_res = ttnn::permute(result, permute_dims, output_memory_config);
                         return {transpose_res};
                     } else {

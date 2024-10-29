@@ -45,7 +45,7 @@ std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std
     uint32_t out_h = input_shape[1] * scale_factor_h_;
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
-    const auto out_dims = std::vector<uint32_t>({ out_n, out_h, out_w, out_c }); //in the NHWC format
+    const ttnn::SmallVector<uint32_t> out_dims({ out_n, out_h, out_w, out_c }); //in the NHWC format
 
     return {tt::tt_metal::LegacyShape{out_dims}};
 }

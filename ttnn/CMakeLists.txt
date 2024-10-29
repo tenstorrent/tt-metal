@@ -575,6 +575,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_header_directories
     metal_common_libs
     tt_metal
+    Boost::container
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
@@ -629,6 +630,12 @@ target_compile_options(
         -Wno-int-to-pointer-cast
         -fno-var-tracking
 )
+
+if(WITH_PYTHON_BINDINGS)
+    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
+else()
+    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)

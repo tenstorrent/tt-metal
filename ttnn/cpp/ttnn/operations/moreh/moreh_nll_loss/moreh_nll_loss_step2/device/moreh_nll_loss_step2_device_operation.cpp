@@ -72,8 +72,8 @@ MorehNllLossStep2DeviceOperation::shape_return_value_t MorehNllLossStep2DeviceOp
 
     auto C = input_shape[1];
 
-    auto dimensions_pads = std::vector<Padding::PadDimension>();
-    std::vector<uint32_t> output_shape_vec;
+    ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
+    ttnn::SmallVector<uint32_t> output_shape_vec;
 
     // Need extend 1d output to 2d, because TT not support 1d tensor
     if (input_rank == 2) {

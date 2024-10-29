@@ -3,7 +3,7 @@ Checks: >
   performance-*,
   modernize-*,
   readability-*,
-  cppcoreguidelines-*
+  cppcoreguidelines-*,
   -modernize-use-trailing-return-type
 
 CheckOptions:

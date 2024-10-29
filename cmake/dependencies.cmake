@@ -8,6 +8,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
 fetch_boost_library(core)
 fetch_boost_library(smart_ptr)
+fetch_boost_library(container)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -27,7 +28,6 @@ CPMAddPackage(
 )
 
 if(yaml-cpp_ADDED)
-    target_link_libraries(yaml-cpp PRIVATE stdlib)
     set_target_properties(
         yaml-cpp
         PROPERTIES
@@ -51,8 +51,6 @@ CPMAddPackage(
 
 if(googletest_ADDED)
     target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
-    target_link_libraries(gtest PRIVATE stdlib)
-    target_link_libraries(gtest_main PRIVATE stdlib)
 endif()
 
 ############################################################################################################################

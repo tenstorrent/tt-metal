@@ -24,13 +24,6 @@ else()
     FIND_AND_SET_CLANG17()
 endif()
 
-if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
-    message(
-        FATAL_ERROR
-        "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
-    )
-endif()
-
 project(
     Metalium
     VERSION 0.50.0
@@ -39,8 +32,40 @@ project(
     LANGUAGES
         CXX
 )
-include(CTest)
+
+if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
+    message(
+        FATAL_ERROR
+        "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
+    )
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
+include(project_options)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(ENABLE_LIBCXX)
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
+    #add_link_options(
+    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
+    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
+    #)
+endif()
+
+# Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+endif()
+
+add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>)
+
+include(CTest)
+
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 # Global settings if we're the top-level project
@@ -63,7 +88,6 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
                 ON
     )
 
-    option(ENABLE_CCACHE FALSE)
     if(ENABLE_CCACHE)
         include(cmake/ccache.cmake)
     endif()
@@ -81,10 +105,6 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 
@@ -92,20 +112,6 @@ set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
 # Project Options
 #   The following options and their defaults impact what artifacts get built
 ############################################################################################################################
-option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
-option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
-option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
-option(ENABLE_LIBCXX "Enable using libc++" ON)
-option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
-option(BUILD_SHARED_LIBS "Create shared libraries" ON)
-option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
-option(ENABLE_MSAN "Enable build with MemorySanitizer" OFF)
-option(ENABLE_TSAN "Enable build with ThreadSanitizer" OFF)
-option(ENABLE_UBSAN "Enable build with UndefinedBehaviorSanitizer" OFF)
-option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming examples" OFF)
-option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
-option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
-
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
 message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
@@ -177,29 +183,6 @@ add_subdirectory(tt_metal/third_party/umd)
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
-add_library(stdlib INTERFACE)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND ENABLE_LIBCXX)
-    find_library(LIBC++ c++)
-    find_library(LIBC++ABI c++abi)
-    if(NOT LIBC++ OR NOT LIBC++ABI)
-        message(
-            FATAL_ERROR
-            "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
-        )
-    endif()
-
-    target_link_libraries(
-        stdlib
-        INTERFACE
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(stdlib INTERFACE -stdlib=libc++)
-else()
-    target_link_libraries(stdlib INTERFACE stdc++)
-    target_compile_options(stdlib INTERFACE -fsized-deallocation)
-endif()
-
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
     metal_common_libs
@@ -210,7 +193,6 @@ target_link_libraries(
         atomic
         hwloc
         numa
-        stdlib # system libraries, hwloc has no cmake support, find_package won't find it
 )
 
 # Note on flags:
@@ -239,7 +221,6 @@ target_link_libraries(
     INTERFACE
         linker_flags
         compiler_warnings
-        stdlib
 )
 target_compile_options(
     compiler_flags
