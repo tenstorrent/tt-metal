@@ -58,9 +58,9 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_tiles_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core))
+        if (core_group_1.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.core_coord_in_core_ranges(core))
+        else if (core_group_2.contains(core))
             num_tiles_per_core = num_tiles_per_core_group_2;
         else
             TT_FATAL(false, "Core not in specified core ranges");

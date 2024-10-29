@@ -47,7 +47,7 @@ Semaphore &Semaphore::operator=(Semaphore &&other) {
 }
 
 bool Semaphore::initialized_on_logical_core(const CoreCoord &logical_core) const {
-    return this->core_range_set_.core_coord_in_core_ranges(logical_core);
+    return this->core_range_set_.contains(logical_core);
 }
 
 uint32_t Semaphore::offset() const {
