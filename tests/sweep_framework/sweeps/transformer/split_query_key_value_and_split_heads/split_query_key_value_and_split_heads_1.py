@@ -26,8 +26,8 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 64, 64], [6, 2048, 2048], [1, 64, 64], 32),
-        "num_heads": list(range(1, 5)),
+        "input_shape": gen_shapes([1, 1, 32 * 3], [6, 2048, 1024 * 3], [1, 1, 32 * 3], 16),
+        "num_heads": list(range(1, 12)),
         "transpose_key": [True, False],
         "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -38,6 +38,8 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_shape"][-1] % (test_vector["num_heads"] * 3) != 0:
+        return True, "Hidden size should be divisible by a total number of heads"
     if (test_vector["input_shape"][-1] // (test_vector["num_heads"] * 3)) % 32 != 0:
         return True, "Head size must be a multiple of 32"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:

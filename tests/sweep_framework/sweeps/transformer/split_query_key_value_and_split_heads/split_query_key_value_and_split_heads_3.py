@@ -8,8 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm, tensor_to_dtype
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -20,44 +19,32 @@ TIMEOUT = 30
 random.seed(0)
 
 
-# This part is hardcoded
-def gen_headsize_numheads_kvheads(num_samples="all"):
-    acc = 0
-    for i in range(32, 4673, 32):
-        head_size = i
-        if 4672 % head_size != 0:
-            continue
-        max_num_heads = 4672 // head_size
-        for j in range(1, max_num_heads + 1):
-            if acc == num_samples:
-                return
-            num_kv_heads = j
-            num_heads = max_num_heads - 2 * num_kv_heads
-            if num_heads <= 0 or num_kv_heads <= 0:
-                continue
-            acc += 1
-            yield (head_size, num_heads, num_kv_heads)
-
-
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1], [6, 256], [1, 1], 18),
-        "head_size": [64],
-        "num_heads": [71],
-        "num_kv_heads": [1],
-        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_shape": gen_shapes([1, 1, 32 * 3], [6, 2048, 1024 * 3], [1, 1, 32 * 3], 8),
+        "num_heads": list(range(1, 6)),
+        "transpose_key": [True, False],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_dtype"] != test_vector["input_b_dtype"]:
+        return True, "KV tensor dtype must be same as Q tensor dtype"
+    if test_vector["input_shape"][-1] % (test_vector["num_heads"] * 3) != 0:
+        return True, "Hidden size should be divisible by a total number of heads"
+    if (test_vector["input_shape"][-1] // (test_vector["num_heads"] * 3)) % 32 != 0:
+        return True, "Head size must be a multiple of 32"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Row major layout is not supported"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_dtype"] == ttnn.bfloat8_b:
@@ -71,12 +58,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    head_size,
     num_heads,
-    num_kv_heads,
-    input_dtype,
+    transpose_key,
+    input_a_dtype,
+    input_b_dtype,
     input_layout,
-    input_memory_config,
+    input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -84,49 +72,54 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    batch_size, sequence_size = input_shape
-    hidden_size = 4672
+    batch_size, sequence_size, hidden_size = input_shape
+    head_size = hidden_size // (3 * num_heads)
 
-    input_tensor_shape = (batch_size, sequence_size, hidden_size)
+    q_hidden_size = hidden_size // 3
 
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
-    )(input_tensor_shape)
-
-    intermediate_result = torch.reshape(
-        torch_input_tensor, (batch_size, sequence_size, num_kv_heads * 2 + num_heads, head_size)
-    )
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.float32)
+    intermediate_result = torch.reshape(torch_input_tensor, (batch_size, sequence_size, num_heads * 3, head_size))
     query, key, value = (
         intermediate_result[..., :num_heads, :],
-        intermediate_result[..., num_heads : num_heads + num_kv_heads, :],
-        intermediate_result[..., num_heads + num_kv_heads :, :],
+        intermediate_result[..., num_heads : num_heads + num_heads, :],
+        intermediate_result[..., num_heads + num_heads :, :],
     )
 
-    query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
-    key = torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size))
-    value = torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size))
+    query = tensor_to_dtype(torch.reshape(query, (batch_size, sequence_size, num_heads, head_size)), input_a_dtype)
+    key = tensor_to_dtype(torch.reshape(key, (batch_size, sequence_size, num_heads, head_size)), input_b_dtype)
+    value = tensor_to_dtype(torch.reshape(value, (batch_size, sequence_size, num_heads, head_size)), input_b_dtype)
 
     query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
     key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
     value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
 
+    if transpose_key:
+        key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
+
     torch_output_tensors = (query, key, value)
 
-    input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=input_dtype,
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor[:, :, :q_hidden_size],
+        dtype=input_a_dtype,
         layout=input_layout,
         device=device,
-        memory_config=input_memory_config,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor[:, :, q_hidden_size:],
+        dtype=input_b_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=input_b_memory_config,
     )
 
     start_time = start_measuring_time()
     output_tensors = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor,
-        kv_input_tensor=None,
+        input_tensor_a,
+        kv_input_tensor=input_tensor_b,
         num_heads=num_heads,
-        num_kv_heads=num_kv_heads,
-        transpose_key=False,
+        num_kv_heads=None,
+        transpose_key=transpose_key,
         memory_config=output_memory_config,
     )
     e2e_perf = stop_measuring_time(start_time)
