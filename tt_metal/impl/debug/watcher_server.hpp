@@ -8,9 +8,9 @@
 
 namespace tt {
 
-void watcher_init(Device *device);
-void watcher_attach(Device *device);
-void watcher_detach(Device *dev);
+void watcher_init(tt_metal::Device *device);
+void watcher_attach(tt_metal::Device *device);
+void watcher_detach(tt_metal::Device *dev);
 
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor &soc_d, CoreCoord core, uint64_t addr, uint32_t len);

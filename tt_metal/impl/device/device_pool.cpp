@@ -9,6 +9,8 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
 
+using namespace tt::tt_metal;
+
 namespace tt {
 
 namespace device_cpu_allocator {

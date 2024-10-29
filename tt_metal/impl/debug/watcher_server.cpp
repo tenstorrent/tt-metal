@@ -23,6 +23,8 @@
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
 
+using namespace tt::tt_metal;
+
 namespace tt {
 namespace watcher {
 
