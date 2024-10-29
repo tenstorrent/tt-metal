@@ -10,6 +10,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/device/device_handle.hpp"
+#include "tt_metal/impl/dispatch/arch.hpp"
 
 using namespace tt::tt_metal;
 
@@ -314,6 +315,7 @@ bool DevicePool::is_device_active(chip_id_t id) const {
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
+    populate_fd_kernels(device_ids.size(), this->num_hw_cqs);
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
