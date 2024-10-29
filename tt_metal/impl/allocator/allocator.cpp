@@ -191,8 +191,21 @@ Statistics BankManager::get_statistics() const {
 }
 
 void BankManager::dump_blocks(std::ofstream &out) const {
-    if (this->allocator_)
+    if (this->allocator_) {
         this->allocator_->dump_blocks(out);
+    }
+}
+
+void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
+    if (this->allocator_) {
+        this->allocator_->shrink_size(shrink_size, bottom_up);
+    }
+}
+
+void BankManager::reset_size() {
+    if (this->allocator_) {
+        this->allocator_->reset_size();
+    }
 }
 
 DeviceAddr get_unreserved_base_address(const Allocator &allocator, const HalMemType &mem_type) {
@@ -378,6 +391,30 @@ void verify_safe_allocation(Allocator& allocator) {
 }
 
 const std::unordered_set<Buffer *> &get_allocated_buffers(const Allocator &allocator) { return allocator.allocated_buffers; }
+
+void shrink_allocator_size(
+    Allocator &allocator,
+    const BufferType &buffer_type,
+    DeviceAddr shrink_size,
+    bool bottom_up) {
+    switch (buffer_type) {
+        case BufferType::DRAM:
+            allocator.dram_manager.shrink_size(shrink_size, bottom_up);
+            break;
+        case BufferType::L1:
+            allocator.l1_manager.shrink_size(shrink_size, bottom_up);
+            break;
+        case BufferType::L1_SMALL:
+            allocator.l1_small_manager.shrink_size(shrink_size, bottom_up);
+            break;
+        case BufferType::TRACE:
+            allocator.trace_buffer_manager.shrink_size(shrink_size, bottom_up);
+            break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
 
 DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer) {
     DeviceAddr address = 0;

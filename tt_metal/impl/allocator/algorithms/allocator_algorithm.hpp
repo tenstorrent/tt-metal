@@ -58,11 +58,16 @@ class Algorithm {
 
     virtual void dump_blocks(std::ofstream &out) const = 0;
 
+    virtual void shrink_size(DeviceAddr shrink_size, bool bottom_up=true) = 0;
+
+    virtual void reset_size() = 0;
+
    protected:
     DeviceAddr max_size_bytes_;
     DeviceAddr offset_bytes_;
     DeviceAddr min_allocation_size_;
     DeviceAddr alignment_;
+    DeviceAddr shrink_size_ = 0;
     std::optional<DeviceAddr> lowest_occupied_address_;
 };
 

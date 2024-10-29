@@ -58,6 +58,9 @@ class BankManager {
 
     void dump_blocks(std::ofstream &out) const;
 
+    void shrink_size(DeviceAddr shrink_size, bool bottom_up=true);
+    void reset_size();
+
    private:
     void deallocate_buffer_(DeviceAddr address);
 
@@ -104,6 +107,8 @@ void dump_memory_blocks(const Allocator &allocator, const BufferType &buffer_typ
 std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator &allocator, uint32_t bank_id);
 
 DeviceAddr base_alloc(const AllocatorConfig & config, BankManager &bank_manager, DeviceAddr size, DeviceAddr page_size, bool bottom_up, std::optional<uint32_t> num_shards);
+
+void shrink_allocator_size(Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up=true);
 
 DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer);
 

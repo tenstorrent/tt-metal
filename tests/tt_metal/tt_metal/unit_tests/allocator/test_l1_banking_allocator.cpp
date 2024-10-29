@@ -26,14 +26,12 @@ uint64_t get_alloc_limit(const tt::tt_metal::Device *device) {
 
 }   // namespace unit_tests::test_l1_banking_allocator
 
-// TODO: Uplift to DeviceFixture once it does not skip GS
-TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
+TEST_F(DeviceSingleCardFixture, TestL1BuffersAllocatedTopDown) {
 
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
     size_t total_size_bytes = 0;
 
-    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(device);
+    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->device_);
 
     std::vector<std::shared_ptr<Buffer>> buffers;
     int alloc_size_idx = 0;
@@ -44,23 +42,19 @@ TEST_F(BasicFixture, TestL1BuffersAllocatedTopDown) {
         if (total_buffer_size + buffer_size >= alloc_limit) {
             break;
         }
-        auto buffer = tt::tt_metal::Buffer::create(device, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
+        auto buffer = tt::tt_metal::Buffer::create(this->device_, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
         buffers.emplace_back(std::move(buffer));
         total_buffer_size += buffer_size;
-        EXPECT_EQ(buffers.back()->address(), device->l1_size_per_core() - total_buffer_size);
+        EXPECT_EQ(buffers.back()->address(), this->device_->l1_size_per_core() - total_buffer_size);
     }
     buffers.clear();
-
-    tt::tt_metal::CloseDevice(device);
 }
 
-// TODO: Uplift to DeviceFixture once it does not skip GS
-TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
-    tt::tt_metal::Device *device = tt::tt_metal::CreateDevice(0, 1, 0);
-    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(device);
+TEST_F(DeviceSingleCardFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
+    uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->device_);
 
     tt::tt_metal::InterleavedBufferConfig l1_config{
-                    .device=device,
+                    .device=this->device_,
                     .size = alloc_limit + 64,
                     .page_size = alloc_limit + 64,
                     .buffer_type = tt::tt_metal::BufferType::L1
@@ -69,6 +63,4 @@ TEST_F(BasicFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
     EXPECT_ANY_THROW(
         auto buffer = tt::tt_metal::CreateBuffer(l1_config);
     );
-
-    tt::tt_metal::CloseDevice(device);
 }

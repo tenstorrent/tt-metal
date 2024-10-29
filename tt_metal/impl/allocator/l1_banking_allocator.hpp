@@ -23,7 +23,7 @@ uint64_t alloc_at_addr_in_compute_and_storage(const AllocatorConfig &config, Ban
 }   // namespace allocator
 
 
-// Currently only designed for Grayskull.
+// For Grayskull:
 // There are 108 (9x12) compute and storage cores where each core has one 1 MB bank with top 512 KB (non-exclusively) dedicated to L1 buffer storage.
 // Circular buffers can grow into L1 buffer storage space but L1 buffers cannot grow past 512 KB.
 // There are an additional 10 storage cores where each core has two banks of 512 KB dedicated solely to L1 buffer storage.
