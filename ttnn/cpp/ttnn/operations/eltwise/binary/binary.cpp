@@ -114,9 +114,12 @@ auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_ten
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[1] > second_shape[1]) {
-            TT_FATAL(second_shape[1] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{1, first_shape[1], 1, 1});
+        if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
+            TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
+            int rank_a = first_shape.rank();
+            std::vector<uint32_t> repeat_dim(rank_a, 1);
+            repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
+            Shape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);
         }
     };
