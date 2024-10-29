@@ -79,6 +79,27 @@ class DeviceSingleCardFixture : public ::testing::Test {
     size_t num_devices_;
 };
 
+class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
+   protected:
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (not slow_dispatch) {
+            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
+            GTEST_SKIP();
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        if (arch_ != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP();
+        }
+
+        const chip_id_t mmio_device_id = 0;
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        device_ = reserved_devices_.at(mmio_device_id);
+
+        num_devices_ = reserved_devices_.size();
+    }
+};
+
 class GalaxyFixture : public ::testing::Test {
    protected:
     void SkipTestSuiteIfNotGalaxyMotherboard()
