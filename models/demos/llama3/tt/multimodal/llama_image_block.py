@@ -92,46 +92,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-    def forward(self, x, mask):
-        return self.forward_tt(x, mask)
-        if os.environ.get("BLOCK") == "tt":
-            return self.forward_tt(x, mask)
-        else:
-            return self.forward_pt(x, mask)
-
-    def forward_pt(self, x_11SH, mask=None):
-        seq_len = x_11SH.shape[-2]
-        assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-
-        attn_out = self.attn(self.ln_1(x_11SH), mask=mask)
-        if self.gated:
-            assert False
-            attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
-
-        x = ttnn.to_torch(x_11SH, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        attn_out = ttnn.to_torch(attn_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        res = (x + attn_out).bfloat16().float()
-        res = ttnn.from_torch(
-            res,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        )
-        mlp_out = self.mlp(self.ln_2(res))
-        if self.gated:
-            mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
-        res = ttnn.to_torch(res, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        mlp_out = ttnn.to_torch(mlp_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
-        out = (res + mlp_out).bfloat16().float()
-        out = ttnn.from_torch(
-            out,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-        )
-        return out
-
-    def forward_tt(self, x_11SH, mask=None):
+    def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
