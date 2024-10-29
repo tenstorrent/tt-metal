@@ -15,6 +15,7 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
 #include <ranges>
 
@@ -33,6 +34,9 @@ namespace operations {
 namespace data_movement {
     using ConcatArgs = std::tuple<const std::vector<ttnn::Tensor>&, int>;
     using OwnedConcatArgs = std::tuple<std::vector<ttnn::Tensor>, int>;
+
+    // FIXME: this papers over an issue in pad, so we should probably move the
+    // fix there.
     MassagedOperation<ttnn::Tensor,
                       const std::vector<ttnn::Tensor>&,
                       int> build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output_memory_config) {
@@ -43,7 +47,10 @@ namespace data_movement {
                                     const std::vector<ttnn::Tensor>&,
                                     int> {
                 .predicate = [input_rank](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
-                    bool res = input_rank < 4;
+                    bool inputs_are_device_tensors = std::all_of(tensors.begin(), tensors.end(), [](const ttnn::Tensor& tensor) {
+                        return tensor.storage_type() != ttnn::StorageType::BORROWED && tensor.storage_type() != ttnn::StorageType::OWNED;
+                    });
+                    bool res = input_rank < 4 && inputs_are_device_tensors; // pad only rejects rank != 4 for device tensors
                     concat_db_print(res, "unsqueeze to 4D required");
                     return res;
                 },
@@ -119,12 +126,17 @@ namespace data_movement {
                 .post_transform = [queue_id](const ttnn::Tensor& output, const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
                     // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
                     if (output.get_layout() != ttnn::TILE_LAYOUT) {
-                        return ttnn::tilize(pad_to_tile_vol(queue_id,
-                                                            output,
-                                                            0.0f,
-                                                            true,
-                                                            output.memory_config()));
+                        auto padded = pad_to_tile_vol(queue_id,
+                                                      output,
+                                                      0.0f,
+                                                      true,
+                                                      output.memory_config());
+                        concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
+                        auto tilized = ttnn::tilize_with_val_padding(padded, padded.get_legacy_shape(), 0.0f, output.memory_config());
+                        concat_db_print(true, "[DEBUG] tilized");
+                        return tilized;
                     }
+                    concat_db_print(true, "[DEBUG] already tilized");
                     return output;
                 },
                 .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
@@ -270,8 +282,7 @@ ttnn::Tensor ConcatOperation::invoke(
         auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
         auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
         std::vector<ttnn::Tensor> itensors(input_tensors);
-        auto massaged_concat = unsqueeze_concat.sequence(untilize_rm_retilize_concat)
-                                               .sequence(non_aligned_last_dim_concat);
+        auto massaged_concat = untilize_rm_retilize_concat.sequence(non_aligned_last_dim_concat);
         return massaged_concat(input_tensors, dim);
     }
 
