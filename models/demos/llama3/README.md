@@ -3,11 +3,13 @@
 This codebase includes the Llama3 family of models.
 
 The current version supports the following Llama3 models:
-- Llama3.1-8B
 - Llama3.2-1B
 - Llama3.2-3B
+- Llama3.1-8B
+- Llama3.2-11B
+- Llama3.1-70B (T3000-only)
 
-All the above llama models are compatible and tested on the following Tenstorrent hardware:
+All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
 - N150 (1-chip)
 - N300 (2-chips)
 - T3000 (8-chips)
@@ -19,6 +21,20 @@ All the above llama models are compatible and tested on the following Tenstorren
 Download the weights [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
 
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
+
+**For Llama3.1-70B only**, it is required to repack the weights. We provide a script to facilitate this in `models/demos/llama3/scripts/repack_weights_70b.py`.
+
+The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
+If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
+
+Note: Use the value of `5` for `chunk_size`.
+
+```
+# This concatenates the sharded checkpoints and makes it easier for us to load.
+python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size=5>
+```
+
+If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
 ### Setup TT environment
 
@@ -57,6 +73,6 @@ When running the demo, do not forget to setup the `$LLAMA_DIR` environment varia
 # Run a single continuous batch with instruct weights
 pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
 
-# Run 3 continuous batches with general weights
-pytest models/demos/llama3/demo/demo.py -k 'general and 3_batch'
+# Run 2 continuous batches with general weights
+pytest models/demos/llama3/demo/demo.py -k 'general and 2_batch'
 ```
