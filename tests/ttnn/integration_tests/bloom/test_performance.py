@@ -10,6 +10,10 @@ from transformers import BloomConfig, BloomForCausalLM, BloomForQuestionAnswerin
 
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom
 from models.demos.grayskull.functional_bloom.tt import ttnn_optimized_functional_bloom
+
+
+from models.utility_functions import is_grayskull, is_wormhole_b0
+from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
@@ -36,12 +40,15 @@ def get_expected_times_causal_lm(functional_bloom):
     }[functional_bloom]
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
 def test_performance_of_bloom_for_question_answering(
-    device, use_program_cache, functional_bloom, batch_size=8, max_length=384
+    device,
+    use_program_cache,
+    functional_bloom,
+    batch_size=4,
+    max_length=384,
 ):
     disable_persistent_kernel_cache()
 
@@ -117,7 +124,6 @@ def test_performance_of_bloom_for_question_answering(
     ttnn_optimized_functional_bloom.ASSUME_FUSED_SOFTMAX = False
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("functional_bloom", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
@@ -191,3 +197,71 @@ def test_performance_of_causal_lm(device, use_program_cache, functional_bloom, b
 
     # TODO: don't modify the config globally. Pass it into the functions instead
     ttnn_optimized_functional_bloom.ASSUME_FUSED_SOFTMAX = False
+
+
+from models.utility_functions import is_grayskull, is_wormhole_b0
+from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    [1],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_perf_bloom_for_question_answering(batch_size, reset_seeds):
+    subdir = ""
+    num_iterations = 1
+    margin = 0.03
+    if is_grayskull():
+        expected_perf = 21202.73
+    elif is_wormhole_b0():
+        expected_perf = 49.37
+
+    command = f"pytest tests/ttnn/integration_tests/bloom/test_ttnn_optimized_functional_bloom.py::test_bloom_for_question_answering"
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_perf}
+
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    prep_device_perf_report(
+        model_name=f"tt_bloom{batch_size}",
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    [4],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_perf_bloom_for_causal_lm(batch_size, reset_seeds):
+    subdir = ""
+    num_iterations = 1
+    margin = 0.03
+    if is_grayskull():
+        expected_perf = 21202.73
+    elif is_wormhole_b0():
+        expected_perf = 49.37
+
+    command = (
+        f"pytest tests/ttnn/integration_tests/bloom/test_ttnn_optimized_functional_bloom.py::test_bloom_for_causal_lm"
+    )
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
+    expected_perf_cols = {inference_time_key: expected_perf}
+
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols)
+    prep_device_perf_report(
+        model_name=f"tt_bloom{batch_size}",
+        batch_size=batch_size,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
