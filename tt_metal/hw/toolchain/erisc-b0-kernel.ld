@@ -98,12 +98,6 @@ SECTIONS
    __ldm_bss_end = .;
   } > REGION_APP_KERNEL_DATA :data
 
-  l1_memory :
-  {
-    *(l1_memory)
-    *(l1_memory_const) /* gcc complains about const and non-const data in the same segment. */
-  } > ETH_L1
-
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
