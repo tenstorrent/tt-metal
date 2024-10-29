@@ -12,6 +12,8 @@
 #include "eth_l1_address_map.h"
 
 namespace ttnn {
+namespace ccl{
+namespace all_gather_detail{
 
 AllGather create_all_gather_struct(
     const Tensor& input_tensor,
@@ -30,7 +32,8 @@ AllGather create_all_gather_struct(
     return ttnn::AllGather{
         dim, num_links, num_devices, device_index, user_defined_num_workers, user_defined_num_buffers_per_channel, receiver_device_id, sender_device_id, memory_config.value_or(input_tensor.memory_config()), topology};
 }
-
+} // namespace all_gather_detail
+} // namespace ccl
 
 AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor const& input_tensor, bool fuse_op) {
     if (fuse_op) {
@@ -175,6 +178,7 @@ Tensor all_gather(
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
     auto devices = input_tensor.get_workers();
     uint32_t num_devices = devices.size();
+    TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
     if (num_devices == 2){
@@ -190,7 +194,7 @@ Tensor all_gather(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
+                ttnn::ccl::all_gather_detail::create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology),
                 {input_tensor});
         },
         {input_tensor},
