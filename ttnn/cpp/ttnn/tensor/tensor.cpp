@@ -226,7 +226,7 @@ Tensor::~Tensor() {
     tensor_attributes.reset();
 }
 
-Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.as_vector()), dtype, layout, tile) {}
+Tensor::Tensor(const Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) : Tensor(storage, ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
@@ -682,7 +682,7 @@ Tensor create_device_tensor(
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, shard_spec_buffer, tile);
 
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
+        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.view(), padded_shape.view()), data_type, layout, tile);
         output = tt::tt_metal::set_tensor_id(output);
         GraphTracker::instance().track_function_end(output);
         return output;
@@ -691,7 +691,7 @@ Tensor create_device_tensor(
             tensor_impl::packed_buffer_size_bytes_wrapper(data_type, compute_buffer_size(padded_shape, data_type));
         auto device_buffer = tensor_impl::allocate_buffer_on_device(
             packed_size_in_bytes, device, padded_shape, data_type, layout, memory_config, std::nullopt, tile);
-        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.as_vector(), padded_shape.as_vector()), data_type, layout, tile);
+        auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(logical_shape.view(), padded_shape.view()), data_type, layout, tile);
         output = tt::tt_metal::set_tensor_id(output);
         GraphTracker::instance().track_function_end(output);
         return output;

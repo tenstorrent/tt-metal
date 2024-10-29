@@ -1185,10 +1185,10 @@ Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, 
             return stride;
         };
 
-        std::vector<std::array<uint32_t, 2>> pad_size{};
-        std::vector<uint32_t> input_strides{};
-        std::vector<uint32_t> output_strides{};
-        std::vector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
+        ttnn::SmallVector<uint32_t> input_strides{};
+        ttnn::SmallVector<uint32_t> output_strides{};
+        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         for (auto index = 0; index < output_shape.rank(); index++) {
             // Check if input tensor fits in output tensor given the input tensor start indices
@@ -1283,7 +1283,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start,
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
-    std::vector<uint32_t> output_shape{};
+    ttnn::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] < input_shape[i]);
@@ -1296,7 +1296,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start,
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const auto& input_buffer) {
-        std::vector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));

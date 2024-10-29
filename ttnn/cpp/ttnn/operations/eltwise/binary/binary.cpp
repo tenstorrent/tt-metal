@@ -98,11 +98,8 @@ inline Tensor binary_impl(
     return output_tensor;
 }
 
-template<BinaryOpType binary_op_type>
-auto preprocess_inputs(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg) {
-
+template <BinaryOpType binary_op_type>
+auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg) {
     Tensor input_tensor_a = input_tensor_a_arg;
     Tensor input_tensor_b = input_tensor_b_arg;
 
@@ -149,8 +146,8 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     std::optional<Tensor> optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-
-    auto [input_tensor_a, input_tensor_b] = detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
+    auto [input_tensor_a, input_tensor_b] =
+        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
     return ttnn::prim::binary(
         queue_id,
@@ -184,13 +181,35 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         input_tensor_a_activation);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperation<binary_op_type>::invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor &input_tensor_a,
+    float scalar,
+    const std::optional<const DataType> &output_dtype,
+    const std::optional<ttnn::MemoryConfig> &memory_config,
+    const std::optional<Tensor> &optional_output_tensor,
+    std::optional<unary::FusedActivations> activations,
+    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
+    return ttnn::prim::binary(
+        queue_id,
+        input_tensor_a,
+        scalar,
+        binary_op_type,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        activations,
+        input_tensor_a_activation);
+}
+
 // TODO: this case should use BinaryWithScalarProgramConfig and there should be a custom kernel to run this
 // Currently, this is exactly how tt::tt_metal::add_unary works
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperation<binary_op_type>::invoke(
     const ttnn::Tensor &input_tensor_a,
-    const float scalar,
-    const std::optional<const DataType> &dtype,
+    float scalar,
+    const std::optional<const DataType> &output_dtype,
     const std::optional<ttnn::MemoryConfig> &memory_config,
     const std::optional<Tensor> &optional_output_tensor,
     std::optional<unary::FusedActivations> activations,
@@ -199,38 +218,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         DefaultQueueId,
         input_tensor_a,
         scalar,
-        dtype,
-        memory_config,
-        optional_output_tensor,
-        activations,
-        input_tensor_a_activation);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor BinaryOperation<binary_op_type>::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor &input_tensor_a,
-    const float scalar,
-    const std::optional<const DataType> &dtype,
-    const std::optional<ttnn::MemoryConfig> &memory_config,
-    const std::optional<Tensor> &optional_output_tensor,
-    std::optional<unary::FusedActivations> activations,
-    std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    using namespace tt::constants;
-    // Cast Float Scalar to a device tensor
-    auto host_buffer = owned_buffer::create<::bfloat16>(static_cast<std::size_t>(TILE_HEIGHT * TILE_WIDTH));
-    host_buffer[0] = scalar;
-    Tensor scalar_tensor_host = Tensor(
-        OwnedStorage{host_buffer},
-        ttnn::Shape(std::array<std::uint32_t, 2>{1, 1}, std::array<std::uint32_t, 2>{TILE_HEIGHT, TILE_WIDTH}),
-        DataType::BFLOAT16,
-        Layout::TILE);
-    Tensor scalar_tensor_device = scalar_tensor_host.to(input_tensor_a.device());
-    // TODO(arakhmati): #7637 pass in memory_config instead of operation::DEFAULT_OUTPUT_MEMORY_CONFIG
-    return BinaryOperation::invoke(
-        input_tensor_a,
-        scalar_tensor_device,
-        dtype,
+        output_dtype,
         memory_config,
         optional_output_tensor,
         activations,
@@ -253,7 +241,8 @@ Tensor RelationalBinary<binary_op_type>::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    auto [input_tensor_a, input_tensor_b] = detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
+    auto [input_tensor_a, input_tensor_b] =
+        detail::preprocess_inputs<binary_op_type>(input_tensor_a_arg, input_tensor_b_arg);
 
     auto output_memory_config = memory_config.value_or(input_tensor_a.memory_config());
     DataType dtype = output_dtype.value_or(input_tensor_a.get_dtype());
@@ -334,25 +323,34 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceRelationalBinary<binary_op_type>::invoke(
-    const Tensor &input_tensor_a_arg,
-    const Tensor &input_tensor_b_arg) {
-
-    return RelationalBinary<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
+    const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg) {
+    return RelationalBinary<binary_op_type>::invoke(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        std::nullopt,
+        std::nullopt,
+        input_tensor_a_arg,
+        std::nullopt,
+        std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceRelationalBinary<binary_op_type>::invoke(
-    const ttnn::Tensor &input_tensor_a,
-    const float scalar) {
-    return RelationalBinary<binary_op_type>::invoke(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, std::nullopt, std::nullopt);
+Tensor InplaceRelationalBinary<binary_op_type>::invoke(const ttnn::Tensor &input_tensor_a, const float scalar) {
+    return RelationalBinary<binary_op_type>::invoke(
+        input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, std::nullopt, std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceLogicalBinary<binary_op_type>::invoke(
-    const Tensor &input_tensor_a_arg,
-    const Tensor &input_tensor_b_arg) {
-
-    return BinaryOperation<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, std::nullopt, std::nullopt);
+    const Tensor &input_tensor_a_arg, const Tensor &input_tensor_b_arg) {
+    return BinaryOperation<binary_op_type>::invoke(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        std::nullopt,
+        std::nullopt,
+        input_tensor_a_arg,
+        std::nullopt,
+        std::nullopt);
 }
 
 template <BinaryOpType binary_op_type>
@@ -361,8 +359,14 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     const Tensor &input_tensor_b_arg,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-
-    return BinaryOperation<binary_op_type>::invoke(input_tensor_a_arg, input_tensor_b_arg, std::nullopt, std::nullopt, input_tensor_a_arg, activations, input_tensor_a_activation);
+    return BinaryOperation<binary_op_type>::invoke(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        std::nullopt,
+        std::nullopt,
+        input_tensor_a_arg,
+        activations,
+        input_tensor_a_activation);
 }
 
 template <BinaryOpType binary_op_type>
@@ -371,7 +375,8 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     const float scalar,
     std::optional<unary::FusedActivations> activations,
     std::optional<unary::UnaryWithParam> input_tensor_a_activation) {
-    return BinaryOperation<binary_op_type>::invoke(input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, activations, input_tensor_a_activation);
+    return BinaryOperation<binary_op_type>::invoke(
+        input_tensor_a, scalar, std::nullopt, std::nullopt, input_tensor_a, activations, input_tensor_a_activation);
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;
@@ -402,7 +407,6 @@ template struct InplaceRelationalBinary<BinaryOpType::GTE>;
 template struct InplaceRelationalBinary<BinaryOpType::LTE>;
 template struct InplaceRelationalBinary<BinaryOpType::EQ>;
 template struct InplaceRelationalBinary<BinaryOpType::NE>;
-
 
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
