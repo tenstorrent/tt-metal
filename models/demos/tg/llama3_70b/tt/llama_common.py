@@ -88,10 +88,10 @@ def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_li
 
 
 def tt_composite_sharded_all_reduce(
-    input_tensor, mesh_device, cluster_axis, dim=3, num_links=2, reduce_scatter_mem_cfg=None
+    input_tensor, mesh_device, cluster_axis, dim=3, num_links=2, reduce_scatter_mem_cfg=None, all_gather_mem_cfg=None
 ):
     input_mem_cfg = input_tensor.memory_config()
-    reduce_scattered_tensor = ttnn.all_gather(
+    reduce_scattered_tensor = ttnn.reduce_scatter(
         input_tensor,
         scatter_dim=dim,
         math_op=ttnn.ReduceType.Sum,

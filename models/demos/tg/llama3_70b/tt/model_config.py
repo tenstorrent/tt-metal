@@ -118,9 +118,9 @@ def set_attention_config(model_config, max_batch_size):
         compute_with_storage_grid_size=(8, 5),
         in0_block_w=2,
         out_subblock_h=1,
-        out_subblock_w=2,
+        out_subblock_w=1,
         per_core_M=1,
-        per_core_N=2,
+        per_core_N=1,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
@@ -197,9 +197,16 @@ def set_attention_config(model_config, max_batch_size):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    decode_config["QKV_OUT_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32, 1280 // 10),  # mesh_cols = 4
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     decode_config["QKV_OUT_REDUCE_SCATTER_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
         shape=(32, (1280 // mesh_cols) // 10),  # mesh_cols = 4
-        core_grid=ttnn.CoreGrid(y=2, x=2),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -207,6 +214,14 @@ def set_attention_config(model_config, max_batch_size):
     decode_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
         shape=(32 * mesh_rows, 2048 // 32),  # mesh_rows = 8
         core_grid=ttnn.CoreGrid(y=4, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    decode_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+        shape=(32, 2048 // 8 // mesh_rows),  # mesh_rows = 8
+        core_grid=ttnn.CoreGrid(y=1, x=8),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,

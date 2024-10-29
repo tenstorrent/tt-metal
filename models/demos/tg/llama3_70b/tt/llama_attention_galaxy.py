@@ -19,6 +19,7 @@ from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_gather,
     tt_sharded_all_reduce,
     tt_sharded_all_gather,
+    tt_composite_sharded_all_reduce,
 )
 from models.demos.t3000.falcon40b.tt.model_utils import (
     matmul_2d_config_from_tensor_shapes as get_matmul_2d_config_from_tensor_shapes,
@@ -258,12 +259,24 @@ class TtLlamaAttention_galaxy:
         )
         xs.deallocate(True)
 
-        fused_query_key_value = tt_sharded_all_reduce(
+        # fused_query_key_value = tt_sharded_all_reduce(
+        #     fused_query_key_value,
+        #     self.mesh_device,
+        #     cluster_axis=1,
+        #     num_links=2,
+        #     memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0]),
+        # )
+        fused_query_key_value = ttnn.to_memory_config(
+            fused_query_key_value, self.attention_config["QKV_OUT_MEMCFG"](self.cluster_shape[0])
+        )
+
+        fused_query_key_value = tt_composite_sharded_all_reduce(
             fused_query_key_value,
             self.mesh_device,
             cluster_axis=1,
             num_links=2,
-            memory_config=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0]),
+            reduce_scatter_mem_cfg=self.attention_config["QKV_OUT_REDUCE_SCATTER_MEMCFG"](self.cluster_shape[0]),
+            all_gather_mem_cfg=self.attention_config["QKV_OUT_GATHERED_MEMCFG"](self.cluster_shape[0]),
         )
 
         # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -407,12 +420,19 @@ class TtLlamaAttention_galaxy:
             compute_kernel_config=self.attention_config["COMPUTE_KERNEL_SELFOUT"],
         )
 
-        attn_output = tt_sharded_all_reduce(
+        # attn_output = tt_sharded_all_reduce(
+        #     attn_output,
+        #     self.mesh_device,
+        #     cluster_axis=0,
+        #     num_links=2,
+        #     memory_config=self.attention_config["SELF_OUT_GATHERED_MEMCFG"](self.cluster_shape[1]),
+        # )
+        attn_output = tt_composite_sharded_all_reduce(
             attn_output,
             self.mesh_device,
             cluster_axis=0,
             num_links=2,
-            memory_config=self.attention_config["SELF_OUT_GATHERED_MEMCFG"](self.cluster_shape[1]),
+            reduce_scatter_mem_cfg=self.attention_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"](self.cluster_shape[1]),
         )
 
         return attn_output
