@@ -11,6 +11,13 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 namespace ttnn {
 
+enum class AllReduceStrategy {
+    AllGatherLocalReduce,
+    ReduceScatterAllGather,
+    //Fused,
+    Invalid
+};
+
 struct AllReduce {
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t num_links;
