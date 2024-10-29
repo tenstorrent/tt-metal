@@ -31,8 +31,8 @@ struct Buffer {
     inline const void* data() const noexcept { return static_cast<void*>(this->data_ptr_); }
 
    private:
-    T* data_ptr_;
-    std::size_t size_;
+    T* data_ptr_ = nullptr;
+    std::size_t size_ = 0;
 };
 
 template <typename T>
