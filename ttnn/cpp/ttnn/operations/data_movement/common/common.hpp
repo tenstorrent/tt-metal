@@ -84,23 +84,38 @@ namespace data_movement {
         }
 
         MassagedOperation sequence(const MassagedOperation& other) {
+            std::shared_ptr<bool> t1_required = std::make_shared<bool>(false);
+            std::shared_ptr<bool> t2_required = std::make_shared<bool>(false);
+            std::shared_ptr<bool> t1_then_t2_required = std::make_shared<bool>(false);
+
             auto merged_predicate = [p1 = this->predicate_,
-                                     p2 = other.predicate_](OpInputTypes... args) -> bool {
-                return p1(args...) or p2(args...);
+                                     p2 = other.predicate_,
+                                     t1_required,
+                                     t2_required](OpInputTypes... args) -> bool {
+                if (p1(args...)) {
+                    *t1_required = true;
+                }
+                if (p2(args...)) {
+                    *t2_required = true;
+                }
+                return *t1_required or *t2_required;
             };
+
             auto merged_pre_transform = [t1 = this->pre_transform_,
                                          t2 = other.pre_transform_,
                                          p1 = this->predicate_,
-                                         p2 = other.predicate_](OpInputTypes... args) -> OwnedArgsType {
-                // this is ugly, but I couldn't find a way around it since
-                // the OpInputTypes may contain consts/refs.
-                if (p1(args...)) {
+                                         p2 = other.predicate_,
+                                         t1_required,
+                                         t2_required,
+                                         t1_then_t2_required](OpInputTypes... args) -> OwnedArgsType {
+                if (*t1_required) {
                     auto transformed_args = t1(args...);
                     if (std::apply(p2, transformed_args)) {
+                        *t1_then_t2_required = true;
                         return std::apply(t2, transformed_args);
                     }
                     return transformed_args;
-                } else if (p2(args...)) {
+                } else if (*t2_required) {
                     return t2(args...);
                 } else {
                     return std::make_tuple(args...);
@@ -109,41 +124,44 @@ namespace data_movement {
 
             auto merged_post_transform = [t1 = this->post_transform_,
                                           t2 = other.post_transform_,
-                                          p1 = this->predicate_,
-                                          p2 = other.predicate_,
-                                          this_pretransform = this->pre_transform_](OpOutputType output, OpInputTypes... args) -> OpOutputType {
-
-                OpOutputType transformed_output = output;
-                if (p1(args...)) {
-                    // for post-transformation, we need to go in reverse order
-                    auto pretransformed_args = this_pretransform(args...);
-                    if (std::apply(p2, pretransformed_args)) {
-                        transformed_output = std::visit([&transformed_output, &pretransformed_args](auto&& f) -> OpOutputType {
-                            if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                                return std::apply(f, std::tuple_cat(std::make_tuple(transformed_output), pretransformed_args));
-                            } else {
-                                return f(transformed_output);
-                            }
-                        }, t2);
-                    }
-                    transformed_output = std::visit([&transformed_output, &args...](auto&& f) -> OpOutputType {
+                                          t1_then_t2_required,
+                                          t1_required,
+                                          t2_required](OpOutputType output, OpInputTypes... args) -> OpOutputType {
+                if (*t1_then_t2_required) {
+                    auto t2_output = std::visit([&output, &args...](auto&& f) -> OpOutputType {
                         if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(transformed_output, args...);
+                            return f(output, args...);
                         } else {
-                            return f(transformed_output);
-                        }
-                    }, t1);
-                }
-                else if (p2(args...)) {
-                    transformed_output = std::visit([&transformed_output, &args...](auto&& f) -> OpOutputType {
-                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(transformed_output, args...);
-                        } else {
-                            return f(transformed_output);
+                            return f(output);
                         }
                     }, t2);
+                    auto t1_output = std::visit([&t2_output, &args...](auto&& f) -> OpOutputType {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
+                            return f(t2_output, args...);
+                        } else {
+                            return f(t2_output);
+                        }
+                    }, t1);
+                    return t1_output;
+                } else if (*t1_required) {
+                    return std::visit([&output, &args...](auto&& f) -> OpOutputType {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
+                            return f(output, args...);
+                        } else {
+                            return f(output);
+                        }
+                    }, t1);
+                } else if (*t2_required) {
+                    return std::visit([&output, &args...](auto&& f) -> OpOutputType {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
+                            return f(output, args...);
+                        } else {
+                            return f(output);
+                        }
+                    }, t2);
+                } else {
+                    return output;
                 }
-                return transformed_output;
             };
 
             return MassagedOperation(
