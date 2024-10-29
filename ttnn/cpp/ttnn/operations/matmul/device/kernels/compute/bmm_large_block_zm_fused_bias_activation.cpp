@@ -28,6 +28,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t mm_partials_cb_id,
+    bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
@@ -43,7 +44,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
     mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -175,6 +176,7 @@ void MAIN {
                             in0_cb_id,
                             in1_cb_id,
                             mm_partials_cb_id,
+                            in1_transpose_tile,
                             out_subblock_num_tiles,
                             out_subblock_w,
                             out_subblock_h,

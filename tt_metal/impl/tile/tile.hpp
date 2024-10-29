@@ -47,10 +47,6 @@ struct Tile {
     Tile(std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH}, bool transpose_tile = false) :
         tile_shape(tile_shape) {
 
-        // if (transpose_tile) {
-        //     std::swap(this->tile_shape[0], this->tile_shape[1]);
-        // }
-
         auto it = std::find_if(TILE_FACE_HW_CHOICES.begin(), TILE_FACE_HW_CHOICES.end(),
                             [this](const auto& pair) {
                                 if (pair[0] == this->tile_shape) {

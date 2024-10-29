@@ -296,9 +296,6 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     uint32_t per_core_M, per_core_N;
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
-    // if (input_tensor_b.get_tile().get_transpose_of_faces()) {
-    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    // }
     if (mcast_in0) {
         per_core_M = M / in0_tile_shape[0];
         per_core_N = div_up(div_up(N, grid_size.x * grid_size.y), in1_tile_shape[1]);
@@ -343,9 +340,6 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
 
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
-    // if (input_tensor_b.get_tile().get_transpose_of_faces()) {
-    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    // }
 
     // Parameters for large matmul with reuse
     uint32_t B = batch_size_a;
@@ -586,9 +580,6 @@ MatmulProgramConfig get_matmul_program_config(
 
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
-    // if (input_tensor_b.get_tile().get_transpose_of_faces()) {
-    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    // }
 
     // MCAST matmuls only support input_b in INTERLEAVED
     if (matmul) {
@@ -999,10 +990,6 @@ void Matmul::validate(
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
 
-    // if (input_tensor_b.get_tile().get_transpose_of_faces()) {
-    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    // }
-
     if (input_tensor_a.device()->arch() == tt::ARCH::GRAYSKULL) {
         TT_FATAL(
             (input_tensor_a.get_tile().get_tile_shape()[1] == TILE_WIDTH && input_tensor_a.get_tile().get_tile_shape()[0] == TILE_HEIGHT),
@@ -1370,9 +1357,6 @@ std::vector<Tensor> Matmul::create_output_tensors(const std::vector<Tensor>& inp
     const auto& input_tensor_b = input_tensors.at(1);
     auto in0_tile_shape = input_tensor_a.get_tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tile().get_tile_shape();
-    // if (input_tensor_b.get_tile().get_transpose_of_faces()) {
-    //     std::swap(in1_tile_shape[0], in1_tile_shape[1]);
-    // }
     auto output_tile = this->output_tile.value();
     auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;

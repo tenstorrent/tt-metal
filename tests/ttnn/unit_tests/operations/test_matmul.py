@@ -190,22 +190,14 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 
 
 @run_for_wormhole_b0()
-# @pytest.mark.parametrize("k", [8192])
-# @pytest.mark.parametrize("n", [1280])
-# @pytest.mark.parametrize("has_bias", [False, True])
-# @pytest.mark.parametrize("grid_size", [(8, 1)])
-# @pytest.mark.parametrize("tile_h", [16, 32])
-# @pytest.mark.parametrize("tile_w", [16, 32])
-# @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
-# @pytest.mark.parametrize("transpose_tile", [True, False])
 @pytest.mark.parametrize("k", [8192])
 @pytest.mark.parametrize("n", [1280])
-@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 1)])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
 def test_matmul_in1_dram_sharded_tiny_tile(
     device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
@@ -336,28 +328,19 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 
 
 @run_for_wormhole_b0()
-# @pytest.mark.parametrize("m", [1536])
-# @pytest.mark.parametrize("k", [1024])
-# @pytest.mark.parametrize("n", [3072])
-# @pytest.mark.parametrize("has_bias", [False, True])
-# @pytest.mark.parametrize("grid_size", [(8, 4)])
-# @pytest.mark.parametrize("tile_h", [16, 32])
-# @pytest.mark.parametrize("tile_w", [16, 32])
-# @pytest.mark.parametrize("in0_sharded", [True, False])
-# @pytest.mark.parametrize("out_sharded", [True, False])
-# @pytest.mark.parametrize("transpose_tile", [True])
-@pytest.mark.parametrize("m", [64])
-@pytest.mark.parametrize("k", [64])
-@pytest.mark.parametrize("n", [64])
-@pytest.mark.parametrize("has_bias", [False])
-@pytest.mark.parametrize("grid_size", [(2, 2)])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in0_sharded", [True])
-@pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("m", [1536])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [3072])
+@pytest.mark.parametrize("has_bias", [False, True])
+@pytest.mark.parametrize("grid_size", [(8, 4)])
+@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_w", [16, 32])
+@pytest.mark.parametrize("in0_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
 def test_matmul_2d_tiny_tile(
-    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, transpose_tile
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -368,8 +351,8 @@ def test_matmul_2d_tiny_tile(
     out_block_w = n // grid_size[0] // tile_w
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
-    in0 = torch.ones(in0_shape).bfloat16().float()
-    in1 = torch.randn(in1_shape).bfloat16().float()
+    in0 = torch.ones(in0_shape).bfloat16()
+    in1 = torch.randn(in1_shape).bfloat16()
 
     if in0_sharded:
         in0_memory_config = ttnn.create_sharded_memory_config(
@@ -391,7 +374,7 @@ def test_matmul_2d_tiny_tile(
     in1_t = ttnn.from_torch(
         in1,
         tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
-        dtype=ttnn.bfloat16,
+        dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -444,7 +427,6 @@ def test_matmul_2d_tiny_tile(
         output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
     else:
         output_tile = ttnn.Tile([tile_h, tile_w])
-    output_tile = ttnn.Tile([tile_h, tile_w])
     if has_bias:
         output_t = ttnn.linear(
             in0_t,
@@ -484,9 +466,10 @@ def test_matmul_2d_tiny_tile(
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("transpose_tile", [True])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("transpose_tile", [True, False])
 def test_matmul_1d_tiny_tile(
-    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, transpose_tile
+    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -522,7 +505,7 @@ def test_matmul_1d_tiny_tile(
     in1_t = ttnn.from_torch(
         in1,
         tile=ttnn.Tile((32, tile_w), transpose_tile=transpose_tile),
-        dtype=ttnn.bfloat16,
+        dtype=in1_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
