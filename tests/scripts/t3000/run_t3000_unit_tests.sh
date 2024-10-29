@@ -164,7 +164,7 @@ run_t3000_llama3.2-11b-vision_unit_tests() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Install Vision-specific packages
-  pip install -r models/demos/llama3/reference/llama_models/requirements.txt
+  pip install -r models/demos/llama3/requirements.txt
 
   LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
   LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_attention.py ; fail+=$?
@@ -199,7 +199,7 @@ run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
   fake_device=N300
 
   # Install Vision-specific packages
-  pip install -r models/demos/llama3/reference/llama_models/requirements.txt
+  pip install -r models/demos/llama3/requirements.txt
 
   FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
   FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_attention.py ; fail+=$?

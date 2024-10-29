@@ -9,9 +9,9 @@ from PIL import Image as PIL_Image
 from termcolor import cprint
 
 from models.demos.llama3.demo.multimodal_demo_text import create_multimodal_model
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.generation as llama_reference_generation
+import llama_models.llama3.reference_impl.generation as llama_reference_generation
 
-from models.demos.llama3.reference.llama_models.models.llama3.api.datatypes import ImageMedia, UserMessage
+from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 
 THIS_DIR = Path(__file__).parent.parent.resolve() / "reference/llama_models/models/scripts/"
 

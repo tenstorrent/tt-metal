@@ -7,7 +7,7 @@ from loguru import logger
 import os
 import ttnn
 
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (

@@ -15,8 +15,8 @@ from PIL import Image as PIL_Image
 
 from torch import nn, Tensor
 
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_model
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_model
+import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 
 import ttnn
 from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_vision import (

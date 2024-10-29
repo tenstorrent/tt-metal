@@ -7,8 +7,8 @@ from loguru import logger
 import os
 import ttnn
 
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
-from models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal import encoder_utils
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from models.demos.llama3.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.model_config import TtModelArgs

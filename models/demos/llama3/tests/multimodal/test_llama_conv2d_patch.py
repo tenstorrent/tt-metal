@@ -25,7 +25,7 @@ from models.demos.llama3.tt.multimodal.llama_conv2d_patch import (
 )
 
 from models.demos.llama3.tt.model_config import TtModelArgs
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.model as llama_reference_mod
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

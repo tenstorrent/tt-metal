@@ -24,7 +24,7 @@ from models.demos.falcon7b_common.tests.test_utils import (
     synchronize_devices,
 )
 
-import models.demos.llama3.reference.llama_models.models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
+import llama_models.llama3.reference_impl.multimodal.encoder_utils as encoder_utils
 
 
 def to_2tuple(x):
