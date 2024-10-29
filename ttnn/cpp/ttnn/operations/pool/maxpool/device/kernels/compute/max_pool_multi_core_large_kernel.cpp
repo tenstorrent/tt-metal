@@ -67,7 +67,7 @@ inline void reduce_h_fused(
     const uint32_t out_cb_id,
     const uint32_t unpA_face_r_dim) {
     constexpr uint32_t num_output_tiles = out_ntiles_c * nblocks;
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : 4;
+    uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : unpA_face_r_dim < 32 ? 2 : 4;
     constexpr uint32_t num_out_rows = 1;
     for (uint32_t out_elem_i = 0; out_elem_i < nblocks; ++out_elem_i) {
         const uint32_t curr_in_cb_id =
