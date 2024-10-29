@@ -278,7 +278,6 @@ ttnn::Tensor ConcatOperation::invoke(
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
         auto output_memory_config = memory_config.value_or(first_tensor.memory_config());
-        auto unsqueeze_concat = build_unsqueeze_concat(rank, output_memory_config);
         auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, output_memory_config);
         auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, output_memory_config);
         std::vector<ttnn::Tensor> itensors(input_tensors);
