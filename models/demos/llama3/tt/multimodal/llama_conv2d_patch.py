@@ -85,7 +85,6 @@ class TtLlamaConv2dPatch(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.program_config = None  # TODO: Update with actual program config
 
     def forward(self, x: torch.Tensor):
         x = self._unfold(x)
