@@ -53,6 +53,12 @@ public:
     const T& at(size_t idx) const {
         return data_.at(idx).value();
     }
+    bool contains(size_t idx) const {
+        if (idx >= data_.size()) {
+            return false;
+        }
+        return data_[idx].has_value();
+    }
     T& operator[](size_t idx) {
         if (idx >= data_.size()) {
             data_.resize(idx + 1);
