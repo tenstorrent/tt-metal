@@ -10,6 +10,7 @@
 #include <magic_enum.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace {
 

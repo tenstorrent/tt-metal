@@ -296,7 +296,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
+    tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
     uint32_t src1_single_tile_size = tt_metal::detail::TileSize(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t dst_single_tile_size = tt_metal::detail::TileSize(dst_cb_data_format);
@@ -305,13 +305,13 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     tt::DataFormat interim_cb1_format = src1_cb_data_format;
 
     tt_metal::Buffer* src0_buffer = a.buffer();
-    tt_metal::Buffer* src1_buffer = b.buffer();
+    tt_metal::Buffer* src1_buffer = b->buffer();
 
     tt_metal::Device* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
-    bool src1_sharded = b.memory_config().is_sharded();
+    bool src1_sharded = b->memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -324,8 +324,8 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         shard_spec = a.shard_spec().value();
         block_or_width_sharded = a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
     } else if (src1_sharded) {
-        shard_spec = b.shard_spec().value();
-        block_or_width_sharded = b.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
+        shard_spec = b->shard_spec().value();
+        block_or_width_sharded = b->memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
     } else if (out_sharded) {
         shard_spec = output.shard_spec().value();
         block_or_width_sharded = output.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
@@ -358,7 +358,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
     if (src1_sharded) {
-        cb_src1_config = cb_src1_config.set_globally_allocated_address(*b.buffer());
+        cb_src1_config = cb_src1_config.set_globally_allocated_address(*b->buffer());
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
@@ -443,7 +443,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     set_eltwise_binary_runtime_args<true>(
         program,
         a,
-        b,
+        *b,
         output,
         binary_reader_kernel_id,
         unary_writer_kernel_id,
@@ -484,7 +484,7 @@ void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
     set_eltwise_binary_runtime_args<false>(
         cached_program.program,
         input_tensor_a,
-        input_tensor_b,
+        *input_tensor_b,
         output_tensor,
         shared_variables.binary_reader_kernel_id,
         shared_variables.unary_writer_kernel_id,
