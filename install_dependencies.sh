@@ -135,7 +135,6 @@ install()
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Please use sudo."
     usage
-    exit 1
 fi
 
 install_llvm
