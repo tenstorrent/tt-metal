@@ -219,7 +219,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
     const CoreCoord core_grid_offset,
-    ttnn::ccl::OpBuildMode op_build_mode,
+    ttnn::ccl::OpFabricMode op_build_mode,
 
     /* Matmul Params */
     const std::optional<const Tensor> bias,
@@ -352,8 +352,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
         topology,
         user_defined_num_workers,
         user_defined_num_buffers_per_channel,
+        op_build_mode},
         all_gather_fused_op_signaler,
-        op_build_mode,
         core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback = program_with_callbacks.override_runtime_arguments_callback;
 

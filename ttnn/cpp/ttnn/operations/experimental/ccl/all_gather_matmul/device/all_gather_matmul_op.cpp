@@ -101,7 +101,7 @@ operation::ProgramWithCallbacks AllGatherMatmul::create_program(const std::vecto
         this->all_gather_struct.sender_device_id,
         this->all_gather_struct.topology,
         this->all_gather_core_grid_offset,
-        this->all_gather_struct.op_build_mode,
+        this->all_gather_struct.build_mode,
 
         /* Matmul Params */
         {}, // Bias
@@ -156,7 +156,7 @@ std::vector <ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology, ttnn::ccl::OpBuildMode::NON_PERSISTENT);
+            ttnn::AllGather all_gather_struct = ttnn::create_all_gather_struct(input_tensor, dim, num_links, memory_config_ag, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology, ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

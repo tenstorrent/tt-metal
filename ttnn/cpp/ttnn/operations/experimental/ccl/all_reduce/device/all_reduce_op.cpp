@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_fabric.hpp"
 #include <cstdint>
 
 namespace ttnn {
@@ -97,7 +98,7 @@ Tensor all_reduce(
             auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
             const auto& gathered_tensor = operation::run(
-                create_all_gather_struct(reshaped_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology),
+                create_all_gather_struct(reshaped_tensor, 0, num_links, output_mem_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, topology, ttnn::ccl::OpFabricMode::TEMPORARY_EDM),
                 {reshaped_tensor});
 
             auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);

@@ -36,8 +36,5 @@ ttnn::Tensor ExecuteAllGather::invoke(
         input_tensor, dim, cluster_axis, mesh_device, num_links, memory_config, num_workers, num_buffers_per_channel, topology, fabric_mode);
 }
 
-ttnn::Tensor ExecuteAllGather::invoke(const ttnn::Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<ttnn::MemoryConfig>& memory_config, ttnn::ccl::OpFabricMode fabric_mode) {
-    return ttnn::operations::ccl::all_gather(input_tensor, dim, num_links, memory_config, fabric_mode);
-}
 
 }  // namespace ttnn::operations::ccl

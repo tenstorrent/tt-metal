@@ -130,7 +130,7 @@ struct AllGather {
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    const ccl::OpBuildMode build_mode;
+    const ccl::OpFabricMode build_mode;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
@@ -139,16 +139,15 @@ struct AllGather {
 };
 
 AllGather create_all_gather_struct(
-    const MemoryConfig &input_tensor_memory_config,
-    const Device* input_tensor_device,
+    const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<size_t> user_defined_num_workersm,
+    const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices,
-    const ccl::Topology topology,
-    const ccl::OpBuildMode op_build_mode
+    const ttnn::ccl::Topology topology,
+    const ccl::OpFabricMode op_build_mode
 );
 
 // All Gather Variants
@@ -163,6 +162,7 @@ struct all_gather_op_builder_args_t {
     ccl::Topology topology;
     std::optional<size_t> user_defined_num_workers;
     std::optional<size_t> user_defined_num_buffers_per_channel;
+    ttnn::ccl::OpFabricMode op_build_mode;
 };
 
 
@@ -170,7 +170,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     all_gather_op_builder_args_t const& op_args,
-    ccl::OpBuildMode build_mode
+    const ccl::OpFabricMode build_mode
     );
 operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
@@ -178,8 +178,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     Tensor& output_tensor,
     all_gather_op_builder_args_t const& op_args,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    ccl::OpBuildMode build_mode,
-    const CoreCoord core_grid_offset = CoreCoord(0, 0));
+    const ccl::OpFabricMode build_mode,
+    const CoreCoord &core_grid_offset = CoreCoord{0, 0});
 
 
 

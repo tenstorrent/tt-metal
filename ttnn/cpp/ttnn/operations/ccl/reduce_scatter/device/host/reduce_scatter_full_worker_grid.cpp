@@ -590,10 +590,11 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel) {
-   ttnn::ccl::Topology topology) {
-    OpBuildMode op_build_mode = OpBuildMode::NON_PERSISTENT;
-    TT_ASSERT(op_build_mode == OpBuildMode::NON_PERSISTENT, "Reduce scatter only supports non-persistent mode EDM mode until support is added in the op");
+    const std::optional<size_t> user_defined_num_buffers_per_channel,
+    ttnn::ccl::Topology topology,
+   ttnn::ccl::OpFabricMode fabric_mode) {
+    OpFabricMode op_build_mode = OpFabricMode::TEMPORARY_EDM;
+    TT_ASSERT(op_build_mode == OpFabricMode::TEMPORARY_EDM, "Reduce scatter only supports non-persistent mode EDM mode until support is added in the op");
 
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(

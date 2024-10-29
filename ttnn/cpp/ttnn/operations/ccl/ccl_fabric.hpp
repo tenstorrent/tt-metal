@@ -16,11 +16,5 @@ enum class OpFabricMode {
     TEMPORARY_EDM
 };
 
-enum class OpBuildMode {
-    NON_PERSISTENT,
-    PERSISTENT_BUILD_PERSISTENT_EDM,
-    PERSISTENT_BUILD_NON_PERSISTENT_WORKERS
-};
-
 } // namespace ccl
 } // namespace ttnn

@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_workers(
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
     const CoreCoord core_grid_offset,
-    ttnn::ccl::OpBuildMode op_build_mode,
+    ttnn::ccl::OpFabricMode op_build_mode,
 
     /* Matmul Params */
     const std::optional<const Tensor> bias,

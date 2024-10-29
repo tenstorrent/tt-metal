@@ -34,7 +34,6 @@ struct ExecuteAllGather {
         const std::optional<size_t> num_buffers_per_channel = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
-        const ttnn::ccl::OpFabricMode op_fabric_mode = ttnn::ccl::OpFabricMode::TEMPORARY_EDM);
 };
 
 }  // namespace ccl

@@ -17,8 +17,7 @@
 namespace ttnn {
 
 AllGather create_all_gather_struct(
-    const MemoryConfig &input_tensor_memory_config,
-    const Device* input_tensor_device,
+    const Tensor& input_tensor,
     const uint32_t dim,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
@@ -26,7 +25,7 @@ AllGather create_all_gather_struct(
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const std::vector<Device*>& devices,
     const ttnn::ccl::Topology topology,
-    const ccl::OpBuildMode op_build_mode
+    const ccl::OpFabricMode op_build_mode
 ) {
     uint32_t num_devices = devices.size();
 
@@ -35,7 +34,7 @@ AllGather create_all_gather_struct(
     std::optional<uint32_t> sender_device_id = std::nullopt; // Initialize sender device ID
 
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices[i] == input_tensor_device) {
+        if (devices[i] == input_tensor.device()) {
             device_index = i;
             switch(topology){
                 case ttnn::ccl::Topology::Ring:{
@@ -185,9 +184,7 @@ std::vector<ttnn::SimpleShape> AllGather::compute_output_shapes(const std::vecto
 
 std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    if (this->op_build_mode == ttnn::ccl::OpBuildMode::PERSISTENT_BUILD_PERSISTENT_EDM) {
-        return input_tensors; // is this safe? Check with Akhmed
-    } else if(this->output_mem_config.is_sharded()) {
+    if(this->output_mem_config.is_sharded()) {
         return {create_device_tensor(
             this->compute_output_shapes(input_tensors).at(0),
             input_tensor.get_dtype(),
@@ -212,15 +209,16 @@ operation::ProgramWithCallbacks AllGather::create_program(const std::vector<Tens
             this->receiver_device_id,
             this->sender_device_id,
             this->topology,
-            this->user_defined_num_workers, 
+            this->user_defined_num_workers,
             this->user_defined_num_buffers_per_channel
         },
-        this->op_build_mode
+        this->build_mode
     );
 }
 
 namespace operations {
 namespace ccl {
+
 
 Tensor all_gather(
     const Tensor& input_tensor, const uint32_t dim, const uint32_t num_links, const std::optional<MemoryConfig>& memory_config, const std::optional<size_t> user_defined_num_workers, const std::optional<size_t> user_defined_num_buffers_per_channel, const ttnn::ccl::Topology topology, const ttnn::ccl::OpFabricMode fabric_config) {
@@ -244,10 +242,9 @@ Tensor all_gather(
 
             auto const& input_tensor_memory_config = input_tensor.memory_config();
             Device *input_tensor_device = input_tensor.device();
-            ttnn::ccl::OpBuildMode op_build_mode = ...;
             log_info(tt::LogOp, "Invoking all-gather without persistence mode for EDM");
             return operation::run(
-                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology, op_build_mode),
+                create_all_gather_struct(input_tensor, dim, num_links, memory_config, user_defined_num_workers, user_defined_num_buffers_per_channel, devices, ccl_topology, fabric_config),
                 {input_tensor});
         },
         {input_tensor},
