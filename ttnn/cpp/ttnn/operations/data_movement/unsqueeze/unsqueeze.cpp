@@ -11,7 +11,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto tensor_shape = input_tensor.get_shape();
     const auto rank = tensor_shape.rank();
-    std::vector<uint32_t> output_shape_vector;
+    SmallVector<uint32_t> output_shape_vector;
 
     TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()), "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
 

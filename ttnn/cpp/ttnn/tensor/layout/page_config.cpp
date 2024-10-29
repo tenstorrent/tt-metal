@@ -42,11 +42,11 @@ PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     }
 }
 
-Alignment PageConfig::create_default_alignment(DataType dtype) const {
+ttnn::Alignment PageConfig::create_default_alignment(DataType dtype) const {
     return std::visit([&](const auto& config) constexpr { return config.create_default_alignment(dtype); }, m_config);
 }
 
-void PageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
+void PageConfig::validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const {
     std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype); }, m_config);
 }
 
@@ -76,11 +76,11 @@ TilePageConfig::TilePageConfig(const Tile& tile)
  : m_tile(tile) {
 }
 
-Alignment TilePageConfig::create_default_alignment(DataType dtype) const {
-    return Alignment({m_tile.get_height(), m_tile.get_width()});
+ttnn::Alignment TilePageConfig::create_default_alignment(DataType dtype) const {
+    return ttnn::Alignment({m_tile.get_height(), m_tile.get_width()});
 }
 
-void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
+void TilePageConfig::validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const {
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
     TT_FATAL(widthAlignment % m_tile.get_width() == 0,
@@ -105,13 +105,13 @@ const Tile& TilePageConfig::get_tile() const {
 }
 
 
-Alignment RowMajorPageConfig::create_default_alignment(DataType dtype) const {
+ttnn::Alignment RowMajorPageConfig::create_default_alignment(DataType dtype) const {
 {
     TT_FATAL(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-    return Alignment({sizeof(uint32_t) / utils::element_size_bytes(dtype)});}
+    return ttnn::Alignment({sizeof(uint32_t) / utils::element_size_bytes(dtype)});}
 }
 
-void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
+void RowMajorPageConfig::validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const {
     TT_FATAL(alignment.size() > 0, "Alignment should have at least 1 dimension for Row Major layout");
     uint32_t widthAlignment = alignment[-1];
     uint32_t element_size = utils::element_size_bytes(dtype);

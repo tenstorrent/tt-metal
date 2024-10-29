@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -186,7 +186,7 @@ constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpack
 //                                  Layout converters
 // ======================================================================================
 namespace detail {
-static std::vector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
+static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
     if (shape.rank() == 1) {
         return {1, 1, 1, shape[-1]};
     } else if (shape.rank() == 2) {
@@ -200,14 +200,6 @@ static std::vector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape)
     }
 }
 
-static std::vector<uint32_t> to_vector(const tt::tt_metal::LegacyShape& shape) {
-    std::vector<uint32_t> shape_vec;
-    for (int i = 0; i < shape.rank(); i++) {
-        shape_vec.push_back(shape[i]);
-    }
-    return shape_vec;
-}
-
 }  // namespace detail
 
 template <typename T, template <typename> typename BufferType>
@@ -216,18 +208,18 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
         (shape[-2] % tile.get_tile_shape()[0] == 0 && shape[-1] % tile.get_tile_shape()[1] == 0),
         "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must be a multiple of tile height ({}) and width ({}), but the provided shape is {}", tile.get_tile_shape()[0], tile.get_tile_shape()[1], shape);
 
-    auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
-    auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
+    auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
+    auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape);
 }
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
-    auto tile_shape = std::vector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
-    auto face_shape = std::vector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
+    auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
+    auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, detail::to_vector(shape), tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tile_shape, face_shape);
 }
 
 // ======================================================================================

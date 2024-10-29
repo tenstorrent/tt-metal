@@ -4,17 +4,18 @@
 
 #pragma once
 
-#include "vector_base.hpp"
+#include "shape_base.hpp"
 
 namespace ttnn {
 
-class SimpleShape final : protected tt::tt_metal::VectorBase {
+class SimpleShape final : protected ShapeBase {
 public:
-    using tt::tt_metal::VectorBase::VectorBase;
-    using tt::tt_metal::VectorBase::operator[];
-    using tt::tt_metal::VectorBase::cbegin;
-    using tt::tt_metal::VectorBase::cend;
-    using tt::tt_metal::VectorBase::as_vector;
+    using ShapeBase::ShapeBase;
+    using ShapeBase::operator[];
+    using ShapeBase::cbegin;
+    using ShapeBase::cend;
+    using ShapeBase::view;
+    using ShapeBase::size;
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -23,11 +24,11 @@ public:
     }
 
     bool operator==(const SimpleShape &other) const;
-    bool operator==(const std::vector<uint32_t> &other) const;
+    bool operator==(const SmallVector<uint32_t> &other) const;
+
 
     [[nodiscard]] size_t rank() const;
     [[nodiscard]] uint64_t volume() const;
-
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");

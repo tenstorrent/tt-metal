@@ -6,10 +6,12 @@
 
 #include <array>
 
-#include "types.hpp"
-#include "alignment.hpp"
-#include "enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+
 #include "impl/tile/tile.hpp"
+
+#include "alignment.hpp"
 #include "size.hpp"
 
 #include <optional>
@@ -18,8 +20,8 @@ namespace tt::tt_metal {
 
 class RowMajorPageConfig {
 public:
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    ttnn::Alignment create_default_alignment(DataType dtype) const;
+    void validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const;
 
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
@@ -29,8 +31,8 @@ class TilePageConfig {
 public:
     TilePageConfig(const Tile& tile = Tile());
 
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    ttnn::Alignment create_default_alignment(DataType dtype) const;
+    void validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const;
 
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
@@ -49,8 +51,8 @@ public:
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
 
-    Alignment create_default_alignment(DataType dtype) const;
-    void validate_alignment(const Alignment& alignment, DataType dtype) const;
+    ttnn::Alignment create_default_alignment(DataType dtype) const;
+    void validate_alignment(const ttnn::Alignment& alignment, DataType dtype) const;
 
     Size get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const;
     size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;

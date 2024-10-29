@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "vector_base.hpp"
+#include "shape_base.hpp"
 #include <stdexcept>
 #include "fmt/color.h"
 #include "tt_metal/common/assert.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
 
 namespace {
 
@@ -23,59 +23,59 @@ int32_t normalized_index(int32_t index, size_t original_size, size_t container_s
     }
 
     if (fixed_index < 0 || fixed_index >= full_size) {
-        TT_THROW("VectorBase[] index out of range. {} not in [{}, {})", index, -full_size, full_size);
+        TT_THROW("ShapeBase[] index out of range. {} not in [{}, {})", index, -full_size, full_size);
     }
 
     return fixed_index;
 }
 }
 
-void VectorBase::init() {
+void ShapeBase::init() {
     m_original_size = m_value.size();
     const size_t min_internal_size = 4;
 
     if(m_original_size < min_internal_size) {
-        std::vector<uint32_t> ones(min_internal_size - m_original_size, 1);
+        Container ones(min_internal_size - m_original_size, 1);
         m_value.insert(m_value.begin(), ones.begin(), ones.end());
     }
 }
 
-size_t VectorBase::size() const {
+size_t ShapeBase::size() const {
     return m_original_size;
 }
 
-std::span<const uint32_t> VectorBase::view() const {
+std::span<const uint32_t> ShapeBase::view() const {
     return std::span<const uint32_t>(cbegin(), cend());
 }
 
-std::vector<uint32_t> VectorBase::as_vector() const {
-    auto original_view = view();
-    return std::vector<uint32_t>(original_view.begin(), original_view.end());
-}
+bool ShapeBase::operator==(const ShapeBase &other) const = default;
 
-bool VectorBase::operator==(const VectorBase &other) const = default;
-
-bool VectorBase::operator==(const std::vector<uint32_t> &other) const {
+bool ShapeBase::operator==(const Container &other) const {
     auto original_view = view();
     return std::equal(original_view.begin(), original_view.end(), other.begin(), other.end());
 }
 
-uint32_t VectorBase::operator[](int32_t index) const {
+bool ShapeBase::operator==(const std::vector<uint32_t> &other) const {
+    auto original_view = view();
+    return std::equal(original_view.begin(), original_view.end(), other.begin(), other.end());
+}
+
+uint32_t ShapeBase::operator[](int32_t index) const {
     auto norm_index = normalized_index(index, m_original_size, m_value.size());
     return m_value[norm_index];
 }
 
-uint32_t& VectorBase::operator[](int32_t index) {
+uint32_t& ShapeBase::operator[](int32_t index) {
     auto norm_index = normalized_index(index, m_original_size, m_value.size());
     return m_value[norm_index];
 }
 
-VectorBase::Container::const_iterator VectorBase::cbegin() const {
+ShapeBase::Container::const_iterator ShapeBase::cbegin() const {
     return this->m_value.cbegin() + (m_value.size() - m_original_size);
 }
 
-VectorBase::Container::const_iterator VectorBase::cend() const {
+ShapeBase::Container::const_iterator ShapeBase::cend() const {
     return this->m_value.cend();
 }
 
-}
+} // namespace ttnn

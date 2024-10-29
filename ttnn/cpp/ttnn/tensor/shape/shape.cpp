@@ -6,12 +6,13 @@
 
 #include <numeric>
 #include <ostream>
+#include "ttnn/tensor/shape/small_vector.hpp"
 
 namespace ttnn {
 
 bool SimpleShape::operator==(const SimpleShape &other) const = default;
 
-bool SimpleShape::operator==(const std::vector<uint32_t> &other) const {
+bool SimpleShape::operator==(const SmallVector<uint32_t> &other) const {
     return this->m_value == other;
 }
 

@@ -10,7 +10,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/async_runtime.hpp"
-#include "ttnn/tensor/tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 
 using namespace tt;

@@ -3,12 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor_layout.hpp"
-#include <variant>
-#include <vector>
-#include "ttnn/tensor/enum_types.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "types.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,9 +15,9 @@ size_t round_up(size_t value, size_t multiple) {
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
-Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_shape) {
+ttnn::Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_shape) {
     const auto rank = legacy_padded_shape.rank();
-    std::vector<uint32_t> values(rank);
+    ttnn::SmallVector<uint32_t> values(rank);
 
     if(rank >= 1) {
         values[rank - 1] = legacy_padded_shape[rank - 1];
@@ -35,27 +29,18 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_sh
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
-    Alignment result(values);
+    ttnn::Alignment result(values);
     return result;
 }
 
-// Euclidean algorithm for greatest common divisor
-size_t gcd(size_t a, size_t b) {
-    while (b != 0) {
-        a %= b;
-        std::swap(a, b);
-    }
-    return a;
 }
 
-// Least common multiple
-size_t lcm(size_t a, size_t b) {
-    return a * b / gcd(a, b);
-}
+TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config)
+    : TensorLayout(dtype, page_config, memory_config, {}) {
 }
 
-
-TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment)
+// Private
+TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Alignment& alignment)
     : m_dtype(dtype),
       m_page_config(page_config),
       m_memory_config(memory_config),
@@ -70,8 +55,9 @@ TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfi
 }
 
 void TensorLayout::initialize_alignment() {
-    if(m_alignment.size() != 0)
+    if(m_alignment.size() != 0) {
         return;
+    }
 
     m_alignment = m_page_config.create_default_alignment(m_dtype);
 }
@@ -82,8 +68,9 @@ void TensorLayout::validate_alignment() const
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::get_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
-    if (!m_memory_config.is_sharded())
+    if (!m_memory_config.is_sharded()) {
         return std::nullopt;
+    }
 
     TT_FATAL(m_memory_config.shard_spec.has_value(), "MemoryConfig should have Shard Spec specified for sharded memory layout");
 
@@ -174,7 +161,7 @@ Strides TensorLayout::get_strides(const ttnn::SimpleShape& shape) const {
 
 ttnn::SimpleShape TensorLayout::get_padded_shape(const ttnn::SimpleShape& shape) const
 {
-    std::vector<uint32_t> padded_shape(shape.rank());
+    ttnn::SmallVector<uint32_t> padded_shape(shape.rank());
     int rank_index = static_cast<int>(shape.rank()) - 1;
     int alignment_index = static_cast<int>(m_alignment.size()) - 1;
     size_t accum_alignment = 1;

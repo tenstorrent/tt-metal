@@ -12,7 +12,7 @@
 #include "tt_metal/common/logger.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 

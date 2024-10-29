@@ -17,7 +17,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_layout.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 #include "tt_metal/impl/device/device.hpp"

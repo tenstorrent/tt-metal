@@ -4,17 +4,14 @@
 
 #pragma once
 
-#include "types.hpp"
-#include "enum_types.hpp"
 
-#include <cstddef>
-#include <ostream>
-#include <variant>
-
-#include "shape.hpp"
 #include "alignment.hpp"
 #include "size.hpp"
 #include "page_config.hpp"
+
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace tt::tt_metal {
 
@@ -54,9 +51,9 @@ using Strides = std::vector<size_t>;
 //   This class is a work in progress. Many of its public methods have to be moved to private or even pImpl.
 class TensorLayout {
 public:
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment = {});
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
-    // This method is not a constructor to make it easy to find and remove all of its usages in the codebase.
+    // This is a static method instead of a constructor to make it easy to find and remove all of its usages in the codebase.
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
     static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape);
 
@@ -64,7 +61,7 @@ public:
     PageConfig get_page_config() const { return m_page_config; }
     DataType get_data_type() const { return m_dtype; }
     const MemoryConfig& get_memory_config() const { return m_memory_config; }
-    const Alignment& get_alignment() const { return m_alignment; }
+    const ttnn::Alignment& get_alignment() const { return m_alignment; }
 
     Strides get_strides(const ttnn::SimpleShape& shape) const;
 
@@ -84,6 +81,9 @@ public:
     Size get_physical_shape(const ttnn::SimpleShape& shape) const;
 
 private:
+    // Private to not expose alignment parameter to the public API
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Alignment& alignment);
+
     void initialize_alignment();
     void validate_alignment() const;
 
@@ -96,7 +96,7 @@ private:
     DataType m_dtype = DataType::BFLOAT16;
     PageConfig m_page_config;
     MemoryConfig m_memory_config;
-    Alignment m_alignment;
+    ttnn::Alignment m_alignment;
 };
 
 } // tt::tt_metal
