@@ -27,6 +27,10 @@
 class CoreRange;
 class CoreRangeSet;
 
+using namespace std;
+
+using namespace tt::tt_metal;
+
 namespace tt {
 
 namespace tt_metal {
