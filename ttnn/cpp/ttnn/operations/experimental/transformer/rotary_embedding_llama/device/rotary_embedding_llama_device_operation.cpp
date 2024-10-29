@@ -42,13 +42,13 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     // Check that cos and sin have same dims
     TT_FATAL(cos.get_padded_shape() == sin.get_padded_shape(), "Cos and Sin dims must match");
 
-
-    if (this->is_sharded) { // Decode mode validation
+    bool is_sharded = !(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+    if (is_sharded) { // Decode mode validation
         uint32_t seq_len = input_tensor.get_padded_shape()[0];
         TT_FATAL(seq_len == 1, "rotary_embedding_llama currently only supports sharded inputs in decode mode, and therefore, seq_len (in dim 0) must be 1.");
 
         for (const auto& input : input_tensors) {
-            TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED), "Inputs to rotary embedding must be height sharded in decode mode");
+            TT_FATAL((input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED), "Sharded inputs for RoPE must be HEIGHT_SHARDED.");
         }
 
         uint32_t num_cores = input_tensor.device()->compute_with_storage_grid_size().x * input_tensor.device()->compute_with_storage_grid_size().y;
@@ -100,8 +100,10 @@ operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(
     const auto& trans_mat = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
+    bool is_sharded = !(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED);
+
     // Works on single core as well
-    if (this->is_sharded) {
+    if (is_sharded) {
         return rotary_embedding_llama_multi_core_sharded(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);
     } else {
         return rotary_embedding_llama_multi_core(input_tensor, cos, sin, trans_mat, output_tensor, this->compute_kernel_config);

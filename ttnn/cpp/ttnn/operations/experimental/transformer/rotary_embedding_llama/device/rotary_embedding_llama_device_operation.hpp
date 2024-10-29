@@ -15,10 +15,8 @@ namespace tt {
 namespace tt_metal {
 
 struct RotaryEmbeddingLlama {
-    const uint32_t seq_len;
     const MemoryConfig output_mem_config;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
-    bool is_sharded = false;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
