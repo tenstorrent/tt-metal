@@ -241,7 +241,6 @@ std::shared_ptr<Buffer> Buffer::create(
     }
 
     buffer->device_->push_work([buffer] {
-        AllocationStatus next_status = AllocationStatus::ALLOCATED;
         try {
             buffer->address_ = detail::AllocateBuffer(buffer.get());
         } catch(...) {
@@ -299,8 +298,7 @@ void Buffer::deleter(Buffer* buffer) {
 }
 
 void Buffer::deallocate_impl() {
-    auto status = allocation_status_.load(std::memory_order::relaxed);
-    if (status == AllocationStatus::DEALLOCATED || status == AllocationStatus::ALLOCATION_FAILED) {
+    if (allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATED) {
         return;
     }
 
@@ -327,6 +325,10 @@ bool Buffer::is_allocated() const {
 
 uint32_t Buffer::address() const {
     if (allocation_status_.load(std::memory_order::acquire) != AllocationStatus::ALLOCATION_REQUESTED) {
+        return address_;
+    }
+
+    if (device_->can_use_passthrough_scheduling()) {
         return address_;
     }
 
