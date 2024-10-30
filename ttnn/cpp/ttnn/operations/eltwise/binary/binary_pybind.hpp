@@ -44,8 +44,8 @@ void bind_primitive_binary_operation(py::module& module, const binary_operation_
 
         Example:
 
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
             >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -110,8 +110,8 @@ void bind_binary_operation(py::module& module, const binary_operation_t& operati
 
         Example:
 
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -195,8 +195,8 @@ void bind_binary_composite(py::module& module, const binary_operation_t& operati
             {4}
 
         Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2)
 
         )doc",
@@ -246,8 +246,8 @@ void bind_binary_composite_with_alpha(py::module& module, const binary_operation
 
             Example:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
                 >>> output = {1}(tensor1, tensor2, alpha)
         )doc",
         operation.base_name(),
@@ -286,9 +286,9 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-            rtol (float)
-            atol (float)
-            equal_nan (bool)
+            rtol (float): relative tolerance.
+            atol (float): absolute tolerance.
+            equal_nan (bool): if NaN values should be treated as equal during comparison.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -297,8 +297,8 @@ void bind_binary_composite_with_rtol_atol(py::module& module, const binary_opera
             ttnn.Tensor: the output tensor.
 
         Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2, rtol, atol, equal_nan)
 
         )doc",
@@ -352,8 +352,8 @@ void bind_binary_composite_overload(py::module& module, const binary_operation_t
 
             Example:
 
-                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device)
+                >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
+                >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
                 >>> output = {1}(tensor1, tensor2/scalar)
         )doc",
         operation.base_name(),
@@ -414,8 +414,8 @@ void bind_div(py::module& module, const binary_operation_t& operation, const std
             ttnn.Tensor: the output tensor.
 
         Example:
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor1, tensor2/scalar)
 
         )doc",
@@ -481,7 +481,7 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            Coeffs (Vector of floats).
+            Coeffs (Vector of floats): coefficients of the polynomial.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -493,7 +493,7 @@ void bind_polyval(py::module& module, const binary_operation_t& operation, const
             {4}
 
         Example:
-            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device=device)
             >>> coeffs = (1, 2, 3, 4)
             >>> output = {1}(tensor, coeffs)
 
@@ -538,8 +538,8 @@ void bind_binary_overload_operation(py::module& module, const binary_operation_t
             Returns:
                 ttnn.Tensor: the output tensor.
 
-            Example::
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            Example:
+                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -590,10 +590,10 @@ void bind_inplace_operation(py::module& module, const binary_operation_t& operat
                 input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
             Returns:
-               List of ttnn.Tensor: the output tensor.
+               ttnn.Tensor: the output tensor.
 
-            Example::
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            Example:
+                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -639,14 +639,14 @@ void bind_logical_inplace_operation(py::module& module, const binary_operation_t
             input_tensor_b (ttnn.Tensor): the input tensor.
 
         Returns:
-            List of ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor.
 
         Note:
             {4}
 
         Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+            >>> tensor1 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
             >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
@@ -681,7 +681,7 @@ void bind_binary_inplace_operation(py::module& module, const binary_operation_t&
             Keyword args:
             * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
             Example::
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor1, tensor2)
         )doc",
         operation.base_name(),
