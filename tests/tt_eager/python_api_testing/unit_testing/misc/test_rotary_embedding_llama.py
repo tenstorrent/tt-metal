@@ -113,11 +113,7 @@ class TtLlamaRotary(torch.nn.Module):
         cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
         sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
 
-        grid = (
-            ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(self.batch, self.core_grid, row_wise=True))
-            .bounding_box()
-            .grid_size()
-        )
+        grid = ttnn.num_cores_to_corerangeset(self.batch, self.core_grid, row_wise=True).bounding_box().grid_size()
         mem_config = ttnn.create_sharded_memory_config(
             shape=(1, self.batch, ttnn.TILE_SIZE, self.head_dim),
             core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
@@ -230,11 +226,7 @@ def run_test_rotary_embedding_llama(
         # For decode, TTNN expects inputs to be [1, batch, nh, dhead]
         inp = [x.transpose(1, 2) for x in inp]
 
-        grid = (
-            ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(batch, tt_model.core_grid, row_wise=True))
-            .bounding_box()
-            .grid_size()
-        )
+        grid = ttnn.num_cores_to_corerangeset(batch, tt_model.core_grid, row_wise=True).bounding_box().grid_size()
         input_mem_config = ttnn.create_sharded_memory_config(
             shape=(1, batch, ttnn.TILE_SIZE, head_dim),
             core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),

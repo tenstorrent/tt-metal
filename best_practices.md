@@ -24,7 +24,7 @@ void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr
 Consider using `tt::stl::Span` as input instead of `std::vector`. This allows `std::array` to be used as an argument as well.
 
 ### Explanation
-`tt::stl::Spann` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
+`tt::stl::Span` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
 
 ### Motivation
 - **Flexibility**: Enables functions to accept both `std::vector` and `std::array`.
@@ -234,7 +234,7 @@ Global classes can lead to issues with concurrency and resource management, espe
 - **Maintainability**: Avoids hidden dependencies and makes the code easier to understand and maintain.
 - **Predictability**: Improves the predictability of resource management and execution flow.
 
-## 12. Move Function  Implementations to `.cpp` Files
+## 12. Move Function Implementations to `.cpp` Files
 
 ### Practice
 Move function and method implementations from header files to `.cpp` files. Template heavy functions/methods implementations could be moved to the '_inl.hpp' file which should be included in the end of the header.
