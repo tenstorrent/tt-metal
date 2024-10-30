@@ -13,6 +13,10 @@ on:
         required: True
         default: True
         type: boolean
+      profiler-build:
+        required: True
+        default: False
+        type: boolean
 
 jobs:
   build-wheel:
@@ -47,15 +51,19 @@ jobs:
         if: ${{ inputs.from-precompiled }}
         with:
           arch: ${{ inputs.arch }}
+          is_profiler: ${{ inputs.profiler-build }}
       - name: Set precompiled dir for precompile builds
         if: ${{ inputs.from-precompiled }}
         # TT_FROM_PRECOMPILED_DIR env variable allows us to not re-run the full C++ build and instead
         # rely on the artifact that was already compiled. We point it to where the repo is.
         run: echo "TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}" >> $GITHUB_ENV
+      - name: Set profiler build if requested
+        if: ${{ inputs.profiler-build }}
+        run: echo "TT_IS_PROFILER_BUILD=True" >> $GITHUB_ENV
       - name: Build Python package distribution
         run: python -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}${{ '-profiler' && inputs.profiler-build || '' }}
           path: dist/

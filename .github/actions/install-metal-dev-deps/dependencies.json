@@ -9,7 +9,7 @@
   ],
   "ubuntu-22.04": [
     "git",
-    "git-lfs",    
+    "git-lfs",
     "pandoc",
     "pkg-config",
     "ninja-build",

@@ -82,6 +82,13 @@ def get_from_precompiled_dir():
     return Path(precompiled_dir) if precompiled_dir else None
 
 
+def get_is_profiler_build():
+    """
+    Retrieve option from user to buuild using profiler build + tracy.
+    """
+    return os.environ.get("TT_IS_PROFILER_BUILD", None) == "True"
+
+
 @dataclass(frozen=True)
 class MetalliumBuildConfig:
     arch_name = get_arch_name()
@@ -131,6 +138,9 @@ class CMakeBuild(build_ext):
             # We indirectly set a wheel build for our CMake build by using BUILD_SHARED_LIBS. This does the following things:
             # - Bundles (most) of our libraries into a static library to deal with a potential singleton bug error with tt_cluster (to fix)
             build_script_args = ["--build-static-libs", "--release"]
+
+            if get_is_profiler_build():
+                build_script_args.append("--enable-profiler")
 
             subprocess.check_call(["./build_metal.sh", *build_script_args], cwd=source_dir, env=build_env)
 

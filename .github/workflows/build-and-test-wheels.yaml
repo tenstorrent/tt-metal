@@ -15,6 +15,11 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+  build-artifact-profiler:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      tracy: true
   build-wheels:
     needs: build-artifact
     if: ${{ always() }}
