@@ -312,7 +312,7 @@ Tensor create_device_tensor(
     const std::optional<Tile>& tile = std::nullopt);
 
 // TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
-[[deprecated]]
+[[deprecated("Use create_device_tensor(const ttnn::SimpleShape&, const TensorLayout&, Device*) instead")]]
 Tensor create_device_tensor(
     const ttnn::Shape &shape,
     DataType dtype,

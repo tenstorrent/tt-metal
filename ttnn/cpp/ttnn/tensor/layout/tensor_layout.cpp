@@ -55,7 +55,7 @@ TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfi
 }
 
 void TensorLayout::initialize_alignment() {
-    if(m_alignment.empty()) {
+    if(!m_alignment.empty()) {
         return;
     }
 
