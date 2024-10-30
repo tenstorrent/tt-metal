@@ -369,7 +369,7 @@ def set_mlp_config(model_config, cluster_shape):
         use_height_and_width_as_shard_shape=True,
     )
     decode_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
-        shape=(M, N // 28 // cluster_shape[0]),
+        shape=(M, N // 28 // cluster_shape[0]),  # shard_grid_cores = 28
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
