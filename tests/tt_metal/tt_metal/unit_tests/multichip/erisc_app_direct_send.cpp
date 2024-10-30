@@ -17,12 +17,9 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace ANON_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE / WORD_SIZE;
-
-using namespace tt;
-using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 struct erisc_info_t {
   volatile uint32_t num_bytes;
@@ -34,6 +31,12 @@ struct erisc_info_t {
   volatile uint32_t reserverd_3_;
   volatile uint32_t reserverd_4_;
 };
+}
+
+using namespace tt;
+using namespace tt::test_utils;
+using namespace tt::test_utils::df;
+
 namespace unit_tests::erisc::direct_send {
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
 bool send_over_eth(
@@ -136,6 +139,7 @@ bool send_over_eth(
 }  // namespace unit_tests::erisc::direct_send
 
 TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip0ToChip1) {
+    using namespace ANON_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
@@ -165,6 +169,7 @@ TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip1ToChip0) {
+    using namespace ANON_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
@@ -194,6 +199,7 @@ TEST_F(N300DeviceFixture, SingleEthCoreDirectSendChip1ToChip0) {
 }
 
 TEST_F(N300DeviceFixture, BidirectionalEthCoreDirectSend) {
+    using namespace ANON_NAMESPACE;
     GTEST_SKIP();
     ASSERT_TRUE(this->num_devices_ == 2);
     const auto& device_0 = devices_.at(0);
@@ -239,6 +245,7 @@ TEST_F(N300DeviceFixture, BidirectionalEthCoreDirectSend) {
 }
 
 TEST_F(N300DeviceFixture, RandomDirectSendTests) {
+    using namespace ANON_NAMESPACE;
     GTEST_SKIP();
     srand(0);
     ASSERT_TRUE(this->num_devices_ == 2);

@@ -12,6 +12,14 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
             set(TEST_TARGET ${TEST_NAME})
         endif()
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
+        set_target_properties(
+            ${TEST_TARGET}
+            PROPERTIES
+                UNITY_BUILD
+                    ON
+                UNITY_BUILD_UNIQUE_ID
+                    "ANON_NAMESPACE"
+        )
 
         target_link_libraries(
             ${TEST_TARGET}
