@@ -5,7 +5,9 @@
     "git-lfs",
     "pandoc",
     "pkg-config",
-    "ninja-build"
+    "ninja-build",
+    "libtbb-dev",
+    "libcapstone-dev"
   ],
   "ubuntu-22.04": [
     "git",
@@ -13,6 +15,8 @@
     "pandoc",
     "pkg-config",
     "ninja-build",
-    "g++-12"
+    "g++-12",
+    "libtbb-dev",
+    "libcapstone-dev"
   ]
 }
