@@ -87,6 +87,32 @@ def tt_sharded_all_reduce(input_tensor, mesh_device, cluster_axis, dim=0, num_li
     return reduced_tensors
 
 
+def tt_composite_sharded_all_reduce(
+    input_tensor, mesh_device, cluster_axis, dim=3, num_links=2, reduce_scatter_mem_cfg=None
+):
+    input_mem_cfg = input_tensor.memory_config()
+    reduce_scattered_tensor = ttnn.reduce_scatter(
+        input_tensor,
+        scatter_dim=dim,
+        math_op=ttnn.ReduceType.Sum,
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        memory_config=reduce_scatter_mem_cfg,
+        topology=ttnn.Topology.Linear,
+    )
+    reduced_tensor = ttnn.all_gather(
+        reduce_scattered_tensor,
+        dim,
+        num_links=num_links,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        memory_config=input_mem_cfg,
+        topology=ttnn.Topology.Linear,
+    )
+    return reduced_tensor
+
+
 def tt_sharded_all_gather(input_tensor, mesh_device, cluster_axis, dim, num_links=2, memory_config=None):
     # Ensure the input tensor is in the correct memory configuration
 
