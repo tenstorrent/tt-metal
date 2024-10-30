@@ -89,7 +89,7 @@ Runtime has not enabled access to program RISC-V on DRAM yet.
 
 Non-rectangular multicast shapes have not been tested yet.
 
-BH enabled 16-deep FIFOs for each of the four command buffers. These are enabled by default in `noc_init` as BH cmd\_buffer has known issues. NoC APIs are not impacted by this change.
+On previous architectures there are instances in kernels where NoC commands are issued without explicit flushes. These were causing ND mismatches or hangs on BH because data and semaphore signals were getting updated faster than NoC has a chance to service the command and are resolved by adding flushes. Previous architectures did not need this because of higher RISC to L1 latency compared to NoC latency.
 
 ## Debug
 
