@@ -29,14 +29,7 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
 )
 add_library(unit_tests_common_o STATIC ${UNIT_TESTS_COMMON_SRC})
-set_target_properties(
-    unit_tests_common_o
-    PROPERTIES
-        UNITY_BUILD
-            ON
-        UNITY_BUILD_UNIQUE_ID
-            "CMAKE_UNIQUE_NAMESPACE"
-)
+TT_ENABLE_UNITY_BUILD(unit_tests_common_o)
 target_link_libraries(
     unit_tests_common_o
     PUBLIC

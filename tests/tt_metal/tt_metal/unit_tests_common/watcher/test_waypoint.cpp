@@ -14,6 +14,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
@@ -194,6 +195,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
             check_core(core, phys_core, true, false);
         }
     }
+}
 }
 }
 

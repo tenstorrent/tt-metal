@@ -641,14 +641,7 @@ target_include_directories(ttnn PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
 target_link_libraries(ttnn PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
 target_link_directories(ttnn PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
 target_precompile_headers(ttnn PRIVATE ${TTNN_PRECOMPILED_HEADERS})
-set_target_properties(
-    ttnn
-    PROPERTIES
-        UNITY_BUILD
-            ON
-        UNITY_BUILD_UNIQUE_ID
-            "CMAKE_UNIQUE_NAMESPACE"
-)
+TT_ENABLE_UNITY_BUILD(ttnn)
 
 #We move the library binaries to a different path rather than PROJECT_BINARY_DIR
 #in the Python wheel

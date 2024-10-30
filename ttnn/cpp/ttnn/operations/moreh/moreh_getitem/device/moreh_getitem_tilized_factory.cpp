@@ -8,6 +8,7 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined;
@@ -15,6 +16,7 @@ struct IndexInfo {
     uint32_t address;
     uint32_t unit_size;
 };
+}
 }
 
 namespace ttnn::operations::moreh::moreh_getitem {

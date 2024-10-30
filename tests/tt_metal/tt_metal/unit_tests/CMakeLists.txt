@@ -48,14 +48,7 @@ add_executable(
     ${UNIT_TESTS_SRC}
     $<TARGET_OBJECTS:unit_tests_common_o>
 )
-set_target_properties(
-    unit_tests
-    PROPERTIES
-        UNITY_BUILD
-            ON
-        UNITY_BUILD_UNIQUE_ID
-            "CMAKE_UNIQUE_NAMESPACE"
-)
+TT_ENABLE_UNITY_BUILD(unit_tests)
 add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/multichip/galaxy_cluster_api.cpp)
 
 target_link_libraries(

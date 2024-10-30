@@ -24,6 +24,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
@@ -160,6 +161,7 @@ std::vector<std::tuple<tt_metal::Device*, tt_metal::Device*, CoreCoord, CoreCoor
         }
     }
     return sender_receivers;
+}
 }
 }
 

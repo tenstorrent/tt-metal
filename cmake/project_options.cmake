@@ -16,4 +16,5 @@ option(BUILD_PROGRAMMING_EXAMPLES "Enables build of tt_metal programming example
 option(TT_METAL_BUILD_TESTS "Enables build of tt_metal tests" OFF)
 option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
 option(ENABLE_CCACHE "Build with compiler cache" FALSE)
+option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 ###########################################################################################

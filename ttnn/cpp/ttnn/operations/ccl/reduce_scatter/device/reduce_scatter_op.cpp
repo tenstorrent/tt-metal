@@ -88,6 +88,7 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->user_defined_num_buffers_per_channel);
 }
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
     // Leaving switch statement for future support of additional types.
@@ -98,6 +99,7 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn:
             TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
             return ttnn::operations::binary::BinaryOpType::ADD;
     }
+}
 }
 }
 

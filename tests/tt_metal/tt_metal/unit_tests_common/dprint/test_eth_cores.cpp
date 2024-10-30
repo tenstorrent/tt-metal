@@ -14,6 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
 R"(Test Debug Print: ERISC
@@ -76,6 +77,7 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
         // Clear the log file for the next core's test
         tt::DPrintServerClearLogFile();
     }
+}
 }
 }
 

@@ -12,6 +12,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
@@ -129,6 +130,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     }
     // See #10527
     // EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, expected_strings));
+}
 }
 }
 

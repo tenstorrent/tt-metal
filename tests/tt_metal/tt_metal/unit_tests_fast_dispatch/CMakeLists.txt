@@ -18,14 +18,7 @@ add_executable(
     ${UNIT_TESTS_FD_SRC}
     $<TARGET_OBJECTS:unit_tests_common_o>
 )
-set_target_properties(
-    unit_tests_fast_dispatch
-    PROPERTIES
-        UNITY_BUILD
-            ON
-        UNITY_BUILD_UNIQUE_ID
-            "CMAKE_UNIQUE_NAMESPACE"
-)
+TT_ENABLE_UNITY_BUILD(unit_tests_fast_dispatch)
 
 target_link_libraries(unit_tests_fast_dispatch PUBLIC test_metal_common_libs)
 target_include_directories(

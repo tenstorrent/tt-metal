@@ -17,6 +17,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_SIZE / WORD_SIZE;
@@ -31,6 +32,7 @@ struct erisc_info_t {
   volatile uint32_t reserverd_3_;
   volatile uint32_t reserverd_4_;
 };
+}
 }
 
 using namespace tt;

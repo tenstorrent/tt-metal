@@ -18,6 +18,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
@@ -111,6 +112,7 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
     }
 
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
+}
 }
 }
 

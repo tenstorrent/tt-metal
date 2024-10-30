@@ -17,6 +17,7 @@ namespace conv2d {
 
 using namespace tt;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const uint32_t act_cb = CB::c_in0;
 const uint32_t weight_cb = CB::c_in1;
@@ -31,6 +32,7 @@ const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
 const uint32_t out0_cb = CB::c_out0;
 const uint32_t temp_sum_cb = CB::c_intermed3;
+}
 }
 
 

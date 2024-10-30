@@ -9,6 +9,7 @@ endif()
 # Project setup
 ############################################
 include(cmake/compilers.cmake)
+include(cmake/unity.cmake)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     message(STATUS "Setting C and C++ compiler from environment variables")
@@ -121,6 +122,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)

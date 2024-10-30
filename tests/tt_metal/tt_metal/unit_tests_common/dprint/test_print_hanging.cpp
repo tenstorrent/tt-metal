@@ -15,6 +15,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different physical cores, so wildcard the exact coordinates.
 const std::string golden_output =
@@ -51,6 +52,7 @@ try {
             golden_output
         )
     );
+}
 }
 }
 
