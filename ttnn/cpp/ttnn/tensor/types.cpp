@@ -8,7 +8,7 @@
 
 namespace ttnn {
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile) {
+SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<tt::tt_metal::Tile>& tile) {
     SimpleShape physical_shape = logical_shape;
     auto rank = physical_shape.rank();
     if (layout == Layout::TILE) {

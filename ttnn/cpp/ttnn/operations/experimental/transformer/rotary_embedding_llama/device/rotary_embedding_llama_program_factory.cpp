@@ -10,8 +10,6 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
-
 namespace tt {
 
 namespace tt_metal {
@@ -24,6 +22,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     Tensor &output,
     ttnn::DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace tt::constants;
     Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());

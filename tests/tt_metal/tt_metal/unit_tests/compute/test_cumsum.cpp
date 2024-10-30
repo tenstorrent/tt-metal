@@ -24,12 +24,12 @@ struct CumsumConfig {
     bool rowwise;
 };
 
-std::vector<tt::test_utils::df::bfloat16> gold_cumsum(std::vector<tt::test_utils::df::bfloat16>& src, const std::vector<uint32_t> &shape, bool rowwise) {
+std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<uint32_t> &shape, bool rowwise) {
     int N = shape.at(0);
     int W = shape.at(1);
     int H = shape.at(2);
 
-    std::vector<tt::test_utils::df::bfloat16> golden(N * W * H);
+    std::vector<bfloat16> golden(N * W * H);
 
     int dim_a = rowwise ? H : W;
     int dim_b = rowwise ? W : H;
@@ -57,7 +57,7 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * tt::test_utils::df::bfloat16::SIZEOF;
+    constexpr uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
 
     uint32_t W = test_config.Wt * tile_width;
     uint32_t H = test_config.Ht * tile_height;
@@ -147,16 +147,16 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
             (uint32_t)test_config.Ht * test_config.Wt                  // Used for transposing kernel
         });
 
-    std::vector<tt::test_utils::df::bfloat16> input = generate_uniform_random_vector<tt::test_utils::df::bfloat16>(
+    std::vector<bfloat16> input = generate_uniform_random_vector<bfloat16>(
         -1.0f,
         1.0f,
-        dram_buffer_size / tt::test_utils::df::bfloat16::SIZEOF,
+        dram_buffer_size / bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
-    std::vector<tt::test_utils::df::bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
-    auto golden_packed = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
+    std::vector<bfloat16> golden = gold_cumsum(input, {test_config.N, W, H}, test_config.rowwise);
+    auto golden_packed = pack_vector<uint32_t, bfloat16>(golden);
 
-    auto input_packed = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input);
+    auto input_packed = pack_vector<uint32_t, bfloat16>(input);
     auto input_packed_tilized = unit_tests::compute::gold_standard_tilize(input_packed, {test_config.N * test_config.Ht, test_config.Wt});
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
@@ -169,10 +169,10 @@ void run_single_core_cumsum(tt_metal::Device* device, const CumsumConfig& test_c
 
     log_info(tt::LogTest, "Running test for N = {}, Wt = {}, Ht = {}", test_config.N, test_config.Wt, test_config.Ht);
 
-    bool result = is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+    bool result = is_close_packed_vectors<bfloat16, uint32_t>(
         output_packed,
         golden_packed,
-        [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
+        [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.01f);
         });
     ASSERT_TRUE(result);

@@ -6,6 +6,7 @@ set(UNIT_TESTS_FD_SINGLEC_MULTIQ_SRCS
 )
 
 add_executable(unit_tests_fast_dispatch_single_chip_multi_queue ${UNIT_TESTS_FD_SINGLEC_MULTIQ_SRCS})
+TT_ENABLE_UNITY_BUILD(unit_tests_fast_dispatch_single_chip_multi_queue)
 
 target_link_libraries(unit_tests_fast_dispatch_single_chip_multi_queue PUBLIC test_metal_common_libs)
 target_include_directories(

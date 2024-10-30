@@ -24,6 +24,8 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
@@ -160,6 +162,8 @@ std::vector<std::tuple<tt_metal::Device*, tt_metal::Device*, CoreCoord, CoreCoor
     }
     return sender_receivers;
 }
+}
+}
 
 namespace fd_unit_tests::erisc::kernels {
 
@@ -170,6 +174,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     const size_t& dst_eth_l1_byte_address,
     const size_t& sem_l1_byte_address,
     uint32_t num_bytes_per_send = 16) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     const auto& sender_receivers = get_sender_receiver_cores(device_ring);
 
@@ -313,11 +318,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
 bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<tt::tt_metal::Device*> device_ring,
-    const BankedConfig& cfg,
+    const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
     const size_t& sem_l1_byte_address,
     uint32_t num_bytes_per_send = 16) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     const auto& sender_receivers = get_sender_receiver_cores(device_ring);
 
@@ -335,8 +341,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         inputs.emplace_back(
-            tt::test_utils::generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-                -1.0f, 1.0f, cfg.size_bytes / tt::test_utils::df::bfloat16::SIZEOF, i));
+            tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+                -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, i));
         full_input.insert(full_input.begin() + i * numel, inputs[i].begin(), inputs[i].end());
 
         const auto& device = std::get<0>(sender_receivers[i]);
@@ -455,6 +461,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 }  // namespace fd_unit_tests::erisc::kernels
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
     }
@@ -470,6 +477,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsInterleavedRingGatherAllChips) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
     }

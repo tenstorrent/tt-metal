@@ -19,19 +19,6 @@ namespace conv2d {
 
 using namespace tt;
 
-const uint32_t act_cb = CB::c_in0;
-const uint32_t weight_cb = CB::c_in1;
-const uint32_t bias_cb = CB::c_in2;
-const uint32_t sharded_act_cb = CB::c_in3;
-const uint32_t cb_for_reader_indices = CB::c_in4;
-const uint32_t cb_for_l1_array = CB::c_in5;
-const uint32_t act_cb_row_major_bfloat16 = CB::c_in6;
-const uint32_t act_cb_second_reader = CB::c_in7;
-const uint32_t matmul_partials_cb = CB::c_intermed0;
-const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
-const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
-const uint32_t out0_cb = CB::c_out0;
-
 operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
@@ -54,6 +41,20 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     bool enable_act_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding) {
+
+    const uint32_t act_cb = CB::c_in0;
+    const uint32_t weight_cb = CB::c_in1;
+    const uint32_t bias_cb = CB::c_in2;
+    const uint32_t sharded_act_cb = CB::c_in3;
+    const uint32_t cb_for_reader_indices = CB::c_in4;
+    const uint32_t cb_for_l1_array = CB::c_in5;
+    const uint32_t act_cb_row_major_bfloat16 = CB::c_in6;
+    const uint32_t act_cb_second_reader = CB::c_in7;
+    const uint32_t matmul_partials_cb = CB::c_intermed0;
+    const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
+    const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
+    const uint32_t out0_cb = CB::c_out0;
+
     bool pass = true;
     enable_split_reader = false;
     tt_metal::Device* device = a.device();

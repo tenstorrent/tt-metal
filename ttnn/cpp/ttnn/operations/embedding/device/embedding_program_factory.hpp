@@ -133,9 +133,9 @@ operation::ProgramWithCallbacks embeddings_tilized(
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
-    uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)log2(input_page_size) : 0;
+    uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_page_size) : 0;
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
-    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)log2(weight_page_size) : 0;
+    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
 
     // Create Kernels
     // reader
@@ -370,9 +370,9 @@ operation::ProgramWithCallbacks embeddings_rm(
     uint32_t output_cb_index = src0_cb_index;
 
     bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
-    uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)log2(input_page_size) : 0;
+    uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_page_size) : 0;
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
-    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)log2(weight_page_size) : 0;
+    uint32_t weight_log2_stick_size = weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;
 
     // Create Kernels
     // reader
@@ -407,7 +407,7 @@ operation::ProgramWithCallbacks embeddings_rm(
             embedding_defines));
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)log2(output_page_size) : 0;
+    uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)out_is_dram,

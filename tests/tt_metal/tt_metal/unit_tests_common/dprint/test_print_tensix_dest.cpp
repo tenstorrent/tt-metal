@@ -145,7 +145,7 @@ static KernelHandle prepare_compute(tt_metal::Program& program, const DestPrintT
 // Generates input data based on the test configuration
 static std::vector<uint32_t> generate_inputs(const DestPrintTestConfig& config) {
     if (config.data_format == tt::DataFormat::Float16_b)
-        return tt::test_utils::generate_packed_increment_vector<uint32_t, tt::test_utils::df::bfloat16>(
+        return tt::test_utils::generate_packed_increment_vector<uint32_t, bfloat16>(
             0.0f, config.get_num_elements(), 0.03125f, -1.1875f);
 
     if (config.data_format == tt::DataFormat::Float32)

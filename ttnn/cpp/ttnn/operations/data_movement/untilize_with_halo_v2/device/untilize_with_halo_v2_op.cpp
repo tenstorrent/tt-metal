@@ -41,7 +41,7 @@ std::vector<tt::tt_metal::LegacyShape> UntilizeWithHaloV2::compute_output_shapes
     // output_shape[1] remains same
     // output_shape[2] changes
     // output_shape[3] remains same
-    output_shape[2] = (uint32_t)ceil((float)total_nsticks / nbatch);
+    output_shape[2] = (uint32_t)std::ceil((float)total_nsticks / nbatch);
 
     log_debug(
         tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);

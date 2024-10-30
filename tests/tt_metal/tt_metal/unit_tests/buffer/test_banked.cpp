@@ -227,8 +227,8 @@ bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> input_packed = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, tt::test_utils::df::bfloat16>(
-        -1.0f, 1.0f, cfg.size_bytes / tt::test_utils::df::bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
+    std::vector<uint32_t> input_packed = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Appli   cation

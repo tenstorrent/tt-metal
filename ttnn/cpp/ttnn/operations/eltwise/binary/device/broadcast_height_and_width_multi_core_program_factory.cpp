@@ -17,6 +17,8 @@
 
 namespace ttnn::operations::binary {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
@@ -24,6 +26,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         case BinaryOpType::MUL: return BcastOpMath::MUL;
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
+}
+}
 }
 
 BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::cached_program_t
@@ -34,6 +38,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;

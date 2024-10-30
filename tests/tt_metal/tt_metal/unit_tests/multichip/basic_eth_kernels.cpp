@@ -22,9 +22,13 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
+}
+}
 
 namespace unit_tests::erisc::kernels {
 
@@ -186,6 +190,7 @@ bool writer_kernel_no_receive(
 }
 
 TEST_F(N300DeviceFixture, EthKernelsNocReadNoSend) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -212,6 +217,7 @@ TEST_F(N300DeviceFixture, EthKernelsNocReadNoSend) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsNocWriteNoReceive) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -354,6 +360,7 @@ bool eth_direct_sender_receiver_kernels(
 }  // namespace unit_tests::erisc::kernels
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -402,6 +409,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip0ToChip1) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     GTEST_SKIP();
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -450,6 +458,7 @@ TEST_F(N300DeviceFixture, EthKernelsDirectSendChip1ToChip0) {
 }
 
 TEST_F(DeviceFixture, EthKernelsDirectSendAllConnectedChips) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
@@ -500,6 +509,7 @@ TEST_F(DeviceFixture, EthKernelsDirectSendAllConnectedChips) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -585,6 +595,7 @@ TEST_F(N300DeviceFixture, EthKernelsBidirectionalDirectSend) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsRepeatedDirectSends) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
 
@@ -617,6 +628,7 @@ TEST_F(N300DeviceFixture, EthKernelsRepeatedDirectSends) {
 }
 
 TEST_F(N300DeviceFixture, EthKernelsRandomDirectSendTests) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     srand(0);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);

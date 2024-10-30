@@ -18,6 +18,8 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -40,6 +42,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+}
+}
 
 operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     const Tensor &a,
@@ -47,6 +51,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     const uint32_t W = shape[-1], H = shape[-2];

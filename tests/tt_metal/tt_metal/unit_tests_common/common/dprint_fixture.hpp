@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "common_fixture.hpp"
 #include "impl/debug/dprint_server.hpp"
 #include "tt_metal/common/core_descriptor.hpp"

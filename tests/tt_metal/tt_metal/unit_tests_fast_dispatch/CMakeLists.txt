@@ -18,6 +18,7 @@ add_executable(
     ${UNIT_TESTS_FD_SRC}
     $<TARGET_OBJECTS:unit_tests_common_o>
 )
+TT_ENABLE_UNITY_BUILD(unit_tests_fast_dispatch)
 
 target_link_libraries(unit_tests_fast_dispatch PUBLIC test_metal_common_libs)
 target_include_directories(

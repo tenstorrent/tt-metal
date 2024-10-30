@@ -31,10 +31,10 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     ttnn::Shape shape(dimensions);
 
     {
-        const auto input_tensor = ttnn::zeros(shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, device);
+        const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         const auto output_tensor = input_tensor + param.scalar;
         const auto expected_tensor =
-            ttnn::operations::creation::full(shape, param.scalar, ttnn::bfloat16, ttnn::TILE_LAYOUT, device);
+            ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
         TT_FATAL(ttnn::numpy::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
     ttnn::close_device(device);

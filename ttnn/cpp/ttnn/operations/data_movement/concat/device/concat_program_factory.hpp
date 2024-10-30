@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
