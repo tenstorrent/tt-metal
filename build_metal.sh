@@ -72,7 +72,7 @@ while true; do
         -h|--help)
             show_help;exit 0;;
         -e|--export-compile-commands)
-            export_compile_commands="ON";;
+            export_compile_commands="ON";unity_builds="OFF";;
         -c|--enable-ccache)
             enable_ccache="ON";;
         -t|--enable-time-trace)
