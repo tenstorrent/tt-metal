@@ -24,7 +24,16 @@ namespace unary {
 namespace detail {
 
 template <typename unary_operation_t>
-void bind_unary_composite_optional_floats_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, std::optional<float> parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, std::optional<float> parameter_b_value, const std::string& description) {
+void bind_unary_composite_optional_floats_with_default(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    std::optional<float> parameter_a_value,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    std::optional<float> parameter_b_value,
+    const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -192,8 +201,6 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
-        {2}
-
         .. math::
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
@@ -207,6 +214,9 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
 
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            {2}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -305,7 +315,7 @@ void bind_unary_operation_with_float_parameter(
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
-    const std::string& note=" ") {
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
@@ -484,7 +494,16 @@ void bind_unary_operation_with_dim_parameter(
 }
 
 template <typename unary_operation_t>
-void bind_unary_rdiv(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string parameter_b_value, const std::string& description, const std::string& note = " ") {
+void bind_unary_rdiv(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    const std::string parameter_b_value,
+    const std::string& description,
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {7}
@@ -854,7 +873,13 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
 
 //OpHandler_1int
 template <typename unary_operation_t>
-void bind_unary_composite_int_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, int32_t parameter_a_value, const std::string& description) {
+void bind_unary_composite_int_with_default(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    int32_t parameter_a_value,
+    const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {5}
@@ -899,7 +924,16 @@ void bind_unary_composite_int_with_default(py::module& module, const unary_opera
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_floats_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& parameter_name_b, const std::string& parameter_b_doc, float parameter_b_value, const std::string& note = "") {
+void bind_unary_composite_floats_with_default(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    float parameter_a_value,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    float parameter_b_value,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`, :attr:`{5}`.
@@ -930,7 +964,7 @@ void bind_unary_composite_floats_with_default(py::module& module, const unary_op
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        note);
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -996,7 +1030,14 @@ void bind_unary_composite_int(py::module& module, const unary_operation_t& opera
 
 //OpHandler_two_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_floats(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc,  const std::string& parameter_name_b, const std::string& parameter_b_doc, const std::string& description) {
+void bind_unary_composite_floats(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    const std::string& parameter_name_b,
+    const std::string& parameter_b_doc,
+    const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {6}
@@ -1093,7 +1134,13 @@ void bind_unary_composite_operation(py::module& module, const unary_operation_t&
 
 //OpHandler_float_with_default
 template <typename unary_operation_t>
-void bind_unary_composite_float_with_default(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, float parameter_a_value, const std::string& note = "") {
+void bind_unary_composite_float_with_default(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    float parameter_a_value,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
@@ -1120,7 +1167,7 @@ void bind_unary_composite_float_with_default(py::module& module, const unary_ope
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
-        note);
+        info_doc);
 
     bind_registered_operation(
         module,
@@ -1140,20 +1187,30 @@ void bind_unary_composite_float_with_default(py::module& module, const unary_ope
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite_float(py::module& module, const unary_operation_t& operation, const std::string& parameter_name_a, const std::string& parameter_a_doc, const std::string& description) {
+void bind_unary_composite_float(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& parameter_name_a,
+    const std::string& parameter_a_doc,
+    const std::string& description,
+    const std::string& range,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         {4}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2}
+            input_tensor (ttnn.Tensor): the input tensor. {5}
+            {2} (float): {3}
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            {6}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -1163,7 +1220,9 @@ void bind_unary_composite_float(py::module& module, const unary_operation_t& ope
         operation.python_fully_qualified_name(),
         parameter_name_a,
         parameter_a_doc,
-        description);
+        description,
+        range,
+        info_doc);
     bind_registered_operation(
         module,
         operation,
@@ -1543,7 +1602,16 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
         )doc");
 
-    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
+    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal,
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+        )doc");
+
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = relu(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = relu6(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::sigmoid, R"doc(\mathrm{{output\_tensor}}_i = sigmoid(\mathrm{{input\_tensor}}_i))doc");
@@ -1574,7 +1642,9 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
-    detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc", "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
+    detail::bind_unary_operation(module, ttnn::bitwise_not,
+    R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc",
+    "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
     //  Unaries with fast_and_approximate_mode
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
@@ -1618,7 +1688,8 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend", "Returns tensor with respective elements of the input tensor subtracted from the value.",
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::rsub, "value", "subtrahent value which is actually calculated as minuend",
+        "Returns tensor with respective elements of the input tensor subtracted from the value.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1653,7 +1724,8 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor", "This will create a tensor of same shape as input reference tensor with fill_value. Support provided for bfloat16, float32 dtypes in Wormhole_B0; Support provided for bfloat16 in Grayskull.",
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::fill, "fill_value", "The value to be filled in the output tensor",
+        "This will create a tensor of same shape as input reference tensor with fill_value. Support provided for bfloat16, float32 dtypes in Wormhole_B0; Support provided for bfloat16 in Grayskull.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+-------------------+
@@ -1668,7 +1740,8 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function", "This function caps off the input to a max value and a min value of 0",
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_max, "upper_limit", "The max value for ReLU function",
+        "This function caps off the input to a max value and a min value of 0",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1680,7 +1753,8 @@ void py_module(py::module& module) {
            System memory is not supported.
 
         )doc");
-    detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function", "This will carry out ReLU operation at min value instead of the standard 0",
+    detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function",
+        "This will carry out ReLU operation at min value instead of the standard 0",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1702,7 +1776,12 @@ void py_module(py::module& module) {
 
 
     // Unary ops with dim parameter
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::glu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication with the first tensor.",
+    detail::bind_unary_operation_with_dim_parameter(
+        module,
+        ttnn::glu,
+        "dim",
+        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
+        "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication with the first tensor.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1717,7 +1796,12 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::reglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform multiplication with the first tensor.",
+    detail::bind_unary_operation_with_dim_parameter(
+        module,
+        ttnn::reglu,
+        "dim",
+        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
+        "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform multiplication with the first tensor.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1732,7 +1816,12 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::geglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.",
+    detail::bind_unary_operation_with_dim_parameter(
+        module,
+        ttnn::geglu,
+        "dim",
+        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
+        "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1747,7 +1836,12 @@ void py_module(py::module& module) {
 
         )doc");
 
-    detail::bind_unary_operation_with_dim_parameter(module, ttnn::swiglu, "dim", "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)", "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform multiplication with the first tensor.",
+    detail::bind_unary_operation_with_dim_parameter(
+        module,
+        ttnn::swiglu,
+        "dim",
+        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
+        "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform multiplication with the first tensor.",
         R"doc(Supported dtypes, layouts, and ranks:
 
            +----------------------------+---------------------------------+-------------------+
@@ -1833,7 +1927,16 @@ void py_module(py::module& module) {
 
         )doc");
     detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
-    detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
+    detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]",
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -1844,7 +1947,18 @@ void py_module(py::module& module) {
            +----------------------------+---------------------------------+-------------------+
 
         )doc");
-    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`, not supported for grayskull.)doc");
+    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf]",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           Not supported on Grayskull.
+
+        )doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]",
         R"doc(Supported dtypes, layouts, and ranks:
 
@@ -1870,9 +1984,27 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc", "",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          ROW MAJOR, TILE        |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
     detail::bind_unary_composite(module, ttnn::logical_not_, R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc");
+    detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc", "",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |          ROW MAJOR, TILE        |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
     detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite_operation(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
 
@@ -2027,8 +2159,20 @@ void py_module(py::module& module) {
     detail::bind_unary_composite_float(
         module,
         ttnn::rpow,
-        "exponent", "exponent value",
-        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
+        "exponent", "exponent value. Non-positive values are not supported.",
+        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc",
+        R"doc(Supported for input range upto 28)doc",
+        R"doc(Supported dtypes and layouts:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+           System memory is not supported.
+
+        )doc");
 
     detail::bind_unary_rdiv(
     module,
