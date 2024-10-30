@@ -555,8 +555,6 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     auto index_dims = cached_program.shared_variables.index_dims;
     auto input_dim_offset = cached_program.shared_variables.input_dim_offset;
 
-    TT_ASSERT(tensor_return_value.buffer()->size() == 1);
-
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
