@@ -229,7 +229,9 @@ if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
 fi
 
-if [ "$unity_builds" = "OFF" ]; then
+if [ "$unity_builds" = "ON" ]; then
+    cmake_args+=("-DTT_UNITY_BUILDS=ON")
+else
     cmake_args+=("-DTT_UNITY_BUILDS=OFF")
 fi
 
