@@ -334,7 +334,7 @@ const DataFormat get_single_pack_src_format(
         TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Dest Fp32 mode is not supported for arch grayskull");
 
         if (is_bfp_format(output_format)) {
-            pack_src_format = DataFormat::Bfp8_b;
+            pack_src_format = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
         } else if(is_exp_b_format(output_format) || (output_format == DataFormat::Float32)) {
             pack_src_format = output_format;
         } else if(output_format == DataFormat::Float16){
@@ -374,7 +374,7 @@ const DataFormat get_single_pack_src_format(
             }
             pack_src_format = unpack_conditional_dst_format;
         } else if (is_bfp_format(output_format)) {
-            pack_src_format = is_exp_b_format(output_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+            pack_src_format = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
         } else {
             pack_src_format = output_format;
         }
@@ -390,7 +390,7 @@ const DataFormat get_single_pack_src_format(
         DataFormat pack_src_format_tmp = output_format;
 
         if (is_bfp_format(output_format)) {
-            pack_src_format_tmp = is_exp_b_format(output_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
+            pack_src_format_tmp = is_exp_b_format(output_format) ? DataFormat::Float16_b : DataFormat::Float16;
         }
 
         if (pack_src_format_tmp != DataFormat::Float32) {
