@@ -52,7 +52,7 @@ static std::tuple<KernelHandle,KernelHandle,KernelHandle> schedule_kernel_compil
     return {receiver_kernel_id, sender_kernel_id,sem_init_id};
 }
 
-static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32_t>> get_rt_args(
+static std::tuple<std::array<uint32_t,7>,std::array<uint32_t,10>,std::array<uint32_t,5>> get_rt_args(
     tt::tt_metal::Program& program,
     Device *device,
     bool is_starting_core,
@@ -67,7 +67,7 @@ static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32
     constexpr uint32_t erisc_semaphore_address =      eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes*2);
     constexpr uint32_t erisc_buffer_address=          eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes*3);
 
-    std::vector<uint32_t> receiver_rt_args = {
+    const std::array<uint32_t,10> receiver_rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
         static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
@@ -79,7 +79,7 @@ static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32
         static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
         worker_sem0
     };
-    std::vector<uint32_t> sender_rt_args = {
+    const std::array<uint32_t,7> sender_rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),//is_ring_start
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,//handshake_addr
         erisc_buffer_address,
@@ -88,7 +88,7 @@ static std::tuple<std::vector<uint32_t>,std::vector<uint32_t>,std::vector<uint32
         static_cast<uint32_t>(device->physical_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
         worker_sem1
         }; //sample size
-    std::vector<uint32_t> sem_id_args = {
+    const std::array<uint32_t,5> sem_id_args = {
         worker_sem0,
         worker_sem1,
         static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_receiver_core).x),
