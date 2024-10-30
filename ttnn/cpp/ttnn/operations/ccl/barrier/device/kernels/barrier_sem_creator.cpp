@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <cstdint>
 
 void kernel_main() {
     uint32_t arg_idx = 0;
