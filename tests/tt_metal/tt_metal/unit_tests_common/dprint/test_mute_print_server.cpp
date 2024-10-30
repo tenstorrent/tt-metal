@@ -14,6 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace ANON_NAMESPACE {
 const std::string golden_output =
 R"(Printing int from arg: 0
 Printing int from arg: 2)";
@@ -61,9 +62,10 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         )
     );
 }
+}
 
 TEST_F(DPrintFixture, TestPrintMuting) {
     for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
+        this->RunTestOnDevice(ANON_NAMESPACE::RunTest, device);
     }
 }

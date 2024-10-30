@@ -28,7 +28,15 @@ set(UNIT_TESTS_COMMON_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_waypoint.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
 )
-add_library(unit_tests_common_o OBJECT ${UNIT_TESTS_COMMON_SRC})
+add_library(unit_tests_common_o STATIC ${UNIT_TESTS_COMMON_SRC})
+set_target_properties(
+    unit_tests_common_o
+    PROPERTIES
+        UNITY_BUILD
+            ON
+        UNITY_BUILD_UNIQUE_ID
+            "ANON_NAMESPACE"
+)
 target_link_libraries(
     unit_tests_common_o
     PUBLIC

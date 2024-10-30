@@ -14,6 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace ANON_NAMESPACE {
 const std::string golden_output =
 R"(Test Debug Print: ERISC
 Basic Types:
@@ -76,6 +77,7 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
         tt::DPrintServerClearLogFile();
     }
 }
+}
 
 TEST_F(DPrintFixture, TestPrintEthCores) {
     for (Device* device : this->devices_) {
@@ -86,7 +88,7 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
         }
         this->RunTestOnDevice(
             [](DPrintFixture *fixture, Device *device){
-                RunTest(fixture, device, true);
+                ANON_NAMESPACE::RunTest(fixture, device, true);
             },
             device
         );
@@ -105,7 +107,7 @@ TEST_F(DPrintFixture, TestPrintIEthCores) {
         }
         this->RunTestOnDevice(
             [](DPrintFixture *fixture, Device *device){
-                RunTest(fixture, device, false);
+                ANON_NAMESPACE::RunTest(fixture, device, false);
             },
             device
         );
