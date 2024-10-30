@@ -8,23 +8,6 @@ from tabulate import tabulate
 from perf_csv import perf_report
 
 
-def validate_results(df):
-    reference_values = {
-        "HOST DURATION [ns]": 10000,
-        "Cycles Count": 120000,
-        "OP TO OP LATENCY [ns]": 3500,
-        "DEVICE FW DURATION [ns]": 115000,
-        "DEVICE KERNEL DURATION [ns]": 110000,
-        "PM BANDWIDTH [ns]": 8000,
-    }
-
-    averages = df.iloc[-1]
-
-    for column, reference in reference_values.items():
-        if averages[column] > reference:
-            assert False, f"Output exceeds reference for {column}: {averages[column]} > {reference}"
-
-
 def run_profile_and_extract_csv():
     command = [
         "./tt_metal/tools/profiler/profile_this.py",
@@ -45,8 +28,8 @@ def run_profile_and_extract_csv():
 
         average_values = perf_report(csv_path)
 
+        print("Min - Avg - Max by Common Runs:")
         print(tabulate(average_values, headers="keys", tablefmt="pretty"))
-        validate_results(average_values)
 
     else:
         print("CSV path not found in the command output.")

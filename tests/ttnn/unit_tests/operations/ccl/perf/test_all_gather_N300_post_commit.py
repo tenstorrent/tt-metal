@@ -16,38 +16,24 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     "num_devices, num_links, output_shape, dim, layout",
     [
         (2, 1, [1, 1, 64, 16384], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [8, 5, 32, 768], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 736], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 704], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 64, 704], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 736], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 1, 32, 704], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 1, 64, 704], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 1, 32, 8192], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [8, 5, 13, 512], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [8, 5, 13, 768], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [8, 8, 256, 384], 1, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 1, 64, 2048], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
-        # (2, 1, [1, 1, 32, 1024], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 2, 32, 4096], 3, ttnn.ROW_MAJOR_LAYOUT),
-        # (2, 1, [1, 2, 32, 1024], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [8, 5, 32, 768], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 736], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 704], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 64, 704], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 736], 3, ttnn.ROW_MAJOR_LAYOUT),
+        (2, 1, [1, 1, 32, 704], 3, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
