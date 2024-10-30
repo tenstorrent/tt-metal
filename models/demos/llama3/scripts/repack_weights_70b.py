@@ -88,7 +88,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Repack llama2-70b weights")
     parser.add_argument("in_dir", type=str, help="input directory")
     parser.add_argument("out_dir", type=str, help="output directory")
-    parser.add_argument("chunk_size", type=int, default=5, help="number of layers per chunk")
+    parser.add_argument("chunk_size", type=int, default=10, help="number of layers per chunk")
     parser.add_argument("-n", "--num_layers", type=int, default=80, help="total number of layers")
     parser.add_argument("-hs", "--hidden_size", type=int, default=8192, help="hidden size of the model")
     args = parser.parse_args()
