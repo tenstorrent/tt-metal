@@ -11,7 +11,7 @@ jobs:
     with:
       arch: '["wormhole_b0"]'
     secrets: inherit
-  t3000-model-perf-tests:
+  t3000-model-accuracy-perplexity-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml

@@ -147,6 +147,9 @@ run_t3000_tests() {
   # Run llama3 smaller tests (1B, 3B, 8B, 11B)
   run_t3000_llama3_tests
 
+  # Run llama3 vision tests
+  run_t3000_llama3_vision_tests
+
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests
 

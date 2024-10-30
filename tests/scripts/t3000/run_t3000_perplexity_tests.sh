@@ -79,7 +79,7 @@ run_t3000_mixtral8x7b_perplexity_tests() {
 
 run_t3000_llama3_perplexity_tests_single_card() {
   # Split long set of tests into two groups
-  # This one runs all the N150 and N300 tests
+  # This one runs all the N150 and N300 tests spoofed on a T3k
   fail=0
   start_time=$(date +%s)
 

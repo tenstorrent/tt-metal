@@ -27,11 +27,11 @@ The downloaded directories include weight files (e.g. `consolidated.00.pth`), th
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
 If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
 
-Note: Use the value of `10` for `chunk_size`.
+Note: Use the default value of `10` for `chunk_size`.
 
 ```
 # This concatenates the sharded checkpoints and makes it easier for us to load.
-python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size=5>
+python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
