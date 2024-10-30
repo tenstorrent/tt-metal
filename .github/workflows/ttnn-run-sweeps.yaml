@@ -161,6 +161,8 @@ on:
           - eltwise.unary_backward.hardswish_bw.hardswish_bw
           - eltwise.unary_backward.rpow_bw.rpow_bw
           - eltwise.unary_complex.conj
+          - eltwise.unary_complex.is_real
+          - eltwise.unary_complex.is_imag
           - eltwise.unary_complex.reciprocal
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.unary.lgamma
