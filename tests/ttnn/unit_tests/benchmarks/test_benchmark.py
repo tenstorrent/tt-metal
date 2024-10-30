@@ -91,7 +91,7 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-matmul_shapes = [
+matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1),
     (512, 1024, 1024, True, True, 1),
     (512, 1024, 2048, True, True, 1),
@@ -107,12 +107,30 @@ matmul_shapes = [
     (4096, 4096, 4096, False, False, 4),
 ]
 
+matmul_shapes_bfloat8_b = [
+    (512, 512, 512, True, True, 1),
+    (512, 1024, 1024, True, True, 1),
+    (512, 1024, 2048, True, True, 1),
+    (1024, 1024, 1024, True, True, 1),
+    (1024, 1024, 2048, True, True, 1),
+    (1024, 2048, 2048, True, True, 1),
+    (2048, 2048, 2048, True, True, 1),
+    (2048, 2048, 3072, True, True, 1),
+    (2048, 3072, 3072, True, True, 1),
+    (3072, 3072, 3072, True, True, 2),
+    (3072, 3072, 4096, True, True, 2),
+    (3072, 4096, 4096, True, True, 4),
+    (4096, 4096, 4096, False, False, 4),
+]
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi2])
+@pytest.mark.parametrize(
+    "dtype, math_fidelity", [(ttnn.bfloat16, ttnn.MathFidelity.HiFi2), (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi)]
+)
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
@@ -120,6 +138,7 @@ def test_matmul_2d_host_perf(
     grid_size,
     tile_h,
     tile_w,
+    dtype,
     math_fidelity,
     num_warmup_iterations,
     num_measurement_iterations,
@@ -133,9 +152,23 @@ def test_matmul_2d_host_perf(
     with open(FILE_NAME, mode="w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(
-            ["m", "k", "n", "in0_sharded", "out_sharded", "in0_block_w", "inference_time_avg (ns)", "TFLOPs (avg)"]
+            [
+                "m",
+                "k",
+                "n",
+                "in0_sharded",
+                "out_sharded",
+                "dtype",
+                "math_fidelity",
+                "inference_time_avg (ns)",
+                "TFLOPs (avg)",
+            ]
         )
 
+        if dtype == ttnn.bfloat16:
+            matmul_shapes = matmul_shapes_bfloat16
+        else:
+            matmul_shapes = matmul_shapes_bfloat8_b
         for m, k, n, in0_sharded, out_sharded, in0_block_w_div in matmul_shapes:
             profiler.clear()
 
@@ -162,7 +195,7 @@ def test_matmul_2d_host_perf(
             in0_t = ttnn.from_torch(
                 in0,
                 tile=ttnn.Tile((tile_h, 32)),
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=in0_memory_config,
@@ -170,7 +203,7 @@ def test_matmul_2d_host_perf(
             in1_t = ttnn.from_torch(
                 in1,
                 tile=ttnn.Tile((32, tile_w)),
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -216,7 +249,7 @@ def test_matmul_2d_host_perf(
                 in1_t,
                 program_config=program_config,
                 memory_config=out_mem_config,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 compute_kernel_config=compute_kernel_config,
                 output_tile=output_tile,
             )
@@ -227,7 +260,7 @@ def test_matmul_2d_host_perf(
                 in1_t,
                 program_config=program_config,
                 memory_config=out_mem_config,
-                dtype=ttnn.bfloat16,
+                dtype=dtype,
                 compute_kernel_config=compute_kernel_config,
                 output_tile=output_tile,
             )
@@ -250,4 +283,4 @@ def test_matmul_2d_host_perf(
             ttnn.deallocate(output_t)
             ttnn.deallocate(in0_t)
             ttnn.deallocate(in1_t)
-            writer.writerow([m, k, n, in0_sharded, out_sharded, in0_block_w, inference_time_avg, tflops])
+            writer.writerow([m, k, n, in0_sharded, out_sharded, dtype, math_fidelity, inference_time_avg, tflops])
