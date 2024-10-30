@@ -7,6 +7,10 @@ on:
         description: "Use precompiled assets for wheel build"
         default: True
         type: boolean
+      profiler-build:
+        description: "Build with the profiler tools and libraries"
+        default: True
+        type: boolean
   schedule:
     - cron: "0 0 * * *"
 
@@ -34,6 +38,7 @@ jobs:
       os: ${{ matrix.os }}
       arch: ${{ matrix.arch }}
       from-precompiled: ${{ inputs.from-precompiled }}
+      profiler-build: ${{ inputs.profiler-build }}
   test-wheels:
     needs: build-wheels
     if: ${{ always() }}
