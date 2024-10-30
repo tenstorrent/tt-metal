@@ -12,6 +12,13 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+
+PHDRS {
+  attributes 0x70000003;
+  text PT_LOAD;
+  data PT_LOAD;
+}
+
 SECTIONS
 {
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
@@ -27,29 +34,29 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_APP_CODE
+  } > REGION_APP_CODE :text
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
     KEEP (*(.init .fini))
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
-  } > REGION_APP_CODE
+  } > REGION_APP_CODE :text
 
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE
-  .rodata1        : { *(.rodata1) } > REGION_APP_CODE
+  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_CODE :text
+  .rodata1        : { *(.rodata1) } > REGION_APP_CODE :text
   .sdata2         :
   {
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA
+  } > REGION_APP_DATA :data
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_DATA :data
 
-.data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA
-  .dynamic        : { *(.dynamic) } > REGION_APP_DATA
+.data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_DATA :data
+  .dynamic        : { *(.dynamic) } > REGION_APP_DATA :data
   .data           :
   {
     *(.data .data.* .gnu.linkonce.d.*)
     SORT(CONSTRUCTORS)
-  } > REGION_APP_DATA
+  } > REGION_APP_DATA :data
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
   __l1_bss_start = .;
@@ -58,7 +65,7 @@ SECTIONS
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-  } > REGION_APP_DATA
+  } > REGION_APP_DATA :data
   . = ALIGN(4);
   __l1_bss_end = .;
 
@@ -76,24 +83,10 @@ SECTIONS
       pad the .data section.  */
    . = ALIGN(4);
    __ldm_bss_end = .;
-  } > REGION_APP_DATA
+  } > REGION_APP_DATA :data
   . = ALIGN(32 / 8);
 
-  .stack :
-  {
-   . = ALIGN(16);
-   __stack_bottom = .;
-   . += __firmware_stack_size;
-   __stack_top = .;
-   __freertos_irq_stack_top = .;
-   . += 4;
-  } > REGION_LDM
-
-  l1_memory :
-  {
-    *(l1_memory)
-    *(l1_memory_const) /* gcc complains about const and non-const data in the same segment. */
-  } > ETH_L1
+  .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

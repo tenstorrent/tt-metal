@@ -55,13 +55,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.state_dict = state_dict
 
-        # self.tok_embeddings = TtLlamaEmbedding(
-        #     mesh_device=mesh_device,
-        #     args=configuration,
-        #     weight_cache_path=configuration.weight_cache_path(dtype),
-        #     state_dict=state_dict,
-        #     dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        # )
         # NOTE: Running all embeddings in torch for now since learnable embeddings use complex indexing ops which must be in torch
         self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, configuration.dim)
         tok_embedding_prefix = f"{state_dict_prefix}tok_embeddings."
@@ -79,23 +72,10 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             weight_key="norm",
         )
 
-        # # self.output layer weight
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
-        # self.output = LMHead(
-        #     configuration,
-        #     mesh_device,
-        #     ttnn.bfloat8_b,
-        #     state_dict,
-        #     state_dict_prefix,
-        #     weight_cache_path,
-        # )
-
-        # torch_weight = lambda name, suffix: torch.transpose(
-        #     self.state_dict[f"{state_dict_prefix}{name}.{suffix}"], -2, -1
-        # )
-
         lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
-        num_splits = 4  # arbitrary, reasonable number
+        total_splits = 8  # Arbitrary value which allows whole-tile splits in LM Head
+        num_splits = total_splits // self.configuration.num_devices
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)
 
         cache_name = lambda name, suffix, split: weight_cache_path / (state_dict_prefix + f"{name}{suffix}{split}")
@@ -113,7 +93,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self.outputs = [
             as_interleaved_tensor("output", "weight", idx, ttnn.bfloat8_b, dim=-1) for idx in range(len(lm_head_torch))
         ]
-        # self.output = as_interleaved_tensor("output", "weight", ttnn.bfloat8_b, dim=-1)
 
         self.n_llama_layers = configuration.n_layers
         self.model_dim = configuration.dim

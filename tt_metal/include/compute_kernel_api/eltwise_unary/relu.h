@@ -100,10 +100,10 @@ ALWI void relu_tile_init() {
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | slope          | slope used in leaky relu calculation                                       | uint32_t | Greater than 0                                        | True     |
+ * | slope          | slope used in leaky relu - will reinterpret unsigned int to float          | uint32_t | Greater than 0                                        | True     |
  */
-ALWI void leaky_relu_tile(uint32_t idst,uint32_t param0) {
-  MATH(( llk_math_eltwise_unary_sfpu_lrelu<APPROX>(idst,param0) ));
+ALWI void leaky_relu_tile(uint32_t idst, uint32_t slope) {
+  MATH(( llk_math_eltwise_unary_sfpu_lrelu<APPROX>(idst, slope) ));
 }
 
 /**

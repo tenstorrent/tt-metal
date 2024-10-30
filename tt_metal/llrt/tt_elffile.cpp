@@ -96,10 +96,16 @@ class ElfFile::Impl {
     }
 
     [[nodiscard]] static bool IsInSegment(Segment const &segment, Elf32_Shdr const &shdr) {
-        // Remember, Segments use word_t sizes
-        return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr >= segment.address &&
-	    shdr.sh_addr + shdr.sh_size <=
-	    segment.address + (segment.contents.size() + segment.bss) * sizeof (word_t);
+        // Remember, Segments use word_t sizes. If a zero-sized
+        // section is at the end of a segment, it is considered in
+        // that segment. Fortunately, we do not have abutting
+        // segments, so do not have to consider the case of a zero
+        // length section sitting at that boundary. We also take
+        // advantage of the (a) fact that sections cannot straddle
+        // segment boundaries -- they're either wholey inside or
+        // wholey outside, and (b) unsigned arithmetic.
+        return shdr.sh_flags & SHF_ALLOC && shdr.sh_addr + shdr.sh_size - segment.address <=
+                                                (segment.contents.size() + segment.bss) * sizeof(word_t);
     }
     [[nodiscard]] bool IsInSegment(unsigned _ix, Elf32_Shdr const &shdr) const {
         return IsInSegment(GetSegments()[_ix], shdr);
@@ -208,26 +214,18 @@ void ElfFile::Impl::LoadImage() {
     if (!hdr.e_shstrndx || hdr.e_shstrndx >= GetShdrs().size())
         TT_THROW("{}: string table is missing or malformed", path_);
 
-    // We care about the location of some sections.
-    for (auto const &section : GetShdrs())
-        if ((section.sh_flags & SHF_ALLOC || section.sh_type == SHT_RELA || section.sh_type == SHT_SYMTAB) &&
-                (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1))
-            TT_THROW(
-                "{}: section {} is misaligned [{x},+{x})@{x}",
-                path_,
-                GetName(section),
-                section.sh_addr,
-                section.sh_size,
-                section.sh_offset);
-
     GetSegments().reserve(hdr.e_phnum);
-    int textIx = -1;
+    bool haveText = false, haveStack = false;
     for (auto const &phdr : GetPhdrs()) {
         if (phdr.p_type == PT_RISCV_ATTRIBUTES)
             // TODO: verify Arch is ok?
             continue;
-        if (phdr.p_type != PT_LOAD)
+        if (phdr.p_type == PT_GNU_STACK)
+            haveStack = true;
+        else if (phdr.p_type != PT_LOAD)
             continue;
+        else if (haveStack)
+            TT_THROW("{}: loadable segments after stack segment", path_);
 
         log_debug(
             tt::LogLLRuntime,
@@ -239,9 +237,6 @@ void ElfFile::Impl::LoadImage() {
             phdr.p_memsz,
             phdr.p_offset);
 
-        if (!phdr.p_memsz)
-            // Have observed zero-sized segments, ignore them
-            continue;
 
         // Require loadable segments to be nicely aligned
         if ((phdr.p_offset | phdr.p_vaddr) & (sizeof(word_t) - 1))
@@ -258,8 +253,11 @@ void ElfFile::Impl::LoadImage() {
         // We require the entry point to be the start of the text segment,
         // so use a simple comparison -- if the entry point is elsewhere
         // we'll complain about lack of text segment.
-        if (hdr.e_entry == phdr.p_vaddr)
-            textIx = GetSegments().size();
+        if (hdr.e_entry == phdr.p_vaddr) {
+            haveText = true;
+            if (!GetSegments().empty())
+                TT_THROW("{}: first loadable segment is not text", path_);
+        }
 
         // This word-size rounding up means the span can occupy some bytes
         // outside the range of the original span, but those bytes will
@@ -270,13 +268,35 @@ void ElfFile::Impl::LoadImage() {
             std::span(reinterpret_cast<word_t const *>(contents.data()), file_size),
             phdr.p_vaddr, mem_size - file_size);
     }
-    if (textIx < 0)
+    if (!haveText)
         TT_THROW("{}: cannot find text segment", path_);
-    if (textIx > 0) {
-        auto &segments = GetSegments();
-	auto text = std::next(segments.begin(), textIx);
-        std::rotate(segments.begin(), text, std::next(text, 1));
+
+    // Check sections
+    for (auto const &section : GetShdrs()) {
+        // We care about alignment of allocatable sections,
+        // relocations and symbols.
+        if ((section.sh_flags & SHF_ALLOC || section.sh_type == SHT_RELA || section.sh_type == SHT_SYMTAB) &&
+            (section.sh_offset | section.sh_addr) & (sizeof(word_t) - 1))
+            TT_THROW(
+                "{}: section {} is misaligned [{x},+{x})@{x}",
+                path_,
+                GetName(section),
+                section.sh_addr,
+                section.sh_size,
+                section.sh_offset);
+        // If it's allocatable, make sure it's in a segment.
+        if (section.sh_flags & SHF_ALLOC && GetSegmentIx(section) < 0)
+            TT_THROW(
+                "{}: allocatable section {} [{x},+{x})@{x} is not in known segment",
+                path_,
+                GetName(section),
+                section.sh_addr,
+                section.sh_size,
+                section.sh_offset);
     }
+    if (haveStack)
+        // Remove the stack segment, now we used it for checking the sections.
+        GetSegments().pop_back();
 }
 
 class ElfFile::Impl::Weakener {

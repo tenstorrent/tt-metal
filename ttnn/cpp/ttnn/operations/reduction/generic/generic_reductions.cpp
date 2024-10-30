@@ -14,7 +14,7 @@ namespace operations::reduction {
 template <ReduceType reduce_type>
 static Tensor reduce_impl(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -29,16 +29,16 @@ static Tensor reduce_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    std::vector<int> dim{};
+    ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
-        if (not std::holds_alternative<std::vector<int>>(dim_arg.value())) {
+        if (not std::holds_alternative<ttnn::SmallVector<int>>(dim_arg.value())) {
             auto dim_as_int = std::get<int>(dim_arg.value());
-            dim = std::vector<int>({dim_as_int});
+            dim = ttnn::SmallVector<int>({dim_as_int});
         } else {
-            dim = std::get<std::vector<int>>(dim_arg.value());
+            dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
         }
     } else {
-        dim = std::vector<int>(rank);
+        dim = ttnn::SmallVector<int>(rank);
         for (int i = 0; i < rank; i++) {
             dim[i] = i;
         }
@@ -93,8 +93,8 @@ static Tensor reduce_impl(
     }
     std::sort(dim.begin(), dim.end());
 
-    std::vector<uint32_t> output_shape;
-    std::vector<uint32_t> padded_output_shape;
+    ttnn::SmallVector<uint32_t> output_shape;
+    ttnn::SmallVector<uint32_t> padded_output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
         if (std::find(dim.begin(), dim.end(), axis) != dim.end()) {
             if (keepdim) {
@@ -182,7 +182,7 @@ static Tensor reduce_impl(
 template <ReduceType reduce_type>
 Tensor Reduce<reduce_type>::invoke(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::vector<int>>>& dim_arg,
+    const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
