@@ -199,6 +199,8 @@ fi
 
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+else
+    cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF")
 fi
 
 if [ "$build_tests" = "ON" ]; then
