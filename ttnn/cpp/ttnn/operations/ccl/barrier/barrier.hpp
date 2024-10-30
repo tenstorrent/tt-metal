@@ -5,8 +5,7 @@
 #pragma once
 
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-
-#include "ttnn/cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::ccl {
