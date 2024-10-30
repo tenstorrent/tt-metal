@@ -9,7 +9,7 @@
 
 #include "small_vector.hpp"
 
-namespace ttnn {
+namespace tt::tt_metal {
 
 // Container wrapper that allows negative indexing
 class ShapeBase {
@@ -41,6 +41,8 @@ public:
 
     std::span<const uint32_t> view() const;
 
+    bool empty() const;
+
 protected:
     void init();
     size_t size() const;
@@ -51,4 +53,4 @@ private:
     size_t m_original_size = 0;
 };
 
-} // namespace ttnn
+} // namespace tt::tt_metal

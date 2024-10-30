@@ -32,7 +32,7 @@ public:
     PageConfig get_page_config() const { return m_page_config; }
     DataType get_data_type() const { return m_dtype; }
     const MemoryConfig& get_memory_config() const { return m_memory_config; }
-    const ttnn::Alignment& get_alignment() const { return m_alignment; }
+    const Alignment& get_alignment() const { return m_alignment; }
 
     Strides compute_strides(const ttnn::SimpleShape& shape) const;
 
@@ -53,7 +53,7 @@ public:
 
 private:
     // Private to not expose alignment parameter to the public API
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Alignment& alignment);
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
     void validate_alignment() const;
@@ -64,7 +64,7 @@ private:
     DataType m_dtype = DataType::BFLOAT16;
     PageConfig m_page_config;
     MemoryConfig m_memory_config;
-    ttnn::Alignment m_alignment;
+    Alignment m_alignment;
 };
 
 } // tt::tt_metal

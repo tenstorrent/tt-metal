@@ -6,7 +6,7 @@
 
 #include "shape_base.hpp"
 
-namespace ttnn {
+namespace tt::tt_metal {
 
 class SimpleShape final : protected ShapeBase {
 public:
@@ -16,6 +16,7 @@ public:
     using ShapeBase::cend;
     using ShapeBase::view;
     using ShapeBase::size;
+    using ShapeBase::empty;
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -24,7 +25,7 @@ public:
     }
 
     bool operator==(const SimpleShape &other) const;
-    bool operator==(const SmallVector<uint32_t> &other) const;
+    bool operator==(const ShapeBase::Container &other) const;
 
 
     [[nodiscard]] size_t rank() const;
@@ -37,6 +38,10 @@ public:
     friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
 };
 
-std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape);
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::SimpleShape &shape);
 
+} // namespace tt::tt_metal
+
+namespace ttnn {
+    using tt::tt_metal::SimpleShape;
 } // namespace ttnn

@@ -15,7 +15,7 @@ size_t round_up(size_t value, size_t multiple) {
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
-ttnn::Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_shape) {
+Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_shape) {
     const auto rank = legacy_padded_shape.rank();
     ttnn::SmallVector<uint32_t> values(rank);
 
@@ -29,7 +29,7 @@ ttnn::Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_pad
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
-    ttnn::Alignment result(values);
+    Alignment result(values);
     return result;
 }
 
@@ -40,7 +40,7 @@ TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const 
 }
 
 // Private
-TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Alignment& alignment)
+TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment)
     : m_dtype(dtype),
       m_page_config(page_config),
       m_memory_config(memory_config),
@@ -55,7 +55,7 @@ TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfi
 }
 
 void TensorLayout::initialize_alignment() {
-    if(m_alignment.size() != 0) {
+    if(m_alignment.empty()) {
         return;
     }
 

@@ -7,7 +7,7 @@
 #include "ttnn/tensor/shape/shape_base.hpp"
 #include "ttnn/tensor/shape/small_vector.hpp"
 
-namespace ttnn {
+namespace tt::tt_metal {
 
 class Alignment final : protected ShapeBase {
 public:
@@ -17,6 +17,7 @@ public:
     using ShapeBase::cend;
     using ShapeBase::view;
     using ShapeBase::size;
+    using ShapeBase::empty;
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
@@ -34,6 +35,6 @@ public:
     friend std::ostream &operator<<(std::ostream &os, const Alignment &shape);
 };
 
-std::ostream &operator<<(std::ostream &os, const ttnn::Alignment &shape);
+std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &shape);
 
 } // namespace ttnn

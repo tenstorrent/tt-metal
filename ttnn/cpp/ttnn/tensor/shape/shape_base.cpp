@@ -7,7 +7,7 @@
 #include "fmt/color.h"
 #include "tt_metal/common/assert.hpp"
 
-namespace ttnn {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -38,6 +38,10 @@ void ShapeBase::init() {
         Container ones(min_internal_size - m_original_size, 1);
         m_value.insert(m_value.begin(), ones.begin(), ones.end());
     }
+}
+
+bool ShapeBase::empty() const {
+    return m_original_size == 0;
 }
 
 size_t ShapeBase::size() const {
@@ -78,4 +82,4 @@ ShapeBase::Container::const_iterator ShapeBase::cend() const {
     return this->m_value.cend();
 }
 
-} // namespace ttnn
+} // namespace tt::tt_metal

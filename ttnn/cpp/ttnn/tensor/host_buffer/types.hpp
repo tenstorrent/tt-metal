@@ -7,5 +7,5 @@
 #include <memory>
 #include <vector>
 
-#include "ownerd_buffer.hpp"
+#include "owned_buffer.hpp"
 #include "borrowed_buffer.hpp"

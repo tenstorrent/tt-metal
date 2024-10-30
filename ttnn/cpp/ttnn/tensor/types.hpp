@@ -559,8 +559,6 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 
 using types::Shape;
 
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile = std::nullopt);
-
 }  // namespace ttnn
 
 namespace tt {
