@@ -42,19 +42,18 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(const Tensor &a,
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
+    Buffer *src0_buffer = a.buffer();
+    Buffer *dst_buffer = output.buffer();
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
     CoreRange cores({0, 0}, {0, 0});
     uint32_t cb_id = tt::CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering
-    uint32_t cb_pagesize = tt::round_up(padded_row_size_nbytes, tt::constants::TILE_WIDTH);
+    uint32_t cb_pagesize = tt::round_up(padded_row_size_nbytes, std::max(src0_buffer->alignment(), tt::constants::TILE_WIDTH));
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
-
-
-    Buffer *src0_buffer = a.buffer();
-    Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -199,7 +198,7 @@ operation::ProgramWithCallbacks pad_rm_opt(const Tensor &a,
 
     Buffer *src0_buffer = a.buffer();
     Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -680,18 +679,19 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(const Tensor &a,
     int32_t src_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * a.element_size();
     int32_t dst_nbytes_per_core_w = ntiles_per_core_w * TILE_WIDTH * output.element_size();
 
+    Buffer *src0_buffer = a.buffer();
+    Buffer *dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
     uint32_t cb_id = tt::CB::c_in0;
     uint32_t cb_npages = 16; // multibuffering for perf
     // uint32_t cb_npages = 1; // multibuffering for perf
-    uint32_t cb_pagesize = (uint32_t) ceil((float) dst_nbytes_per_core_w / tt::constants::TILE_WIDTH) * tt::constants::TILE_WIDTH;
+    uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
+    uint32_t cb_pagesize = static_cast<uint32_t>(ceil((float) dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}})
 		.set_page_size(cb_id, cb_pagesize);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
-
-    Buffer *src0_buffer = a.buffer();
-    Buffer *dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
