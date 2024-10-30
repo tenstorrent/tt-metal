@@ -34,7 +34,6 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4
