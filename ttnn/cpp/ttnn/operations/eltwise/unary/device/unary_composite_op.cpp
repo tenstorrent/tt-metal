@@ -315,26 +315,19 @@ Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_con
     return result_log1p;
 }
 
+// log[exp[x] + 1] => softplus[x]
 // mish[x] = x*tanh[softplus[x]]
-// use transformation y = x*tanh[softplus[x]] by broadcast
-// Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor _mish(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({x}))};
-    operation::launch_op(
-        [output_mem_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& x = input_tensors.at(0);
-            Tensor sp_x = ttnn::softplus(x, 1.0f, 20.0f, output_mem_config);
-            Tensor tanh_x = ttnn::tanh(sp_x, output_mem_config);
-            sp_x.deallocate();
-            Tensor mish_x = ttnn::multiply(x, tanh_x, std::nullopt, output_mem_config);
-            return {mish_x};
-        },
-        {x},
-        output_tensors);
-    return output_tensors.at(0);
+Tensor ExecuteMish::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::EXP, 1.0f},
+    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam{UnaryOpType::LOG},
+    UnaryWithParam{UnaryOpType::TANH} };
+    Tensor result = ttnn::unary_chain(x, ops_chain, output_mem_config);
+    Tensor mish_x = ttnn::multiply(x, result, std::nullopt, output_mem_config);
+    return mish_x;
 }
 
 // multivariate log-gamma function
