@@ -13,7 +13,7 @@ ttnn::Tensor BarrierOperation::invoke(
     ttnn::ccl::Topology topology)
 {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
-    return barrier
+    return barrier_function
     (
         input_tensor,
         Barrier

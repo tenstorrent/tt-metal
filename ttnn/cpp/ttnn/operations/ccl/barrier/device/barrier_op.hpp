@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
 
 namespace operations::ccl{
     //Template for the barrier tensor found in device/barrier_op.cpp
-Tensor barrier(
+Tensor barrier_function(
     const Tensor& input_tensor,
     const ttnn::Barrier& barrier_struct);
 } // namespace operations::ccl

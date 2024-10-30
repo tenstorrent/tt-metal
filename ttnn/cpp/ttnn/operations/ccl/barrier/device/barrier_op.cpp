@@ -70,7 +70,7 @@ void Barrier::update_structure (const Tensor& input_tensor)
 namespace operations::ccl{
 
 
-Tensor barrier(
+Tensor barrier_function(
     const Tensor& input_tensor,
     const ttnn::Barrier& barrier_struct)
 {
