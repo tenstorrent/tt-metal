@@ -5,9 +5,7 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
-namespace ttnn::operations::moreh::moreh_getitem {
-
-namespace rm {
+namespace ANON_NAMESPACE {
 struct IndexInfo {
     bool is_defined;
     bool is_dram;
@@ -16,6 +14,7 @@ struct IndexInfo {
 };
 }
 
+namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOperation::MorehGetItemRmFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
@@ -23,6 +22,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
+    using namespace ANON_NAMESPACE;
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
@@ -62,7 +62,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 
-    rm::IndexInfo index_info[5] = {0};
+    IndexInfo index_info[5] = {0};
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
@@ -237,6 +237,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
     tensor_return_value_t &tensor_return_value) {
+    using namespace ANON_NAMESPACE;
     auto &program = cached_program.program;
     auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
@@ -248,7 +249,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    rm::IndexInfo index_info[5] = {0};
+    IndexInfo index_info[5] = {0};
 
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;

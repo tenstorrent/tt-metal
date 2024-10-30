@@ -1,4 +1,4 @@
-    // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,8 +7,6 @@
 
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-
-namespace ttnn::operations::moreh::moreh_getitem {
 
 namespace ANON_NAMESPACE {
 struct IndexInfo {
@@ -19,6 +17,7 @@ struct IndexInfo {
 };
 }
 
+namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemTilizedFactory::cached_program_t
 MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     const operation_attributes_t &operation_attributes,
