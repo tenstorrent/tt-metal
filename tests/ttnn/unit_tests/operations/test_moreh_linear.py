@@ -15,10 +15,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 
 
-def create_ttnn_tilized_tensor(torch_tensor, device, dtype):
-    return ttnn.from_torch(torch_tensor, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-
-
 def get_tensors(
     input_shape,
     mat2_shape,
