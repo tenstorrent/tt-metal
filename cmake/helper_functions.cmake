@@ -18,7 +18,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
                 UNITY_BUILD
                     ON
                 UNITY_BUILD_UNIQUE_ID
-                    "ANON_NAMESPACE"
+                    "CMAKE_UNIQUE_NAMESPACE"
         )
 
         target_link_libraries(

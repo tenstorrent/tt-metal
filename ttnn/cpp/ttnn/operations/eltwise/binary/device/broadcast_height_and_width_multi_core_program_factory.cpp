@@ -17,7 +17,7 @@
 
 namespace ttnn::operations::binary {
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType binary_op_type) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: return BcastOpMath::ADD;
@@ -36,7 +36,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::constants;
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;

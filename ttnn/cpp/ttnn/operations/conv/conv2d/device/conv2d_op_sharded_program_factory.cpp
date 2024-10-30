@@ -17,7 +17,7 @@ namespace conv2d {
 
 using namespace tt;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const uint32_t act_cb = CB::c_in0;
 const uint32_t weight_cb = CB::c_in1;
 const uint32_t bias_cb = CB::c_in2;
@@ -84,7 +84,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en,
     bool use_non_tile_height) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
@@ -264,7 +264,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     bool split_reader,
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -360,7 +360,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");

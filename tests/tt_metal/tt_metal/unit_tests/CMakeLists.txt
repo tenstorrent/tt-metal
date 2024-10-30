@@ -54,7 +54,7 @@ set_target_properties(
         UNITY_BUILD
             ON
         UNITY_BUILD_UNIQUE_ID
-            "ANON_NAMESPACE"
+            "CMAKE_UNIQUE_NAMESPACE"
 )
 add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/multichip/galaxy_cluster_api.cpp)
 

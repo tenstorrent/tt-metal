@@ -17,7 +17,7 @@ set_target_properties(
         UNITY_BUILD
             ON
         UNITY_BUILD_UNIQUE_ID
-            "ANON_NAMESPACE"
+            "CMAKE_UNIQUE_NAMESPACE"
 )
 add_executable(unit_tests_ttnn_ccl ${TTNN_CCL_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})

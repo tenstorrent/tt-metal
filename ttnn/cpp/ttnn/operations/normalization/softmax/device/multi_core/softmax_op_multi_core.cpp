@@ -20,7 +20,7 @@
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -38,7 +38,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     bool numeric_stable
 ) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;

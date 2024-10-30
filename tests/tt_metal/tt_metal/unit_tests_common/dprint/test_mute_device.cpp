@@ -14,7 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
 R"(Test Debug Print: Data0
 Basic Types:
@@ -77,6 +77,6 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 
 TEST_F(DPrintFixtureDisableDevices, TestPrintMuteDevice) {
     for (Device* device : this->devices_) {
-        this->RunTestOnDevice(ANON_NAMESPACE::RunTest, device);
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

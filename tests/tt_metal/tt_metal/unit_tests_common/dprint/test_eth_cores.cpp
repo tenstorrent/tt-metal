@@ -14,7 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
 R"(Test Debug Print: ERISC
 Basic Types:
@@ -88,7 +88,7 @@ TEST_F(DPrintFixture, TestPrintEthCores) {
         }
         this->RunTestOnDevice(
             [](DPrintFixture *fixture, Device *device){
-                ANON_NAMESPACE::RunTest(fixture, device, true);
+                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
             },
             device
         );
@@ -107,7 +107,7 @@ TEST_F(DPrintFixture, TestPrintIEthCores) {
         }
         this->RunTestOnDevice(
             [](DPrintFixture *fixture, Device *device){
-                ANON_NAMESPACE::RunTest(fixture, device, false);
+                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false);
             },
             device
         );

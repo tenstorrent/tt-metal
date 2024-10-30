@@ -24,7 +24,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
@@ -172,7 +172,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     const size_t& dst_eth_l1_byte_address,
     const size_t& sem_l1_byte_address,
     uint32_t num_bytes_per_send = 16) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     const auto& sender_receivers = get_sender_receiver_cores(device_ring);
 
@@ -316,12 +316,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
 bool eth_interleaved_ring_gather_sender_receiver_kernels(
     std::vector<tt::tt_metal::Device*> device_ring,
-    const ANON_NAMESPACE::BankedConfig& cfg,
+    const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
     const size_t& sem_l1_byte_address,
     uint32_t num_bytes_per_send = 16) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     const auto& sender_receivers = get_sender_receiver_cores(device_ring);
 
@@ -459,7 +459,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 }  // namespace fd_unit_tests::erisc::kernels
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
     }
@@ -475,7 +475,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectRingGatherAllChips) {
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsInterleavedRingGatherAllChips) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
     }

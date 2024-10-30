@@ -35,7 +35,7 @@ set_target_properties(
         UNITY_BUILD
             ON
         UNITY_BUILD_UNIQUE_ID
-            "ANON_NAMESPACE"
+            "CMAKE_UNIQUE_NAMESPACE"
 )
 target_link_libraries(
     unit_tests_common_o

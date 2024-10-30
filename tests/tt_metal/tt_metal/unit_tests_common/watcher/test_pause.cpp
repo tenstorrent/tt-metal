@@ -12,7 +12,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(WatcherFixture* fixture, Device* device) {
     // Set up program
     Program program = Program();
@@ -134,6 +134,6 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 
 TEST_F(WatcherFixture, TestWatcherPause) {
     for (Device* device : this->devices_) {
-        this->RunTestOnDevice(ANON_NAMESPACE::RunTest, device);
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

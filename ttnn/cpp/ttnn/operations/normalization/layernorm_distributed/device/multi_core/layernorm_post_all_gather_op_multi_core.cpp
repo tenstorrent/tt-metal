@@ -19,7 +19,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -55,7 +55,7 @@ operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
     float eps,
     ttnn::DeviceComputeKernelConfig compute_kernel_config
 ) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     const uint32_t W = shape[-1], H = shape[-2];

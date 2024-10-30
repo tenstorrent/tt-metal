@@ -647,7 +647,7 @@ set_target_properties(
         UNITY_BUILD
             ON
         UNITY_BUILD_UNIQUE_ID
-            "ANON_NAMESPACE"
+            "CMAKE_UNIQUE_NAMESPACE"
 )
 
 #We move the library binaries to a different path rather than PROJECT_BINARY_DIR

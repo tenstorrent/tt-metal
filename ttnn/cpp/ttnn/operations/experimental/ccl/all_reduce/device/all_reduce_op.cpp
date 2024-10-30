@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks AllReduce::create_program(
         this->user_defined_num_buffers_per_channel);
 }
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
     // Leaving switch statement for future support of additional types.
     switch (reduce_op) {
@@ -176,7 +176,7 @@ Tensor all_reduce(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
     TT_FATAL(topology == ttnn::ccl::Topology::Ring, "All Reduce op is currently supported only on Ring topology");

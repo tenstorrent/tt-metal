@@ -26,7 +26,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace ANON_NAMESPACE {
+namespace CMAKE_UNIQUE_NAMESPACE {
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 constexpr std::int32_t MAX_NUM_WORDS =
     (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE) / WORD_SIZE;
@@ -447,7 +447,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     tt_metal::Device* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
-    const ANON_NAMESPACE::BankedConfig& cfg,
+    const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,
     const uint32_t& max_transfer_size) {
     bool pass = true;
 
@@ -562,7 +562,7 @@ TEST_F(CommandQueueSingleCardFixture, EnqueueDummyProgramOnEthCore) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, EthKernelsNocReadNoSend) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
@@ -578,7 +578,7 @@ TEST_F(CommandQueueSingleCardFixture, EthKernelsNocReadNoSend) {
 }
 
 TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& device : devices_) {
@@ -594,7 +594,7 @@ TEST_F(CommandQueueSingleCardFixture, EthKernelsNocWriteNoReceive) {
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsDirectSendAllConnectedChips) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     for (const auto& sender_device : devices_) {
@@ -677,7 +677,7 @@ TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendDramBufferAllConnectedChips
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, EthKernelsSendInterleavedBufferAllConnectedChips) {
-    using namespace ANON_NAMESPACE;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
