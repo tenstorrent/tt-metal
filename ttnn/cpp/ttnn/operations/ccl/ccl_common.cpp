@@ -441,11 +441,10 @@ std::vector<tt_xy_pair> RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::cre
             tt::LogOp,
             "Reduce Scatter more workers instantiated than is work to be done. Some workers will be idle and do "
             "nothing");
-        num_workers = tensor_slice_shape_in_elems.y;
-        for (uint32_t w = 0; w < num_workers; ++w) {
+        for (uint32_t w = 0; w < tensor_slice_shape_in_elems.y; ++w) {
             worker_slice_shapes.emplace_back(tensor_slice_shape_in_elems.x, 1);
         }
-        for (uint32_t w = num_workers; w < tensor_slice_shape_in_elems.x; ++w) {
+        for (uint32_t w = tensor_slice_shape_in_elems.y; w < num_workers; ++w) {
             worker_slice_shapes.emplace_back(0, 0);
         }
         return worker_slice_shapes;
@@ -713,21 +712,20 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles = ceil(total_num_tiles / num_workers); // Ceil so that the remainder worker will have a smaller slice
+    std::size_t optim_worker_slice_len_tiles = ((total_num_tiles - 1) / num_workers) + 1; // Ceil so that the remainder worker will have a smaller slice
 
     if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) { // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {
             worker_slice_shapes.emplace_back(max_slice_size_in_tiles, 1);
         }
     } else { // Each worker will only have one slice
-        uint32_t remainder_worker_len_tiles = total_num_tiles % optim_worker_slice_len_tiles;
-
+        size_t base_tiles_per_worker = total_num_tiles / num_workers;
+        size_t total_extra_tiles = total_num_tiles - (base_tiles_per_worker * num_workers);
         for (uint32_t w = 0; w < num_workers; ++w) {
+            bool add_extra_tile = w < total_extra_tiles;
+            size_t remainder_tiles = add_extra_tile ? 1 : 0;
+            size_t num_tiles_this_worker = base_tiles_per_worker + remainder_tiles;
             worker_slice_shapes.emplace_back(optim_worker_slice_len_tiles, 1);
-        }
-        // If there is a remainder worker, we need to adjust the last worker's slice shape to be smaller
-        if (remainder_worker_len_tiles > 0) {
-            worker_slice_shapes.back() = tt_xy_pair{remainder_worker_len_tiles, 1};
         }
     }
 

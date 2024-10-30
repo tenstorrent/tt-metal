@@ -115,10 +115,11 @@ static void add_worker_config_to_edm_builders(
             std::size_t expected_message_size_bytes = (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index)
                                                                             : sender_edm_builder.get_eth_buffer_size_bytes();
             TT_ASSERT(worker_attrs.send_to_edm_semaphore_id.has_value(), "Internal error");
+            bool const channel_enabled = tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index) > 0;
             ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& sender_channel_buffer_info =
                 sender_edm_builder.add_sender_channel(
                     worker_attrs.send_to_edm_semaphore_id.value(),
-                    1,
+                    channel_enabled,
                     sender_worker_coords,
                     expected_message_size_bytes);
             edm_interface_addresses.worker_sender_edm_semaphore_addresses.insert(
@@ -139,12 +140,13 @@ static void add_worker_config_to_edm_builders(
             std::size_t expected_message_size_bytes = (num_buffers_per_channel == 1) ? tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index)
                                                                             : receiver_edm_builder.get_eth_buffer_size_bytes();
             TT_ASSERT(worker_attrs.receive_from_edm_semaphore_id.has_value());
+            bool const channel_enabled = tensor_slicer.get_worker_slice_size_bytes(worker_tensor_slice_index) > 0;
             ttnn::ccl::EriscDatamoverBuilder::ChannelBufferInterface const& receiver_channel_buffer_info =
                 receiver_edm_builder.add_receiver_channel(
                     worker_attrs.receive_from_edm_semaphore_id.value(),
                     // Since we are in worker signal EDM termination mode, we don't need to set the actual number of
                     // messages the EDM must forward as it will receive its finish signal from the worker instead
-                    1,
+                    channel_enabled,
                     receiver_worker_coords,
                     expected_message_size_bytes);
 

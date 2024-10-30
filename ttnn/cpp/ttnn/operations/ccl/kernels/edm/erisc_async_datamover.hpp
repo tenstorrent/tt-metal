@@ -139,13 +139,12 @@ class ChannelBuffer final {
             *(channel_bytes_acked_addresses[i]) = 0;
         }
 
-        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
+        if (total_num_messages_to_move != 0) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
             }
         } else {
-            ASSERT(TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED);
             goto_state(STATE::DONE);
         }
     }

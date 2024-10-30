@@ -171,7 +171,9 @@ void kernel_main() {
         writer_send_semaphore_addr_ptr);
 
     uint32_t total_lifetime_cb_pages_popped_from_math = 0;
-    while (worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
+    bool work_to_do = worker_slice_shape.x > 0 && worker_slice_shape.y > 0;
+    bool sends_to_edm = num_transfers > 0;
+    while (work_to_do && worker_slice_base_offset.x < output_tensor_shape.x && worker_slice_base_offset.y < output_tensor_shape.y) {
         // First phase - we only forward messages to EDM
         // Set the valid_worker_slice_shape
         coord_t valid_worker_slice_shape = worker_slice_shape;
@@ -260,7 +262,8 @@ void kernel_main() {
         pop_filler_pages_from_cb(cb_id_in0, 1);
     }
 
-    if (num_transfers > 0) {
+    if (sends_to_edm) {
         sender.close();
     }
+    WAYPOINT("DONE");
 }
