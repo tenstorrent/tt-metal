@@ -197,9 +197,30 @@ def set_attention_config(model_config, max_batch_size):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    decode_config["QKV_OUT_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32, 1280 // 10),  # mesh_cols = 4
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    decode_config["QKV_OUT_REDUCE_SCATTER_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32, (1280 // mesh_cols) // 10),  # mesh_cols = 4
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     decode_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
         shape=(32 * mesh_rows, 2048 // 32),  # mesh_rows = 8
         core_grid=ttnn.CoreGrid(y=4, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    decode_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+        shape=(32, 2048 // 8 // mesh_rows),  # mesh_rows = 8
+        core_grid=ttnn.CoreGrid(y=1, x=8),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -347,16 +368,16 @@ def set_mlp_config(model_config, cluster_shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    decode_config["FF1_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
-        shape=(M * cluster_shape[0], N // 8),
-        core_grid=ttnn.CoreGrid(y=1, x=8),
+    decode_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=(M, N // 28 // cluster_shape[0]),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 3))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    decode_config["FF2_OUT_GATHERED_MEMCFG"] = ttnn.create_sharded_memory_config(
-        shape=(32 * cluster_shape[1], 2048 // 8),
-        core_grid=ttnn.CoreGrid(y=1, x=8),
+    decode_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=(M, K // 8 // cluster_shape[1]),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -495,6 +516,13 @@ def set_core_model_config(model_config, cluster_shape):
     )
     decode_config["LM_HEAD_ACT_MEMCFG"] = ttnn.create_sharded_memory_config(
         shape=(32, 2048 // 32),
+        core_grid=ttnn.CoreGrid(y=4, x=8),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    decode_config["LM_HEAD_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
+        shape=(32, model_config_entries["padded_vocab_size"] // cluster_shape[1] // 32),
         core_grid=ttnn.CoreGrid(y=4, x=8),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
