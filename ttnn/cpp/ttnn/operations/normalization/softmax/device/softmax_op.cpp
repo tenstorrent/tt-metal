@@ -199,14 +199,7 @@ Tensor scale_mask_softmax(const Tensor& input_tensor, std::optional<float> scale
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
             tt::tt_metal::LegacyShape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
-            std::variant <int, float> pad_value;
-            if(input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {
-                pad_value = -std::numeric_limits<float>::infinity();
-            }
-            else {
-                pad_value = -std::numeric_limits<int>::infinity();
-            }
-            ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=pad_value, .target_layout=Layout::TILE};
+            ttnn::operations::experimental::auto_format::FormatParams input_format_params = {.pad_shape=input_pad_shape, .pad_value=-std::numeric_limits<float>::infinity(), .target_layout=Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
                 TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1], "Error");

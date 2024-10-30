@@ -94,7 +94,7 @@ Tensors run_with_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {},
-    const std::variant<int, float> pad_value = (float)0.0,
+    const float pad_value = 0,
     const bool pad_c = false,
     uint8_t cq_id = 0
 );

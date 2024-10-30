@@ -53,28 +53,18 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
         (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
         (device_shape[-1] % TILE_WIDTH != 0 ? (device_shape[-1] / TILE_WIDTH + 1) * TILE_WIDTH : device_shape[-1])};
     const auto new_shape = tt::tt_metal::LegacyShape(new_intended_shape, new_device_shape);
-
-    std::variant<int, float> pad_value;
-    if(input.get_dtype() == ttnn::DataType::BFLOAT16) {
-        pad_value = (float) 0.0;
-    }
-    else {
-        pad_value = (int) 0;
-    }
-    return AutoFormat::format_input_tensor(input, device, new_shape, pad_value, target_layout, target_mem_config);
+    return AutoFormat::format_input_tensor(input, device, new_shape, 0.0, target_layout, target_mem_config);
 }
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     Device* device,
     const tt::tt_metal::LegacyShape& padded_shape,
-    std::variant<int, float> pad_value,
+    float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
     bool pad_input = input.get_legacy_shape() != padded_shape;
     bool convert_layout = input.get_layout() != target_layout;
-
-
 
     if (!pad_input && !convert_layout) {
         return AutoFormat::move_tensor_to_device(input, device);
@@ -106,13 +96,16 @@ Tensor AutoFormat::format_input_tensor(
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value.index() == 0 ? (float) std::get<int>(pad_value) : (float)std::get<float>(pad_value),
+                    pad_value,
                     false,
                     mem_config);
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-                return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
+                return ttnn::tilize_with_val_padding(formatted_input,
+                                                padded_shape,
+                                                (formatted_input.get_dtype() == ttnn::DataType::BFLOAT16 or formatted_input.get_dtype() == ttnn::DataType::FLOAT32) ? (float) pad_value : (int) pad_value,
+                                                mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
@@ -120,7 +113,7 @@ Tensor AutoFormat::format_input_tensor(
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    pad_value.index() == 0 ? (float) std::get<int>(pad_value) : (float)std::get<float>(pad_value),
+                    pad_value,
                     false,
                     mem_config);
             }
@@ -139,8 +132,7 @@ Tensor AutoFormat::format_input_tensor(
             (const ttnn::Tensor)formatted_input,
             padded_shape.to_array_4D(),
             tt::tt_metal::Array4D({0, 0, 0, 0}),
-            pad_value.index() == 0 ? (float) std::get<int>(pad_value) : (float)std::get<float>(pad_value)
-            );
+            pad_value);
     }
 
     if (convert_layout) {
