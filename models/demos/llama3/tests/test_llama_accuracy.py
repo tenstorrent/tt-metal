@@ -37,7 +37,7 @@ def test_tt_model_accuracy(mesh_device, prefill_len, decode_len, use_program_cac
     min_top1_acc = 75
     min_top5_acc = 96
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     # Load model args and tokenizer
     model_args = TtModelArgs(mesh_device)
