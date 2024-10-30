@@ -15,35 +15,35 @@ jobs:
             {
               name: "Common models GS",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              runs-on: ["cloud-virtual-machine", "E150", "gandalf"],
               cmd: tests/scripts/single_card/nightly/run_common_models.sh,
               timeout: 40
             },
             {
               name: "GS ttnn nightly",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              runs-on: ["cloud-virtual-machine", "E150", "gandalf"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 40
             },
             {
               name: "WH N150 ttnn nightly",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              runs-on: ["cloud-virtual-machine", "N150", "gandalf"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
             {
               name: "WH N300 ttnn nightly",
               arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              runs-on: ["cloud-virtual-machine", "N300", "gandalf"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
             },
             {
               name: "GS-only models",
               arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
+              runs-on: ["cloud-virtual-machine", "E150", "gandalf"],
               cmd: tests/scripts/single_card/nightly/run_gs_only.sh,
               timeout: 40
             },
@@ -95,7 +95,7 @@ jobs:
       ARCH_NAME: wormhole_b0
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ["cloud-virtual-machine", "in-service", "${{ matrix.card }}"]
+    runs-on: ["cloud-virtual-machine", "gandalf", "${{ matrix.card }}"]
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
