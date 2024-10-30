@@ -67,7 +67,7 @@ void py_bind_barrier(pybind11::module& module) {
                     tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
             >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
 
-            >>> output = ttnn.reduce_scatter(input_tensor_mesh, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.barrier(input_tensor_mesh, topology=ttnn.Topology.Ring)
 
 
         )doc");
