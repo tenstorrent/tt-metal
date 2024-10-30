@@ -330,8 +330,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     ],
 )
 def test_mistral7B_demo(device, use_program_cache, input_prompts, instruct_weights, is_ci_env, num_batches):
-    if is_ci_env:
-        pytest.skip("Issue #14440: May kill WH cards")
+    pytest.skip("https://github.com/tenstorrent/cloud/issues/3323: May kill WH cards (internal issue 14440)")
 
     if (is_ci_env and instruct_weights == False) or (is_ci_env and not (num_batches == 1 or num_batches == 3)):
         pytest.skip(
