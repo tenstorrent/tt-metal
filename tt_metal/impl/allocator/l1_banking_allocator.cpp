@@ -21,9 +21,7 @@
 #include "third_party/umd/device/xy_pair.h"
 #include <fmt/base.h>
 
-// FIXME: NEED TO ELIMINATE for ARCH_NAME
-// consider moving MEM_MAILBOX_BASE behind HAL
-#include "dev_mem_map.h"
+#include "llrt/hal.hpp"
 
 namespace tt {
 
@@ -184,7 +182,8 @@ void init_compute_and_storage_l1_bank_manager(Allocator &allocator, const Alloca
         num_banks.total);
 
     // Storage only cores only need to reserve mailbox space to hold barriers
-    uint32_t storage_core_unreserved_base = ((MEM_MAILBOX_BASE + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
+    uint32_t mem_mailbox_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+    uint32_t storage_core_unreserved_base = ((mem_mailbox_base + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
     uint64_t l1_bank_size = alloc_config.storage_core_bank_size.has_value()

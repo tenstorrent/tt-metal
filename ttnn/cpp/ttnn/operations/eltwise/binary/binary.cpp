@@ -17,7 +17,7 @@ namespace detail {
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
-           op == BinaryOpType::LOGADDEXP2;
+           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
 }
 
 // Tensor - Scalar
@@ -114,9 +114,12 @@ auto preprocess_inputs(const Tensor &input_tensor_a_arg, const Tensor &input_ten
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
-        if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[1] > second_shape[1]) {
-            TT_FATAL(second_shape[1] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{1, first_shape[1], 1, 1});
+        if (first_shape.rank() >= 3 and second_shape.rank() >= 3 and first_shape[-3] > second_shape[-3]) {
+            TT_FATAL(second_shape[-3] == 1, "Dimension trying to broadcast is not equal to 1");
+            int rank_a = first_shape.rank();
+            std::vector<uint32_t> repeat_dim(rank_a, 1);
+            repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
+            Shape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);
         }
     };
@@ -387,6 +390,7 @@ template struct BinaryOperation<BinaryOpType::MUL>;
 template struct InplaceBinaryOperation<BinaryOpType::MUL>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_AND>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_OR>;
+template struct BinaryOperation<BinaryOpType::LOGICAL_XOR>;
 template struct BinaryOperation<BinaryOpType::LDEXP>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP>;
 template struct BinaryOperation<BinaryOpType::LOGADDEXP2>;
@@ -410,5 +414,7 @@ template struct InplaceRelationalBinary<BinaryOpType::NE>;
 
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
+template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
+
 
 }  // namespace ttnn::operations::binary
