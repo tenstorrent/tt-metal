@@ -114,7 +114,7 @@ class TtLlamaAttention_optimized:
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.kv_dtype,
-                    # cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
+                    cache_file_name=self.cache_path / f"empty_attn_cache{cache_k.shape}",
                 ),
                 self.mesh_device,
             )

@@ -90,7 +90,7 @@ class TtLlamaMLP_optimized:
             device=self.mesh_device,
             memory_config=w3_mem_config,
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
-            # cache_file_name=self.cache_path / w1_dram_shard_str,
+            cache_file_name=self.cache_path / w1_dram_shard_str,
         )
 
         w2_shard_shape = (
@@ -106,7 +106,7 @@ class TtLlamaMLP_optimized:
             device=self.mesh_device,
             memory_config=w2_memory_config,
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=2),
-            # cache_file_name=self.cache_path / w2_dram_shard_str,
+            cache_file_name=self.cache_path / w2_dram_shard_str,
         )
 
         self.w3 = ttnn.as_tensor(
@@ -116,7 +116,7 @@ class TtLlamaMLP_optimized:
             device=self.mesh_device,
             memory_config=w3_mem_config,
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=3),
-            # cache_file_name=self.cache_path / w3_dram_shard_str,
+            cache_file_name=self.cache_path / w3_dram_shard_str,
         )
 
     def __call__(self, x: List[ttnn.Tensor], mode="decode") -> List[ttnn.Tensor]:
