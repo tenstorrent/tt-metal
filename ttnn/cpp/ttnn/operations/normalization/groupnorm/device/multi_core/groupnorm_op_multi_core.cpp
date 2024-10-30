@@ -482,8 +482,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t) per_core_Mt,
         (std::uint32_t) TILE_HEIGHT
     };
-    tt::tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
