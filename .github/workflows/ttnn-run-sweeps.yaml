@@ -317,7 +317,6 @@ jobs:
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     timeout-minutes: 30
     runs-on: [build, in-service]
     steps:
@@ -378,7 +377,6 @@ jobs:
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     timeout-minutes: 720
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:

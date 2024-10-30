@@ -25,7 +25,6 @@ jobs:
       # Use BM for microbenchmarks
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0

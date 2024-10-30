@@ -40,7 +40,6 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
-    environment: dev
     runs-on:
       - ${{ inputs.runner-label }}
       - "in-service"

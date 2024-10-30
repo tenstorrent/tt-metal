@@ -41,7 +41,6 @@ jobs:
   # setup:
   #   name: Setup runner labels for deploy
   #   runs-on: ubuntu-latest
-  #   environment: ${{ inputs.environment }}
   #   outputs:
   #     deployrunner: ${{ steps.step1.outputs.deployrunner }}
   #   steps:
@@ -65,7 +64,6 @@ jobs:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0

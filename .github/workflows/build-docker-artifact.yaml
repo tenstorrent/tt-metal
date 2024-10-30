@@ -26,7 +26,6 @@ jobs:
       TT_METAL_DOCKER_IMAGE: ${{ inputs.os }}
       IMAGE: tt-metalium/ubuntu-20.04-amd64
       DOCKERFILE: ubuntu-20.04-amd64
-    environment: dev
     runs-on:
       - build-docker
       - in-service
