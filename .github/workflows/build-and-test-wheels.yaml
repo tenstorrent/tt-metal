@@ -15,7 +15,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
     uses: ./.github/workflows/build-artifact.yaml
     strategy:
-      profiler-build: [False, True]
+      matrix:
+        profiler-build: [False, True]
     with:
       tracy: ${{ matrix.profiler-build }}
   build-wheels:
