@@ -88,7 +88,9 @@ operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->user_defined_num_buffers_per_channel);
 }
 
-static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(ttnn::operations::reduction::ReduceType reduce_op) {
     // Leaving switch statement for future support of additional types.
     switch (reduce_op) {
         case ttnn::operations::reduction::ReduceType::Sum:
@@ -97,6 +99,8 @@ static ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_typ
             TT_THROW("Reduce scatter only supports reduce_type Sum. Op type {} not supported.", reduce_op);
             return ttnn::operations::binary::BinaryOpType::ADD;
     }
+}
+}
 }
 
 namespace operations{
@@ -110,6 +114,7 @@ Tensor reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     TT_FATAL(std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "reduce_scatter op is only supported for Fast Dispatch");
 
@@ -162,6 +167,7 @@ Tensor reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
 
     TT_FATAL(topology == ttnn::ccl::Topology::Linear, "This all_gather API with cluster_axis is currently supported only for the Linear topology");

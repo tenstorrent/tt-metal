@@ -323,7 +323,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             py::arg("start") = 0,
             py::arg("end"),
             py::arg("step") = 1,
-            py::arg("dtype") = ttnn::bfloat16,
+            py::arg("dtype") = DataType::BFLOAT16,
             py::arg("device") = std::nullopt,
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
 }

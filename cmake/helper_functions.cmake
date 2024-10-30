@@ -12,6 +12,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
             set(TEST_TARGET ${TEST_NAME})
         endif()
         add_executable(${TEST_TARGET} ${TEST_SRC_PATH})
+        TT_ENABLE_UNITY_BUILD(${TEST_TARGET})
 
         target_link_libraries(
             ${TEST_TARGET}

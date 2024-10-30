@@ -8,13 +8,12 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
-
 namespace tt {
 
 namespace tt_metal {
 
 void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
