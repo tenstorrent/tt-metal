@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
-    const uint32_t tile_row_shift_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(3);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);

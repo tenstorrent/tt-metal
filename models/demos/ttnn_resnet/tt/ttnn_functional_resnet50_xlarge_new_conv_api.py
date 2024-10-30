@@ -745,7 +745,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -783,7 +783,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -962,7 +962,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -1000,7 +1000,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )

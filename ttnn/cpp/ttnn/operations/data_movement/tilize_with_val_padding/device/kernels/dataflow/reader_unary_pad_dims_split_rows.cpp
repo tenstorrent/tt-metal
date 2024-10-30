@@ -7,7 +7,7 @@
 
 void kernel_main() {
 
-    const uint32_t bytes_per_tile_row = get_compile_time_arg_val(3);
+    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(3);
 
     // Constexpr
     constexpr uint32_t cb_id_in0                       = 0;
