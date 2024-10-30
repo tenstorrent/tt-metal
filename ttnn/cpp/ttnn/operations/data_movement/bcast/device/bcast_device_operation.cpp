@@ -124,7 +124,7 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(const std::vec
     }
     const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
-        ShardSpec shard_spec{CoreRangeSet({}), {0, 0}};
+        ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
         if (input_tensor.memory_config().is_sharded()) {
             // Derive output shard_spec based on input
             shard_spec = input_tensor.shard_spec().value();

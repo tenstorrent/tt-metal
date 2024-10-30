@@ -9,7 +9,6 @@ import torch
 import math
 
 import ttnn
-from ttnn.operations.conv2d import determine_parallel_config, create_sharded_memory_config_from_parallel_config
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -126,17 +125,17 @@ def run(
         ttact = ttnn.from_torch(act_reshaped, dtype)
 
     ttact_device = ttnn.to_device(ttact, device)
-    parallel_config = determine_parallel_config(
+    parallel_config = ttnn._ttnn.operations.conv2d.determine_parallel_config(
         is_1d_systolic=True,
         batch_size=in_n,
         input_channels=in_c,
         output_height=out_h,
         output_width=out_w,
         output_channels=in_c,
-        device=device,
+        compute_grid_size=device.compute_with_storage_grid_size(),
         is_out_tiled=False,
     )
-    sharded_memory_config = create_sharded_memory_config_from_parallel_config(
+    sharded_memory_config = ttnn._ttnn.operations.conv2d.create_sharded_memory_config_from_parallel_config(
         tensor_shape=act_shape,
         parallel_config=parallel_config,
         tile_size=32 if dtype == ttnn.bfloat8_b else 1,

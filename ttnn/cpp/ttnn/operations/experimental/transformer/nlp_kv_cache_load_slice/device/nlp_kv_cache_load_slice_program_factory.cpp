@@ -24,7 +24,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
     auto input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.get_legacy_shape();
 
-    vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
+    std::vector<uint32_t> common_reader_kernel_args = {input_buffer->address(), 0};
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
@@ -35,9 +35,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
         CoreCoord core = {i % num_cores_x, i / num_cores_x};
 
         // reader and writer kernel args
-        vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[1] = start_id;
-        vector<uint32_t> writer_kernel_args = {
+        std::vector<uint32_t> writer_kernel_args = {
             num_tiles_per_core,
         };
         ret_val[i] = {reader_kernel_args, writer_kernel_args};

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+ * SPDX-FileCopyrightText: © 2023, 2024 Tenstorrent Inc.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -20,69 +20,65 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
+
+PHDRS {
+  attributes 0x70000003;
+  text PT_LOAD;
+  data PT_LOAD;
+}
+
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
-  PROVIDE (__executable_start = __firmware_start);
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
-  .start __firmware_start :
+  .text __firmware_start :
   {
     *(.start)
-  } > REGION_APP_KERNEL_CODE
-  code_l1 :
-  {
-    *(code_l1)
-  } > REGION_APP_KERNEL_CODE
-  PROVIDE (__ecode_l1 = .);
-  .text :
-
-  {
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
     *(.text.hot .text.hot.*)
     *(.text .stub .text.* .gnu.linkonce.t.*)
+    /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_APP_KERNEL_CODE
+  } > REGION_APP_KERNEL_CODE :text
 
+  .init.fini :
+  {
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
+  } > REGION_APP_KERNEL_CODE :text
 
-  PROVIDE (__etext = .);
-  _etext = .; PROVIDE (_etext = .);
+  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE :text
+  .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE :text
 
-  PROVIDE (etext = .);
-  .rodata         : { *(.rodata .rodata.* .gnu.linkonce.r.*) } > REGION_APP_KERNEL_CODE
-  .rodata1        : { *(.rodata1) } > REGION_APP_KERNEL_CODE
   .sdata2         :
   {
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-  } > REGION_APP_KERNEL_DATA
-  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_KERNEL_DATA
+  } > REGION_APP_KERNEL_DATA :data
+  .sbss2          : { *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*) } > REGION_APP_KERNEL_DATA :data
   /* Adjust the address for the data segment.  We want to adjust up to
      the same address within the page on the next page up.  */
-  . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE));
-  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_KERNEL_DATA
-  .dynamic        : { *(.dynamic) } > REGION_APP_KERNEL_DATA
-  . = DATA_SEGMENT_RELRO_END (0, .);
+  .data.rel.ro : { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } > REGION_APP_KERNEL_DATA :data
+  .dynamic        : { *(.dynamic) } > REGION_APP_KERNEL_DATA :data
   .data           :
   {
     . = ALIGN(16);
     *(.data .data.* .gnu.linkonce.d.*)
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     SORT(CONSTRUCTORS)
-  } > REGION_APP_KERNEL_DATA
+  } > REGION_APP_KERNEL_DATA :data
 
   . = ALIGN(4); /* startup code will use word writes to zero bss */
-  _edata = .; PROVIDE (edata = .);
-  . = .;
   __l1_bss_start = .;
   .sbss           :
   {
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-  } > REGION_APP_KERNEL_DATA
+  } > REGION_APP_KERNEL_DATA :data
   . = ALIGN(4);
   __l1_bss_end = .;
 
@@ -100,34 +96,9 @@ SECTIONS
       pad the .data section.  */
    . = ALIGN(4);
    __ldm_bss_end = .;
-  } > REGION_APP_KERNEL_DATA
-  . = ALIGN(32 / 8);
-  . = SEGMENT_START("ldata-segment", .);
-  . = ALIGN(32 / 8);
-  _end = .; PROVIDE (end = .);
-  . = DATA_SEGMENT_END (.);
+  } > REGION_APP_KERNEL_DATA :data
 
-
-  .stack :
-  {
-   . = ALIGN(16);
-   __stack_bottom = .;
-   . += __firmware_stack_size;
-   __stack_top = .;
-   __freertos_irq_stack_top = .;
-   . += 4;
-  } > REGION_LDM
-
-  data_noinit (NOLOAD):
-  {
-    *(data_noinit)
-  } > REGION_APP_KERNEL_DATA
-
-  l1_memory :
-  {
-    *(l1_memory)
-    *(l1_memory_const) /* gcc complains about const and non-const data in the same segment. */
-  } > ETH_L1
+  .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

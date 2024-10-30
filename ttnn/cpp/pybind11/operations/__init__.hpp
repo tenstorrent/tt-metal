@@ -10,10 +10,10 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
+#include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
-#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -29,6 +29,8 @@
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/full/full_pybind.hpp"
+#include "ttnn/operations/full_like/full_like_pybind.hpp"
+#include "ttnn/operations/index_fill/index_fill_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
@@ -39,7 +41,9 @@
 #include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -140,6 +144,18 @@ void py_module(py::module& module) {
 
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
+
+    auto m_full_like = module.def_submodule("full_like", "full_like operation");
+    full_like::bind_full_like_operation(m_full_like);
+
+    auto m_uniform = module.def_submodule("uniform", "uniform operations");
+    uniform::bind_uniform_operation(m_uniform);
+
+    auto m_index_fill = module.def_submodule("index_fill", "index_fill operation");
+    index_fill::bind_index_fill_operation(m_index_fill);
+
+    auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
+    bernoulli::bind_bernoulli_operation(m_bernoulli);
 }
 }  // namespace operations
 

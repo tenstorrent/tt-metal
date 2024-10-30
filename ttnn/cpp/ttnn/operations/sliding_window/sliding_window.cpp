@@ -14,11 +14,11 @@ std::size_t SlidingWindowConfig::get_hash() const {
     * Return the input shape (excluding depth)
     */
 Shape SlidingWindowConfig::get_input_shape() const {
-    return Shape(std::vector<uint32_t>{batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
+    return Shape({batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
 }
 
 bool SlidingWindowConfig::has_parallel_config() const {
-    return num_cores_nhw > 0 && !core_range_set.ranges().empty();
+    return num_cores_nhw > 0 && num_cores_c > 0 && !core_range_set.ranges().empty();
 }
 /**
     * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
@@ -33,7 +33,7 @@ Shape SlidingWindowConfig::get_output_shape() const {
         output_w = input_hw.second;
     }
     log_debug(tt::LogOp, "output_size: {} {} {}", batch_size, output_h, output_w);
-    return Shape( std::vector<uint32_t>{batch_size, output_h, output_w, 0});
+    return Shape({batch_size, output_h, output_w, 0});
 }
 
 /**
@@ -371,18 +371,18 @@ std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>
                             flattened_remote_config);
 }
 
-std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile, bool pad_last_core) {
+std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::vector<uint32_t>& op_trace_metadata, const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries, bool pad_tile, bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
     for(const auto& item : shard_boundaries) {
         const auto& [output_shard_start, output_shard_end] = item.first;
         const auto& [input_shard_start, input_shard_end] = item.second;
+        std::vector<uint16_t> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
             continue;
         }
         TT_ASSERT(input_shard_start == op_trace_metadata[output_shard_start]);
-        std::vector<uint16_t> local_top_left_indices;
         for(size_t i = output_shard_start; i < output_shard_end + 1; i++) {
             local_top_left_indices.push_back(op_trace_metadata[i] - op_trace_metadata[output_shard_start]);
         }
@@ -398,16 +398,20 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(const std::
             }
         }
     }
-    if (pad_last_core) {
-        // Pad indices for last core if not equal to other cores
+    if (pad_cores) {
         uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
-        uint32_t indices_length_last_core = sharded_input_top_left_indices.back().size();
-        TT_ASSERT(indices_length_last_core <= indices_length_per_core, "indices length for last core {} larger than indices length per core {}", indices_length_last_core, indices_length_per_core);
-        if (indices_length_per_core - indices_length_last_core > 0) {
-            std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_last_core, 0);
-            sharded_input_top_left_indices.back().insert(sharded_input_top_left_indices.back().end(), extend_v.begin(), extend_v.end());
+        for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
+            // Pad indices for this core if not equal to other cores
+            if (sharded_input_top_left_indices.size() == core_idx) {
+                sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
+            }
+            TT_FATAL(core_idx < sharded_input_top_left_indices.size(), "Invalid core_idx {} for sharded_input_top_left_indices", core_idx);
+            uint32_t indices_length_this_core = sharded_input_top_left_indices[core_idx].size();
+            if (indices_length_per_core - indices_length_this_core > 0) {
+                std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_this_core, 0);
+                sharded_input_top_left_indices[core_idx].insert(sharded_input_top_left_indices[core_idx].end(), extend_v.begin(), extend_v.end());
+            }
         }
-
     }
     return sharded_input_top_left_indices;
 }
@@ -429,7 +433,7 @@ Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>&
     // we need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
-    Shape config_shape = Shape(std::vector<uint32_t>{(uint32_t) config.size(), (uint32_t) config[0].size() + extend_with_zeroes});
+    Shape config_shape = Shape({(uint32_t) config.size(), (uint32_t) config[0].size() + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
     if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -442,7 +446,7 @@ Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>&
                 repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
             }
             auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-            config_shape = Shape(std::vector<uint32_t>{config_shape[0] * repeat_factor, config_shape[1]});
+            config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
             return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
@@ -464,7 +468,7 @@ Tensor construct_on_host_config_tensor(const std::vector<std::vector<uint16_t>>&
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = Shape(std::vector<uint32_t>{config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else {
         TT_ASSERT(false, "Unsupported shard scheme");
@@ -488,7 +492,7 @@ std::string SlidingWindowConfig::to_string() const {
             + "_" + std::to_string(std::get<0>(stride_hw)) + "_" + std::to_string(std::get<1>(stride_hw))
             + "_" + std::to_string(std::get<0>(pad_hw)) + "_" + std::to_string(std::get<1>(pad_hw))
             + "_" + std::to_string(std::get<0>(dilation_hw)) + "_" + std::to_string(std::get<1>(dilation_hw))
-            + "_" + std::to_string(num_cores_nhw) + "_" + core_range_set.str();
+            + "_" + std::to_string(num_cores_nhw) + "_" + std::to_string(num_cores_c) + "_" + core_range_set.str();
 }
 
 } // namespace ttnn::operations::sliding_window
@@ -518,7 +522,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(co
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const -> format_context::iterator {
-        std::string str = fmt::format("SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), dilation_hw=({},{}), num_cores_nhw={}, core_range_set_={})",
+        std::string str = fmt::format("SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
             t.batch_size,
             t.input_hw.first,
             t.input_hw.second,
@@ -531,6 +535,7 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
             t.dilation_hw.first,
             t.dilation_hw.second,
             t.num_cores_nhw,
+            t.num_cores_c,
             t.core_range_set.str());
         return fmt::format_to(ctx.out(), "{}", str);
 }

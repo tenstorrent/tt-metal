@@ -28,7 +28,7 @@ void RunCustomCycle(tt_metal::Device *device, int fastDispatch)
         all_cores,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    vector<uint32_t> trisc_kernel_args = {};
+    std::vector<uint32_t> trisc_kernel_args = {};
     tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
         program, "tt_metal/programming_examples/profiler/test_multi_op/kernels/multi_op_compute.cpp",
         all_cores,

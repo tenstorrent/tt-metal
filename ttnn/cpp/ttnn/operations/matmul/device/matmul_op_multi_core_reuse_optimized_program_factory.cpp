@@ -123,7 +123,7 @@ operation::ProgramWithCallbacks create_program(
     }
 
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().grid;
@@ -192,7 +192,7 @@ operation::ProgramWithCallbacks create_program(
             reader_writer_compile_time_args,
             mm_kernel_in1_reader_writer_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
@@ -234,7 +234,7 @@ operation::ProgramWithCallbacks create_program(
             .compile_args = compute_kernel_args_group_1,
             .defines = mm_kernel_defines});
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
             in0_num_subblocks,       // in0_num_subblocks
             in0_block_num_tiles,     // in0_block_num_tiles

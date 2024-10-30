@@ -71,6 +71,10 @@ Tensor _power(uint8_t queue_id, const Tensor& input, uint32_t exponent, const st
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
 Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor t_one = ttnn::full_like(input_a, 1.0f);
    Tensor t_result(input_a);
    {
@@ -101,6 +105,10 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
 
 // asinh(x) = log(x + sqrt(x^2 + 1))
 Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+    TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor ln_res(input_a);
    {
        Tensor x_abs = ttnn::abs(input_a, output_mem_config);
@@ -119,6 +127,10 @@ Tensor _asinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
 
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 Tensor _atanh(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+
+   TT_FATAL(input_a.storage_type() == StorageType::DEVICE,
+            "Unary operation requires input to be on Device.");
+
    Tensor comp_result(input_a);
    {
        Tensor nr_term(input_a);
@@ -386,7 +398,7 @@ Tensor _variance_impl(
     const Tensor& mean_y,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     constexpr float correction = 0.0f;
     auto shape_wh = y.get_legacy_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
@@ -400,7 +412,7 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
 
 Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     return _variance_impl(y, mean_y, output_memory_config);
 }
@@ -423,7 +435,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  output
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
@@ -539,13 +551,13 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<Tensor> t_split;
     tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    std::vector<uint32_t> s_a = {0, 0, 0, 0};
-    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    std::vector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = std::vector<uint32_t>({1,1,1,1});
+    auto step = ttnn::SmallVector<uint32_t>({1,1,1,1});
     Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 
@@ -805,7 +817,7 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
 
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole or Blackhole");
     Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;

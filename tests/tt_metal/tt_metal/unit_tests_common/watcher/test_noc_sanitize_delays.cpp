@@ -9,11 +9,11 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
 //////////////////////////////////////////////////////////////////////////////////////////
+using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 

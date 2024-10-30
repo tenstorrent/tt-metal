@@ -5,7 +5,7 @@
 #pragma once
 
 #include "common/core_descriptor.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include <list>
 
 namespace tt::tt_metal {

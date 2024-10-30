@@ -45,7 +45,6 @@ uint32_t element_size_bytes(DataType dtype) {
 }
 
 uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
-    uint32_t W = shape[-1];
     uint32_t page_size = 0;
     const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
     const auto bfloat8b_tile_HW = tile.has_value() ? tile_HW + 64 : constants::BFLOAT8_B_TILE_HW;
@@ -53,6 +52,7 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
     switch (layout) {
         case Layout::ROW_MAJOR: {
             uint32_t size_of_element = element_size_bytes(dtype);
+            uint32_t W = shape.rank() == 0 ? 1 : shape[-1];
             page_size = W * size_of_element;
         } break;
         case Layout::TILE: {
@@ -82,11 +82,10 @@ uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes,
                 } break;
                 default: TT_ASSERT(false && "Unsupported data type!");
             }
-            TT_ASSERT(total_size_bytes % page_size == 0);
+            TT_ASSERT(page_size == 0 ? total_size_bytes == 0 : total_size_bytes % page_size == 0);
         } break;
         default: TT_ASSERT(false && "Unsupported layout to write to device");
     }
-    TT_ASSERT(page_size != 0);
     return page_size;
 }
 
@@ -191,12 +190,12 @@ DeviceBuffer allocate_interleaved_buffer_on_device(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
-    return std::make_shared<Buffer>(device, buffer_size_bytes, page_size, memory_config.buffer_type);
+    return Buffer::create(device, buffer_size_bytes, page_size, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_contiguous_buffer_on_device(
     size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return std::make_shared<Buffer>(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
+    return Buffer::create(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
 }
 
 DeviceBuffer allocate_sharded_buffer_on_device(
@@ -212,7 +211,7 @@ DeviceBuffer allocate_sharded_buffer_on_device(
     const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
     uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
 
-    return std::make_shared<Buffer>(
+    return Buffer::create(
         device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
 }
 
@@ -665,7 +664,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
     uint32_t size_in_bytes = device_buffer->size();
-    vector<T> data_vec;
+    std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
@@ -1186,10 +1185,10 @@ Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, 
             return stride;
         };
 
-        std::vector<std::array<uint32_t, 2>> pad_size{};
-        std::vector<uint32_t> input_strides{};
-        std::vector<uint32_t> output_strides{};
-        std::vector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttnn::SmallVector<std::array<uint32_t, 2>> pad_size{};
+        ttnn::SmallVector<uint32_t> input_strides{};
+        ttnn::SmallVector<uint32_t> output_strides{};
+        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         for (auto index = 0; index < output_shape.rank(); index++) {
             // Check if input tensor fits in output tensor given the input tensor start indices
@@ -1284,7 +1283,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start,
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
-    std::vector<uint32_t> output_shape{};
+    ttnn::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] < input_shape[i]);
@@ -1297,7 +1296,7 @@ Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start,
 
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const auto& input_buffer) {
-        std::vector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
         auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));

@@ -626,7 +626,7 @@ class resnet50:
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
+        _, self.override_fold_mem_config, _, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
             device=device,
             input_tensor=conv_dummy_tensor,
             conv_config=self.conv1_config,
@@ -635,13 +635,6 @@ class resnet50:
             width=self.conv1_output_width,
             in_channels=self.conv1_input_channels,
             out_channels=self.conv1_output_channels,
-            kernel_size=[self.conv1_kernel_size[0], self.conv1_kernel_size[1]],
-            stride=[self.conv1_stride[0], self.conv1_stride[1]],
-            padding=[self.conv1_padding[0], self.conv1_padding[1]],
-            dilation=[1, 1],
-            groups=1,
-            weights_width=self.conv1_weight_tensor.shape[3],
-            input_width=self.conv1_input_width,
         )
 
     def __del__(self):

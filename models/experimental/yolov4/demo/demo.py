@@ -13,7 +13,8 @@ import os
 
 from models.experimental.yolov4.reference.yolov4 import Yolov4
 from models.experimental.yolov4.ttnn.yolov4 import TtYOLOv4
-
+from models.experimental.yolov4.ttnn.weight_parameter_update import update_weight_parameters
+from collections import OrderedDict
 import ttnn
 from models.utility_functions import skip_for_grayskull
 
@@ -418,11 +419,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         if not is_torch_model:
             input_shape = img.shape
             input_tensor = torch.permute(img, (0, 2, 3, 1))
-
-            input_tensor = input_tensor.reshape(
-                input_tensor.shape[0], 1, input_tensor.shape[1] * input_tensor.shape[2], input_tensor.shape[3]
-            )
-            input_tensor = ttnn.from_torch(input_tensor, device=device)
+            input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
             img = input_tensor
             t1 = time.time()
 
@@ -534,33 +531,44 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_yolov4_model(device, model_location_generator, reset_seeds, input_path):
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
+    ],
+)
+def test_yolov4_model(device, model_location_generator, reset_seeds, input_path, use_pretrained_weight):
     model_path = model_location_generator("models", model_subdir="Yolo")
-    if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-            os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-            )  # execute the yolov4_weights_download.sh file
+    if use_pretrained_weight:
+        if model_path == "models":
+            if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
+                os.system(
+                    "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
+                )  # execute the yolov4_weights_download.sh file
 
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
+            weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
+        else:
+            weights_pth = str(model_path / "yolov4.pth")
+
+        ttnn_model = TtYOLOv4(weights_pth)
+        torch_model = Yolov4()
+        new_state_dict = {}
+        ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
+
+        keys = [name for name, parameter in torch_model.state_dict().items()]
+        values = [parameter for name, parameter in ds_state_dict.items()]
+
+        for i in range(len(keys)):
+            new_state_dict[keys[i]] = values[i]
+
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
     else:
-        weights_pth = str(model_path / "yolov4.pth")
-
-    ttnn_model = TtYOLOv4(weights_pth)
-
-    torch_model = Yolov4()
-
-    new_state_dict = {}
-    ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+        torch_model = Yolov4.from_random_weights()
+        ttnn_weights = update_weight_parameters(OrderedDict(torch_model.state_dict()))
+        ttnn_model = TtYOLOv4(ttnn_weights)
 
     n_classes = 80
     namesfile = "models/experimental/yolov4/demo/coco.names"

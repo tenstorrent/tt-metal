@@ -15,19 +15,13 @@ from PIL import Image as PIL_Image
 
 from torch import nn, Tensor
 
-BFLOAT = False
-
-import importlib
-
-llama_reference_model = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-llama_reference_image_transforms = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.image_transform"
-)
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_model
+import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 
 import ttnn
-from models.demos.llama3.tt.multimodal.llama_image_transformer_vision import TtLlamaCrossAttentionTransformerVision
+from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_vision import (
+    TtLlamaCrossAttentionTransformerVision,
+)
 from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
@@ -38,6 +32,9 @@ from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     get_single_rot_mat,
+)
+from models.utility_functions import (
+    nearest_32,
 )
 
 logger = logging.getLogger(__name__)
@@ -225,16 +222,21 @@ class CrossAttentionTransformer(torch.nn.Module):
             vision_tokens = self.vision_model(stacked_images, aspect_ratios)
             # Back to torch
             vision_tokens = ttnn.to_torch(vision_tokens, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            chunk_seq_len = self.configuration.vision_chunk_ntok
+            # NOTE: slicing up to chunk_seq_len is necessary because padding information is lost by this point
             vision_tokens = (
-                vision_tokens[0].reshape(bsz, max_num_images, self.max_num_chunks, -1, self.model_dim).float()
+                vision_tokens[0, :, :chunk_seq_len]
+                .reshape(bsz, max_num_images, self.max_num_chunks, -1, self.model_dim)
+                .float()
             )
 
         bsz, nimg, nchunk, ntok, image_token_dim = tuple(vision_tokens.shape)
+        padded_seq_len = self.max_num_chunks * nearest_32(self.configuration.vision_chunk_ntok)
 
         # Prepare vision tokens for TT text_model
         vision_tokens_squeeze = vision_tokens.view(1, bsz, -1, image_token_dim)
         vision_tokens_squeeze = torch.nn.functional.pad(
-            vision_tokens_squeeze, (0, 0, 0, 4224 - vision_tokens_squeeze.shape[2]), "constant", 0
+            vision_tokens_squeeze, (0, 0, 0, padded_seq_len - vision_tokens_squeeze.shape[2]), "constant", 0
         )
         vision_tokens_tt = ttnn.from_torch(
             vision_tokens_squeeze,
@@ -266,11 +268,18 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         cross_attention_masks = torch.nn.functional.pad(
             cross_attention_masks,
-            (0, 4224 - cross_attention_masks.shape[3]),
+            (0, padded_seq_len - cross_attention_masks.shape[3]),
             "constant",
             get_negative_inf_value(torch.float32),
         )
         return (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask)
+
+    def validate_inputs(self, tokens):
+        batch, seq_len = tokens.shape[:2]
+        assert batch == 1, f"Only batch 1 is supported, got {batch}"
+        assert (
+            seq_len <= self.configuration.max_seq_len
+        ), f"Sequence length {seq_len} exceeds max sequence length {self.configuration.max_seq_len}"
 
     def forward(
         self,
@@ -281,8 +290,10 @@ class CrossAttentionTransformer(torch.nn.Module):
         xattn_caches: torch.Tensor,
         text_only_inference: bool = False,
     ) -> torch.Tensor:
+        self.validate_inputs(tokens)
         h = self.text_model.get_partially_trainable_embedding(tokens[:, position_ids])
         batch, seq_len = h.shape[:2]
+        padded_seq_len = _get_padded_prefill_seqlen(seq_len)
         if seq_len == 1:
             mode = "decode"
         else:
@@ -302,35 +313,39 @@ class CrossAttentionTransformer(torch.nn.Module):
         if mode == "prefill":
             xattn_mask_expand = torch.nn.functional.pad(
                 xattn_mask_expand,
-                (0, 0, 0, 128 - xattn_mask_expand.shape[2]),
+                (0, 0, 0, padded_seq_len - xattn_mask_expand.shape[2]),
                 "constant",
                 get_negative_inf_value(torch.float32),
             )
+
         tt_xattn_mask = ttnn.from_torch(
             xattn_mask_expand,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
 
         full_text_mask = full_text_row_masked_out_mask[:, :, position_ids]
         if mode == "prefill":
             full_text_mask = torch.nn.functional.pad(
-                full_text_mask, (0, 0, 0, 128 - full_text_mask.shape[2]), "constant", 0
+                full_text_mask, (0, 0, 0, padded_seq_len - full_text_mask.shape[2]), "constant", 0
             )
         full_text_mask_expand_1NSH = full_text_mask.expand(
             -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
         )
+
         tt_full_text_mask_expand_1NSH = ttnn.from_torch(
             full_text_mask_expand_1NSH,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        tt_full_text_mask_expand_1NSH = ttnn.to_layout(tt_full_text_mask_expand_1NSH, ttnn.TILE_LAYOUT)
 
         full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)
         tt_full_text_mask_expand_11SD = ttnn.from_torch(
@@ -343,8 +358,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
         # Check mask shapes, pad if in prefill?
         if mode == "prefill":
-            # DEBUG: pad h seqlen to 128
-            h = torch.nn.functional.pad(h, (0, 0, 0, 128 - h.shape[1]), "constant", 0)
+            h = torch.nn.functional.pad(h, (0, 0, 0, padded_seq_len - h.shape[1]), "constant", 0)
             tt_h = prepare_inputs_ttnn_prefill(
                 h,
                 self.mesh_device,
@@ -427,9 +441,10 @@ class CrossAttentionTransformer(torch.nn.Module):
             text_only_inference=text_only_inference,
         )
 
-        tt_out = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)).float()
+        tt_out = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         if mode == "prefill":
-            tt_out = tt_out[0].reshape(batch, 128, -1)[:, :seq_len, :]  # DEBUG: undo padding
+            tt_out = tt_out[0].reshape(batch, padded_seq_len, -1)[:, :seq_len, :]  # DEBUG: undo padding
         else:
             tt_out = tt_out[0, ..., :batch, :].transpose(0, 1).reshape(batch, seq_len, -1)
 
@@ -493,3 +508,16 @@ def _pad_masks(
                 out_masks[idx, mask_elem[0] : mask_elem[1], mask_idx, :mask_num_chunks].fill_(0.0)
 
     return out_masks
+
+
+def _get_padded_prefill_seqlen(seq_len):
+    """
+    If seq_len is less than 128, pad to 128
+    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 1024
+    """
+    if seq_len < 128:
+        return 128
+    else:
+        mult_1024 = 1024 * math.ceil(seq_len / 1024)
+        pow_2 = 2 ** math.ceil(math.log2(seq_len))
+        return min(mult_1024, pow_2)

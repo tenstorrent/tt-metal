@@ -5,10 +5,11 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import os
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -36,13 +37,13 @@ parameters = {
 }
 
 
-# def mesh_device_fixture():
-#     device = ttnn.open_device(device_id=0)
-#     assert ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
-#     device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-#     yield (device, device_name)
-#     ttnn.close_device(device)
-#     del device
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
 
 
 # This is the run instructions for the test, defined by the developer.

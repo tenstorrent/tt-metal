@@ -6,7 +6,6 @@
 
 #include "llrt.hpp"
 #include "hal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 
 #include "jit_build/settings.hpp"
@@ -159,7 +158,7 @@ uint32_t generate_risc_startup_addr(bool is_eth_core) {
 }
 
 void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
-    vector<uint32_t> jump_to_fw;
+    std::vector<uint32_t> jump_to_fw;
     jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
     write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
 }

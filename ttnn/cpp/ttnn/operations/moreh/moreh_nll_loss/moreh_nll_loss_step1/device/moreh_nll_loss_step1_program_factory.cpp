@@ -148,7 +148,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         }
 
         uint32_t element_size = weight_has_value ? weight.value().element_size() : 0;
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             target_addr,
             weight_addr,
             static_cast<uint32_t>(ignore_index),
@@ -161,7 +161,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             target.element_size(),
         };
 
-        vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
+        std::vector<uint32_t> writer_args = {output_addr, num_units_per_core, tile_offset};
 
         SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
         SetRuntimeArgs(program, writer_kernel_id, core, writer_args);

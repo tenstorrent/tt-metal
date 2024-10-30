@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/tt_stl/aligned_allocator.hpp"
@@ -752,8 +751,8 @@ class DeviceCommand {
     uint32_t cmd_sequence_sizeB = 0;
     void *cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
     vector_memcpy_aligned<uint32_t> cmd_region_vector;
 };

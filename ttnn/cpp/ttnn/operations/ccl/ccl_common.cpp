@@ -12,6 +12,35 @@
 namespace ttnn {
 namespace ccl {
 
+std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
+    const Tensor& input_tensor,
+    const std::vector<Device*>& devices,
+    const ttnn::ccl::Topology& topology) {
+
+    uint32_t num_devices = devices.size();
+    bool is_linear = topology == ttnn::ccl::Topology::Linear;
+    uint32_t device_index = 0; // Initialize device index
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices.at(i) == input_tensor.device()) {
+            device_index = i;
+            bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
+            bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
+
+            std::optional<chip_id_t> receiver_device_id = is_last_chip_in_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+
+            std::optional<chip_id_t> sender_device_id = is_last_chip_in_counter_clockwise_direction ?
+                std::nullopt :
+                std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+
+            return {device_index, sender_device_id, receiver_device_id};
+        }
+    }
+
+    return {device_index, std::nullopt, std::nullopt};  // Return null if the device is not found
+}
+
 RingTopology::RingTopology(
     Device const* device,
     Topology topology,
@@ -720,10 +749,14 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
     std::size_t worker_index
 ) {
     static_assert(std::is_same_v<TensorSlice::ords_t, tt_xy_pair>, "generate_slice_sequence_on_dim not yet implemented for type not of tt_xy_pair");
-    TT_ASSERT(fracture_dim == 3);
     // We don't support 4D shapes in the CCL kernels yet, which are needed for proper reduction/concatenation in some cases
     // so for now we subtract the outer dims from the fracture_dim since we only support 2D at the moment.
-    fracture_dim -= 2;
+    if (fracture_dim == 3) {
+        fracture_dim -= 2;
+    } else {
+        // dims are
+        fracture_dim = 0;
+    }
 
     TT_ASSERT(worker_slice_shape.y == 1);
 
@@ -743,7 +776,7 @@ std::vector<TensorSlice> generate_slice_sequence_on_dim(
         log_trace(tt::LogOp, "worker_index {}", worker_index);
     }
 
-    auto worker_slice_start_offset = fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} : TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
+    auto worker_slice_start_offset = /*fracture_dim == 0 ? TensorSlice::ords_t{0, worker_index * worker_slice_shape.y} :*/ TensorSlice::ords_t{worker_index * worker_slice_shape.x, 0};
 
     auto generate_slice = [forward_direction,incr, &slices, &tensor_shape, &slice_shape, &worker_slice_shape, tensor_slice_offset, &worker_slice_start_offset, fracture_dim, dim_start_offset, slice_size_on_dim](std::int64_t i){
         auto tensor_slice_offset_adjusted = tensor_slice_offset;

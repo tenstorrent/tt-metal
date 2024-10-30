@@ -79,12 +79,6 @@ run_frequent_api_pipeline_tests() {
         TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_frequent
         echo "Running Python API unit tests in SD for frequent..."
         ./tests/scripts/run_python_api_unit_tests.sh
-    else
-        if [[ $tt_arch == "wormhole_b0" ]]; then
-            pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k nightly
-        else
-            echo "API tests are not available for fast dispatch because they're already covered in post-commit"
-        fi
     fi
 }
 

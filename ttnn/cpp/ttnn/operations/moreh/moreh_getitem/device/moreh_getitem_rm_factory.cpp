@@ -159,7 +159,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             // buffers
             input_5d.buffer()->address(),
             index_info[0].address,
@@ -208,7 +208,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
             input_unit_size,
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             // buffer
             output.buffer()->address(),
 
@@ -241,8 +241,6 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto core_h = cached_program.shared_variables.core_h;
     auto index_dims = cached_program.shared_variables.index_dims;
     auto input_dim_offset = cached_program.shared_variables.input_dim_offset;
-
-    TT_ASSERT(tensor_return_value.buffer()->size() == 1);
 
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();

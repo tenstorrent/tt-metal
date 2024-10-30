@@ -23,21 +23,6 @@
 #include "ttnn/core.hpp"
 
 
-namespace{
-    inline void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
-        // Push empty work to threads and ensure its been picked up
-        static auto empty_work = std::make_shared<std::function<void()>>([](){});
-        for (auto target_device : workers) {
-            target_device->work_executor.push_work(empty_work);
-        }
-        // Block until work has been picked up, to flush the queue
-        for (auto target_device : workers) {
-            while(not target_device->work_executor.worker_queue.empty());
-        }
-    }
-}
-
-
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to(const Tensor& input_tensor, Device* target_device, const MemoryConfig& mem_config) {
@@ -148,7 +133,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     }
 
     if (blocking) {
-        SynchronizeWorkerThreads(workers);
+        tt::tt_metal::detail::SynchronizeWorkerThreads(workers);
     }
     // Update main_thread_ref_count for tensor after pushing to queue.
     input_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
@@ -297,9 +282,9 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value)  {
     uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
     uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
 
-    std::vector<uint32_t> shape;
-    std::vector<uint32_t> padded_shape;
-    std::vector<uint32_t> input_tensor_start;
+    ttnn::SmallVector<uint32_t> shape;
+    ttnn::SmallVector<uint32_t> padded_shape;
+    ttnn::SmallVector<uint32_t> input_tensor_start;
 
     for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
         shape.push_back(input_tensor.get_legacy_shape().without_padding()[index]);
@@ -336,8 +321,8 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
         input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
             input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
-    std::vector<uint32_t> output_tensor_start{};
-    std::vector<uint32_t> output_tensor_end{};
+    ttnn::SmallVector<uint32_t> output_tensor_start{};
+    ttnn::SmallVector<uint32_t> output_tensor_end{};
     for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
         output_tensor_start.push_back(0);
         output_tensor_end.push_back(output_tensor_shape[index]);
@@ -351,14 +336,15 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_shape);
+    const auto& new_padded_shape = new_shape.padded_shape();
     TT_ASSERT(
-        input_tensor.volume() == new_shape.padded_shape().volume(),
+        input_tensor.volume() == new_padded_shape.volume(),
         "{} != {}",
         input_tensor.volume(),
-        new_shape.padded_shape().volume());
+        new_padded_shape.volume());
     if (input_tensor.get_layout() == Layout::TILE) {
         TT_ASSERT(
-            new_shape[-2] % constants::TILE_HEIGHT == 0 && new_shape[-1] % constants::TILE_WIDTH == 0 &&
+            new_padded_shape[-2] % constants::TILE_HEIGHT == 0 && new_padded_shape[-1] % constants::TILE_WIDTH == 0 &&
             "Expected a multiple of 32 for H, W (or -1 evaluating to such) in Tensor::reshape()!");
     }
     auto output = std::visit(
@@ -427,7 +413,7 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) 
 }
 
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
-    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.as_vector()));
+    return tensor_reshape(input_tensor, ttnn::Shape(new_shape.view()));
 }
 
 }

@@ -31,61 +31,42 @@ from models.demos.llama3.tt.multimodal.llama_tile_position_embedding import (
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 
-import importlib
-
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "gated",
+    "bsz, num_concurrent_media, num_chunks",
     [
-        True,
+        (1, 1, 4),
+        (1, 4, 4),
     ],
 )
-@pytest.mark.parametrize(
-    "input_shape, dim, max_num_tiles",
-    [
-        ((1, 32, 4, 1032), 1280, 4),
-        ((1, 8, 4, 1032), 1280, 4),
-        ((1, 4, 4, 1032), 1280, 4),
-        ((1, 1, 4, 1032), 1280, 4),
-        ((1, 1, 4, 1024), 1280, 4),
-        # ((1, 32, 16, 1032), 1280, 16), # Large test, takes some time
-    ],
-)
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.TILE_LAYOUT,
-    ],
-)
+@pytest.mark.parametrize("pre_embed", [False, True])
 def test_llama_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
-    layout,
-    # Tile Position Embedding params
-    dim,
-    gated,
-    max_num_tiles,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
+    pre_embed,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.9999
+    layout = ttnn.TILE_LAYOUT
+    gated = True
+    pcc_required = 0.9999
 
     mesh_device.enable_async(True)
 
@@ -93,13 +74,16 @@ def test_llama_conv2d_inference(
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "vision_model.vision_encoder.pre_tile_pos_embed."
+    first_layer_prefix = "vision_model.vision_encoder." + (
+        "pre_tile_pos_embed." if pre_embed else "post_tile_pos_embed."
+    )
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    num_devices = model_args.num_devices
 
-    bsz, num_concurrent_media, num_chunks, ntok = input_shape
+    ntok = nearest_32(model_args.vision_chunk_ntok - (0 if pre_embed else 1))
+    dim = model_args.vision_dim
+    max_num_tiles = model_args.vision_max_num_tiles
 
     ##### Check parms #####
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"
@@ -160,13 +144,8 @@ def test_llama_conv2d_inference(
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-
-    if passing:
-        logger.info(f"Llama_TilePositionEmbedding Passed!")
-    else:
-        logger.warning(f"Llama_TilePositionEmbedding Failed!")
-        assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
