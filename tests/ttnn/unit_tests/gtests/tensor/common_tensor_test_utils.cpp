@@ -15,7 +15,7 @@ void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLay
 
     const uint32_t io_cq = 0;
 
-    const auto input_buf_size_bytes = layout.get_packed_buffer_size_bytes(input_shape);
+    const auto input_buf_size_bytes = layout.compute_packed_buffer_size_bytes(input_shape);
     const auto host_buffer_datum_size_bytes = sizeof(uint32_t);
     const auto input_buf_size = input_buf_size_bytes / host_buffer_datum_size_bytes;
 
@@ -40,7 +40,7 @@ void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const TensorLay
         EXPECT_EQ(host_data[i], readback_data[i]);
     }
 
-    EXPECT_EQ(tensor.get_padded_shape(), layout.get_padded_shape(input_shape));
+    EXPECT_EQ(tensor.get_padded_shape(), layout.compute_padded_shape(input_shape));
     tensor.deallocate();
 }
 

@@ -56,8 +56,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     // Running sum-reduce with preallocated output
     // Preallocate Input and Output Tensors on Device
     tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(input_shape.padded_shape()));
-    ASSERT_EQ(output_buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(np_out.get_padded_shape()));
+    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape.padded_shape()));
+    ASSERT_EQ(output_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(np_out.get_padded_shape()));
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, input_shape.padded_shape(), tensor_layout);
     auto output_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, np_out.get_padded_shape(), tensor_layout);
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
@@ -123,7 +123,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             auto write_event = std::make_shared<Event>();
             auto workload_event = std::make_shared<Event>();
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(shape));
+            ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
             auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
             auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
             Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);

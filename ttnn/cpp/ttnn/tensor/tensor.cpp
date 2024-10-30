@@ -664,7 +664,7 @@ Tensor create_device_tensor(
     GraphTracker::instance().track_function_start("tt::tt_metal::create_device_tensor", shape, tensor_layout.get_data_type(), tensor_layout.get_layout(), device, tensor_layout.get_memory_config());
 
     auto device_buffer = tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
-    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.view(), tensor_layout.get_padded_shape(shape).view()), tensor_layout.get_data_type(), tensor_layout.get_layout(), tensor_layout.get_page_config().get_tile());
+    auto output = Tensor(DeviceStorage{device_buffer}, ttnn::Shape(shape.view(), tensor_layout.compute_padded_shape(shape).view()), tensor_layout.get_data_type(), tensor_layout.get_layout(), tensor_layout.get_page_config().get_tile());
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);

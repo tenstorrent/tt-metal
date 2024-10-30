@@ -61,7 +61,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                     host_data[j] = bfloat16(static_cast<float>(i + dev_idx));
                 }
                 tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(shape));
+                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, shape, tensor_layout);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
@@ -103,7 +103,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
     auto readback_data = std::shared_ptr<bfloat16 []>(new bfloat16[buf_size_datums]);
 
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-    ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(shape));
+    ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
     for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         for (int i = 0; i < 30; i++) {

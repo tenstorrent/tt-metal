@@ -54,7 +54,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
             }
             // Allocate and write buffer
             tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-            ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(tensor_shape));
+            ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(tensor_shape));
             auto t0_input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_shape, tensor_layout);
             auto t0_input_storage = tt::tt_metal::DeviceStorage{t0_input_buffer};
             Tensor t0_input_tensor = Tensor(t0_input_storage, tensor_shape, DataType::BFLOAT16, Layout::TILE);
@@ -71,7 +71,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
 
     std::thread t1([&]() {
         TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(tensor_shape));
+        ASSERT_EQ(tensor_buf_size * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(tensor_shape));
         for (int j = 0; j < 100; j++) {
             for (int i = 0; i < tensor_buf_size; i++) {
                 t1_host_data[i] = bfloat16(static_cast<float>(4 + j));

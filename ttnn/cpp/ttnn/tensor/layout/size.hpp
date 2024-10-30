@@ -18,9 +18,7 @@ public:
     operator std::array<size_t, 2>() const;
     operator std::array<uint32_t, 2>() const;
 
-    Size operator/(const Size& rhs) const;
     Size operator*(size_t scalar) const;
-    Size operator%(const Size& rhs) const;
 
     bool operator==(const Size& rhs) const;
 

@@ -16,16 +16,8 @@ Size::Size(const std::pair<size_t, size_t>& size)
 Size::Size(const std::array<size_t, 2>& size)
     : Size(size[0], size[1]) {}
 
-Size Size::operator/(const Size& rhs) const {
-    return Size(m_height / rhs.m_height, m_width / rhs.m_width);
-}
-
 Size Size::operator*(size_t scalar) const {
     return Size(m_height * scalar, m_width * scalar);
-}
-
-Size Size::operator%(const Size& rhs) const {
-    return Size(m_height % rhs.m_height,  m_width % rhs.m_width);
 }
 
 Size::operator std::pair<size_t, size_t>() const {

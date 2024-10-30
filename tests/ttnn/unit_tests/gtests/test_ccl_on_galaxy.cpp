@@ -157,7 +157,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
             }
             for (auto& dev : devs) {
                 tt::tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(shape));
+                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(dev, shape, tensor_layout);
                 auto input_storage = DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
@@ -254,7 +254,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         }
 
         TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
-        ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.get_packed_buffer_size_bytes(shape));
+        ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
         for (auto& dev : ring_devices) {
             auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(dev, shape, tensor_layout);
             auto input_storage = DeviceStorage{input_buffer};

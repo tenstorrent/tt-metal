@@ -124,9 +124,9 @@ void validate_sharded_buffer_allocation(
 }
 
 DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout) {
-    auto buffer_size_bytes = layout.get_packed_buffer_size_bytes(shape);
-    auto page_size_bytes = layout.get_page_size_bytes(shape);
-    auto shard_spec_buffer = layout.get_shard_spec_buffer(shape);
+    auto buffer_size_bytes = layout.compute_packed_buffer_size_bytes(shape);
+    auto page_size_bytes = layout.compute_page_size_bytes(shape);
+    auto shard_spec_buffer = layout.compute_shard_spec_buffer(shape);
     auto memory_config = layout.get_memory_config();
 
     return Buffer::create(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);

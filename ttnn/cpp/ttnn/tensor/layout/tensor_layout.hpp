@@ -24,8 +24,8 @@ class TensorLayout {
 public:
     TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
 
-    // This is a static method instead of a constructor to make it easy to find and remove all of its usages in the codebase.
-    [[deprecated("Use of LegacyPaddedShape is deprecated. Please use constructor with Alignment instead.")]]
+    // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a constructor
+    [[deprecated("Use of Legacy Padded Shape is deprecated")]]
     static TensorLayout fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape);
 
     Layout get_layout() const { return m_page_config.is_row_major() ? Layout::ROW_MAJOR : Layout::TILE; }
@@ -34,22 +34,22 @@ public:
     const MemoryConfig& get_memory_config() const { return m_memory_config; }
     const ttnn::Alignment& get_alignment() const { return m_alignment; }
 
-    Strides get_strides(const ttnn::SimpleShape& shape) const;
+    Strides compute_strides(const ttnn::SimpleShape& shape) const;
 
-    std::optional<ShardSpecBuffer> get_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
+    std::optional<ShardSpecBuffer> compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
 
-    size_t get_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const;
-    size_t get_page_size_bytes(const ttnn::SimpleShape& shape) const;
+    size_t compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const;
+    size_t compute_page_size_bytes(const ttnn::SimpleShape& shape) const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
-    ttnn::SimpleShape get_padded_shape(const ttnn::SimpleShape& shape) const;
+    ttnn::SimpleShape compute_padded_shape(const ttnn::SimpleShape& shape) const;
 
     // Returns number of elements laid out in physically memory across H:W dimensions
     //  W is row width aligned to page width and shard width, depends on data type
     //  H is all dimensions except W multiplied and aligned to tile and shard height
-    Size get_physical_shape(const ttnn::SimpleShape& shape) const;
+    Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
 private:
     // Private to not expose alignment parameter to the public API
@@ -58,11 +58,8 @@ private:
     void initialize_alignment();
     void validate_alignment() const;
 
-    uint32_t get_header_size_bytes() const;
-    uint32_t get_page_elements_count(const ttnn::SimpleShape& shape) const;
-
-    Size get_page_shape(const Size& physical_size) const;
-    size_t get_page_size_bytes(const Size& page_size) const;
+    Size compute_page_shape(const Size& physical_size) const;
+    size_t compute_page_size_bytes(const Size& page_size) const;
 
     DataType m_dtype = DataType::BFLOAT16;
     PageConfig m_page_config;
