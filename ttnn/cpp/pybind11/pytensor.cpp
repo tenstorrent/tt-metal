@@ -396,20 +396,46 @@ Tensor convert_numpy_tensor_to_tt_tensor(
         case DataType::BFLOAT8_B: {
             auto data_ptr = reinterpret_cast<float *>(np_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            // TODO(arakhmati): should it be Layout::TILE?
-            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR, optional_tile);
+            auto buffer = owned_buffer::create<float>(std::move(data));
+            auto tensor = Tensor(
+                            OwnedStorage{buffer},
+                            shape,
+                            DataType::FLOAT32,
+                            Layout::ROW_MAJOR,
+                            optional_tile)
+                            .to(Layout::TILE);
+            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_packed_data = pack_fp32_vec_as_bfp8_tiles(
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            return Tensor(
+                    std::move(OwnedStorage{std::move(output_buffer)}),
+                    shape,
+                    data_type,
+                    Layout::TILE,
+                    tensor.get_tile());
         }
         case DataType::BFLOAT4_B: {
             auto data_ptr = reinterpret_cast<float *>(np_data_ptr);
             auto data = std::vector<float>(data_ptr, data_ptr + num_elements);
-            auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false, optional_tile);
-            auto buffer = owned_buffer::create<uint32_t>(std::move(uint32_vector));
-            auto storage = OwnedStorage{std::move(buffer)};
-            // TODO(arakhmati): should it be Layout::TILE?
-            return Tensor(std::move(storage), shape, data_type, Layout::ROW_MAJOR, optional_tile);
+            auto buffer = owned_buffer::create<float>(std::move(data));
+            auto tensor = Tensor(
+                            OwnedStorage{buffer},
+                            shape,
+                            DataType::FLOAT32,
+                            Layout::ROW_MAJOR,
+                            optional_tile)
+                            .to(Layout::TILE);
+            auto output_float_data = owned_buffer::get_as<float>(tensor).get();
+            auto output_packed_data = pack_fp32_vec_as_bfp4_tiles(
+                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tensor.get_tile());
+            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
+            return Tensor(
+                    std::move(OwnedStorage{std::move(output_buffer)}),
+                    shape,
+                    data_type,
+                    Layout::TILE,
+                    tensor.get_tile());
         }
         default: {
             TT_THROW("Unsupported DataType: {}", data_type);

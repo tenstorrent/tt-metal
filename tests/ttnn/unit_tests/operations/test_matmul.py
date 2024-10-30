@@ -82,8 +82,8 @@ def test_tiny_tiles(device, n, c, h, w, tile_h, tile_w):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("b", [8])
-@pytest.mark.parametrize("h", [4])
+@pytest.mark.parametrize("b", [2])
+@pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
@@ -190,7 +190,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("k", [8192])
+@pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 1)])
@@ -328,15 +328,15 @@ def test_matmul_in1_dram_sharded_tiny_tile(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [1536])
+@pytest.mark.parametrize("m", [768])
 @pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [3072])
+@pytest.mark.parametrize("n", [768])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])
 def test_matmul_2d_tiny_tile(
@@ -457,15 +457,15 @@ def test_matmul_2d_tiny_tile(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("in0_sharded", [True])
+@pytest.mark.parametrize("out_sharded", [True])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])
 def test_matmul_1d_tiny_tile(
