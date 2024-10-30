@@ -105,6 +105,13 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
 
 uint32_t find_closest_common_largest_divisor(uint32_t num1, uint32_t num2, uint32_t start_divisor);
 
+bool use_matmul_for_1x1_conv(
+    const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
+    const std::array<uint32_t, 2>& padding,
+    const std::array<uint32_t, 2>& dilation,
+    uint32_t groups);
+
 sliding_window::ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -132,6 +139,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     const OptimizedConvParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t act_block_h_override,
+    uint32_t act_block_w_div,
+    uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum);
 

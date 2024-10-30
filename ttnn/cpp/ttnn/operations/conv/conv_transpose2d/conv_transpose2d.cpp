@@ -161,6 +161,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 TT_THROW("Invalid Device Arch, Got {}",device->arch());
         }
 
+        const bool mm_conv = conv2d::use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
 
         //Call Halo Transpose
         auto [input_tensor_post_tm, parallel_config, tensor_manipulated, use_non_tile_height] = conv2d::shard_or_reshard_tensor_if_required(
@@ -172,13 +173,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             output_width,
             in_channels,
             out_channels,
-            kernel_size,
-            stride,
-            padding,
-            dilation,
-            weight_tensor.get_shape()[3],
-            input_width,
-            groups
+            mm_conv
             );
 
         uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
@@ -224,9 +219,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.act_block_w_div,
             kernel_size[0],
             kernel_size[1],
-            conv_config.fp32_dest_acc_enabled,
-            conv_config.input_channels_alignment == 16
-        );
+            conv_config.fp32_dest_acc_enabled);
 
         //TODO: Flip the Weights
         bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
