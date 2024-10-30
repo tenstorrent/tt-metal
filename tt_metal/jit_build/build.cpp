@@ -33,7 +33,6 @@ namespace tt::tt_metal {
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
