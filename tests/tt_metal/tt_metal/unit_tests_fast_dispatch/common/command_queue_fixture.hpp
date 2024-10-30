@@ -17,6 +17,7 @@
 #include "impl/device/device.hpp"
 #include "impl/kernels/data_types.hpp"
 #include "impl/kernels/kernel_types.hpp"
+#include "impl/dispatch/command_queue.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster_descriptor_types.h"
 #include "tt_metal/host_api.hpp"
@@ -226,9 +227,11 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {
 
     void SetUp() override {
         CommandQueueSingleCardFixture::SetUp();
-
         this->device_ = this->devices_[0];
+        this->initialize_seed();
+    }
 
+    void initialize_seed() {
         const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
@@ -509,13 +512,23 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {
 };
 
 class RandomProgramTraceFixture : public RandomProgramFixture, public CommandQueueSingleCardTraceFixture {
+   protected:
+    Program programs[NUM_PROGRAMS];
+
     void SetUp() override {
         CommandQueueSingleCardTraceFixture::SetUp();
-
         this->device_ = this->devices_[0];
+        this->initialize_seed();
+    }
 
-        const uint32_t seed = tt::parse_env("TT_METAL_SEED", static_cast<uint32_t>(time(nullptr)));
-        log_info(tt::LogTest, "Using seed: {}", seed);
-        srand(seed);
+    uint32_t trace_programs() {
+        const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
+        for (Program &program : this->programs) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
+        }
+        EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+
+        EnqueueTrace(this->device_->command_queue(), trace_id, false);
+        return trace_id;
     }
 };
