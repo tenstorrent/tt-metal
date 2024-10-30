@@ -9,6 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case_t3k
+from ttnn.distributed.distributed import ShardTensorToMesh
 
 
 def run_normal(
@@ -35,14 +36,15 @@ def run_normal(
     logger.info(f"Input shape: {input_shape}")
     logger.info(f"dim: {dim}")
     input_tensor = torch.rand(input_shape).bfloat16()
-
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
     # Use Async mode based on test input config
     device.enable_async(enable_async)
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(device.get_devices()[i], mem_config))
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=device,
+        dtype=input_dtype,
+        layout=layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device=device, dim=dim),
+    )
     for i in range(num_iters):
         # Run barrier many times in a loop
         ttnn.barrier(
@@ -71,8 +73,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
     )
-    for d in device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_devices(device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -94,15 +95,13 @@ def run_with_trace(
             topology=all_gather_topology,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for d in device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_devices(device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(device, trace_id, blocking=False)
     ttnn.release_trace(device, trace_id)
-    for d in device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_devices(device)
     return tt_out_tensor
 
 
@@ -285,11 +284,7 @@ def test_barrier_sharded(
     unchunked_input_shape = list(input_shape)
     unchunked_input_shape[dim] *= num_devices
 
-    unchunked_input_tensor = torch.rand(unchunked_input_shape).bfloat16()
-
-    unchunked_input_tensor = unchunked_input_tensor.bfloat16()
-
-    input_tensors = torch.chunk(unchunked_input_tensor, num_devices, dim)
+    input_tensor = torch.rand(unchunked_input_shape).bfloat16()
 
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
@@ -319,14 +314,13 @@ def test_barrier_sharded(
     if num_devices < 2:
         pytest.skip("Requires multiple devices to run")
 
-    tt_input_tensors = []
-
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype).to(tensor_layout).to(t3k_mesh_device.get_devices()[i], mem_config)
-        )
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        device=t3k_mesh_device,
+        dtype=input_dtype,
+        layout=tensor_layout,
+        mesh_mapper=ShardTensorToMesh(mesh_device=t3k_mesh_device, dim=dim),
+    )
 
     if trace_mode:
         tt_out_tensor = run_with_trace(
@@ -358,5 +352,4 @@ def test_barrier_sharded(
                 topology=all_gather_topology,
             )
         ## Wait for completion
-        for d in t3k_mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_devices(t3k_mesh_device)
