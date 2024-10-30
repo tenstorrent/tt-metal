@@ -231,9 +231,9 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer);
 
 /**
- * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
- * Return value: Semaphore address (uint32_t)
+ * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
