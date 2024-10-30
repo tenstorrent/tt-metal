@@ -45,3 +45,4 @@ jobs:
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       from-precompiled: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
+      profiler-build: ${{ github.event_name == 'workflow_dispatch' && inputs.profiler-build }}
