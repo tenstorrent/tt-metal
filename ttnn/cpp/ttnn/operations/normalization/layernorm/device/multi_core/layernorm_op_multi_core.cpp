@@ -18,6 +18,7 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace ANON_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -40,6 +41,7 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+}
 
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
@@ -53,6 +55,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace ANON_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -407,6 +410,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace ANON_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;

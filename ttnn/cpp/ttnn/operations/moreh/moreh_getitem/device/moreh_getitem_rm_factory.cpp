@@ -5,14 +5,17 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+namespace ttnn::operations::moreh::moreh_getitem {
+
+namespace rm {
 struct IndexInfo {
     bool is_defined;
     bool is_dram;
     uint32_t address;
     uint32_t unit_size;
 };
+}
 
-namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOperation::MorehGetItemRmFactory::create(
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
@@ -59,7 +62,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 
-    IndexInfo index_info[5] = {0};
+    rm::IndexInfo index_info[5] = {0};
 
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
@@ -245,7 +248,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
     auto index_tensors = tensor_args.index_tensors;
-    IndexInfo index_info[5] = {0};
+    rm::IndexInfo index_info[5] = {0};
 
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;

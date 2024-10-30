@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+    // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,17 @@
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+namespace ttnn::operations::moreh::moreh_getitem {
+
+namespace ANON_NAMESPACE {
 struct IndexInfo {
     bool is_defined;
     bool is_dram;
     uint32_t address;
     uint32_t unit_size;
 };
+}
 
-namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemTilizedFactory::cached_program_t
 MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     const operation_attributes_t &operation_attributes,
@@ -24,6 +27,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::operations::primary;
+    using namespace ANON_NAMESPACE;
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
@@ -547,6 +551,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     const operation_attributes_t &operation_attributes,
     const tensor_args_t &tensor_args,
     tensor_return_value_t &tensor_return_value) {
+    using namespace ANON_NAMESPACE;
     auto &program = cached_program.program;
     auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
