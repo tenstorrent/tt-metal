@@ -206,7 +206,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -238,7 +238,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
@@ -271,7 +271,7 @@ def test_transpose_wh_sharded_program_cache(dtype, device, use_program_cache):
     input_shape = torch.Size([N, C, H, W])
 
     num_cores = min(N, compute_grid_size.x * compute_grid_size.y)
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
