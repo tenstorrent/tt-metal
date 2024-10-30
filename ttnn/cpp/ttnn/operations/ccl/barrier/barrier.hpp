@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 #include "ttnn/cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
