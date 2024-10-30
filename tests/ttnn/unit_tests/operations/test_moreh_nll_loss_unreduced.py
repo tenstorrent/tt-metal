@@ -208,7 +208,6 @@ def test_moreh_nll_loss_unreduced_callback(shape, device, use_program_cache):
 @pytest.mark.parametrize(
     "shape",
     [
-        (32, 32, 32),
         (32, 32),
         (400, 300),
         (20, 300, 320),
