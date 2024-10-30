@@ -697,5 +697,5 @@ void EnqueueAddBufferToProgram(
 
 }  // namespace tt::tt_metal
 
-std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);
-std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::EnqueueCommandType const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::CommandQueue::CommandQueueMode const& type);
