@@ -100,10 +100,6 @@ void kernel_main() {
 
     {
 
-    // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
-    for (uint32_t i = 0; i < 2000000000; i++) {
-        asm volatile("nop");
-    }
     eth_setup_handshake(handshake_addr, true);
     }
 

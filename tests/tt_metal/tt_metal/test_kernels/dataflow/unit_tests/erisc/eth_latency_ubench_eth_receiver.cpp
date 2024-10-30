@@ -16,17 +16,6 @@ struct addr_sem_pair {
 static constexpr bool DISABLE_CONTEXT_SWITCHING = true;
 static constexpr uint32_t NUM_CHANNELS = 8;
 
-FORCE_INLINE
-void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
-    channel_sync->bytes_sent = 0;
-    channel_sync->receiver_ack = 0;
-    internal_::eth_send_packet(
-        0,
-        ((uint32_t)(channel_sync)) >> 4,
-        ((uint32_t)(channel_sync)) >> 4,
-        1);
-}
-
 template <bool measure>
 FORCE_INLINE void roundtrip_ping(
     std::array<uint32_t, NUM_CHANNELS> const& channels_addrs,
@@ -179,10 +168,7 @@ void kernel_main() {
         channels_sem_addrs[i] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
-    for (uint32_t i = 0; i < 2000000000; i++) {
-        asm volatile("nop");
-    }
+
 
     eth_setup_handshake(handshake_addr, false);
     // We reuse the handshake address to send back acks to the sender core.
