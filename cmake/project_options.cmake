@@ -19,7 +19,7 @@ option(ENABLE_CCACHE "Build with compiler cache" FALSE)
 option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 ###########################################################################################
 
-if(CMAKE_EXPORT_COMPILE_COMMANDS)
+if(CMAKE_EXPORT_COMPILE_COMMANDS AND TT_UNITY_BUILDS)
     message(STATUS "Disabling Unity builds because CMAKE_EXPORT_COMPILE_COMMANDS is ON")
     set(TT_UNITY_BUILDS OFF)
 endif()
