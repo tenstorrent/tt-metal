@@ -52,7 +52,7 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
 
 std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
     const Tensor& grad, const Tensor& input, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryBackwardClip::invoke(grad, input, min, max, output_mem_config);
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, min, max, output_mem_config);
 }
 
 // Hardtanh
