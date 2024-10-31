@@ -124,7 +124,7 @@ matmul_shapes_bfloat8_b = [
 ]
 
 
-@run_for_wormhole_b0()
+@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
 @pytest.mark.parametrize("grid_size", [(8, 8)])
 @pytest.mark.parametrize("tile_h", [32])
