@@ -25,6 +25,7 @@ enum class UnaryCompositeOpType {
     DIGAMMA,
     LGAMMA,
     LOG1P,
+    MISH,
     MULTIGAMMALN,
     SINH,
     SOFTSIGN,
@@ -65,6 +66,7 @@ Tensor _cosh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&,  const std::optional<MemoryConfig>&);
 Tensor _log1p(const Tensor&, const std::optional<MemoryConfig>&);
+Tensor _mish(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _softsign(const Tensor&, const std::optional<MemoryConfig>&);
@@ -187,6 +189,13 @@ template <>
 struct OpHandler<UnaryCompositeOpType::LOG1P> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
         return _log1p(t1, mem_cfg);
+    }
+};
+
+template <>
+struct OpHandler<UnaryCompositeOpType::MISH> {
+    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg ) {
+        return _mish(t1, mem_cfg);
     }
 };
 
