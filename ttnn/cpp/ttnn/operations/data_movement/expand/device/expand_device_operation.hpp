@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <variant>
 #include <vector>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::expand {
 struct ExpandOperation {
