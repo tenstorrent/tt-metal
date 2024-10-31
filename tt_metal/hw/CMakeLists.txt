@@ -193,4 +193,12 @@ add_custom_target(
 add_library(hw INTERFACE)
 add_library(Metalium::Metal::Hardware ALIAS hw)
 
-target_include_directories(hw INTERFACE inc)
+set(currentArch "$ENV{ARCH_NAME}")
+string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
+target_include_directories(
+    hw
+    INTERFACE
+        inc
+        inc/${currentArch}
+        $<$<STREQUAL:${currentArch},wormhole>:${CMAKE_CURRENT_SOURCE_DIR}/inc/wormhole/wormhole_b0_defines>
+)
