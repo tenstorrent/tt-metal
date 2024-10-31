@@ -54,5 +54,7 @@ m	k	n	inference_time_avg (ns)	TFLOPs (avg)
 ```
 
 
+#### Square matrices
 
+![A simple bar chart of the TFLOPS on WH when using various square matrcies](images/TFLOPS_WH_SQUARE.png "Square Matrix TFLOPS on WH from SRAM")
 
