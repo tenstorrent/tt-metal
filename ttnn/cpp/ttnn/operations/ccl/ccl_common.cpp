@@ -712,19 +712,20 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles = ((total_num_tiles - 1) / num_workers) + 1; // Ceil so that the remainder worker will have a smaller slice
+    const std::size_t optim_worker_slice_len_tiles = ((total_num_tiles - 1) / num_workers) + 1;
 
-    if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) { // Each worker will have a full slice
+    const bool each_worker_has_max_size_slice = max_slice_size_in_tiles < optim_worker_slice_len_tiles;
+    if (each_worker_has_max_size_slice) { // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {
             worker_slice_shapes.emplace_back(max_slice_size_in_tiles, 1);
         }
     } else { // Each worker will only have one slice
-        size_t base_tiles_per_worker = total_num_tiles / num_workers;
-        size_t total_extra_tiles = total_num_tiles - (base_tiles_per_worker * num_workers);
+        const size_t base_tiles_per_worker = total_num_tiles / num_workers;
+        const size_t total_extra_tiles = total_num_tiles - (base_tiles_per_worker * num_workers);
         for (uint32_t w = 0; w < num_workers; ++w) {
-            bool add_extra_tile = w < total_extra_tiles;
-            size_t remainder_tiles = add_extra_tile ? 1 : 0;
-            size_t num_tiles_this_worker = base_tiles_per_worker + remainder_tiles;
+            const bool add_extra_tile = w < total_extra_tiles;
+            const size_t remainder_tiles = add_extra_tile ? 1 : 0;
+            const size_t num_tiles_this_worker = base_tiles_per_worker + remainder_tiles;
             worker_slice_shapes.emplace_back(optim_worker_slice_len_tiles, 1);
         }
     }

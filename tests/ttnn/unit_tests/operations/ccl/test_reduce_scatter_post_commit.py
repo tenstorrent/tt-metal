@@ -668,8 +668,7 @@ def test_width_sharded_reduce_scatter_post_commit(
         ),
     ),
 )
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-# @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [True])
 def test_width_sharded_reduce_scatter_post_commit_4chip(
