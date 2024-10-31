@@ -14,6 +14,16 @@ function(CHECK_COMPILERS)
     message(STATUS "Checking compilers")
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        if(ENABLE_LIBCXX)
+            find_library(LIBC++ c++)
+            find_library(LIBC++ABI c++abi)
+            if(NOT LIBC++ OR NOT LIBC++ABI)
+                message(
+                    FATAL_ERROR
+                    "libc++ or libc++abi not found. Make sure you have libc++ and libc++abi installed and in your PATH"
+                )
+            endif()
+        endif()
         if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17.0.0" OR CMAKE_CXX_COMPILER_VERSION GREATER_EQUAL "18.0.0")
             message(WARNING "Only Clang-17 is tested right now")
         endif()
@@ -28,8 +38,9 @@ function(CHECK_COMPILERS)
     endif()
 endfunction()
 
-function(ADJUST_COMPILER_WARNINGS)
+function(ADJUST_METAL_COMPILER_WARNINGS)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(STATUS "Adjusting compiler warnings for Clang")
         target_compile_options(
             compiler_warnings
             INTERFACE
@@ -46,10 +57,12 @@ function(ADJUST_COMPILER_WARNINGS)
                 -Wno-deprecated-declarations
         )
     else() # GCC-12 or higher
+        message(STATUS "Adjusting compiler warnings for GCC")
         target_compile_options(
             compiler_warnings
             INTERFACE
                 -Wno-deprecated
+                -Wno-deprecated-declarations
                 -Wno-attributes
                 -Wno-stringop-overread
                 -Wno-stringop-overflow

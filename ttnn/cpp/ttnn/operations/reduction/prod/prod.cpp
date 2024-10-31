@@ -58,7 +58,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         }
     }
     // Apply prod
-    std::vector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
+    ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
@@ -91,32 +91,32 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     Tensor temp = input_a;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {
-        std::vector<int64_t> permute_dims = {2, 0, 1, 3};
+        ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
         temp = ttnn::permute(input_a, permute_dims, output_mem_config);
     } else if (dim == 3 || dim == -1) {
-        std::vector<int64_t> permute_dims = {3, 0, 1, 2};
+        ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
         temp = ttnn::permute(input_a, permute_dims, output_mem_config);
     }
     Tensor result = prod_nc(temp, dim, output_mem_config);
     // Permute and unpad result for dim 2,3
-    auto step = std::vector<uint32_t>({1, 1, 1, 1});
+    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
     if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
         return result;
     } else if (dim == 2 || dim == -2) {
-        std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
-        std::vector<uint32_t> start_index = {0, 0, 0, 0};
-        std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
     } else {  // dim 3
         // permute
-        std::vector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
         tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
-        std::vector<uint32_t> start_index = {0, 0, 0, 0};
-        std::vector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
@@ -125,7 +125,7 @@ Tensor ProdOperation::invoke(const Tensor& input_a, bool all_dimensions, int64_t
     }
 }
 
-Tensor ProdOperation::invoke(const Tensor &input, const Tensor &output, std::vector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
+Tensor ProdOperation::invoke(const Tensor &input, const Tensor &output, ttnn::SmallVector<int64_t> &dims, const std::optional<MemoryConfig>& memory_config) {
         auto mem_cfg = memory_config.value_or(input.memory_config());
         return tt::operations::primary::prod_nc(input, output, dims, mem_cfg);
 }

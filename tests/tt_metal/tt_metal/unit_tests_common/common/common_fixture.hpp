@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -16,8 +18,7 @@ class CommonFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {
-        static std::unordered_map<uint64_t, uint32_t> trace_captured;
-        uint64_t program_id = program.get_id();
+        const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {

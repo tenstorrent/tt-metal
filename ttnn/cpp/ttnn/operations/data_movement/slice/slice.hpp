@@ -15,20 +15,43 @@ struct SliceOperation {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        const std::vector<T> &begins,
-        const std::vector<T> &ends,
-        const std::vector<T> &step,
+        tt::stl::Span<const T> begins,
+        tt::stl::Span<const T> ends,
+        tt::stl::Span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     template<typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const std::vector<T> &output_tensor_start,
-        const std::vector<T> &output_tensor_end,
-        const std::vector<T> &step,
+        tt::stl::Span<const T> output_tensor_start,
+        tt::stl::Span<const T> output_tensor_end,
+        tt::stl::Span<const T> step,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    template<typename T>
+    static ttnn::Tensor invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SmallVector<T>& begins,
+        const ttnn::SmallVector<T>& ends,
+        const ttnn::SmallVector<T>& step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return invoke(queue_id, input_tensor, tt::stl::Span<const T>(begins), tt::stl::Span<const T>(ends), tt::stl::Span<const T>(step), memory_config_arg, optional_output_tensor);
+    }
+
+    template<typename T>
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SmallVector<T>& begins,
+        const ttnn::SmallVector<T>& ends,
+        const ttnn::SmallVector<T>& step,
+        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return invoke(input_tensor, tt::stl::Span<const T>(begins), tt::stl::Span<const T>(ends), tt::stl::Span<const T>(step), memory_config_arg, optional_output_tensor);
+    }
 
     template<typename T, std::size_t N>
     static ttnn::Tensor invoke(

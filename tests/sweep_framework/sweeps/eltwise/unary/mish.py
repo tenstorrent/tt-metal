@@ -5,8 +5,8 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import os
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -14,10 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -29,20 +25,29 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
         + gen_shapes([1, 1], [256, 256], [1, 1], 16),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
 
 
-# def mesh_device_fixture():
-#     device = ttnn.open_device(device_id=0)
-#     assert ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
-#     device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
-#     yield (device, device_name)
-#     ttnn.close_device(device)
-#     del device
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Row Major layout is not supported"
+    return False, None
+
+
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_grayskull(device), "This op is not supported on Grayskull"
+    device_name = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "default")).lower()
+    yield (device, device_name)
+    ttnn.close_device(device)
+    del device
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -58,15 +63,14 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    mish = torch.nn.Mish()
-    torch_output_tensor = mish(torch_input_tensor_a)
+    golden_function = ttnn.get_golden_function(ttnn.mish)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

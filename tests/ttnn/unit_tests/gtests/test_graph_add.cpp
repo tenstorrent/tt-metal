@@ -47,8 +47,8 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
     auto run_mode = std::get<1>(param_combination);
 
     {
-        const auto input_tensor_a = ttnn::zeros(params.a_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
-        const auto input_tensor_b = ttnn::zeros(params.b_Shape, ttnn::bfloat16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+        const auto input_tensor_a = ttnn::zeros(params.a_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+        const auto input_tensor_b = ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
 
         auto call = [&] {
             const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
