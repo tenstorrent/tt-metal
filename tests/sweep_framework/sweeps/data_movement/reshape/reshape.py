@@ -115,8 +115,6 @@ def run(
     # If we store result to L1 required volume should not be larger than 1Mb
     while input_a_memory_config == ttnn.L1_MEMORY_CONFIG and max_volume(rehape_shape) > 1024 * 1024 and i < num_tries:
         rehape_shape = gen_reshape_shape(input_shape)
-        # print(f"max_volume(rehape_shape) {max_volume(rehape_shape)}")
-        # print(1)
         i += 1
 
     torch_output_tensor = torch.reshape(torch_input_tensor_a, rehape_shape)
@@ -139,26 +137,3 @@ def run(
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     # print(pcc)
     return [pcc, e2e_perf]
-
-
-# # Run sweeps locally
-# from tests.sweep_framework.framework.permutations import *
-
-# start_time = start_measuring_time()
-# for suite in parameters.keys():
-#     device_id = 0
-#     device = ttnn.open_device(device_id=device_id)
-#     suite_vectors = list(permutations(parameters[suite]))
-#     print(len(suite_vectors))
-#     for vector in suite_vectors:
-#         try:
-#             passed, _ = run(**vector, device=device)
-#             if passed[0] != True:
-#                 print(passed)
-#         except Exception as e:
-#             print(e)
-
-#     ttnn.close_device(device)
-
-# e2e_perf = stop_measuring_time(start_time)
-# print(f"time {e2e_perf / 1000000000}s")
