@@ -11,12 +11,6 @@
 using std::vector;
 using namespace tt::tt_metal;
 
-struct TestBufferConfig {
-    uint32_t num_pages;
-    uint32_t page_size;
-    BufferType buftype;
-};
-
 Program create_simple_unary_program(const Buffer& input, const Buffer& output) {
     Program program = CreateProgram();
 

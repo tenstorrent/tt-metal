@@ -38,8 +38,9 @@ function(CHECK_COMPILERS)
     endif()
 endfunction()
 
-function(ADJUST_COMPILER_WARNINGS)
+function(ADJUST_METAL_COMPILER_WARNINGS)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(STATUS "Adjusting compiler warnings for Clang")
         target_compile_options(
             compiler_warnings
             INTERFACE
@@ -56,10 +57,12 @@ function(ADJUST_COMPILER_WARNINGS)
                 -Wno-deprecated-declarations
         )
     else() # GCC-12 or higher
+        message(STATUS "Adjusting compiler warnings for GCC")
         target_compile_options(
             compiler_warnings
             INTERFACE
                 -Wno-deprecated
+                -Wno-deprecated-declarations
                 -Wno-attributes
                 -Wno-stringop-overread
                 -Wno-stringop-overflow

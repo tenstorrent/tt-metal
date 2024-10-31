@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
+#include <optional>
 
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
 
 namespace tt {
@@ -41,65 +44,6 @@ uint32_t element_size_bytes(DataType dtype) {
         case DataType::BFLOAT8_B: return sizeof(std::byte);
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");
-    }
-}
-
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile) {
-    uint32_t page_size = 0;
-    const auto tile_HW = tile.has_value() ? tile->get_tile_hw() : constants::TILE_HW;
-    const auto bfloat8b_tile_HW = tile.has_value() ? tile_HW + 64 : constants::BFLOAT8_B_TILE_HW;
-    const auto bfloat4b_tile_HW = tile.has_value() ? tile_HW / 2 + 64 : constants::BFLOAT4_B_TILE_HW;
-    switch (layout) {
-        case Layout::ROW_MAJOR: {
-            uint32_t size_of_element = element_size_bytes(dtype);
-            uint32_t W = shape.rank() == 0 ? 1 : shape[-1];
-            page_size = W * size_of_element;
-        } break;
-        case Layout::TILE: {
-            // TODO: Update to be generic for data type (issue 462)
-            switch (dtype) {
-                case DataType::BFLOAT16: {
-                    // Float is converted to bfloat16 before being written to device
-                    uint32_t size_of_element = element_size_bytes(DataType::BFLOAT16);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::FLOAT32: {
-                    uint32_t size_of_element = element_size_bytes(DataType::FLOAT32);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::UINT32:
-                case DataType::INT32:
-                case DataType::UINT16:
-                case DataType::UINT8:{
-                    uint32_t size_of_element = element_size_bytes(dtype);
-                    page_size = tile_HW * size_of_element;
-                } break;
-                case DataType::BFLOAT4_B: {
-                    page_size = bfloat4b_tile_HW;
-                } break;
-                case DataType::BFLOAT8_B: {
-                    page_size = bfloat8b_tile_HW;
-                } break;
-                default: TT_ASSERT(false && "Unsupported data type!");
-            }
-            TT_ASSERT(page_size == 0 ? total_size_bytes == 0 : total_size_bytes % page_size == 0);
-        } break;
-        default: TT_ASSERT(false && "Unsupported layout to write to device");
-    }
-    return page_size;
-}
-
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile) {
-    // Physical limitation in FD for now
-    switch (layout) {
-        case Layout::ROW_MAJOR:
-            // TODO: Explore valid page shapes other than 1,W
-            return {1, shard_shape[1]};
-        case Layout::TILE: {
-            auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
-            return {tile_shape[0], tile_shape[1]};
-        }
-        default: TT_THROW("Unsupported layout to write to device");
     }
 }
 
@@ -179,63 +123,13 @@ void validate_sharded_buffer_allocation(
     }
 }
 
-namespace detail {
+DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout) {
+    auto buffer_size_bytes = layout.compute_packed_buffer_size_bytes(shape);
+    auto page_size_bytes = layout.compute_page_size_bytes(shape);
+    auto shard_spec_buffer = layout.compute_shard_spec_buffer(shape);
+    auto memory_config = layout.get_memory_config();
 
-DeviceBuffer allocate_interleaved_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, shape, tile);
-    return Buffer::create(device, buffer_size_bytes, page_size, memory_config.buffer_type);
-}
-
-DeviceBuffer allocate_contiguous_buffer_on_device(
-    size_t buffer_size_bytes, Device* device, const MemoryConfig& memory_config) {
-    return Buffer::create(device, buffer_size_bytes, buffer_size_bytes, memory_config.buffer_type);
-}
-
-DeviceBuffer allocate_sharded_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    validate_sharded_buffer_allocation(shape, layout, data_type, shard_params, memory_config, tile);
-    const auto& page_shape = ttnn::SimpleShape(shard_params.page_shape);
-    uint32_t page_size = get_page_size(data_type, layout, buffer_size_bytes, page_shape, tile);
-
-    return Buffer::create(
-        device, buffer_size_bytes, page_size, memory_config.buffer_type, memory_config.memory_layout, shard_params);
-}
-
-}  // namespace detail
-
-DeviceBuffer allocate_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile) {
-    if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        return detail::allocate_interleaved_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, memory_config, tile);
-    } else if (memory_config.memory_layout == tt::tt_metal::TensorMemoryLayout::SINGLE_BANK) {
-        return detail::allocate_contiguous_buffer_on_device(buffer_size_bytes, device, memory_config);
-    } else {
-        TT_ASSERT(memory_config.is_sharded(), "Incorrect Memory Layout");
-        return detail::allocate_sharded_buffer_on_device(
-            buffer_size_bytes, device, shape, data_type, layout, shard_spec.value(), memory_config, tile);
-    }
+    return Buffer::create(device, buffer_size_bytes, page_size_bytes, memory_config.buffer_type, memory_config.memory_layout, shard_spec_buffer);
 }
 
 void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
@@ -537,6 +431,8 @@ std::string to_string(const BufferType& buffer, const tt::tt_metal::LegacyShape&
         }
     } else if (layout == Layout::TILE) {
         switch (shape.rank()) {
+            case 0: print_datum(ss, buffer[0]); break;
+            case 1: ss << "Unsupported Rank (1) for printing tensor with TILE_LAYOUT!";
             case 2: to_string_tile<BufferType, 2>(ss, buffer, shape, 0, 0); break;
             case 3: to_string_tile<BufferType, 3>(ss, buffer, shape, 0, 0); break;
             case 4: to_string_tile<BufferType, 4>(ss, buffer, shape, 0, 0); break;
@@ -800,18 +696,14 @@ DeviceBuffer initialize_data_on_device(
     BufferType<T>& data_to_write,
     Device* device,
     const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile,
+    const TensorLayout& tensor_layout,
     std::optional<std::reference_wrapper<CommandQueue>> queue = std::nullopt) {
+
     ZoneScoped;
     TT_ASSERT(device != nullptr);
-    auto packed_size_in_bytes = packed_buffer_size_bytes<T>(data_to_write.size());
 
-    auto device_buffer =
-        allocate_buffer_on_device(packed_size_in_bytes, device, shape, data_type, layout, memory_config, shard_spec, tile);
+    auto device_buffer = allocate_buffer_on_device(device, shape, tensor_layout);
+
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         write_data_to_device_buffer<T>(
@@ -827,33 +719,14 @@ DeviceBuffer to_device_buffer(
     const Storage& storage,
     Device* device,
     const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec,
-    const std::optional<Tile>& tile,
+    const TensorLayout& tensor_layout,
     std::optional<std::reference_wrapper<CommandQueue>> queue) {
     return std::visit(
-        [&device, &shape, &data_type, &layout, &tile, memory_config, shard_spec](auto&& storage) -> DeviceBuffer {
+        [&device, &shape, &tensor_layout, &queue](auto&& storage) -> DeviceBuffer {
             using StorageType = std::decay_t<decltype(storage)>;
-            if (memory_config.is_sharded()) {
-                TT_ASSERT(shard_spec.has_value(), "If sharded must provide shard_spec");
-            }
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
-                TT_ASSERT(
-                    compute_buffer_size(shape, data_type) == data_to_write.size(),
-                        "Tensor buffer size and number of data elements does not match: {} != {}",
-                        compute_buffer_size(shape, data_type),
-                        data_to_write.size());
-                if (layout == Layout::TILE) {
-                    auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
-                    TT_ASSERT(
-                        (shape[-2] % tile_shape[0] == 0 && shape[-1] % tile_shape[1] == 0),
-                        "Tensor shape incompatible for specified layout");
-                }
-                return initialize_data_on_device<T>(
-                    data_to_write, device, shape, data_type, layout, memory_config, shard_spec, tile);
+                return initialize_data_on_device<T>(data_to_write, device, shape, tensor_layout, queue);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
@@ -872,39 +745,25 @@ DeviceBuffer to_device_buffer(
 // ======================================================================================
 
 template <typename T>
-Tensor to_device(
-    const Tensor& tensor,
-    Device* target_device,
-    const MemoryConfig& memory_config,
-    std::optional<std::reference_wrapper<CommandQueue>> queue) {
-    TT_ASSERT(tensor.storage_type() != StorageType::DEVICE);
-    if (tensor.storage_type() == StorageType::OWNED) {
-        TT_ASSERT(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
-    }
-    TT_ASSERT(target_device != nullptr && "Need target device in order to move tensor to device!");
-    TT_ASSERT(tensor.is_allocated() && "Need data to exist in order to move it to device");
+Tensor to_device(const Tensor& tensor, Device* target_device, const MemoryConfig& memory_config,
+                 std::optional<std::reference_wrapper<CommandQueue>> queue) {
 
-    auto shape = tensor.get_padded_shape();
+    TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
+    if (tensor.storage_type() == StorageType::OWNED) {
+        TT_FATAL(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
+    }
+    TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
+    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
+
+    auto shape = tensor.get_logical_shape();
+    auto padded_shape = tensor.get_padded_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto tile = tensor.get_tile();
+    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, padded_shape);
 
-    std::optional<ShardSpecBuffer> shard_spec_buffer_opt = std::nullopt;
-    if (memory_config.is_sharded()) {
-        auto page_shape = get_sharded_page_shape(layout, data_type, memory_config.shard_spec.value().shape, tile);
+    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, shape, tensor_layout, queue);
 
-        auto width = shape[-1];
-        auto other_dims = 1;
-        for (int i = 0; i < shape.rank() - 1; i++) {
-            other_dims *= shape[i];
-        }
-
-        std::array<uint32_t, 2> tensor2d_size = {other_dims / page_shape[0], width / page_shape[1]};
-        shard_spec_buffer_opt = ShardSpecBuffer(memory_config.shard_spec.value(), page_shape, tensor2d_size);
-    }
-
-    auto device_buffer = tensor_impl::to_device_buffer<T>(
-        tensor.get_storage(), target_device, shape, data_type, layout, memory_config, shard_spec_buffer_opt, tile, queue);
     return Tensor(DeviceStorage{device_buffer}, tensor.get_shape(), data_type, layout, tile);
 }
 

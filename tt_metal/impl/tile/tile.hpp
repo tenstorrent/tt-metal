@@ -63,6 +63,8 @@ struct Tile {
     }
 
     // Getter methods
+    const uint32_t get_height() const { return tile_shape[0]; }
+    const uint32_t get_width() const { return tile_shape[1]; }
     const uint32_t get_num_faces() const { return num_faces; }
     const uint32_t get_tile_hw() const { return tile_hw; }
     const uint32_t get_face_hw() const { return face_hw; }
