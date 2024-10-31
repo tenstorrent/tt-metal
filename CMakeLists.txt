@@ -102,9 +102,9 @@ endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
