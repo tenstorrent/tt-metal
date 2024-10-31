@@ -57,11 +57,11 @@ jobs:
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
-            ./build_metal.sh --disable-unity-builds --build-type Release
+            ./build_metal.sh --build-type Release
 
       # TTNN project
       - name: Checkout cpp-ttnn-project-template
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: tenstorrent/cpp-ttnn-project-template
           path: project
