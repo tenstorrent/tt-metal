@@ -88,11 +88,10 @@ def get_backward_tensors(
     *,
     with_padding=True,
     use_randint=True,
+    npu_dtype=ttnn.bfloat16,
+    cpu_dtype=torch.bfloat16,
+    npu_layout=ttnn.TILE_LAYOUT,
 ):
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttnn.TILE_LAYOUT
-
     if use_randint:
         torch_output_grad = torch.randint(-2, 3, torch_output_grad_shape, dtype=cpu_dtype, requires_grad=True)
         torch_input_grad = torch.randint(-2, 3, torch_input_grad_shape, dtype=cpu_dtype)
@@ -117,8 +116,10 @@ def get_backward_tensors(
     return tt_output_grad, tt_input_grad, torch_output_grad
 
 
-def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device):
-    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim)
+def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device, dtype=ttnn.bfloat16):
+    (tt_input, tt_output, output_shape, _, torch_input) = get_tensors(
+        input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype
+    )
     torch_output = torch.sum(torch_input, dim, keepdim)
 
     if not use_provide_output:
@@ -187,10 +188,13 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
     ids=["None", "0", "1", "2", "3", "[]", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-false"])
-def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, device):
+@pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    passing = moreh_sum(input_shape, dim, keepdim, True, compute_kernel_options, device)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    passing = moreh_sum(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 
 
@@ -211,11 +215,11 @@ def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, device):
 )
 @pytest.mark.parametrize(
     "dim",
-    (0, 1, 2, 3, 4, 5),
+    [0, 1, 2, 3, 4, 5],
     ids=["0", "1", "2", "3", "4", "5"],
 )
-@pytest.mark.parametrize("use_provide_output", (True, False), ids=["True", "False"])
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-false"])
+@pytest.mark.parametrize("use_provide_output", [True, False], ids=["True", "False"])
+@pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
 def test_moreh_sum_non_4d(input_shape, dim, keepdim, use_provide_output, device):
     torch.manual_seed(2023)
     input_rank = len(input_shape)
@@ -300,16 +304,18 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
     # assert passing
 
 
-def moreh_sum_backward(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device):
+def moreh_sum_backward(
+    input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device, dtype=ttnn.bfloat16
+):
     torch.manual_seed(2023)
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
     (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
-        input_shape, dim, device, keepdim=keepdim
+        input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype
     )
     (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
-        tt_output_shape, torch_output_shape, input_shape, device
+        tt_output_shape, torch_output_shape, input_shape, device, npu_dtype=dtype
     )
 
     if not use_provide_output:
@@ -353,7 +359,7 @@ def moreh_sum_backward(input_shape, dim, keepdim, use_provide_output, compute_ke
 )
 @pytest.mark.parametrize(
     "dim",
-    (
+    [
         None,
         0,
         1,
@@ -368,14 +374,17 @@ def moreh_sum_backward(input_shape, dim, keepdim, use_provide_output, compute_ke
         [1, 2, 3],
         [1, 3],
         [2, 3],
-    ),
+    ],
     ids=["None", "0", "1", "2", "3", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
 )
-@pytest.mark.parametrize("keepdim", (True, False), ids=["keepdim-true", "keepdim-false"])
+@pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
+def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
     torch.manual_seed(2023)
-    passing = moreh_sum_backward(input_shape, dim, keepdim, True, compute_kernel_options, device)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b is not supported")
+    passing = moreh_sum_backward(input_shape, dim, keepdim, True, compute_kernel_options, device, dtype=dtype)
     assert passing
 
 
@@ -415,7 +424,7 @@ def test_moreh_sum_backward_wo_input_grad(input_shape, dim, device):
 )
 @pytest.mark.parametrize(
     "dim",
-    (0, 1, 2),
+    [0, 1, 2],
     ids=["0", "1", "2"],
 )
 def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_cache):
@@ -431,14 +440,16 @@ def test_moreh_sum_backward_enable_cache(input_shape, dim, device, use_program_c
 
 @pytest.mark.parametrize(
     "input_shape",
-    ([2, 3, 2, 4, TILE_HEIGHT * 6 - 1, TILE_WIDTH * 6 - 1],),
+    [
+        [2, 3, 2, 4, TILE_HEIGHT * 6 - 1, TILE_WIDTH * 6 - 1],
+    ],
     ids=[
         "2, 3, 2, 4, TILE_HEIGHT * 6 - 1, TILE_WIDTH * 4 - 1",
     ],
 )
 @pytest.mark.parametrize(
     "dim",
-    (0, 4, 5, [4, 5], [1, 4, 5]),
+    [0, 4, 5, [4, 5], [1, 4, 5]],
     ids=["dim-n", "dim-h", "dim-w", "dim-hw", "dim-nhw"],
 )
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
