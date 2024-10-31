@@ -732,20 +732,7 @@ DeviceBuffer to_device_buffer(
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
-                auto buffer_size = compute_buffer_size(shape, data_type, tile);
-                TT_ASSERT(
-                    buffer_size == data_to_write.size(),
-                        "Tensor buffer size and number of data elements does not match: {} != {}",
-                        buffer_size,
-                        data_to_write.size());
-                if (layout == Layout::TILE) {
-                    auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
-                    TT_ASSERT(
-                        (shape[-2] % tile_shape[0] == 0 && shape[-1] % tile_shape[1] == 0),
-                        "Tensor shape incompatible for specified layout");
-                }
-                return initialize_data_on_device<T>(
-                    data_to_write, device, shape, data_type, layout, memory_config, shard_spec, tile);
+                return initialize_data_on_device<T>(data_to_write, device, shape, tensor_layout, queue);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
