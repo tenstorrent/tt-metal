@@ -80,7 +80,6 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
 
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MatmulFusedOpSignaler::init_all_gather(
-    uint32_t num_transfers,
     uint32_t ring_size,
     uint32_t start_ring_index,
     uint32_t tensor_slice_shape_width,
@@ -89,7 +88,6 @@ void MatmulFusedOpSignaler::init_all_gather(
 
     uint32_t weight_output_page_offset
 ) {
-    this->num_transfers = num_transfers;
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->tensor_slice_shape_width = tensor_slice_shape_width;
@@ -148,7 +146,9 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
 ) {
     TT_ASSERT(initialized_all_gather && initialized_fused_op, "MatmulFusedOpSignaler not initialized fully.");
 
-    out_rt_args.push_back(static_cast<uint32_t>(this->num_transfers));
+    uint32_t num_directions = 2; // CCL All Gather is always bi-directional
+
+    out_rt_args.push_back(static_cast<uint32_t>(num_directions));
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->start_ring_index));
     out_rt_args.push_back(static_cast<uint32_t>(this->tensor_slice_shape_width));
@@ -159,7 +159,7 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(
         out_rt_args.push_back(static_cast<uint32_t>(this->output_page_offset));
         out_rt_args.push_back(static_cast<uint32_t>((this->ring_size - 1) * this->output_page_offset));
     }
-    out_rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
+    out_rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir ? Direction::CCW : Direction::CW)); // Counter-clockwise direction is the first since it has local slice
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
 }

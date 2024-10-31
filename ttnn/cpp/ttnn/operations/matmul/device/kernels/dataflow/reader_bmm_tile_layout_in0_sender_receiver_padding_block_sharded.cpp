@@ -118,7 +118,6 @@ void kernel_main() {
         fused_op_receiver = MatmulOpReceiver(
             sender_id < num_remote_senders, /* wait_for_op_signal */
             rt_args_idx,
-            num_blocks,
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
