@@ -253,22 +253,6 @@ endif()
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE)
 
-if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            ${UMD_HOME}/device/wormhole
-            ${UMD_HOME}/src/firmware/riscv/wormhole
-    )
-else()
-    target_include_directories(
-        metal_header_directories
-        INTERFACE
-            ${UMD_HOME}/device/$ENV{ARCH_NAME}
-            ${UMD_HOME}/src/firmware/riscv/$ENV{ARCH_NAME}
-    )
-endif()
-
 if(WITH_PYTHON_BINDINGS)
     # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
     add_library(pch_pybinds INTERFACE)

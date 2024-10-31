@@ -19,6 +19,7 @@ target_link_libraries(
         span
         Metalium::Metal::STL
         Metalium::Metal::LLRT
+        umd::Firmware
 )
 
 target_include_directories(
