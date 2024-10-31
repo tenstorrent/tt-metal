@@ -69,7 +69,7 @@ struct BroadcastConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
 
-void mask_src_b_for_broadcast(std::vector<tt::test_utils::df::bfloat16>& tile, const std::vector<uint32_t> &shape, BroadcastDim dim) {
+void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uint32_t> &shape, BroadcastDim dim) {
     int num_rows = shape.at(0);
     int num_cols = shape.at(1);
 
@@ -83,14 +83,14 @@ void mask_src_b_for_broadcast(std::vector<tt::test_utils::df::bfloat16>& tile, c
     }
 }
 
-std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_utils::df::bfloat16>& src_a, std::vector<tt::test_utils::df::bfloat16>& src_b, const std::vector<uint32_t> &shape, EltwiseOp op, BroadcastDim dim, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+std::vector<bfloat16> gold_broadcast(std::vector<bfloat16>& src_a, std::vector<bfloat16>& src_b, const std::vector<uint32_t> &shape, EltwiseOp op, BroadcastDim dim, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     int num_rows = shape.at(0);
     int num_cols = shape.at(1);
 
     uint16_t srca_fid_mask = 0xFFFF;
     uint16_t srcb_fid_mask = 0xFFFF;
 
-    std::vector<tt::test_utils::df::bfloat16> golden(num_cols * num_rows);
+    std::vector<bfloat16> golden(num_cols * num_rows);
     auto arch = get_arch_from_string(get_umd_arch_name());
 
     switch (math_fidelity) {
@@ -103,7 +103,7 @@ std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_ut
 
     for (int i = 0; i < num_rows; i++) {
         for (int j = 0; j < num_cols; j++) {
-            tt::test_utils::df::bfloat16 broadcast_value;
+            bfloat16 broadcast_value;
             switch (dim)
             {
             case BroadcastDim::ROW: { broadcast_value = src_b[j]; break; }
@@ -118,8 +118,8 @@ std::vector<tt::test_utils::df::bfloat16> gold_broadcast(std::vector<tt::test_ut
             case EltwiseOp::SUB: { golden[i * num_cols + j] = src_a[i * num_cols + j].to_float() - broadcast_value.to_float(); break; }
             case EltwiseOp::MUL: {
                 golden[i * num_cols + j] =
-                    tt::test_utils::df::bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_packed() & srca_fid_mask)).to_float() *
-                    tt::test_utils::df::bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_packed() & srcb_fid_mask)).to_float();
+                    bfloat16(std::bit_cast<uint32_t>(src_a[i * num_cols + j].to_packed() & srca_fid_mask)).to_float() *
+                    bfloat16(std::bit_cast<uint32_t>(broadcast_value.to_packed() & srcb_fid_mask)).to_float();
                 break;
             }
             default: { TT_THROW("Unsupported EltwiseOp={}", op); break; }
@@ -142,7 +142,7 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
     constexpr uint32_t tile_width = 32;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t single_tile_size = tile_width * tile_height * tt::test_utils::df::bfloat16::SIZEOF;
+    constexpr uint32_t single_tile_size = tile_width * tile_height * bfloat16::SIZEOF;
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device=device,
@@ -244,25 +244,25 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
             (uint32_t)1,
         });
 
-    std::vector<tt::test_utils::df::bfloat16> input0 = generate_uniform_random_vector<tt::test_utils::df::bfloat16>(
+    std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(
         -1.0f,
         1.0f,
-        single_tile_size / tt::test_utils::df::bfloat16::SIZEOF,
+        single_tile_size / bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
-    std::vector<tt::test_utils::df::bfloat16> input1 = generate_uniform_random_vector<tt::test_utils::df::bfloat16>(
+    std::vector<bfloat16> input1 = generate_uniform_random_vector<bfloat16>(
         -1.0f,
         1.0f,
-        single_tile_size / tt::test_utils::df::bfloat16::SIZEOF,
+        single_tile_size / bfloat16::SIZEOF,
         std::chrono::system_clock::now().time_since_epoch().count());
 
     mask_src_b_for_broadcast(input1, {tile_width, tile_height}, test_config.broadcast_dim);
 
-    std::vector<tt::test_utils::df::bfloat16> golden = gold_broadcast(input0, input1, {tile_width, tile_height}, test_config.eltwise_op, test_config.broadcast_dim, test_config.math_fidelity);
+    std::vector<bfloat16> golden = gold_broadcast(input0, input1, {tile_width, tile_height}, test_config.eltwise_op, test_config.broadcast_dim, test_config.math_fidelity);
 
-    auto packed_input0 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input0);
-    auto packed_input1 = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(input1);
-    auto packed_golden = pack_vector<uint32_t, tt::test_utils::df::bfloat16>(golden);
+    auto packed_input0 = pack_vector<uint32_t, bfloat16>(input0);
+    auto packed_input1 = pack_vector<uint32_t, bfloat16>(input1);
+    auto packed_golden = pack_vector<uint32_t, bfloat16>(golden);
     unit_tests::compute::GoldenConfig config = {
         .num_tiles_r_dim = tile_width/32,
         .num_tiles_c_dim = tile_height/32
@@ -279,10 +279,10 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, dest_buffer_data);
     auto dest_buffer_data_untilized = unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
-    bool result = is_close_packed_vectors<tt::test_utils::df::bfloat16, uint32_t>(
+    bool result = is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data_untilized,
         packed_golden,
-        [&](const tt::test_utils::df::bfloat16& a, const tt::test_utils::df::bfloat16& b) {
+        [&](const bfloat16& a, const bfloat16& b) {
             return is_close(a, b, 0.0155);
         });
     ASSERT_TRUE(result);

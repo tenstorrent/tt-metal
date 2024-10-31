@@ -65,8 +65,10 @@ runs:
         # for newly created files.
         # Passing HOME variable is necessary to avoid Python lib installation into /home/ubuntu/.local folder which
         # may not be writable by the RUNNER_UID user.
-        # --log-driver none: Do not save logs to disk as we're printing them to GitHub
-        # and it takes up space
+        # --log-driver none: Do not save logs to disk by default as we're printing them to GitHub Actions UI already
+        # and it takes up space on the runner. What can happen is that we can eat up all the space of a runner while it's
+        # spitting our endless logs, causing the runner being unable to call home, resulting in job failures / runner
+        # offline status on GitHub. Issue tt-metal/#12626
         options: |
           -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
           --rm

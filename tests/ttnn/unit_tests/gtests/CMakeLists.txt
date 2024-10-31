@@ -19,6 +19,7 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
 )
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn)
 add_executable(unit_tests_ttnn_ccl ${TTNN_CCL_UNIT_TESTS_SRC})
 add_executable(unit_tests_ttnn_tensor ${TTNN_TENSOR_UNIT_TESTS_SRC})
 add_executable(test_multi_device ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_device.cpp)
