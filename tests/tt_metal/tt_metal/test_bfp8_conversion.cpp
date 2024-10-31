@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
         }
 
         std::vector<uint32_t> shape_vec = {1, 1, 32, 32};
-        std::vector<float> tiled_fp32_vec = convert_layout(fp32_vec, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
+        std::vector<float> tiled_fp32_vec = convert_layout(fp32_vec, shape_vec, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES);
 
         std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in = pack_fp32_vec_as_bfp8_tiles(fp32_vec, /*row_major_input=*/true, /*is_exp_a=*/false);
         std::vector<float> unpacked_bfp8b_tile_vec_rm_out = unpack_bfp8_tiles_into_float_vec(packed_bfp8b_tile_vec_rm_in, /*row_major_output*/true, /*is_exp_a=*/false);
@@ -44,8 +44,8 @@ int main(int argc, char **argv) {
         // ////////////////////////////////////////////////////////////////////////////
         // //                      Validation
         // ////////////////////////////////////////////////////////////////////////////
-        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_tile_out, shape_vec, TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR);
-        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_rm_out, shape_vec, TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES);
+        std::vector<float> tiled_to_rm_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_tile_out, shape_vec, tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR);
+        std::vector<float> rm_to_tiled_fp32_vec = convert_layout(unpacked_bfp8b_tile_vec_rm_out, shape_vec, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES);
 
         // Ensure that passing in row_major_input=true and row_major_output=true are inverses of row_major_input=false and row_major_output=false yield the same result
         pass &= (packed_bfp8b_tile_vec_rm_in == packed_bfp8b_tile_vec_tile_in);
