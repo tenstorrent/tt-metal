@@ -8,7 +8,7 @@ import torch
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
@@ -53,18 +53,34 @@ def run_max_pool(
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
-        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
+        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000 and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
         if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
             pytest.skip("This case runs out of memory on Wormhole b0")
-        if stride == (1, 1) and in_n * in_c * in_h * in_w > 1e7:
-            pytest.skip("This case runs out of memory")
+        if (
+            stride == (1, 1)
+            and (act_shape == [16, 64, 112, 112] or act_shape == [4, 16, 1056, 160] or act_shape == [16, 16, 528, 80])
+            and is_wormhole_b0()
+        ):
+            pytest.skip("This case runs out of memory on Wormhole b0")
+        if stride == (1, 1) and act_shape == [8, 16, 528, 80] and is_grayskull():
+            pytest.skip("This case runs out of memory on Grayskull")
+        if kernel_h > 3 and kernel_w > 3 and act_shape == [16, 64, 112, 112] and is_grayskull():
+            pytest.skip("This case runs out of memory on Grayskull")
+        if kernel_h == 13 and kernel_w == 13 and act_shape == [128, 32, 132, 20] and is_grayksull():
+            pytest.skip("This case runs out of memory on Grayskull")
 
     if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         if in_c < max_cores:
             pytest.skip("Width sharding requires channles >= cores")
         if in_c / max_cores < 16:
             pytest.skip("Width sharding requires large enough channels to shard (at least 16 per core)")
+        if (
+            kernel_size == (13, 13)
+            and (act_shape == [8, 4096, 10, 16] or act_shape == [1, 32768, 10, 10])
+            and is_grayskull()
+        ):
+            pytest.skip("This case runs out of memory on Grayskull")
 
     if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
         if in_c < cores_x:
@@ -160,7 +176,7 @@ def run_max_pool(
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
-    pcc_thresh = 0.9999
+    pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9997
 
@@ -217,7 +233,7 @@ def run_max_pool(
             # [64, 16, 1056, 160],    ## oom
             # [128, 16, 1056, 160],   ## oom
             # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],
+            [8, 16, 528, 80],  # oom with stride (1,1)
             [16, 16, 528, 80],  # oom with stride (1,1)
             # [32, 16, 528, 80],  ## oom
             # [64, 16, 528, 80],  ## oom
@@ -292,9 +308,9 @@ def test_run_max_pool(
             [1, 4096, 6, 6],
             [4, 1024, 40, 40],
             [2, 2048, 40, 40],
-            [8, 4096, 10, 16],
+            [8, 4096, 10, 16],  # oom with kernel (13,13)
             # wide yolo kernel
-            [1, 32768, 10, 10],
+            [1, 32768, 10, 10],  # oom with kernel (13,13)
         )
     ),
 )
