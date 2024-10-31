@@ -7,8 +7,16 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
 )
+
 set(TTNN_CCL_UNIT_TESTS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_erisc_data_mover_with_workers.cpp)
-set(TTNN_TENSOR_UNIT_TESTS_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp)
+
+set(TTNN_TENSOR_UNIT_TESTS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
+)
 
 add_executable(unit_tests_ttnn ${TTNN_UNIT_TESTS_SRC})
 TT_ENABLE_UNITY_BUILD(unit_tests_ttnn)
