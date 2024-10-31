@@ -3034,7 +3034,7 @@ bool Device::close() {
     }
 
     this->work_executor.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     this->active_sub_device_manager_ = nullptr;
     for (auto sub_device_manager = this->sub_device_managers_.begin(); sub_device_manager != this->sub_device_managers_.end();) {
@@ -3870,9 +3870,8 @@ bool v1::CloseDevice(DeviceHandle device) { return v0::CloseDevice(device); }
 
 void v1::DeallocateBuffers(DeviceHandle device) { device->deallocate_buffers(); }
 
-void v1::DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet &worker_cores, bool last_dump) {
-    auto worker_cores_vec = corerange_to_cores(worker_cores);
-    detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
+void v1::DumpDeviceProfileResults(DeviceHandle device) {
+    detail::DumpDeviceProfileResults(device);
 }
 
 ARCH v1::GetArch(DeviceHandle device) { return device->arch(); }

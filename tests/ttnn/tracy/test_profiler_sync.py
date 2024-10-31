@@ -46,3 +46,9 @@ def test_all_devices(
     num_devices,
 ):
     logger.debug("Testing All Devices")
+
+
+def test_all_mesh_devices(
+    mesh_device,
+):
+    logger.debug("Testing All Mesh Devices")

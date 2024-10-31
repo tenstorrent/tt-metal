@@ -167,15 +167,16 @@ void DevicePool::init_profiler_devices() const {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
                     log_info(
                         tt::LogMetal,
-                        "Starting profiler on device {}",
+                        "Profiler started on remote device {}",
                         this->devices[mmio_controlled_device_id].get()->id());
-                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
                 }
             }
         }
     }
+    detail::ProfilerSync(ProfilerSyncState::INIT);
 #endif
 }
 
@@ -449,6 +450,8 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -468,6 +471,8 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
