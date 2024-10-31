@@ -1,5 +1,6 @@
 # Matrix Multiply FLOPS
 
+
 ## Introduction
 
 Across many families of neural networks and applications, the common denominator is the use of the generalized matrix multiply operation. Depending on the size and the precision of the input and output matrices, different underlying effects, and more importantly performance metrics, can be observed. Classically, this comes down to the hardware's ability to execute an operation, and its ability to fetch the data for that operation intercept. 
@@ -10,6 +11,23 @@ Thankfully, matrix multiplication requires more compute operations (2N^3) than m
 However, said inversion point depends on the size and crossover point of each cache level/memory technology and the datatype in use. The amount of 8 bit elements that can be moved per unit time is nearly an order of magnitude more than 64 bit elements. 
 
 Therefore, the peak achieved flops changes based on the datatype, the size of the data, and the layout of the data. 
+
+
+## Test it yourself!
+
+Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com!), you can test and see the matrix multiply TFLOPS results for yourself by running: `pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf`, available in the ttMetal repository. 
+
+To do so, make sure to have followed the setup instructions guide available at https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md 
+
+NB: You'll need to comment out the skip the `#@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")` line.
+
+## Points of interest in the tests
+
+The parameters of interest are 3 fold:
+1. Dimensions: the sizes of the matrix on each edge, denoted as m, n and k 
+2. The fidelity of the computation, referred to as lofi, hifi2, hifi3, and hifi4. This affects how many bits of each input datatype is actually ingested during the computation.  
+3. Datatype of input/output space. It has been shown that a network layer need not always use all of the bits of a given datatype. But some layers do need the full resolution provided by a given data type, and its higher memory footprint. 
+
 
 ## Operations
 
@@ -75,17 +93,6 @@ m	k	n	inference_time_avg (ns)	TFLOPs (avg)
 
 ![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrcies](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
 
-
-
-
-## Test it yourself
-
-Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com), you can test all of the above for yourself by running: `pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf`, available in the ttMetalium repository. 
-
-The parameters of interest are 3 fold:
-1. Dimensions: the sizes of the matrix on each edge, denoted as m, n and k 
-2. The fidelity of the computation, referred to as lofi, hifi2, hifi3, and hifi4. This effects how many bits of each input datatype is actually ingested during the computation.  
-3. Datatype of input/output space. It has been shown that a network layer need not always use all of the bits of a given datatype. But some layers do need the full resolution provided by a given data type, and its higher memory footprint. 
 
 
 ### Understanding device scaling: SRAM vs DRAM
