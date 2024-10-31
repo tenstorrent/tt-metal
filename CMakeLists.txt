@@ -61,6 +61,8 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT ENABLE_LIBCXX)
+    add_compile_options(-fsized-deallocation)
 endif()
 
 add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>)
