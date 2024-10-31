@@ -250,9 +250,6 @@ if(ENABLE_TRACY)
     add_link_options(-rdynamic)
 endif()
 
-add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE)
-
 if(WITH_PYTHON_BINDINGS)
     # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
     add_library(pch_pybinds INTERFACE)

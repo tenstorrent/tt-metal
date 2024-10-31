@@ -34,7 +34,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_common_o)
 target_link_libraries(
     unit_tests_common_o
     PUBLIC
-        metal_header_directories
         gtest
         gtest_main
         magic_enum
