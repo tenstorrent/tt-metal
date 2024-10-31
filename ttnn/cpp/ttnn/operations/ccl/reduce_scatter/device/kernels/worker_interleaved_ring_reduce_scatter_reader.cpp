@@ -379,7 +379,7 @@ void kernel_main() {
     // For RM => shape in elements
     std::size_t n_reads = 1;
     uint32_t start_ring_index = args.my_ring_idx;
-    bool work_to_do = args.tensor_slice_shape.x > 0 && args.tensor_slice_shape.y > 0;
+    const bool work_to_do = args.tensor_slice_shape.x > 0 && args.tensor_slice_shape.y > 0;
     while (work_to_do && args.worker_slice_offset.x < args.tensor_slice_shape.x &&
            args.worker_slice_offset.y < args.tensor_slice_shape.y) {
         // Need to reset back to the start ring index because the last iteration of the tranfers read chunks
