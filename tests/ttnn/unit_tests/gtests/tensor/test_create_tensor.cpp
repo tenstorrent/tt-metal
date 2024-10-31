@@ -76,8 +76,6 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})},
         CreateTensorParams{.shape=ttnn::SimpleShape({2, 1, 32, 32})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({64, 1, 256, 1})},
-        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 21120, 16})},
         CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
         CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})},
         CreateTensorParams{.shape=ttnn::SimpleShape({0})}
@@ -108,6 +106,9 @@ INSTANTIATE_TEST_SUITE_P(
         EmptyTensorParams{.shape=ttnn::Shape({1, 1, 21120, 16})},
         EmptyTensorParams{.shape=ttnn::Shape({0, 0, 0, 0})},
         EmptyTensorParams{.shape=ttnn::Shape({0, 1, 32, 32})},
-        EmptyTensorParams{.shape=ttnn::Shape({0})}
+        EmptyTensorParams{.shape=ttnn::Shape({0})},
+        EmptyTensorParams{.shape=ttnn::Shape({1, 1, 1, 1})},
+        EmptyTensorParams{.shape=ttnn::Shape({1})},
+        EmptyTensorParams{.shape=ttnn::Shape({})}
     )
 );
