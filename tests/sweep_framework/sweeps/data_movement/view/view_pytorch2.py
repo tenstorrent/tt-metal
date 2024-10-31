@@ -64,7 +64,7 @@ def parse_md_file_simple_no_regex(file_path):
 
 parameters = {
     "nightly": {
-        "view_specs": parse_md_file_simple_no_regex("sweeps/data_movement/view/view_trace.md"),
+        "view_specs": parse_md_file_simple_no_regex("tests/sweep_framework/sweeps/data_movement/view/view_trace.md"),
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
