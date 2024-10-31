@@ -11,8 +11,10 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
+        description: 'Optional: N150, N300, E150, BH, config-t3000, config-tg, config-tgg'
         required: true
         type: string
+        default: '["in-service"]'
       good-commit:
         required: true
         type: string
@@ -40,9 +42,7 @@ jobs:
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - "in-service"
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
       - name: Set up dyanmic env vars for build
