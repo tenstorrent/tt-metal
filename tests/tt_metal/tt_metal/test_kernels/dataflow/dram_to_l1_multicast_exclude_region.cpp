@@ -36,11 +36,11 @@ void kernel_main() {
         dst_noc_x_end,
         dst_noc_y_end,
         dst_addr);
-    uint32_t noc_exclude_addr = get_noc_exclude_addr(
+    uint32_t noc_exclude_region = get_noc_exclude_region(
         exclude_start_x,
         exclude_start_y,
         exclude_dir_x,
         exclude_dir_y);
-    noc_async_write_multicast_exclude_region(local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests, noc_exclude_addr);
+    noc_async_write_multicast_exclude_region(local_addr, dst_noc_multicast_addr, src_buffer_size, num_dests, noc_exclude_region);
     noc_async_write_barrier();
 }

@@ -81,6 +81,7 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define EXCLUDE_DIRECTION_X_OFFSET 20
 #define EXCLUDE_START_Y_OFFSET 14
 #define EXCLUDE_START_X_OFFSET 8
+#define DYNAMIC_NOC_DIRECTOIN(noc, direction) (noc == 1 ? 1 - direction : direction)
 
 FORCE_INLINE
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
@@ -627,7 +628,7 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
 }
 
 FORCE_INLINE
-std::uint32_t  get_noc_exclude_addr(
+std::uint32_t  get_noc_exclude_region(
     std::uint32_t exclude_start_x,
     std::uint32_t exclude_start_y,
     std::uint32_t exclude_dir_x,
@@ -637,8 +638,8 @@ std::uint32_t  get_noc_exclude_addr(
             Get an encoding which contians the definition of the exclusion area
         */
         return (EXCLUDE_ENABLED << EXCLUDE_ENABLED_OFFSET |
-            exclude_dir_y << EXCLUDE_DIRECTION_Y_OFFSET |
-            exclude_dir_x << EXCLUDE_DIRECTION_X_OFFSET |
+            DYNAMIC_NOC_DIRECTOIN(noc, exclude_dir_y) << EXCLUDE_DIRECTION_Y_OFFSET |
+            DYNAMIC_NOC_DIRECTOIN(noc, exclude_dir_x) << EXCLUDE_DIRECTION_X_OFFSET |
             DYNAMIC_NOC_Y(noc, exclude_start_y) << EXCLUDE_START_Y_OFFSET  |
             DYNAMIC_NOC_X(noc, exclude_start_x) << EXCLUDE_START_X_OFFSET);
 }
@@ -1519,7 +1520,7 @@ void noc_async_write_multicast_loopback_src(
  * (x_start,y_start,x_end,y_end) and a local address created using
  * *get_noc_multicast_addr* function. Also, *see noc_async_write_barrier*.
  * Similarly, the exclusion zone is specified using uint32_t encoding referencing
- * an on-chip and directions relative to it created using *get_noc_exclude_addr* function.
+ * an on-chip core and directions relative to it created using *get_noc_exclude_region* function.
  *
  * The destination nodes can only be a set of Tensix cores + L1 memory address.
  * The destination nodes must form an L-shaped grid (where dst_noc_addr_multicast defines a grid

@@ -59,8 +59,8 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
     auto num_dests = (grid_size.x * grid_size.y) - cfg.target_grid_offset;
     // calculate number of destination cores, taking exluded ones into account
     if (cfg.exclude_start.x != 0 || cfg.exclude_start.y != 0) {
-        auto num_x = cfg.exclude_direction.x == 0 ? grid_size.x - cfg.exclude_start.x : cfg.exclude_start.x + 1;
-        auto num_y = cfg.exclude_direction.y == 0 ? grid_size.y - cfg.exclude_start.y : cfg.exclude_start.y + 1;
+        auto num_x = cfg.exclude_direction.x == 1 ? grid_size.x - cfg.exclude_start.x : cfg.exclude_start.x + 1;
+        auto num_y = cfg.exclude_direction.y == 1 ? grid_size.y - cfg.exclude_start.y : cfg.exclude_start.y + 1;
         num_dests = (grid_size.x * grid_size.y) - num_x * num_y - cfg.target_grid_offset;
     }
     std::vector<uint32_t> mcast_reader_args = {
@@ -103,8 +103,8 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
     for(int i = 0 ; i < grid_size.y; i++) {
         for(int j = 0 ; j < grid_size.x; j++) {
             // don't compare on skipped cores
-            if ( ((cfg.exclude_direction.x == 1 && j <= cfg.exclude_start.x) || (cfg.exclude_direction.x == 0 && j >= cfg.exclude_start.x)) &&
-                ((cfg.exclude_direction.y == 1 && i <= cfg.exclude_start.y) || (cfg.exclude_direction.y == 0 && i >= cfg.exclude_start.y))) {
+            if ( ((cfg.exclude_direction.x == 0 && j <= cfg.exclude_start.x) || (cfg.exclude_direction.x == 1 && j >= cfg.exclude_start.x)) &&
+                ((cfg.exclude_direction.y == 0 && i <= cfg.exclude_start.y) || (cfg.exclude_direction.y == 1 && i >= cfg.exclude_start.y))) {
                     tt::log_debug(tt::LogTest, "Skipping core {},{}", j, i); // debug print to verify we don't skip unnecessary cores
                     continue;
                 }
@@ -149,7 +149,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
         .target_grid_offset = 0, //source core is in exclusion zone, don't count twice
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
         .exclude_start = {10, 6},
-        .exclude_direction = {1, 1}
+        .exclude_direction = {0, 0}
     };
     for (unsigned int id=0; id < devices_.size(); id++){
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
@@ -166,7 +166,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
         .exclude_start = {10, 6},
-        .exclude_direction = {0, 1}
+        .exclude_direction = {1, 0}
     };
     for (unsigned int id=0; id < devices_.size(); id++){
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
@@ -183,7 +183,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
         .exclude_start = {10, 6},
-        .exclude_direction = {1, 0}
+        .exclude_direction = {0, 1}
     };
     for (unsigned int id=0; id < devices_.size(); id++){
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
@@ -200,7 +200,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownRight){
         .target_grid_offset = 1,
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1_multicast_exclude_region.cpp",
         .exclude_start = {10, 6},
-        .exclude_direction = {0, 0}
+        .exclude_direction = {1, 1}
     };
     for (unsigned int id=0; id < devices_.size(); id++){
         if (!(this->devices_.at(id)->arch() == tt::ARCH::BLACKHOLE)){
