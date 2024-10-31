@@ -7,6 +7,8 @@
 
 void kernel_main() {
 
+    constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(3);
+
     // Constexpr
     constexpr uint32_t cb_id_in0                       = 0;
     constexpr uint32_t tile_height = 32;
@@ -33,7 +35,7 @@ void kernel_main() {
     // that the stick size dictates tiles c, but stick size
     // doesn't necessarily need to be divisible by tiles c...
     // this is only the case really for tilize
-    const uint32_t num_tiles_block_c = block_row_size / 64; // Assuming 2 bytes per datum, there are 64 bytes per tile row
+    const uint32_t num_tiles_block_c = block_row_size / bytes_per_tile_row; // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
     constexpr bool src0_is_dram          = get_compile_time_arg_val(0) == 1;
     #define stick_size_is_pow2 get_compile_time_arg_val(1) == 1

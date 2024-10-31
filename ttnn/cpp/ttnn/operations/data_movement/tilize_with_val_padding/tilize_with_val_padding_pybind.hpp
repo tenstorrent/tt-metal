@@ -47,7 +47,7 @@ void bind_tilize_with_val_padding(py::module &module) {
             [](const OperationType &self,
                const ttnn::Tensor &input_tensor,
                const tt::tt_metal::LegacyShape &output_tensor_shape,
-               float value,
+               const PadValue value,
                const std::optional<MemoryConfig> &memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
@@ -63,7 +63,9 @@ void bind_tilize_with_val_padding(py::module &module) {
             py::arg("dtype") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("queue_id") = 0,
-        });
+        }
+
+        );
 }
 
 void bind_tilize_with_zero_padding(py::module &module) {
@@ -73,9 +75,9 @@ void bind_tilize_with_zero_padding(py::module &module) {
 
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 
-            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 or UINT32 data type.
 
-            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 or UINT32 data type.
 
             Args:
                 * :attr:`input_tensor`: Input Tensor.
