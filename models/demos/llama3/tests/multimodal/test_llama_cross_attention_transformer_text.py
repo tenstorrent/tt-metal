@@ -13,10 +13,7 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text im
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
     get_prefill_rot_mat,
-    prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
     get_single_rot_mat,
 )
@@ -95,9 +92,9 @@ def test_llama_cross_attention_transformer_text_inference(
     vision_tokens = torch.randn((batch, vision_seq_len, dim))
 
     tt_vision_tokens = vision_tokens.clone()
-    tt_vision_tokens = prepare_inputs_ttnn_prefill(
+    tt_vision_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_vision_tokens,
-        mesh_device,
+        force_replicated=True,
     )
 
     with torch.no_grad():
@@ -197,15 +194,15 @@ def test_llama_cross_attention_transformer_text_inference(
             # Prepare TT inputs
 
             if mode == "prefill":
-                tt_h = prepare_inputs_ttnn_prefill(
+                tt_h = model_args.prepare_inputs_ttnn_prefill(
                     h,
-                    mesh_device,
+                    force_replicated=True,
                 )
             else:
-                tt_h = prepare_inputs_ttnn(
+                tt_h = model_args.prepare_inputs_ttnn_decode(
                     h,
-                    model_args.dim,
-                    mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                    force_replicated=True,
                 )
 
             tt_position_id = ttnn.from_torch(

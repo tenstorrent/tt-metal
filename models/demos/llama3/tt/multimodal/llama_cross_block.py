@@ -60,7 +60,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="attention_norm",
         )
 
@@ -90,7 +89,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="ffn_norm",
         )
 
@@ -120,7 +118,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
 
         attn_out = self.attention(
-            x_11SH=self.attention_norm(x_11SH),
+            x_11SH=self.attention_norm(x_11SH, mode=mode),
             xattn_mask=xattn_mask,
             xattn_cache=xattn_cache,
             full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
@@ -130,7 +128,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         res = ttnn.add(x_11SH, attn_out)
-        mlp_out = self.feed_forward(self.ffn_norm(res), mode=mode)
+        mlp_out = self.feed_forward(self.ffn_norm(res, mode=mode), mode=mode)
         mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
         mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd))
         out = ttnn.add(res, mlp_out)

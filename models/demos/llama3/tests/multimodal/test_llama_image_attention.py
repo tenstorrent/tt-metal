@@ -75,6 +75,7 @@ def test_llama_attention_inference(batch, num_chunks, mesh_device, use_program_c
 
     attention_input = model_args.prepare_inputs_ttnn_prefill(
         tt_attention_input.view(num_chunks, ntok, dim),
+        force_replicated=True,
     )
     # Pad TT input to multipple of 32
     attention_input, npadtt = pad_seq_one_tile(attention_input, mesh_device)

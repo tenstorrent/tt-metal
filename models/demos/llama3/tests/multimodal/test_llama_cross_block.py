@@ -10,10 +10,6 @@ import ttnn
 import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-    prepare_inputs_ttnn,
-)
 from models.utility_functions import comp_pcc, comp_allclose, nearest_32
 from models.utility_functions import skip_for_grayskull
 
@@ -77,6 +73,7 @@ def test_llama_cross_attention_transformer_block_inference(
     tt_xattn_tokens = pt_xattn_tokens.clone()
     tt_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
+        force_replicated=True,
     )
 
     """
@@ -121,11 +118,13 @@ def test_llama_cross_attention_transformer_block_inference(
         if mode == "prefill":
             tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
+                force_replicated=True,
             )
         else:
             tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
                 ttnn.DRAM_MEMORY_CONFIG,
+                force_replicated=True,
             )
 
         xattn_mask = torch.bernoulli(

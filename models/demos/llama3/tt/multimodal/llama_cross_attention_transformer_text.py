@@ -68,7 +68,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=configuration.get_state_dict_prefix("", None),
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
             weight_key="norm",
         )
 

@@ -125,11 +125,13 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
         if mode == "prefill":
             tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
+                force_replicated=True,
             )
         else:
             tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
                 ttnn.DRAM_MEMORY_CONFIG,
+                force_replicated=True,
             )
         xattn_mask = torch.bernoulli(
             torch.full(

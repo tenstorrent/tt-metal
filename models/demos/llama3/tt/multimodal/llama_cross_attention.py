@@ -114,7 +114,6 @@ class TtLlamaCrossAttention(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="q_norm",
             eps=self.norm_eps,
         )
@@ -125,7 +124,6 @@ class TtLlamaCrossAttention(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-            weight_dtype=dtype,
             weight_key="k_norm",
             eps=self.norm_eps,
         )
@@ -178,7 +176,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 transpose_k_heads=False,
             )
 
-        xk = self.k_norm(xk)
+        xk = self.k_norm(xk, mode="decode")
 
         # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
         xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
@@ -230,7 +228,7 @@ class TtLlamaCrossAttention(LightweightModule):
         xq = ttnn.slice(xq, (0, 0, 0, 0), (batch, self.n_local_heads, 1, self.head_dim))
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
-        xq = self.q_norm(xq)
+        xq = self.q_norm(xq, mode="decode")
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
@@ -313,7 +311,7 @@ class TtLlamaCrossAttention(LightweightModule):
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
 
-        xq = self.q_norm(xq)
+        xq = self.q_norm(xq, mode="prefill")
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
