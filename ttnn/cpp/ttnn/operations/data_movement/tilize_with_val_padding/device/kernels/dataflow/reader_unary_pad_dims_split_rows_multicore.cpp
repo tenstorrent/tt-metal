@@ -17,6 +17,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
+    constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(3);
+
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(2);
@@ -25,7 +27,7 @@ void kernel_main() {
     const uint32_t n_block_reps = get_arg_val<uint32_t>(5);
 
     const uint32_t num_tiles_per_row =
-        padded_X_size >> 6;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
+        padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
 #define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
