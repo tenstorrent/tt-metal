@@ -279,15 +279,15 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
 
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
+        std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
+        std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
-        // Silicon driver will attempt to open this many hugepages as channels, and assert if workload uses more than
-        // available. Metal currently uses assigns 1 channel per device
-        uint32_t num_host_mem_ch_per_mmio_device = HOST_MEM_CHANNELS;
+        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
+        // and assert if workload uses more than available.
+        uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, (uint32_t)all_chips_set.size());
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
-        std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
-        std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         device_driver = std::make_unique<tt_SiliconDevice>(
             sdesc_path,
             this->cluster_desc_path_,
