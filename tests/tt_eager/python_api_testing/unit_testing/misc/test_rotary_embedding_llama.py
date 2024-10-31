@@ -86,7 +86,12 @@ class TtLlamaRotary(torch.nn.Module):
         )
 
         rotary_output = ttnn.experimental.rotary_embedding_llama(
-            x, cos, sin, self.transformation_mat, compute_kernel_config=compute_kernel_config
+            x,
+            cos,
+            sin,
+            self.transformation_mat,
+            is_decode_mode=self.mode == "decode",
+            compute_kernel_config=compute_kernel_config,
         )
 
         return rotary_output

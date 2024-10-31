@@ -372,8 +372,8 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();
 
     const uint32_t batch = input.get_padded_shape()[1];
-    const uint32_t n_heads_t = shard_spec->shape[0] / TILE_HEIGHT;
-    const uint32_t head_dim_t = shard_spec->shape[1] / TILE_WIDTH;
+    const uint32_t n_heads_t = shard_spec->shape[0] / constants::TILE_HEIGHT;
+    const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 
     tt_metal::Device *device = input.device();
 
