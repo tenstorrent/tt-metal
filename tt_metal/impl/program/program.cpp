@@ -125,6 +125,8 @@ class Program_ {
 
     bool is_finalized() const;
     void finalize(Device *device);
+    bool is_cached() const { return this->cached_; }
+    void set_cached() { this->cached_ = true; }
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
@@ -146,6 +148,7 @@ class Program_ {
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_;
+    bool cached_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
@@ -1561,6 +1564,8 @@ std::vector<std::reference_wrapper<const Semaphore>> Program::semaphores_on_core
 bool detail::Program_::is_finalized() const { return this->finalized_; }
 
 bool Program::is_finalized() const { return pimpl_->is_finalized(); }
+bool Program::is_cached() const { return pimpl_->is_cached(); }
+void Program::set_cached() { pimpl_->set_cached(); }
 
 const ProgramTransferInfo &Program::get_program_transfer_info() const noexcept { return pimpl_->program_transfer_info; }
 
