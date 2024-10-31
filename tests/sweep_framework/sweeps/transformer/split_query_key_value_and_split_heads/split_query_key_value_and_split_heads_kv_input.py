@@ -158,28 +158,3 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     return [(passed, output_string), e2e_perf]
-
-
-from tests.sweep_framework.framework.permutations import *
-
-for suite in parameters.keys():
-    if suite != "nightly":
-        continue
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    acc = 0
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        if invalidate_vector(vector)[0]:
-            acc += 1
-            continue
-        try:
-            passed, _ = run(**vector, device=device)
-            if passed[0] != True:
-                print(passed)
-        except Exception as e:
-            print(vector)
-            print(e)
-    print(acc)
-    ttnn.close_device(device)
