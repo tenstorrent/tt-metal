@@ -292,10 +292,11 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         input_shape[3] / num_shards_c,
         nblocks,
         split_reader,  // enable split reader
-        0,             // split reader id
+        0,             // split reader id,
         bf16_one_u32,
         in_nblocks_c,
-        in_cb_sz};
+        in_cb_sz,
+        max_rows_for_reduction};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -312,7 +313,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         1,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
-        in_cb_sz};
+        in_cb_sz,
+        max_rows_for_reduction};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -354,7 +356,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
-        in_nblocks_c};
+        in_nblocks_c,
+        max_rows_for_reduction};
 
     auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
