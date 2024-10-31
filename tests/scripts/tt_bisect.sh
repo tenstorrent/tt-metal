@@ -56,7 +56,7 @@ while [[ "$found" = "false" ]]; do
    build_code=0
    echo "at commit `git rev-parse HEAD`"
    echo "building Metal"
-   . build_metal.sh; build_code+=$?
+   ./build_metal.sh --build-tests; build_code+=$?
 
    if [[ $build_code -ne 0 ]]; then
       echo "Build failed"
