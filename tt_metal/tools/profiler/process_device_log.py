@@ -316,6 +316,8 @@ def get_ops(timeseries):
 
     ops.append({"timeseries": []})
     for opID in ordered_ops:
+        if opID == 0:
+            continue
         op = opsDict[opID]
         opCores = {}
 
