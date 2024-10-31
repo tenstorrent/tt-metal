@@ -17,7 +17,7 @@
 #include "debug_tools.hpp"
 #include "dev_msgs.h"
 #include "llrt/hal.hpp"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

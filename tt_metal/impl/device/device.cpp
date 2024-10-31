@@ -18,7 +18,7 @@
 #include "common/utils.hpp"
 #include "llrt/llrt.hpp"
 #include "dev_msgs.h"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "tt_metal/impl/device/device_pool.hpp"
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "llrt/hal.hpp"

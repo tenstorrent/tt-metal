@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 
 namespace eth_l1_mem {
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_config.h"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "llrt/hal.hpp"
 #include "llrt/wormhole/wh_hal.hpp"
 #include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"

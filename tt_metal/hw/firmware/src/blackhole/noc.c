@@ -5,7 +5,7 @@
 #include "noc.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 
 ////
 

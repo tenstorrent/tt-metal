@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT; // for NOC PCIe alignemnt
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment

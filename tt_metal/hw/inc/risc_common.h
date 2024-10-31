@@ -14,7 +14,7 @@
 #include "limits.h"
 #include "mod_div_lib.h"
 #include "noc_overlay_parameters.h"
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 #include "stream_io_map.h"
 #include "tensix.h"
 

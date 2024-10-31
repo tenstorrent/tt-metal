@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "common_values.hpp"
 #include "dev_mem_map.h"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 
 /*
 * This file contains addresses that are visible to both host and device compiled code.

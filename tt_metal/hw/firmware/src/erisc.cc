@@ -6,7 +6,7 @@
 #include "ethernet/tunneling.h"
 #include "firmware_common.h"
 #include "generated_bank_to_noc_coord_mapping.h"
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 #include "risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "debug/watcher_common.h"

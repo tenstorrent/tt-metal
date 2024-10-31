@@ -6,7 +6,7 @@
 
 #include <stdint.h>
 
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 #include "dev_msgs.h"
 
 ////

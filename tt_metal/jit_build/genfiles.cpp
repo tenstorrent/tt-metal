@@ -15,7 +15,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/settings.hpp"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 
 namespace fs = std::filesystem;
 
@@ -567,7 +567,7 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << endl;
     ss << "#pragma once" << endl;
     ss << endl;
-    ss << "#include <noc/noc_parameters.h>" << endl;
+    ss << "#include <noc/metal_noc_parameters.h>" << endl;
     ss << endl;
 
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;

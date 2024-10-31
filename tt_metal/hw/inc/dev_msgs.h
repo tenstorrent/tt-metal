@@ -11,7 +11,7 @@
 #pragma once
 
 #include "core_config.h"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"

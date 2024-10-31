@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 
 #pragma once

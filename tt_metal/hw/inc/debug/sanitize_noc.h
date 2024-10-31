@@ -27,7 +27,7 @@
 
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true

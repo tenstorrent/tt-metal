@@ -6,7 +6,7 @@
 #define _STREAM_INTERFACE_H_
 
 #include "noc_overlay_parameters.h"
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 #include "noc_nonblocking_api.h"
 
 // Low-level chip-dependent stream/NOC functions

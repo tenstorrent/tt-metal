@@ -10,7 +10,7 @@
 
 //////
 
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 
 
 /*

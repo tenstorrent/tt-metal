@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "eth_l1_address_map.h"
-#include "noc_parameters.h"
+#include "metal_noc_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "noc.h"
 #include "noc_overlay_parameters.h"

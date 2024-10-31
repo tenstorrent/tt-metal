@@ -19,7 +19,7 @@
 #include "llrt/llrt.hpp"
 #include "llrt/rtoptions.hpp"
 #include "noc/noc_overlay_parameters.h"
-#include "noc/noc_parameters.h"
+#include "noc/metal_noc_parameters.h"
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
 
