@@ -18,38 +18,47 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 
 
-def get_torch_tensors(shape):
+def get_torch_tensors(shape, torch_dtype):
     C = shape[1]
     target_shape = shape[:1] + shape[2:]
 
-    cpu_dtype = torch.float32
     cpu_index_dtype = torch.long
 
-    torch_input = torch.rand(shape, dtype=cpu_dtype).requires_grad_()
+    torch_input = torch.rand(shape, dtype=torch_dtype).requires_grad_()
     torch_target = torch.randint(0, C, target_shape, dtype=cpu_index_dtype)
-    torch_weight = torch.rand(C, dtype=cpu_dtype)
-    torch_divisor = torch.tensor([0], dtype=cpu_dtype)
-    torch_output = torch.tensor([0], dtype=cpu_dtype)
+    torch_weight = torch.rand(C, dtype=torch_dtype)
+    torch_divisor = torch.tensor([0], dtype=torch_dtype)
+    torch_output = torch.tensor([0], dtype=torch_dtype)
 
     return torch_input, torch_target, torch_weight, torch_divisor, torch_output
 
 
-def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device):
+def get_tt_tensors(torch_input, torch_target, torch_weight, torch_divisor, torch_output, device, ttnn_dtype):
     npu_index_dtype = ttnn.int32
 
-    tt_input = to_ttnn(torch_input, device=device)
-    tt_target = to_ttnn(torch_target, device=device, dtype=npu_index_dtype)
-    tt_weight = to_ttnn(torch_weight, device=device)
-    tt_divisor = to_ttnn(torch_divisor, device=device)
-    tt_output = to_ttnn(torch_output, device=device)
+    tt_input = to_ttnn(torch_input, dtype=ttnn_dtype, device=device)
+    tt_target = to_ttnn(torch_target, dtype=npu_index_dtype, device=device)
+    tt_weight = to_ttnn(torch_weight, dtype=ttnn_dtype, device=device)
+    tt_divisor = to_ttnn(torch_divisor, dtype=ttnn_dtype, device=device)
+    tt_output = to_ttnn(torch_output, dtype=ttnn_dtype, device=device)
 
     return tt_input, tt_target, tt_weight, tt_divisor, tt_output
 
 
-def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, compute_kernel_options=None):
+def run_moreh_nll_loss(
+    shape,
+    ignore_index,
+    reduction,
+    none_weight,
+    device,
+    *,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+    compute_kernel_options=None,
+):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape)
+    (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape, torch_dtype)
 
     if none_weight:
         torch_weight = None
@@ -58,7 +67,7 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
     torch_loss = torch.tensor([nll_loss(torch_input, torch_target)])
 
     (tt_input, tt_target, tt_weight, tt_divisor, tt_output) = get_tt_tensors(
-        torch_input, torch_target, torch_weight, torch_divisor, torch_output, device
+        torch_input, torch_target, torch_weight, torch_divisor, torch_output, device, ttnn_dtype
     )
 
     assert reduction in ["sum", "mean"]
@@ -82,10 +91,20 @@ def run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, comp
     assert passing
 
 
-def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device, compute_kernel_options=None):
+def run_moreh_nll_loss_backward(
+    shape,
+    ignore_index,
+    reduction_mean,
+    none_weight,
+    device,
+    *,
+    torch_dtype=torch.float32,
+    ttnn_dtype=ttnn.bfloat16,
+    compute_kernel_options=None,
+):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape)
+    (torch_input, torch_target, torch_weight, torch_divisor, torch_output) = get_torch_tensors(shape, torch_dtype)
     if none_weight:
         torch_weight = None
 
@@ -95,7 +114,7 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
     torch_loss = nll_loss(torch_input, torch_target)
 
     (tt_input, tt_target, tt_weight, tt_divisor, tt_output) = get_tt_tensors(
-        torch_input, torch_target, torch_weight, torch_divisor, torch_output, device
+        torch_input, torch_target, torch_weight, torch_divisor, torch_output, device, ttnn_dtype
     )
     reduction = "mean"
     if reduction_mean == False:
@@ -152,9 +171,12 @@ def run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device, ttnn_dtype):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
 
+    torch.manual_seed(0)
     run_moreh_nll_loss(shape, ignore_index, reduction, none_weight, device)
 
 
@@ -203,11 +225,14 @@ def test_moreh_nll_loss_callback(shape, reduction, device, use_program_cache):
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_compute_kernel_options(
-    shape, ignore_index, reduction, none_weight, compute_kernel_options, device
+    shape, ignore_index, reduction, none_weight, compute_kernel_options, device, ttnn_dtype
 ):
-    torch.manual_seed(0)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
 
+    torch.manual_seed(0)
     run_moreh_nll_loss(
         shape, ignore_index, reduction, none_weight, device, compute_kernel_options=compute_kernel_options
     )
@@ -225,9 +250,12 @@ def test_moreh_nll_loss_compute_kernel_options(
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("reduction_mean", [True, False])
 @pytest.mark.parametrize("none_weight", [True, False])
-def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device, ttnn_dtype):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
 
+    torch.manual_seed(0)
     run_moreh_nll_loss_backward(shape, ignore_index, reduction_mean, none_weight, device)
 
 
@@ -276,11 +304,14 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device, us
 @pytest.mark.parametrize("reduction_mean", [True, False])
 @pytest.mark.parametrize("none_weight", [True, False])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_backward_compute_kernel_options(
-    shape, reduction_mean, none_weight, compute_kernel_options, device
+    shape, reduction_mean, none_weight, compute_kernel_options, ttnn_dtype, device
 ):
-    torch.manual_seed(0)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
 
+    torch.manual_seed(0)
     ignore_index = 0
 
     run_moreh_nll_loss_backward(

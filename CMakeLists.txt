@@ -43,6 +43,7 @@ endif()
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(project_options)
+include(unity)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -121,6 +122,7 @@ message(STATUS "Build Python bindings: ${WITH_PYTHON_BINDINGS}")
 message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
+message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
@@ -213,7 +215,7 @@ target_compile_options(
 )
 
 # add additional compile warning flags depending on the compiler
-ADJUST_COMPILER_WARNINGS()
+ADJUST_METAL_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
 target_link_libraries(
@@ -288,7 +290,6 @@ if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
             ${UMD_HOME}/src/firmware/riscv/wormhole
     )
 else()
-    target_compile_options(compiler_flags INTERFACE -DDISABLE_ISSUE_3487_FIX)
     target_include_directories(
         metal_header_directories
         INTERFACE

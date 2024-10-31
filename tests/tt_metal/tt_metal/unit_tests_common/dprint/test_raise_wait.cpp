@@ -14,6 +14,8 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
 R"(TestConstCharStrNC{0,0}
    2
@@ -274,9 +276,11 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
         )
     );
 }
+}
+}
 
 TEST_F(DPrintFixture, TestPrintRaiseWait) {
     for (Device* device : this->devices_) {
-        this->RunTestOnDevice(RunTest, device);
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

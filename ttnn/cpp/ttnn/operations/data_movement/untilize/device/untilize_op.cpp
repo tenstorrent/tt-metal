@@ -18,8 +18,8 @@ uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks) {
     if (nblocks <= ncores) {
         ncores = nblocks;
     } else {
-        uint32_t nblocks_per_core = ceil((float)nblocks / ncores);
-        ncores = ceil((float)nblocks / nblocks_per_core);
+        uint32_t nblocks_per_core = std::ceil((float)nblocks / ncores);
+        ncores = std::ceil((float)nblocks / nblocks_per_core);
     }
     return ncores;
 }
@@ -47,7 +47,7 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
         uint32_t ntiles = input_tensor_a.volume() / TILE_HW;
         uint32_t ntiles_per_block = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
-        uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
+        uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
         auto num_cores =
             untilize_helpers::get_num_cores(input_tensor_a.device()->compute_with_storage_grid_size(), nblocks);
         uint32_t fused_height = input_tensor_a.volume() / input_tensor_a.get_legacy_shape()[-1];
@@ -82,7 +82,7 @@ std::vector<Tensor> Untilize::create_output_tensors(
         } else {
             uint32_t ntiles = input_tensor.volume() / TILE_HW;
             uint32_t ntiles_per_block = input_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
-            uint32_t nblocks = ceil((float)ntiles / ntiles_per_block);
+            uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
             auto num_cores =
                 untilize_helpers::get_num_cores(input_tensor.device()->compute_with_storage_grid_size(), nblocks);
             auto shard_grid =
