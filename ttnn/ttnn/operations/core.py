@@ -278,13 +278,17 @@ def to_torch(
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
-    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+    if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
+        tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
+    ):
         tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
     shape_without_tile_padding = tuple(tensor.shape)
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-    if tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+    if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
+        tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
+    ):
         raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
     if mesh_composer:
         return mesh_composer.compose(tensor)
