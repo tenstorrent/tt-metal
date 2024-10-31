@@ -44,10 +44,21 @@ void kernel_main() {
     constexpr uint32_t block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t page_size = get_compile_time_arg_val(5);
 
+    DPRINT << "reader kernel" << ENDL();
+    DPRINT << "input_addr: " << input_addr << ENDL();
+    DPRINT << "input_start_tile_id: " << input_start_tile_id << ENDL();
+    DPRINT << "num_blocks: " << num_blocks << ENDL();
+    DPRINT << "num_pages: " << num_pages << ENDL();
+    DPRINT << "block_num_tiles: " << block_num_tiles << ENDL();
+    DPRINT << "page_size: " << page_size << ENDL();
+
     constexpr uint32_t block_size_bytes = page_size * num_pages;
 
     const uint32_t bank_id = get_arg_val<uint32_t>(0);
     const uint32_t vc = get_arg_val<uint32_t>(1);
+
+    DPRINT << "bank_id: " << bank_id << ENDL();
+    DPRINT << "vc: " << vc << ENDL();
 
     constexpr uint32_t cb_id = 0;
 
