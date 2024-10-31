@@ -87,7 +87,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                ON
+                FALSE #FIXME(14541): We've got work to do :(
     )
 
     if(ENABLE_CCACHE)
@@ -251,7 +251,7 @@ if(ENABLE_TRACY)
 endif()
 
 add_library(metal_header_directories INTERFACE)
-target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
+target_include_directories(metal_header_directories INTERFACE)
 
 if("$ENV{ARCH_NAME}" STREQUAL "wormhole_b0")
     target_include_directories(

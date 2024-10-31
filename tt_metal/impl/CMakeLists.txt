@@ -26,8 +26,14 @@ set(IMPL_SRC
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
-target_link_libraries(impl PRIVATE Boost::smart_ptr)
-target_link_libraries(impl PUBLIC common)
+target_link_libraries(
+    impl
+    PUBLIC
+        common
+        Metalium::Metal::LLRT
+    PRIVATE
+        Boost::smart_ptr
+)
 
 target_include_directories(
     impl
