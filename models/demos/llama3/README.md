@@ -22,7 +22,8 @@ Download the weights [directly from Meta](https://llama.meta.com/llama-downloads
 
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
-**For Llama3.1-70B only**, it is required to repack the weights. We provide a script to facilitate this in `models/demos/llama3/scripts/repack_weights_70b.py`.
+#### Llama3.1-70B only
+Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/demos/llama3/scripts/repack_weights_70b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
 If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
@@ -35,6 +36,13 @@ python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
+
+#### Llama3.2-11B multimodal only
+Llama3.2-11B multimodal requires extra python dependencies. Install them from:
+
+```
+pip install -r models/demos/llama3/requirements.txt
+```
 
 ### Setup TT environment
 
