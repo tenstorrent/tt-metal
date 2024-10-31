@@ -11,7 +11,7 @@ target_sources(
 target_link_libraries(
     tt_metal
     PUBLIC
-        metal_header_directories
+        metal_header_directories # DELETE ME!!!
         Metalium::Metal::Impl
         Metalium::Metal::STL
         umd::device
