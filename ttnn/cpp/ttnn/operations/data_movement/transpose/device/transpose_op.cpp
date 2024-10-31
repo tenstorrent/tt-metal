@@ -54,7 +54,7 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
-            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0, "Error");
+            TT_FATAL((W * input_tensor.element_size()) % input_tensor.buffer()->alignment() == 0, "Error");
         } else {
             TT_FATAL(C % TILE_HEIGHT == 0, "Error");
         }
