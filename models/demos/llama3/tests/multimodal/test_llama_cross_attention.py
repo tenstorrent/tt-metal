@@ -81,6 +81,7 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
     tt_xattn_tokens = pt_xattn_tokens.clone()
     tt_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
         tt_xattn_tokens,
+        force_replicated=True,
     )
 
     """
