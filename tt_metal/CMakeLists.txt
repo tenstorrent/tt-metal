@@ -12,10 +12,10 @@ target_link_libraries(
     tt_metal
     PUBLIC
         metal_header_directories
-        umd_device
+        umd::device
         metal_common_libs
         magic_enum
-        fmt
+        fmt::fmt-header-only
         span
         compiler_flags
         $<$<BOOL:${ENABLE_TRACY}>:TracyClient>
