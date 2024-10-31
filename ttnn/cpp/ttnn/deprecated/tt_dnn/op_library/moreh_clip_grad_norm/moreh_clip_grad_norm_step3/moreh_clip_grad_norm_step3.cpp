@@ -107,7 +107,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
         const auto num_tiles = input.volume() / tt::constants::TILE_HW;
 
         // reader
-        const std::vector<uint32_t> reader_runtime_args{
+        const std::array reader_runtime_args{
             input_addr,
             static_cast<uint32_t>(is_dram(input)),
             clip_coef_clamped_addr,
@@ -116,11 +116,11 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         // writer
-        const std::vector<uint32_t> writer_runtime_args{input_addr, static_cast<uint32_t>(is_dram(input)), num_tiles};
+        const std::array writer_runtime_args{input_addr, static_cast<uint32_t>(is_dram(input)), num_tiles};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute
-        const std::vector<uint32_t> compute_runtime_args{num_tiles};
+        const std::array compute_runtime_args{num_tiles};
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }
 

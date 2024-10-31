@@ -8,13 +8,12 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
-
 namespace tt {
 
 namespace tt_metal {
 
 void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
@@ -65,7 +64,7 @@ std::vector<Tensor> RotaryEmbeddingLlama::create_output_tensors(const std::vecto
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = this->compute_output_shapes(input_tensors)[0].logical_shape();
     return {create_device_tensor(
-        output_shape, output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
+        output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), this->output_mem_config)};
 }
 
 operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(

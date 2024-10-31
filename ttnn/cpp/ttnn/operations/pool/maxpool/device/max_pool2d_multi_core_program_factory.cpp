@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-
-
-#include "impl/buffers/buffer_constants.hpp"
 #include "max_pool2d_device_op.hpp"
-// #include "max_pool2d_multi_core_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
 /**
@@ -272,6 +267,10 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     }
     #endif
 
+    uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
+    /* For GRAYSKULL, make reduction for 16 rows at a time.*/
+    if (device->arch() == tt::ARCH::GRAYSKULL)
+        max_rows_for_reduction /= 2;
     /**
      * Reader Kernel: input rows -> input cb
      */
@@ -292,7 +291,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,  // enable split reader
         0,             // split reader id
         bf16_one_u32,
-        in_nblocks_c};
+        in_nblocks_c,
+        max_rows_for_reduction};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -308,7 +308,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,  // enable split reader
         1,             // split reader id
         bf16_one_u32,
-        in_nblocks_c};
+        in_nblocks_c,
+        max_rows_for_reduction};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -350,7 +351,8 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
-        in_nblocks_c};
+        in_nblocks_c,
+        max_rows_for_reduction};
 
     auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
@@ -404,7 +406,7 @@ MaxPool2D::MultiCore::cached_program_t MaxPool2D::MultiCore::create(const operat
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(sliding_window_config);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
     auto top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, is_block_sharded); // only pad the indices for block sharding
+        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, true);
     auto reader_indices =
         sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
     log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.shape());

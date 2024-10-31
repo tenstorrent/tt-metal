@@ -27,6 +27,30 @@ FORCE_INLINE bool eth_txq_is_busy() {
     return internal_::eth_txq_is_busy(0);
 }
 
+/**
+ * Wait until the ethernet transaction queue is no longer busy ingesting a command
+ *
+ * Return value: None
+ *
+ * | Argument  | Description                                                    | Type     | Valid Range        | Required |
+ * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | wait_min  | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
+ */
+FORCE_INLINE void wait_for_eth_txq_cmd_space( uint32_t wait_min = 0) {
+    uint32_t count = 0;
+    while(eth_txq_is_busy())
+    {
+        if (count == wait_min)
+        {
+            run_routing();
+            count = 0;
+        }
+        else
+        {
+            count ++;
+        }
+    }
+}
 
 /**
  * A blocking call that waits until the value of a local L1 memory address on
@@ -40,14 +64,23 @@ FORCE_INLINE bool eth_txq_is_busy() {
  * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
  * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True     |
  * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True     |
+ * | wait_min  | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
  */
 FORCE_INLINE
-void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t wait_min=0) {
+    uint32_t count = 0;
     while ((*sem_addr) != val) {
-        run_routing();
+        if (count == wait_min)
+        {
+            run_routing();
+            count = 0;
+        }
+        else
+        {
+            count ++;
+        }
     }
 }
-
 /**
  * A blocking call that waits until the value of a local L1 memory address on
  * the Tensix core executing this function becomes equal to or greater than a target value.
@@ -60,11 +93,21 @@ void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
  * |-----------|----------------------------------------------------------------|----------|--------------------|----------|
  * | sem_addr  | Semaphore address in local L1 memory                           | uint32_t | 0..1MB             | True     |
  * | val       | The target value of the semaphore                              | uint32_t | Any uint32_t value | True     |
+ * | wait_min  | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
  */
 FORCE_INLINE
-void eth_noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+void eth_noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t wait_min = 0) {
+    uint32_t count = 0;
     while ((*sem_addr) < val) {
-        run_routing();
+        if (count == wait_min)
+        {
+            run_routing();
+            count = 0;
+        }
+        else
+        {
+            count ++;
+        }
     }
 }
 /**
@@ -140,7 +183,7 @@ void eth_send_bytes(
  * | dst_addr                    | Destination address in remote eth core L1 memory        | uint32_t | 0..256kB    | True     |
  * | num_bytes                   | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB    | True     |
  * | channel                     | Which transaction channel to use. Corresponds to        | uint32_t | 0..7        | True     |
- * |                             | channels in erisc_info_t             |          |             |          |
+ * |                             | channels in erisc_info_t                                |          |             |          |
  * | num_bytes_per_send          | Number of bytes to send per packet                      | uint32_t | 16..1MB     | False    |
 *  | num_bytes_per_send_word_size| num_bytes_per_send shifted right 4                      | uint32_t | 1..256kB    | False    |
  */
@@ -224,8 +267,9 @@ void eth_write_remote_reg(uint32_t reg_addr, uint32_t value) {
  *
  * Return value: None
  *
- * | Argument          | Description                                             | Type     | Valid Range | Required |
- * |-------------------|---------------------------------------------------------|----------|-------------|----------|
+ * | Argument   | Description                                                    | Type     | Valid Range        | Required |
+ * |------------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | wait_min   | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
  */
 FORCE_INLINE
 void eth_wait_for_receiver_done(uint32_t wait_min = 0) {
@@ -257,7 +301,7 @@ void eth_wait_for_receiver_done(uint32_t wait_min = 0) {
  * | Argument                    | Description                                             | Type     | Valid Range | Required |
  * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
  * | channel                     | Which transaction channel to check. Corresponds to      | uint32_t | 0..7        | True     |
- * |                             | channels in erisc_info_t             |          |             |          |
+ * |                             | channels in erisc_info_t                                |          |             |          |
  */
 FORCE_INLINE
 bool eth_is_receiver_channel_send_acked(uint32_t channel) {
@@ -275,7 +319,7 @@ bool eth_is_receiver_channel_send_acked(uint32_t channel) {
  * | Argument                    | Description                                             | Type     | Valid Range | Required |
  * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
  * | channel                     | Which transaction channel to check. Corresponds to      | uint32_t | 0..7        | True     |
- * |                             | channels in erisc_info_t             |          |             |          |
+ * |                             | channels in erisc_info_t                                |          |             |          |
  */
 FORCE_INLINE
 bool eth_is_receiver_channel_send_done(uint32_t channel) {
@@ -314,9 +358,10 @@ void eth_wait_for_receiver_channel_done(uint32_t channel) {
  *
  * Return value: None
  *
- * | Argument                    | Description                                             | Type     | Valid Range | Required |
- * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
- * | channel                     | Which transaction channel to block on                   | uint32_t | 0..7        | True     |
+ * | Argument             | Description                                                    | Type     | Valid Range        | Required |
+ * |----------------------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | channel              | Which transaction channel to block on                          | uint32_t | 0..7               | True     |
+ * | wait_min             | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
  */
 FORCE_INLINE
 void eth_wait_receiver_done(uint32_t wait_min = 0) {
@@ -339,9 +384,10 @@ void eth_wait_receiver_done(uint32_t wait_min = 0) {
  *
  * Return value: None
  *
- * | Argument          | Description                                             | Type     | Valid Range | Required |
- * |-------------------|---------------------------------------------------------|----------|-------------|----------|
- * | num_bytes         | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB | True     |
+ * | Argument   | Description                                                    | Type     | Valid Range        | Required |
+ * |------------|----------------------------------------------------------------|----------|--------------------|----------|
+ * | num_bytes  | Size of data transfer in bytes, must be multiple of 16         | uint32_t | 0..256kB           | True     |
+ * | wait_min   | The number of cycles to wait before performing run_routing()   | uint32_t | Any uint32_t value | False    |
  */
 FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes, uint32_t wait_min = 0) {
@@ -387,25 +433,29 @@ bool eth_bytes_are_available_on_channel(uint8_t channel) {
  * | channel                     | Which transaction channel to check                      | uint32_t | 0..7        | True     |
  */
 FORCE_INLINE
-void eth_wait_for_bytes_on_channel(uint32_t num_bytes, uint8_t channel) {
+void eth_wait_for_bytes_on_channel_sync_addr(uint32_t num_bytes, volatile eth_channel_sync_t* eth_channel_syncs, uint32_t wait_min = 1000000) {
     // assert(channel < 4);
     uint32_t count = 0;
-    uint32_t poll_count = 1000000;
-    uint32_t num_bytes_sent = erisc_info->channels[channel].bytes_sent;
-    while (num_bytes_sent == 0) {
-        uint32_t received_this_iter = erisc_info->channels[channel].bytes_sent;
+    uint32_t num_bytes_sent = eth_channel_syncs->bytes_sent;
+    while (num_bytes_sent != num_bytes) {
+        uint32_t received_this_iter = eth_channel_syncs->bytes_sent;
         if (received_this_iter != num_bytes_sent) {
             // We are currently in the process of receiving data on this channel, so we just just wait a
             // bit longer instead of initiating a context switch
             num_bytes_sent = received_this_iter;
+        } else if (count == wait_min) {
+            count = 0;
+            run_routing();
         } else {
             count++;
-            if (count > poll_count) {
-                count = 0;
-                run_routing();
-            }
         }
     }
+}
+
+FORCE_INLINE
+void eth_wait_for_bytes_on_channel(uint32_t num_bytes, uint8_t channel, uint32_t wait_min = 1000000) {
+    // assert(channel < 4);
+    eth_wait_for_bytes_on_channel_sync_addr(num_bytes, &(erisc_info->channels[channel]),wait_min);
 }
 
 /**
@@ -439,16 +489,22 @@ void eth_receiver_done() {
  * |-----------------------------|---------------------------------------------------------|----------|-------------|----------|
  * | channel                     | Which transaction channel to ack                        | uint32_t | 0..7        | True     |
  */
+
+FORCE_INLINE
+void send_eth_receiver_channel_done(volatile eth_channel_sync_t *channel_sync) {
+    channel_sync->bytes_sent = 0;
+    channel_sync->receiver_ack = 0;
+    internal_::eth_send_packet(
+        0,
+        ((uint32_t)(&(channel_sync->bytes_sent))) >> 4,
+        ((uint32_t)(&(channel_sync->bytes_sent))) >> 4,
+        1);
+}
+
 FORCE_INLINE
 void eth_receiver_channel_done(uint32_t channel) {
     // assert(channel < 4);
-    erisc_info->channels[channel].bytes_sent = 0;
-    erisc_info->channels[channel].receiver_ack = 0;
-    internal_::eth_send_packet(
-        0,
-        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
-        ((uint32_t)(&(erisc_info->channels[channel].bytes_sent))) >> 4,
-        1);
+    send_eth_receiver_channel_done(&(erisc_info->channels[channel]));
 }
 
 /**

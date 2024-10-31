@@ -18,13 +18,13 @@ void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>
 void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr<void>>& src, const std::optional<std::size_t>& transfer_size = std::nullopt); // Right!
 ```
 
-## 2. Use `std::span` for Input Parameters
+## 2. Use `tt::stl::Span` for Input Parameters
 
 ### Practice
-Consider using `std::span` as input instead of `std::vector`. This allows `std::array` to be used as an argument as well.
+Consider using `tt::stl::Span` as input instead of `std::vector`. This allows `std::array` to be used as an argument as well.
 
 ### Explanation
-`std::span` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
+`tt::stl::Spann` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
 
 ### Motivation
 - **Flexibility**: Enables functions to accept both `std::vector` and `std::array`.
@@ -33,7 +33,7 @@ Consider using `std::span` as input instead of `std::vector`. This allows `std::
 ### Example
 ```
 template <typename T>
-void print_elements(std::span<T> data) {
+void print_elements(tt::stl::Span<const T> data) {
     for (const auto& element : data) {
         std::cout << element << " ";
     }
@@ -217,7 +217,7 @@ Use the Copy-and-Swap idiom to avoid duplicating code between different construc
 ### Explanation
 The Copy-and-Swap idiom is a robust and elegant method to implement copy assignment operators. It leverages the copy constructor and the swap method to provide strong exception safety and reduce code duplication.
 
-### Example 
+### Example
 https://stackoverflow.com/questions/3279543/what-is-the-copy-and-swap-idiom
 
 
@@ -279,7 +279,7 @@ Prefer:
 enum class ThreadingOption { SingleCore, MultiCore };
 tensor = tt::tt_metal::tilize_with_val_padding(tensor, output_shape, 0, output_memory_config, dtype, ThreadingOption::MultiCore);
 ```
-Also consider giving enums power-of-2 values to pass them all as a single argument, e.g. 
+Also consider giving enums power-of-2 values to pass them all as a single argument, e.g.
 ```cpp
 Options::FOO | Options::BAR
 ```
@@ -343,7 +343,7 @@ void doSomething(...) {
 Prefer:
 ```cpp
 void doSomething(...) {
-    if (!contractCheck) 
+    if (!contractCheck)
         return;
 
     // Do a lot of things

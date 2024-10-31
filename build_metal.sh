@@ -26,6 +26,7 @@ show_help() {
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
+    echo "  --disable-unity-builds           Disable Unity builds"
 }
 
 clean() {
@@ -49,11 +50,12 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_static_libs="OFF"
+unity_builds="ON"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-static-libs,release,development,debug,clean
+LONGOPTIONS=help,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-static-libs,disable-unity-builds,release,development,debug,clean
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -70,7 +72,7 @@ while true; do
         -h|--help)
             show_help;exit 0;;
         -e|--export-compile-commands)
-            export_compile_commands="ON";;
+            export_compile_commands="ON";unity_builds="OFF";;
         -c|--enable-ccache)
             enable_ccache="ON";;
         -t|--enable-time-trace)
@@ -101,6 +103,8 @@ while true; do
             build_programming_examples="ON";;
         --build-static-libs)
             build_static_libs="ON";;
+        --disable-unity-builds)
+	    unity_builds="OFF";;
         --release)
             build_type="Release";;
         --development)
@@ -156,6 +160,7 @@ echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
+echo "INFO: Enable Unity builds: $unity_builds"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -194,6 +199,8 @@ fi
 
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+else
+    cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF")
 fi
 
 if [ "$build_tests" = "ON" ]; then
@@ -220,6 +227,12 @@ fi
 
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
+fi
+
+if [ "$unity_builds" = "ON" ]; then
+    cmake_args+=("-DTT_UNITY_BUILDS=ON")
+else
+    cmake_args+=("-DTT_UNITY_BUILDS=OFF")
 fi
 
 # Create and link the build directory

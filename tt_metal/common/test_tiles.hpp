@@ -11,22 +11,25 @@
 #include <cstdint>
 #include <vector>
 #include <optional>
+#include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "math.hpp"
 
-enum TensorLayout {
+namespace tests::utils {
+enum class TensorLayoutType {
     LIN_ROW_MAJOR = 0, // standard element-wise row-major
     TILED_SWIZZLED = 1, // row-major of tiles, each tile is row-major-swizzled
     TILED_NFACES = 2,  // row-major of tiles, each tile is N (N = 1, 2, or 4) faces, each face is row-major, faces are swizzled
 };
+} // namespace tests::utils
 
 template <class T, template <typename...> typename BufferType>
 std::vector<T> convert_to_tile_layout(
     const BufferType<T>& data,
-    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -79,8 +82,8 @@ std::vector<T> convert_to_tile_layout(
 template <class T, template <typename...> typename BufferTyp>
 std::vector<T> convert_to_flat_layout(
     const BufferTyp<T>& data,
-    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     result.reserve(data.size());
@@ -115,7 +118,7 @@ std::vector<T> convert_to_flat_layout(
 
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> untilize_nchw(const BufferType<T>& in, const std::vector<std::uint32_t>& shape, const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt) {
+inline std::vector<T> untilize_nchw(const BufferType<T>& in, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
@@ -159,7 +162,7 @@ inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + til
 
 // Converts a linear non-zero-padded row-major tensor to zero-padded-32 32-swizzled tilized row-major tensor
 template <typename T, template <typename...> typename BufferType>
-inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, const std::vector<std::uint32_t>& shape, const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt) {
+inline std::vector<T> tilize_nchw(const BufferType<T>& in_rowmajor, tt::stl::Span<const uint32_t> shape, std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt) {
     ZoneScoped;
     int H = shape[shape.size() - 2], W = shape[shape.size() - 1];
     auto batch_size = 1;
@@ -221,35 +224,35 @@ struct TensAddr {
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout(
     const BufferType<T>& inp,
-    const std::vector<uint32_t>& shape,
-    TensorLayout inL,
-    TensorLayout outL,
-    const std::optional<std::vector<uint32_t>>& tile_shape = std::nullopt,
-    const std::optional<const std::vector<uint32_t>>& face_shape = std::nullopt) {
+    tt::stl::Span<const uint32_t> shape,
+    tests::utils::TensorLayoutType inL,
+    tests::utils::TensorLayoutType outL,
+    std::optional<tt::stl::Span<const uint32_t>> tile_shape = std::nullopt,
+    std::optional<const tt::stl::Span<const uint32_t>> face_shape = std::nullopt) {
     ZoneScoped;
     switch (inL) {
-        case TILED_SWIZZLED:
-            if (outL == TILED_NFACES) {
+        case tests::utils::TensorLayoutType::TILED_SWIZZLED:
+            if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
                 return convert_to_tile_layout<T>(inp, tile_shape, face_shape);
-            } else if (outL == LIN_ROW_MAJOR) {
+            } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
                 return untilize_nchw<T>(inp, shape, tile_shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
-        case LIN_ROW_MAJOR:
-            if (outL == TILED_SWIZZLED) {
+        case tests::utils::TensorLayoutType::LIN_ROW_MAJOR:
+            if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
                 return tilize_nchw<T>(inp, shape, tile_shape);
-            } else if (outL == TILED_NFACES) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape);
-                return convert_layout<T>(swiz32, shape, TILED_SWIZZLED, outL, tile_shape, face_shape);
+            } else if (outL == tests::utils::TensorLayoutType::TILED_NFACES) {
+                auto swiz32 = convert_layout<T>(inp, shape, inL, tests::utils::TensorLayoutType::TILED_SWIZZLED, tile_shape, face_shape);
+                return convert_layout<T>(swiz32, shape, tests::utils::TensorLayoutType::TILED_SWIZZLED, outL, tile_shape, face_shape);
             } else
                 TT_ASSERT(false && "Unsupported conversion.");
         break;
-        case TILED_NFACES:
-            if (outL == TILED_SWIZZLED) {
+        case tests::utils::TensorLayoutType::TILED_NFACES:
+            if (outL == tests::utils::TensorLayoutType::TILED_SWIZZLED) {
                 return convert_to_flat_layout<T>(inp, tile_shape, face_shape);
-            } else if (outL == LIN_ROW_MAJOR) {
-                auto swiz32 = convert_layout<T>(inp, shape, inL, TILED_SWIZZLED, tile_shape, face_shape);
+            } else if (outL == tests::utils::TensorLayoutType::LIN_ROW_MAJOR) {
+                auto swiz32 = convert_layout<T>(inp, shape, inL, tests::utils::TensorLayoutType::TILED_SWIZZLED, tile_shape, face_shape);
                 return untilize_nchw<T>(swiz32, shape, tile_shape);
             } else {
                 TT_ASSERT(false && "Unsupported conversion");

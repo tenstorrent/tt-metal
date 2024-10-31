@@ -231,9 +231,9 @@ void UpdateCircularBufferPageSize(Program &program, CBHandle cb_handle, uint8_t 
 void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, const Buffer &buffer);
 
 /**
- * Initializes semaphore on all cores within core range (inclusive). Each core can have up to four 32B semaphores.
+ * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
- * Return value: Semaphore address (uint32_t)
+ * Return value: Semaphore id (uint32_t). This can be used inside a kernel to extract the address using get_semaphore
  *
  * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
  * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
@@ -255,9 +255,21 @@ uint32_t CreateSemaphore(
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | InterleavedBufferConfig  |             | Yes      |
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated interleaved DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | Config for the buffer                   | InterleavedBufferConfig  |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Allocates a sharded DRAM or L1 buffer on device
@@ -266,9 +278,21 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config);
 *
 *  | Argument        | Description                             | Type                     | Valid Range | Required |
 *  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
-*  | config          | config for buffer                       | ShardedBufferConfig      |             | Yes      |
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
 */
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config);
+
+/**
+*  Creates a pre-allocated sharded DRAM or L1 buffer on device
+*
+*  Return value: std::shared_ptr<Buffer>
+*
+*  | Argument        | Description                             | Type                     | Valid Range | Required |
+*  |-----------------|---------------------------------------- |--------------------------|-------------|----------|
+*  | config          | Config for the buffer                   | ShardedBufferConfig      |             | Yes      |
+*  | address         | Device address of the buffer            | DeviceAddr               |             | Yes      |
+*/
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address);
 
 /**
 *  Deallocates buffer from device by marking its memory as free.

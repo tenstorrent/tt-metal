@@ -11,9 +11,6 @@ from models.utility_functions import skip_for_grayskull
 
 
 def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
-    if scatter_dim != 3:
-        return True, "Only support for scatter_dim=3 is tested so far"
-
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
     tensor_size_bytes = elem_size
     for i in input_shape:
@@ -322,6 +319,69 @@ def test_line_reduce_scatter_post_commit(
     )
 
 
+# ~2:45 extra time in the current state
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 2),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, scatter_dim, layout",
+    [
+        ([1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 1024], 1, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+def test_line_reduce_scatter_post_commit_4chip(
+    pcie_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    scatter_dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=1,
+):
+    run_reduce_scatter_test(
+        pcie_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        scatter_dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        topology=ttnn.Topology.Linear,
+    )
+
+
 def run_reduce_scatter_sharded_test(
     t3k_mesh_device,
     num_devices,
@@ -337,6 +397,9 @@ def run_reduce_scatter_sharded_test(
     tensor_mem_layout,
     use_program_cache,
     function_level_defaults,
+    in_shard_override=None,
+    in_shard_grid_override=None,
+    topology=ttnn.Topology.Ring,
     enable_async=True,
     num_iters=1,
     n_worker=None,
@@ -355,15 +418,23 @@ def run_reduce_scatter_sharded_test(
     t3k_mesh_device.enable_async(enable_async)
 
     # Generate input tensors
-    input_shard_shape = list(output_shard_shape)
-    if scatter_dim == 3:
-        input_shard_shape[1] *= num_devices
+    if in_shard_grid_override is None:
+        assert in_shard_override is None
+        in_shard_grid = shard_grid
+        input_shard_shape = list(output_shard_shape)
+        if scatter_dim == 3:
+            input_shard_shape[1] *= num_devices
+        else:
+            input_shard_shape[0] *= num_devices
     else:
-        input_shard_shape[0] *= num_devices
+        assert in_shard_override is not None
+        input_shard_shape = list(in_shard_override)
+        in_shard_grid = in_shard_grid_override
+
     tt_input_tensors = []
 
     input_shard_spec = ttnn.ShardSpec(
-        shard_grid,
+        in_shard_grid,
         tuple(input_shard_shape),
         orientation,
         False,
@@ -421,6 +492,7 @@ def run_reduce_scatter_sharded_test(
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=output_mem_config,
+                topology=topology,
             )
 
             for device_id in t3k_mesh_device.get_device_ids():
@@ -539,6 +611,97 @@ def test_width_sharded_reduce_scatter_post_commit(
         tensor_mem_layout,
         use_program_cache=use_program_cache,
         function_level_defaults=function_level_defaults,
+        enable_async=enable_async,
+        num_iters=num_iters,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 2),
+    ],
+)
+@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize(
+    "tensor_mem_layout",
+    [
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape,output_shard_shape,shard_grid,in_shard_override,in_shard_grid_override",
+    (
+        # LLama
+        (
+            (1, 1, 32, 1280),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
+        ),
+        (
+            (1, 1, 32, 1280),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 1))}),
+            None,
+            None,
+        ),
+    ),
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+def test_width_sharded_reduce_scatter_post_commit_4chip(
+    pcie_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    output_shard_shape,
+    dim,
+    num_links,
+    math_op,
+    topology,
+    shard_grid,
+    orientation,
+    input_dtype,
+    tensor_layout,
+    tensor_mem_layout,
+    use_program_cache,
+    function_level_defaults,
+    in_shard_override,
+    in_shard_grid_override,
+    enable_async,
+    num_iters=1,
+):
+    run_reduce_scatter_sharded_test(
+        pcie_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        output_shard_shape,
+        dim,
+        num_links,
+        math_op,
+        shard_grid,
+        orientation,
+        input_dtype,
+        tensor_layout,
+        tensor_mem_layout,
+        use_program_cache=use_program_cache,
+        function_level_defaults=function_level_defaults,
+        in_shard_override=in_shard_override,
+        in_shard_grid_override=in_shard_grid_override,
+        topology=topology,
         enable_async=enable_async,
         num_iters=num_iters,
     )

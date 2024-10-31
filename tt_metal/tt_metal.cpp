@@ -33,6 +33,23 @@ namespace tt_metal {
 
 namespace {
 
+#if defined(TRACY_ENABLE)
+
+std::unordered_map<int, std::string> global_mempool_names;
+std::mutex global_mempool_names_mutex;
+
+static const char * get_buffer_location_name (BufferType buffer_type, int device_id) {
+    std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
+    int name_combo = (int)buffer_type * 1000 + device_id;
+    if (global_mempool_names.find(name_combo) == global_mempool_names.end())
+    {
+        std::string global_mempool_name = fmt::format("Device {} {}", device_id, magic_enum::enum_name(buffer_type));
+        global_mempool_names.emplace(name_combo, global_mempool_name);
+    }
+    return global_mempool_names[name_combo].c_str();
+}
+#endif
+
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
     ZoneScoped;
     return std::visit(
@@ -818,6 +835,11 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
 
     GraphTracker::instance().track_allocate(buffer);
 
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyAllocN(reinterpret_cast<void const *>(allocated_addr), buffer->size(), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
     return allocated_addr;
 }
 
@@ -827,7 +849,29 @@ void DeallocateBuffer(Buffer *buffer) {
         return;
     }
 
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
     allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
+}
+
+void SynchronizeWorkerThreads(const std::vector<Device*>& workers) {
+    if (tt::tt_metal::detail::InWorkerThread()) {
+        // Early exit if in a worker thread, since waiting for the worker
+        // queue to become empty inside a worker thread leads to a deadlock
+        // Synchronizing in a worker thread should be a nop by definition
+        return;
+    }
+    // Push empty work to threads and ensure its been picked up
+    for (auto target_device : workers) {
+        target_device->work_executor.push_work([](){});
+    }
+    // Block until work has been picked up, to flush the queue
+    for (auto target_device : workers) {
+        while(not target_device->work_executor.worker_queue.empty());
+    }
 }
 
 }  // namespace detail
@@ -1046,9 +1090,26 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+}
+
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
     return Buffer::create(
         config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
         config.size,
         config.page_size,
         config.buffer_type,

@@ -67,15 +67,14 @@ def is_unsupported_case_n300(input_shape, dim, mem_config, num_devices, num_link
 
 def run_with_trace(
     mesh_device,
-    devices,
     all_gather_topology,
     input_tensor_mesh,
     dim,
     num_links,
     output_mem_config,
-    n_worker,
-    n_buffer,
-    num_iter,
+    n_worker=None,
+    n_buffer=None,
+    num_iter=20,
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -132,6 +131,7 @@ def run_all_gather_impl(
     all_gather_topology,
     num_iters=1,
     enable_async=False,
+    trace_mode=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -154,14 +154,24 @@ def run_all_gather_impl(
         tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-    for i in range(num_iters):
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+    if trace_mode:
+        tt_out_tensor = run_with_trace(
+            mesh_device,
+            all_gather_topology,
+            input_tensor_mesh,
+            dim,
+            num_links,
+            mem_config,
         )
+    else:
+        for i in range(num_iters):
+            tt_out_tensor = ttnn.all_gather(
+                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
+            )
 
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
-        logger.info(f"Done iteration {i}")
+            for d in mesh_device.get_devices():
+                ttnn.synchronize_device(d)
+            logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -188,6 +198,7 @@ def run_all_gather_on_n300_impl(
     all_gather_topology,
     num_iters=1,
     enable_async=False,
+    trace_mode=False,
 ):
     if mesh_device.get_num_devices() != 2:
         pytest.skip("Not N300!")
@@ -212,6 +223,7 @@ def run_all_gather_on_n300_impl(
         all_gather_topology=all_gather_topology,
         num_iters=num_iters,
         enable_async=enable_async,
+        trace_mode=trace_mode,
     )
 
 
