@@ -148,6 +148,9 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         in_cb_sz = (input_shape[3] / num_shards_c * kernel_size_hw_padded) > (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             ? (tt::constants::TILE_HW * MAX_TILES_PER_REDUCTION)
             : input_shape[3] / num_shards_c * kernel_size_hw_padded;
+        if (is_wide_reduction) {
+            in_nblocks_c = in_ntiles_c / MAX_TILES_PER_REDUCTION;
+        }
     } else {
         if (is_wide_reduction) {
             in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * kernel_size_hw_padded;
@@ -188,22 +191,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto in_tiled_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_tiled_cb_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_tiled_cb_id, in_tiled_cb_pagesize, in_tiled_cb_npages);
 
-    if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
-        uint32_t max_pool_partials_cb_pagesize = in_cb_sz;
-        uint32_t max_pool_partials_cb_npages = nblocks;
-        CircularBufferConfig max_pool_partials_cb_config =
-            CircularBufferConfig(
-                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, in_df}})
-                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
-        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
-        log_debug(
-            tt::LogOp,
-            "CB {} :: PS = {}, NP = {}",
-            max_pool_partials_cb_id,
-            max_pool_partials_cb_pagesize,
-            max_pool_partials_cb_npages);
-    }
 
     // output of reduce == writer to write
     uint32_t out_cb_id = tt::CB::c_out0;  // output rows in RM
@@ -217,6 +204,22 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
+    if (is_large_kernel) {
+        uint32_t max_pool_partials_cb_id = tt::CB::c_intermed1;  // max_pool partials
+        uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
+        uint32_t max_pool_partials_cb_npages = nblocks;
+        CircularBufferConfig max_pool_partials_cb_config =
+            CircularBufferConfig(
+                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, out_df}})
+                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
+        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
+        log_debug(
+            tt::LogOp,
+            "CB {} :: PS = {}, NP = {}",
+            max_pool_partials_cb_id,
+            max_pool_partials_cb_pagesize,
+            max_pool_partials_cb_npages);
+    }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
     #if 1
@@ -292,7 +295,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         0,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
-        max_rows_for_reduction};
+        in_cb_sz};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -309,7 +312,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         1,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
-        max_rows_for_reduction};
+        in_cb_sz};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -351,8 +354,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         split_reader,                // enable split reader
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
-        in_nblocks_c,
-        max_rows_for_reduction};
+        in_nblocks_c};
 
     auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
