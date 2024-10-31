@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -21,12 +22,18 @@ inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
+
 class CircularBufferConfig {
    public:
     // Static circular buffer spec
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat> &data_format_spec) :
         total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
         this->set_config(data_format_spec);
+    }
+
+    // User is expected to use the builder here.
+    CircularBufferConfig(uint32_t total_size) :
+        total_size_(total_size), globally_allocated_address_(std::nullopt), dynamic_cb_(false) {
     }
 
     // Dynamic circular buffer spec
@@ -119,7 +126,57 @@ class CircularBufferConfig {
     }
 
     const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> &page_sizes() const { return this->page_sizes_; }
-    const Buffer* shadow_global_buffer;
+    const Buffer* shadow_global_buffer{nullptr};
+
+    class Builder {
+       public:
+        Builder(CircularBufferConfig &parent, uint8_t buffer_index) : parent_(parent), buffer_index_(buffer_index) {
+            if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
+                TT_THROW(
+                    "Buffer index ({}) exceeds max number of circular buffers per core ({})",
+                    buffer_index,
+                    NUM_CIRCULAR_BUFFERS);
+            }
+            parent_.buffer_indices_.insert(buffer_index_);
+        }
+
+        Builder &data_format(const tt::DataFormat &data_format) {
+            parent_.data_formats_[buffer_index_] = data_format;
+            return *this;
+        }
+
+        Builder &add_size(uint32_t size) {
+            parent_.total_size_ += size;
+            return *this;
+        }
+
+        Builder &page_size(uint32_t page_size) {
+            if (parent_.total_size_ % page_size != 0) {
+                TT_THROW(
+                    "Total circular buffer size {} B must be divisible by page size {} B",
+                    parent_.total_size_,
+                    page_size);
+            }
+            if (page_size % sizeof(uint32_t) != 0) {
+                TT_THROW("Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+            }
+            parent_.page_sizes_[buffer_index_] = page_size;
+            return *this;
+        }
+
+        Builder &tile_dims(const Tile &tile) {
+            parent_.tiles_[buffer_index_] = tile;
+            return *this;
+        }
+
+       private:
+        CircularBufferConfig &parent_;
+        uint8_t buffer_index_;
+    };
+
+    Builder index(uint8_t buffer_index) { return Builder(*this, buffer_index); }
+
+
    private:
     void set_config(const std::map<uint8_t, tt::DataFormat> &data_format_spec) {
         if (data_format_spec.size() > NUM_CIRCULAR_BUFFERS) {
@@ -151,6 +208,27 @@ class CircularBufferConfig {
     // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
     std::optional<uint32_t> max_size_ = std::nullopt;
 };
+
+inline bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) {
+    if (lhs.total_size() != rhs.total_size() ||
+        lhs.globally_allocated_address() != rhs.globally_allocated_address() ||
+        lhs.data_formats() != rhs.data_formats() ||
+        lhs.page_sizes() != rhs.page_sizes() ||
+        lhs.tiles() != rhs.tiles()) {
+        return false;
+    }
+
+    if (lhs.shadow_global_buffer && rhs.shadow_global_buffer) {
+        return lhs.shadow_global_buffer == rhs.shadow_global_buffer;
+    }
+
+    return !lhs.shadow_global_buffer && !rhs.shadow_global_buffer;
+}
+
+inline bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) {
+    return !(lhs == rhs);
+}
+
 
 }  // namespace v0
 }  // namespace tt::tt_metal

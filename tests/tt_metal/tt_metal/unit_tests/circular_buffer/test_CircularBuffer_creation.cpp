@@ -68,12 +68,21 @@ TEST_F(DeviceFixture, TestCreateCircularBufferAtValidIndices) {
         {16, cb_config.data_format},
         {24, cb_config.data_format}
     };
-    CircularBufferConfig config = CircularBufferConfig(cb_config.page_size, data_format_spec)
+    CircularBufferConfig expected_config = CircularBufferConfig(cb_config.page_size, data_format_spec)
         .set_page_size(0, cb_config.page_size)
         .set_page_size(2, cb_config.page_size)
         .set_page_size(16, cb_config.page_size)
         .set_page_size(24, cb_config.page_size);
-    auto cb = CreateCircularBuffer(program, cr_set, config);
+
+    CircularBufferConfig actual_config = CircularBufferConfig(cb_config.page_size);
+    actual_config.index(0).page_size(cb_config.page_size).data_format(cb_config.data_format);
+    actual_config.index(2).page_size(cb_config.page_size).data_format(cb_config.data_format);
+    actual_config.index(16).page_size(cb_config.page_size).data_format(cb_config.data_format);
+    actual_config.index(24).page_size(cb_config.page_size).data_format(cb_config.data_format);
+
+    EXPECT_TRUE(actual_config == expected_config);
+    
+    auto cb = CreateCircularBuffer(program, cr_set, actual_config);
 
     for (unsigned int id = 0; id < num_devices_; id++) {
         detail::CompileProgram(devices_.at(id), program);
