@@ -69,14 +69,12 @@ Tensor Expand::invoke(
     // Convert tile tensor to row major (lmfao)
     if (input.get_layout() == Layout::TILE) {
         // untilize/tilize is way too inaccurate for us to even remotely use.
-        Tensor rm_input_dev = core::to_device(
-            tensor_impl::to_layout_wrapper(input.cpu(true), Layout::ROW_MAJOR), input.device(), std::nullopt);
+        Tensor rm_input_dev = core::to_device(input.cpu(true).to(Layout::ROW_MAJOR), input.device(), std::nullopt);
 
         Tensor rm_output_dev = ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt);
+
         return core::to_device(
-            tensor_impl::to_layout_wrapper(rm_output_dev.cpu(true).pad_to_tile(0), Layout::TILE),
-            rm_output_dev.device(),
-            std::nullopt);
+            rm_output_dev.cpu(true).pad_to_tile(0).to(Layout::TILE), rm_output_dev.device(), std::nullopt);
     }
 
     return ttnn::prim::expand(input, output_shape, output, memory_config);
