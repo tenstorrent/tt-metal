@@ -18,6 +18,8 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -40,6 +42,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+}
+}
 
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
@@ -53,6 +57,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -192,7 +197,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
             reader_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(gamma_stick_size);
@@ -202,7 +207,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         reader_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
             reader_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
         } else {
             reader_compile_time_args.push_back(beta_stick_size);
@@ -407,6 +412,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t block_wt,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
@@ -904,7 +910,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)log2(gamma_stick_size) : 0;
+            uint32_t gamma_log2_stick_size = gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
             writer_mcast_sender_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
             writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) gamma_log2_stick_size);
         } else {
@@ -917,7 +923,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)log2(beta_stick_size) : 0;
+            uint32_t beta_log2_stick_size = beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
             writer_mcast_sender_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
             writer_mcast_receiver_compile_time_args.push_back((std::uint32_t) beta_log2_stick_size);
         } else {

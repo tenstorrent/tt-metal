@@ -18,6 +18,8 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -111,6 +113,8 @@ std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size
 
     return {max_tile_span, num_groups_before_start_again_at_tile_beginning};
 }
+}
+}
 
 operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor &a,
@@ -126,6 +130,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     CoreCoord grid_size,
     bool inplace
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     if (gamma.has_value()) {
         TT_ASSERT(gamma.value().get_layout() == Layout::ROW_MAJOR);
     }
@@ -477,8 +482,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t) per_core_Mt,
         (std::uint32_t) TILE_HEIGHT
     };
-    tt::tt_metal::NOC reader_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,

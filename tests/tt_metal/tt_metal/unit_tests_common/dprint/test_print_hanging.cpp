@@ -15,6 +15,8 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 // Some machines will run this test on different physical cores, so wildcard the exact coordinates.
 const std::string golden_output =
 R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
@@ -51,6 +53,8 @@ try {
         )
     );
 }
+}
+}
 
 TEST_F(DPrintFixture, TestPrintHanging) {
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
@@ -60,5 +64,5 @@ TEST_F(DPrintFixture, TestPrintHanging) {
         GTEST_SKIP();
 
     // Since the dprint server gets killed from a timeout, only run on one device.
-    this->RunTestOnDevice(RunTest, this->devices_[0]);
+    this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, this->devices_[0]);
 }

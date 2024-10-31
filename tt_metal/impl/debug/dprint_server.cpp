@@ -19,6 +19,7 @@
 #include "debug_helpers.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
+#include "common/bfloat8.hpp"
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
@@ -75,6 +76,14 @@ static std::string GetRiscName(CoreType core_type, int hart_id) {
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", hart_id);
+}
+
+static void AssertSize(uint8_t sz, uint8_t expected_sz) {
+    TT_ASSERT(
+        sz == expected_sz,
+        "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
+        sz,
+        expected_sz);
 }
 
 // A null stream for when the print server is muted.
@@ -181,57 +190,102 @@ private:
 };
 
 static void PrintTileSlice(ostream& stream, uint8_t* ptr, int hart_id) {
-    // Since MATH RISCV doesn't have access to CBs, we can't print tiles from it. If the user still
-    // tries to do this print a relevant message.
-    if ((1 << hart_id) == tt::llrt::RISCV_TR1) {
-        stream << "Warning: MATH core does not support TileSlice printing, omitting print..."
-            << endl << std::flush;
-        return;
-    }
-
-    TileSliceHostDev<0>ts_copy; // Make a copy since ptr might not be properly aligned
+    TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
-    TT_ASSERT(offsetof(TileSliceHostDev<0>, samples_) % sizeof(uint16_t) == 0, "TileSliceHostDev<0> samples_ field is not properly aligned");
-    uint16_t *samples_ = reinterpret_cast<uint16_t *>(ptr) + offsetof(TileSliceHostDev<0>, samples_) / sizeof(uint16_t);
+    TT_ASSERT(
+        offsetof(TileSliceHostDev<0>, data) % sizeof(uint32_t) == 0,
+        "TileSliceHostDev<0> data field is not properly aligned");
+    uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
 
-    enum CB cb = static_cast<enum CB>(ts->cb_id_);
-    if (ts->w0_ == 0xFFFF) {
-        uint32_t ptr = ts->ptr_;
-        uint8_t count = ts->count_;
-        stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count) << std::flush;
-    } else if (ts->w1_ == 0xFFFF) {
-        tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format_);
-        stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
-    } else {
-        uint32_t i = 0;
-        bool count_exceeded = false;
-        for (int h = ts->h0_; h < ts->h1_; h += ts->hs_) {
-            for (int w = ts->w0_; w < ts->w1_; w += ts->ws_) {
-                // If the number of data specified by the SliceRange exceeds the number that was
-                // saved in the print buffer (set by the MAX_COUNT template parameter in the
-                // TileSlice), then break early.
-                if (i >= ts->count_) {
-                    count_exceeded = true;
-                    break;
-                }
-                stream << bfloat16_to_float(samples_[i]);
-                if (w + ts->ws_ < ts->w1_)
-                    stream << " ";
-                i++;
+    // Read any error codes and handle accordingly
+    enum CB cb = static_cast<enum CB>(ts->cb_id);
+    switch (ts->return_code) {
+        case DPrintOK:
+            break; // Continue to print the tile slice
+        case DPrintErrorBadTileIdx:
+            {
+            uint32_t page_size = ts->cb_ptr;
+            stream << fmt::format("Tried printing {}: unexpected tile size ({})\n", cb, page_size);
+            return;
             }
+        case DPrintErrorBadPointer:
+            {
+            uint32_t ptr = ts->cb_ptr;
+            uint8_t count = ts->data_count;
+            stream << fmt::format("Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n", cb, ptr, count)
+                   << std::flush;
+            return;
+            }
+        case DPrintErrorUnsupportedFormat:
+            {
+            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            stream << fmt::format("Tried printing {}: Unsupported data format ({})\n", cb, data_format);
+            return;
+            }
+        case DPrintErrorMath:
+            stream << "Warning: MATH core does not support TileSlice printing, omitting print..." << endl << std::flush;
+            return;
+        case DPrintErrorEthernet:
+            stream << "Warning: Ethernet core does not support TileSlice printing, omitting print..." << endl << std::flush;
+            return;
+        default:
+            stream << fmt::format(
+                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
+            return;
+    }
 
-            // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
-            // know that the slice has been truncated.
-            if (count_exceeded) {
-                stream << "<TileSlice data truncated due to exceeding max count ("
-                    << to_string(ts->count_) << ")>" << endl;
+    // No error codes, print the TileSlice
+    uint32_t i = 0;
+    bool count_exceeded = false;
+    for (int h = ts->slice_range.h0; h < ts->slice_range.h1; h += ts->slice_range.hs) {
+        for (int w = ts->slice_range.w0; w < ts->slice_range.w1; w += ts->slice_range.ws) {
+            // If the number of data specified by the SliceRange exceeds the number that was
+            // saved in the print buffer (set by the MAX_COUNT template parameter in the
+            // TileSlice), then break early.
+            if (i >= ts->data_count) {
+                count_exceeded = true;
                 break;
             }
-
-            if (ts->endl_rows_)
-                stream << endl;
+            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
+            switch (data_format) {
+                case tt::DataFormat::Float16_b: {
+                    uint16_t* float16_b_ptr = reinterpret_cast<uint16_t*>(data);
+                    stream << bfloat16_to_float(float16_b_ptr[i]);
+                    break;
+                }
+                case tt::DataFormat::Float32: {
+                    float *float32_ptr = reinterpret_cast<float *>(data);
+                    stream << float32_ptr[i];
+                    break;
+                }
+                case tt::DataFormat::Bfp4_b:
+                case tt::DataFormat::Bfp8_b: {
+                    // Saved the exponent and data together
+                    uint16_t *data_ptr = reinterpret_cast<uint16_t *>(data);
+                    uint8_t val = (data_ptr[i] >> 8) & 0xFF;
+                    uint8_t exponent = data_ptr[i] & 0xFF;
+                    uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
+                    stream << *reinterpret_cast<float *>(&bit_val);
+                    // stream << *reinterpret_cast<float *>(&bit_val) << fmt::format(" (exp={:x}, val={:x}) ", exponent, val);
+                    break;
+                }
+                default: break;
+            }
+            if (w + ts->slice_range.ws < ts->slice_range.w1)
+                stream << " ";
+            i++;
         }
+
+        // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
+        // know that the slice has been truncated.
+        if (count_exceeded) {
+            stream << "<TileSlice data truncated due to exceeding max count (" << to_string(ts->data_count) << ")>" << endl;
+            break;
+        }
+
+        if (ts->endl_rows)
+            stream << endl;
     }
 } // PrintTileSlice
 
@@ -753,7 +807,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         stream << "STRING BUFFER OVERFLOW DETECTED" << endl;
                     else
                         stream << cptr;
-                    TT_ASSERT(sz == strlen(cptr)+1);
+                    AssertSize(sz, strlen(cptr)+1);
                 break;
                 case DPrintTILESLICE:
                     PrintTileSlice(stream, ptr, hart_id);
@@ -761,49 +815,49 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
 
                 case DPrintENDL:
                     stream << endl;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintSETW:
                     val = CAST_U8P(ptr)[0];
                     stream << setw(val);
                     most_recent_setw = val;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintSETPRECISION:
                     stream << std::setprecision(*ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintFIXED:
                     stream << std::fixed;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintDEFAULTFLOAT:
                     stream << std::defaultfloat;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintHEX:
                     stream << std::hex;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintOCT:
                     stream << std::oct;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintDEC:
                     stream << std::dec;
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintUINT8:
                     // iostream default uint8_t printing is as char, not an int
                     stream << *reinterpret_cast<uint8_t*>(ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintUINT16:
                     {
                         uint16_t value;
                         memcpy(&value, ptr, sizeof(uint16_t));
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintUINT32:
@@ -811,7 +865,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         uint32_t value;
                         memcpy(&value, ptr, sizeof(uint32_t));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintUINT64:
@@ -819,7 +873,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         uint64_t value;
                         memcpy(&value, ptr, sizeof(uint64_t));
                         stream << value;
-                        TT_ASSERT(sz == 8);
+                        AssertSize(sz, 8);
                     }
                     break;
                 case DPrintINT8:
@@ -827,7 +881,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int8_t value;
                         memcpy(&value, ptr, sizeof(int8_t));
                         stream << (int)value;  // Cast to int to ensure it prints as a number, not a char
-                        TT_ASSERT(sz == 1);
+                        AssertSize(sz, 1);
                     }
                     break;
                 case DPrintINT16:
@@ -835,7 +889,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int16_t value;
                         memcpy(&value, ptr, sizeof(int16_t));
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintINT32:
@@ -843,7 +897,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int32_t value;
                         memcpy(&value, ptr, sizeof(int32_t));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintINT64:
@@ -851,7 +905,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         int64_t value;
                         memcpy(&value, ptr, sizeof(int64_t));
                         stream << value;
-                        TT_ASSERT(sz == 8);
+                        AssertSize(sz, 8);
                     }
                     break;
                 case DPrintFLOAT32:
@@ -859,7 +913,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         float value;
                         memcpy(&value, ptr, sizeof(float));
                         stream << value;
-                        TT_ASSERT(sz == 4);
+                        AssertSize(sz, 4);
                     }
                     break;
                 case DPrintBFLOAT16:
@@ -868,12 +922,12 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         memcpy(&rawValue, ptr, sizeof(uint16_t));
                         float value = bfloat16_to_float(rawValue);
                         stream << value;
-                        TT_ASSERT(sz == 2);
+                        AssertSize(sz, 2);
                     }
                     break;
                 case DPrintCHAR:
                     stream << *reinterpret_cast<char*>(ptr);
-                    TT_ASSERT(sz == 1);
+                    AssertSize(sz, 1);
                 break;
                 case DPrintU32_ARRAY:
                     PrintTypedUint32Array(stream, most_recent_setw, sz/4, reinterpret_cast<uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
@@ -888,7 +942,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     raised_signals_.insert(sigval);
                     raise_wait_lock_.unlock();
                     //stream << "\nRaised signal=" << sigval << endl;
-                    TT_ASSERT(sz == 4);
+                    AssertSize(sz, 4);
                 break;
                 case DPrintWAIT:
                     {
@@ -903,7 +957,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     raise_wait_lock_.unlock();
                     break_due_to_wait = true;
                     //stream << "\nWaiting on signal=" << *reinterpret_cast<uint32_t*>(ptr);
-                    TT_ASSERT(sz == 4);
+                    AssertSize(sz, 4);
                     }
                 break;
                 default:

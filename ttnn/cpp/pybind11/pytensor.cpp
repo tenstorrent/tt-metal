@@ -517,7 +517,16 @@ Tensor convert_python_tensors_to_tt_tensors(py::list tensor_shards, std::optiona
 
         auto shape = tt_tensor.get_legacy_shape();
         auto torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
-        auto tensor = frombuffer(buffer, "dtype"_a=torch_dtype);
+        auto tensor = [&](){
+            if(tt_tensor.volume() == 0) {
+                auto pytorch_empty = torch.attr("empty");
+                auto logical_shape = tt_tensor.get_logical_shape();
+                auto view = logical_shape.view();
+                std::vector<uint32_t> shape_vector(view.begin(), view.end());
+                return pytorch_empty(shape_vector, "dtype"_a=torch_dtype);
+            }
+            return frombuffer(buffer, "dtype"_a=torch_dtype);
+        }();
         tensor = tensor.attr("reshape")(torch_shape);
         tensor = tensor.attr("contiguous")();
         if (tt_tensor.storage_type() == StorageType::BORROWED) {

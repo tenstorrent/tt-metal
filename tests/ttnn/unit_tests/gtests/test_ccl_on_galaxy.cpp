@@ -10,6 +10,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/async_runtime.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 
 using namespace tt;
@@ -155,7 +156,9 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
                 log_info(LogTest, "Running iteration {}", i);
             }
             for (auto& dev : devs) {
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+                tt::tt_metal::TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+                ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
+                auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(dev, shape, tensor_layout);
                 auto input_storage = DeviceStorage{input_buffer};
                 Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
                 // Push inputs.
@@ -249,8 +252,11 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         if (i % 100 == 0) {
             log_info(LogTest, "Running iteration {}", i);
         }
+
+        TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
+        ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
         for (auto& dev : ring_devices) {
-            auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(buf_size_datums * datum_size_bytes, dev, shape, DataType::BFLOAT16, Layout::TILE, mem_cfg);
+            auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(dev, shape, tensor_layout);
             auto input_storage = DeviceStorage{input_buffer};
             Tensor input_tensor = Tensor(input_storage, shape, DataType::BFLOAT16, Layout::TILE);
             // Push inputs.

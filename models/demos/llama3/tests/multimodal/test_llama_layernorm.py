@@ -7,25 +7,19 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 from models.demos.llama3.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    nearest_32,
 )
 from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "seq_len",
-    (4224,),
-)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -35,13 +29,15 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ensure_gc):
+def test_layernorm_inference(mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
     width = model_args.vision_dim
+    num_chunks = 4
+    seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -99,9 +95,4 @@ def test_layernorm_inference(mesh_device, seq_len, use_program_cache, reset_seed
 
         logger.info(comp_allclose(reference_output, tt_output))
         logger.info(f"PCC: {pcc_message}")
-        if passing:
-            logger.info("LayerNorm on device {idx} Passed!")
-        else:
-            logger.warning("LayerNorm {idx} Failed!")
-
-        assert passing, f"LayerNorm output does not meet PCC requirement {pcc_required}: {pcc_message}."
+        assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

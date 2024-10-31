@@ -203,7 +203,9 @@ Buffer::Buffer(
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up) :
+    const std::optional<bool> bottom_up,
+    const bool owns_data,
+    Private) :
     device_(device),
     size_(size),
     page_size_(page_size),
@@ -211,6 +213,7 @@ Buffer::Buffer(
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
     bottom_up_(bottom_up.value_or(this->is_dram())),
+    owns_data_(owns_data),
     buffer_page_mapping_(nullptr) {
     TT_FATAL(this->device_ != nullptr && this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
 
@@ -227,7 +230,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up) {
-    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up);
+    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, true /* owns data */, Private());
+    // Using a custom deleter to properly clean up the owned datas
     auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);
     buffer->weak_self = buffer;
 
@@ -237,10 +241,19 @@ std::shared_ptr<Buffer> Buffer::create(
     }
 
     buffer->device_->push_work([buffer] {
-        buffer->address_ = detail::AllocateBuffer(buffer.get());
+        try {
+            buffer->address_ = detail::AllocateBuffer(buffer.get());
+        } catch(...) {
+            std::unique_lock lock(buffer->allocation_mutex_);
+            buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
+            lock.unlock();
+            buffer->allocation_cv_.notify_all();
+
+            throw;
+        }
 
         std::unique_lock lock(buffer->allocation_mutex_);
-        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
         lock.unlock();
         buffer->allocation_cv_.notify_all();
     });
@@ -248,8 +261,30 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
+std::shared_ptr<Buffer> Buffer::create(
+    Device *device,
+    DeviceAddr address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up) {
+    // Not using a custom deleter, because it doesn't own any data to cleanup
+    auto buffer = std::make_shared<Buffer>(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, false /* owns data */, Private());
+    buffer->weak_self = buffer;
+
+    buffer->address_ = address;
+    buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+
+    return buffer;
+}
+
 void Buffer::deallocate() {
     deallocation_requested_.store(true, std::memory_order::relaxed);
+    if (!owns_data_) {
+        return;
+    }
     device_->push_work([self = weak_self.lock()] {
         self->deallocate_impl();
     });
@@ -263,7 +298,7 @@ void Buffer::deleter(Buffer* buffer) {
 }
 
 void Buffer::deallocate_impl() {
-    if (allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+    if (allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATED) {
         return;
     }
 
@@ -289,6 +324,10 @@ bool Buffer::is_allocated() const {
 }
 
 uint32_t Buffer::address() const {
+    if (allocation_status_.load(std::memory_order::acquire) != AllocationStatus::ALLOCATION_REQUESTED) {
+        return address_;
+    }
+
     if (device_->can_use_passthrough_scheduling()) {
         return address_;
     }
