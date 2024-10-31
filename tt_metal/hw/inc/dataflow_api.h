@@ -81,7 +81,7 @@ extern CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 #define EXCLUDE_DIRECTION_X_OFFSET 20
 #define EXCLUDE_START_Y_OFFSET 14
 #define EXCLUDE_START_X_OFFSET 8
-#define DYNAMIC_NOC_DIRECTOIN(noc, direction) (noc == 1 ? 1 - direction : direction)
+#define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
 
 FORCE_INLINE
 uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
@@ -638,8 +638,8 @@ std::uint32_t  get_noc_exclude_region(
             Get an encoding which contians the definition of the exclusion area
         */
         return (EXCLUDE_ENABLED << EXCLUDE_ENABLED_OFFSET |
-            DYNAMIC_NOC_DIRECTOIN(noc, exclude_dir_y) << EXCLUDE_DIRECTION_Y_OFFSET |
-            DYNAMIC_NOC_DIRECTOIN(noc, exclude_dir_x) << EXCLUDE_DIRECTION_X_OFFSET |
+            DYNAMIC_NOC_DIRECTION(noc, exclude_dir_y) << EXCLUDE_DIRECTION_Y_OFFSET |
+            DYNAMIC_NOC_DIRECTION(noc, exclude_dir_x) << EXCLUDE_DIRECTION_X_OFFSET |
             DYNAMIC_NOC_Y(noc, exclude_start_y) << EXCLUDE_START_Y_OFFSET  |
             DYNAMIC_NOC_X(noc, exclude_start_x) << EXCLUDE_START_X_OFFSET);
 }
