@@ -4,11 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/host_api.hpp"
 
