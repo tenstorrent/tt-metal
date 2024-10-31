@@ -201,7 +201,10 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
-        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
+        if tile is not None:
+            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
+        else:
+            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
     else:
         if tile is not None:
             tensor = ttnn.Tensor(tensor, dtype, {}, tile)
