@@ -63,7 +63,7 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_perf.py ; fail+=$?
+  LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_perf.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

@@ -117,7 +117,7 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-70B-Instruct/
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
   for FAKE_DEVICE in T3K; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do

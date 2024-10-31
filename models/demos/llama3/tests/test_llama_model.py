@@ -32,7 +32,7 @@ from models.utility_functions import skip_for_grayskull
     "weights, layers",
     [
         ("random", 1),
-        ("general", None),
+        ("instruct", None),
     ],
     ids=["quick", "full"],
 )
