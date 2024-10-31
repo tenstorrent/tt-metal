@@ -84,10 +84,10 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     const Size physical_size = compute_physical_shape(shape);
     const Size page_shape = compute_page_shape(physical_size);
 
-    TT_FATAL(page_shape.width() == 0 ? physical_size.width() == 0 : physical_size.width() % page_shape.width() == 0, "Physical width {} must be multiple of page width {}", physical_size.width(), page_shape.width());
-    TT_FATAL(page_shape.height() == 0 ? physical_size.height() == 0 : physical_size.height() % page_shape.height() == 0, "Physical height {} must be multiple of page height {}", physical_size.height(), page_shape.height());
-    const auto width_in_pages = page_shape.width() == 0 ? 0 : physical_size.width() / page_shape.width();
-    const auto height_in_pages = page_shape.height() == 0 ? 0 : physical_size.height() / page_shape.height();
+    TT_FATAL(physical_size.width() % page_shape.width() == 0, "Physical width {} must be multiple of page width {}", physical_size.width(), page_shape.width());
+    TT_FATAL(physical_size.height() % page_shape.height() == 0, "Physical height {} must be multiple of page height {}", physical_size.height(), page_shape.height());
+    const auto width_in_pages = physical_size.width() / page_shape.width();
+    const auto height_in_pages = physical_size.height() / page_shape.height();
     const std::array<uint32_t, 2> tensor2d_shape {height_in_pages, width_in_pages};
 
     ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape);
@@ -97,14 +97,14 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
     const Size physical_size = compute_physical_shape(shape);
     const Size page_shape = compute_page_shape(physical_size);
-    const auto width_remainder = page_shape.width() == 0 ? 0 : physical_size.width() % page_shape.width();
-    const auto height_remainder = page_shape.height() == 0 ? 0 : physical_size.height() % page_shape.height();
+    const auto width_remainder = physical_size.width() % page_shape.width();
+    const auto height_remainder = physical_size.height() % page_shape.height();
     TT_FATAL(width_remainder == 0 && height_remainder == 0, "Physical size {} must be multiple of page size {}", physical_size, page_shape);
 
     const size_t physical_area = physical_size.height() * physical_size.width();
     const size_t page_area = page_shape.height() * page_shape.width();
 
-    const size_t page_count = page_area == 0 ? 0 : physical_area / page_area;
+    const size_t page_count = physical_area / page_area;
     const size_t page_size_bytes = compute_page_size_bytes(page_shape);
 
     return page_count * page_size_bytes;
@@ -146,11 +146,7 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
 }
 
 Size TensorLayout::compute_page_shape(const Size& physical_size) const {
-    if(memory_config_.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        return physical_size;
-    }
-
-    return page_config_.get_page_shape(physical_size, memory_config_);
+    return page_config_.get_page_shape(physical_size, dtype_, memory_config_);
 }
 
 Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
