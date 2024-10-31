@@ -10,7 +10,7 @@
 
 namespace basic_tests::CoreRange {
 
-TEST_F(CoreCoordHarness, TestCoreRangeContains) {
+TEST_F(CoreCoordFixture, TestCoreRangeContains) {
     // Contains CoreCoord
     EXPECT_TRUE(this->cr1.contains(this->sc1.start_coord));
     EXPECT_TRUE(this->cr1.contains(this->cr1.start_coord));
@@ -25,7 +25,7 @@ TEST_F(CoreCoordHarness, TestCoreRangeContains) {
     EXPECT_TRUE(this->cr4.contains(::CoreRangeSet(std::vector{this->cr1, this->cr2, this->cr3})));
 }
 
-TEST_F(CoreCoordHarness, TestCoreRangeNotContains) {
+TEST_F(CoreCoordFixture, TestCoreRangeNotContains) {
     // Not Contains CoreCoord
     EXPECT_FALSE(this->sc1.contains(this->cr1.start_coord));
     EXPECT_FALSE(this->sc1.contains(this->sc2.start_coord));

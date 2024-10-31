@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -22,7 +22,7 @@ using namespace tt;
 
 namespace unit_tests_common::matmul::test_matmul_single_core{
 
-bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M, int N, int K, int out_subblock_h, int out_subblock_w){
+bool matmul_single_core(DispatchFixture *fixture, tt_metal::Device *device, int M, int N, int K, int out_subblock_h, int out_subblock_w){
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -216,7 +216,7 @@ bool matmul_single_core(CommonFixture *fixture, tt_metal::Device *device, int M,
 }
 } // namespace unit_tests_common::matmul::test_matmul_single_core
 
-TEST_F (CommonFixture, TensixMatmulSingleCoreSmall){
+TEST_F (DispatchFixture, TensixMatmulSingleCoreSmall){
     uint32_t M = 4;
     uint32_t K = 4;
     uint32_t N = 4;
@@ -227,7 +227,7 @@ TEST_F (CommonFixture, TensixMatmulSingleCoreSmall){
     }
 }
 
-TEST_F (CommonFixture, TensixMatmulSingleCore){
+TEST_F (DispatchFixture, TensixMatmulSingleCore){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "Fast dispatch buffer memory issue, skipping for now");
         GTEST_SKIP();

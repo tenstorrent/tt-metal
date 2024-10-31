@@ -252,7 +252,7 @@ structure our tests with this framework is to bundle it into a single
 executable.
 
 You can use `--gtest_filter_test` to filter out the specific test you'd like.
-For example, to build and run the `CommonFixture.DRAMLoopbackSingleCore` on
+For example, to build and run the `DispatchFixture.DRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the unit tests:
@@ -261,7 +261,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="CommonFixture.DRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="DispatchFixture.DRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:

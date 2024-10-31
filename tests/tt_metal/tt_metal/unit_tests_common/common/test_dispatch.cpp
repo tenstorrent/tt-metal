@@ -4,13 +4,13 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 
 using std::vector;
 
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
-static void test_sems_across_core_types(CommonFixture *fixture,
+static void test_sems_across_core_types(DispatchFixture *fixture,
                                         vector<tt::tt_metal::v1::DeviceHandle>& devices,
                                         bool active_eth) {
     // just something unique...
@@ -89,7 +89,7 @@ static void test_sems_across_core_types(CommonFixture *fixture,
     }
 }
 
-TEST_F(CommonFixture, EthTestBlank) {
+TEST_F(DispatchFixture, EthTestBlank) {
 
     Device *device = devices_[0];
     Program program = CreateProgram();
@@ -113,7 +113,7 @@ TEST_F(CommonFixture, EthTestBlank) {
     }
 }
 
-TEST_F(CommonFixture, TensixTestInitLocalMemory) {
+TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
 
     // This test will hang/assert if there is a failure
 
@@ -136,7 +136,7 @@ TEST_F(CommonFixture, TensixTestInitLocalMemory) {
     this->RunProgram(device, program);
 }
 
-TEST_F(CommonFixture, EthTestInitLocalMemory) {
+TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     // This test will hang/assert if there is a failure
 
@@ -167,11 +167,11 @@ TEST_F(CommonFixture, EthTestInitLocalMemory) {
     }
 }
 
-TEST_F(CommonFixture, TensixActiveEthTestSemaphores) {
+TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) {
     test_sems_across_core_types(this, this->devices_, true);
 }
 
-TEST_F(CommonFixture, TensixIdleEthTestSemaphores) {
+TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP();
     }
@@ -181,7 +181,7 @@ TEST_F(CommonFixture, TensixIdleEthTestSemaphores) {
 
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
-TEST_F(CommonFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
 
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;

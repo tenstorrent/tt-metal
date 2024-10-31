@@ -11,7 +11,7 @@ using std::vector;
 
 namespace basic_tests::CoreRange {
 
-TEST_F(CoreCoordHarness, TestCoreRangeIterator)
+TEST_F(CoreCoordFixture, TestCoreRangeIterator)
 {
     vector<CoreCoord> cores_in_core_range;
 

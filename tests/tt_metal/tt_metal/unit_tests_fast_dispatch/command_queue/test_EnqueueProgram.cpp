@@ -4,8 +4,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include "command_queue_fixture.hpp"
+#include "trace_fixtures.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "impl/buffers/buffer.hpp"

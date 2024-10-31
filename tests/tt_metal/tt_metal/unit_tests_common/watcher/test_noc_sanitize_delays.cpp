@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llrt/rtoptions.hpp"
-#include "watcher_fixture.hpp"
+#include "debug_tools_fixtures.hpp"
 #include "test_utils.hpp"
 #include "llrt/llrt.hpp"
 #include "tt_metal/detail/tt_metal.hpp"

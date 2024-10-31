@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -137,7 +137,7 @@ void create_CBs_for_fused_matmul(tt_metal::Program &program, tt_metal::Device* d
     }
 }
 
-bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool activations_rm, bool output_rm, MathFidelity math_fidelity = MathFidelity::HiFi4) {
+bool matmul_large_block(DispatchFixture *fixture, tt_metal::Device *device, bool activations_rm, bool output_rm, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -365,7 +365,7 @@ bool matmul_large_block(CommonFixture *fixture, tt_metal::Device *device, bool a
 
 }
 
-TEST_F(CommonFixture, TensixMatmulLargeBlock) {
+TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;;
         tt::log_info(tt::LogTest, "Math Fidelity = {}", i);

@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -390,7 +390,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device *device, int in1_or
 }
 } // namespace unit_tests_common::matmul::test_matmul_multi_core
 
-TEST_F(CommonFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
+TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
@@ -400,7 +400,7 @@ TEST_F(CommonFixture, TensixMatmulMultiCoreMultiDRAMIn0MCast) {
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
+TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAMIn1MCast) {
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 #include "tt_metal/impl/device/device_pool.hpp"
 
 // A dispatch-agnostic test fixture
-class CommonFixture: public ::testing::Test {
+class DispatchFixture: public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program) {

@@ -9,6 +9,7 @@
 
 #include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
+#include "trace_fixtures.hpp"
 #include "detail/tt_metal.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "gtest/gtest.h"

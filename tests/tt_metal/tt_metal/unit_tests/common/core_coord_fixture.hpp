@@ -8,7 +8,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-class CoreCoordHarness : public ::testing::Test {
+class CoreCoordFixture : public ::testing::Test {
    protected:
     CoreRange cr1 = CoreRange({0, 0}, {1, 1});
     CoreRange cr2 = CoreRange({3, 3}, {5, 4});

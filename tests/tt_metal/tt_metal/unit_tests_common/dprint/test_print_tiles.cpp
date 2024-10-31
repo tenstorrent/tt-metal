@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dprint_fixture.hpp"
+#include "debug_tools_fixtures.hpp"
 #include "test_utils.hpp"
 #include "common/bfloat8.hpp"
 #include "common/bfloat4.hpp"

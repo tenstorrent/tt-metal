@@ -11,14 +11,14 @@
 
 namespace basic_tests::CoreRangeSet {
 
-TEST_F(CoreCoordHarness, TestCoreRangeSetMergeNoSolution) {
+TEST_F(CoreCoordFixture, TestCoreRangeSetMergeNoSolution) {
     EXPECT_EQ(::CoreRangeSet(sc1).merge(std::set{sc3}), ::CoreRangeSet(std::set{sc1, sc3}));
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{cr2}), ::CoreRangeSet(std::set{cr1, cr2}));
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{cr1, cr2}), ::CoreRangeSet(std::set{cr1, cr2}));
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{cr2}).merge(std::set{cr3}), ::CoreRangeSet(std::set{cr1, cr2, cr3}));
 }
 
-TEST_F(CoreCoordHarness, TestCoreRangeSetMergeCoreCoord) {
+TEST_F(CoreCoordFixture, TestCoreRangeSetMergeCoreCoord) {
     ::CoreRangeSet empty_crs;
     EXPECT_EQ(empty_crs.merge(std::set{this->sc1}).ranges().size(), 1);
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{sc3, sc4}), ::CoreRangeSet(std::set{cr16}));
@@ -47,7 +47,7 @@ TEST_F(CoreCoordHarness, TestCoreRangeSetMergeCoreCoord) {
             CoreRange{{3, 4}, {4, 5}}}));
 }
 
-TEST_F(CoreCoordHarness, TestCoreRangeSetMergeCoreRange) {
+TEST_F(CoreCoordFixture, TestCoreRangeSetMergeCoreRange) {
     EXPECT_EQ(::CoreRangeSet(cr1).merge(std::set{cr1}), ::CoreRangeSet(std::set{cr1}));
     EXPECT_EQ(::CoreRangeSet(cr7).merge(std::set{cr6}).merge(std::set{cr4}), ::CoreRangeSet(std::set{cr8}));
     EXPECT_EQ(

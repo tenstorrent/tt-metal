@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -368,7 +368,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *device){
+bool matmul_multi_core_multi_dram(DispatchFixture *fixture, tt_metal::Device *device){
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;
@@ -498,7 +498,7 @@ bool matmul_multi_core_multi_dram(CommonFixture *fixture, tt_metal::Device *devi
 
 }
 
-TEST_F(CommonFixture, TensixMatmulMultiCoreSingleDRAM){
+TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM){
     const char* arch = getenv("ARCH_NAME");
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is only supported in slow dispatch mode");
@@ -512,7 +512,7 @@ TEST_F(CommonFixture, TensixMatmulMultiCoreSingleDRAM){
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulMultiCoreMultiDRAM){
+TEST_F(DispatchFixture, TensixMatmulMultiCoreMultiDRAM){
     // need to update move_tiles_to_dram to support both slow and fast
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         log_info(LogTest, "This test is not supported in slow dispatch mode, need to update move_tiles_to_dram..");

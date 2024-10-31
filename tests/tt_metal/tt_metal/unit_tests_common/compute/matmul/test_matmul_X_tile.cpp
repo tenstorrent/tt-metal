@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"
@@ -83,7 +83,7 @@ void set_math_fid_masks(uint16_t &math_fid_mask, MathFidelity math_fidelity = Ma
     }
 }
 
-void matmul_tile(CommonFixture *fixture, tt_metal::Device *device, const MatmulTileConfig &cfg, vector<uint32_t> activations, vector<uint32_t> weights, vector<bfloat16> tensor_vals){
+void matmul_tile(DispatchFixture *fixture, tt_metal::Device *device, const MatmulTileConfig &cfg, vector<uint32_t> activations, vector<uint32_t> weights, vector<bfloat16> tensor_vals){
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
@@ -351,7 +351,7 @@ using namespace unit_tests_common::matmul::test_matmul_X_tile;
 }
 */
 
-TEST_F(CommonFixture, TensixMatmulSingleTile){
+TEST_F(DispatchFixture, TensixMatmulSingleTile){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -377,7 +377,7 @@ TEST_F(CommonFixture, TensixMatmulSingleTile){
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulMultiTile){
+TEST_F(DispatchFixture, TensixMatmulMultiTile){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -410,7 +410,7 @@ TEST_F(CommonFixture, TensixMatmulMultiTile){
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulBlock){
+TEST_F(DispatchFixture, TensixMatmulBlock){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -441,7 +441,7 @@ TEST_F(CommonFixture, TensixMatmulBlock){
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulBlockInitShort){
+TEST_F(DispatchFixture, TensixMatmulBlockInitShort){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {
@@ -472,7 +472,7 @@ TEST_F(CommonFixture, TensixMatmulBlockInitShort){
     }
 }
 
-TEST_F(CommonFixture, TensixMatmulBlockInitShortWithDt){
+TEST_F(DispatchFixture, TensixMatmulBlockInitShortWithDt){
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
         for (bool fp32_dest_acc_en : {true, false}) {

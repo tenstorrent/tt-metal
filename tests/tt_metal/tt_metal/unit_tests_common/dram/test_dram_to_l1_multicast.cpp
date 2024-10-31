@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -23,7 +23,7 @@ struct DRAMtoL1MulticastConfig{
     CoreCoord exclude_direction;
 };
 
-bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, const DRAMtoL1MulticastConfig &cfg){
+bool dram_to_l1_multicast(DispatchFixture* fixture, tt_metal::Device *device, const DRAMtoL1MulticastConfig &cfg){
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -123,7 +123,7 @@ bool dram_to_l1_multicast(CommonFixture* fixture, tt_metal::Device *device, cons
 }
 }
 
-TEST_F(CommonFixture, TensixDRAMtoL1Multicast){
+TEST_F(DispatchFixture, TensixDRAMtoL1Multicast){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -133,7 +133,7 @@ TEST_F(CommonFixture, TensixDRAMtoL1Multicast){
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
     }
 }
-TEST_F(CommonFixture, TensixDRAMtoL1MulticastLoopbackSrc){
+TEST_F(DispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 500 * 1024,
         .target_grid_offset = 0,

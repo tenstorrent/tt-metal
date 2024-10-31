@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include <algorithm>
-#include <cstdint>
-#include <variant>
-#include <vector>
 #include "common/core_coord.hpp"
 #include "common/env_lib.hpp"
 #include "gtest/gtest.h"
@@ -86,90 +82,6 @@ class CommandQueueMultiDeviceFixture : public ::testing::Test {
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
     tt::ARCH arch_;
     size_t num_devices_;
-};
-
-class CommandQueueSingleCardFixture : public ::testing::Test {
-   protected:
-    void SetUp() override {
-        this->validate_dispatch_mode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices();
-    }
-
-    void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
-
-    void validate_dispatch_mode() {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            GTEST_SKIP();
-        }
-    }
-
-    void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        const chip_id_t mmio_device_id = 0;
-        this->reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        if (enable_remote_chip) {
-            for (const auto &[id, device] : this->reserved_devices_) {
-                this->devices_.push_back(device);
-            }
-        } else {
-            this->devices_.push_back(this->reserved_devices_.at(mmio_device_id));
-        }
-
-        this->num_devices_ = this->reserved_devices_.size();
-    }
-
-    std::vector<tt::tt_metal::Device *> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device *> reserved_devices_;
-    tt::ARCH arch_;
-    size_t num_devices_;
-};
-
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
-    protected:
-     void SetUp() override {
-        this->validate_dispatch_mode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
-     }
-};
-
-class SingleDeviceTraceFixture: public ::testing::Test {
-protected:
-    tt::tt_metal::Device* device_;
-    tt::ARCH arch_;
-
-    void Setup(const size_t buffer_size, const uint8_t num_hw_cqs = 1) {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            tt::log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            GTEST_SKIP();
-        }
-        if (num_hw_cqs > 1) {
-            // Running multi-CQ test. User must set this explicitly.
-            auto num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
-            if (num_cqs == nullptr or strcmp(num_cqs, "2")) {
-                TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-                GTEST_SKIP();
-            }
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        const int device_id = 0;
-        const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-        const chip_id_t mmio_device_id = 0;
-        this->device_ = tt::tt_metal::detail::CreateDevices({mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, buffer_size, dispatch_core_type).at(mmio_device_id);
-    }
-
-    void TearDown() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
-
 };
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {

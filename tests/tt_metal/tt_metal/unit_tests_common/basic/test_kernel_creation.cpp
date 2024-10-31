@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -14,7 +14,7 @@
 using namespace tt;
 
 // Ensures we can successfully create kernels on available compute grid
-TEST_F(CommonFixture, TensixCreateKernelsOnComputeCores) {
+TEST_F(DispatchFixture, TensixCreateKernelsOnComputeCores) {
     for (unsigned int id = 0; id < devices_.size(); id++) {
         tt_metal::Program program = CreateProgram();
         CoreCoord compute_grid = devices_.at(id)->compute_with_storage_grid_size();
@@ -30,7 +30,7 @@ TEST_F(CommonFixture, TensixCreateKernelsOnComputeCores) {
 }
 
 // Ensure we cannot create kernels on storage cores
-TEST_F(CommonFixture, TensixCreateKernelsOnStorageCores) {
+TEST_F(DispatchFixture, TensixCreateKernelsOnStorageCores) {
     for (unsigned int id=0; id < devices_.size(); id++) {
         if (devices_.at(id)->storage_only_cores().empty()) {
             GTEST_SKIP() << "This test only runs on devices with storage only cores";
@@ -47,7 +47,7 @@ TEST_F(CommonFixture, TensixCreateKernelsOnStorageCores) {
     }
 }
 
-TEST_F(CommonFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
+TEST_F(DispatchFixture, TensixIdleEthCreateKernelsOnDispatchCores) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         GTEST_SKIP() << "This test is only supported in fast dispatch mode";
     }

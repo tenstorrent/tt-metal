@@ -10,7 +10,7 @@
 
 namespace basic_tests::CoreRange{
 
-TEST_F(CoreCoordHarness, TestCoreRangeAdjacent)
+TEST_F(CoreCoordFixture, TestCoreRangeAdjacent)
 {
     EXPECT_TRUE ( this->cr1.adjacent(this->cr9) );
     EXPECT_TRUE ( this->cr9.adjacent(this->cr1) );
@@ -23,7 +23,7 @@ TEST_F(CoreCoordHarness, TestCoreRangeAdjacent)
 
 }
 
-TEST_F(CoreCoordHarness, TestCoreRangeNotAdjacent){
+TEST_F(CoreCoordFixture, TestCoreRangeNotAdjacent){
     EXPECT_FALSE ( this->cr2.adjacent(this->cr3));
     EXPECT_FALSE ( this->cr1.adjacent(this->cr6));
     EXPECT_FALSE ( this->cr1.adjacent(this->cr11));

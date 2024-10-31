@@ -13,15 +13,15 @@
 #include "impl/program/program.hpp"
 #include "tt_cluster_descriptor_types.h"
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-class ProgramWithKernelCreatedFromStringFixture : public CommonFixture {
+class ProgramWithKernelCreatedFromStringFixture : public DispatchFixture {
    protected:
     void SetUp() override {
-        CommonFixture::SetUp();
+        DispatchFixture::SetUp();
         for (Device *device : this->devices_)
         {
             const chip_id_t device_id = device->id();

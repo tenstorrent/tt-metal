@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "dprint_fixture.hpp"
+#include "debug_tools_fixtures.hpp"
 #include "test_utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -24,7 +24,7 @@ struct DRAMConfig{
     tt_metal::DataMovementConfig data_movement_cfg;
 };
 
-bool dram_single_core_db (CommonFixture* fixture, tt_metal::Device *device){
+bool dram_single_core_db (DispatchFixture* fixture, tt_metal::Device *device){
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -90,7 +90,7 @@ bool dram_single_core_db (CommonFixture* fixture, tt_metal::Device *device){
     return input_vec == result_vec;
 }
 
-bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const DRAMConfig &cfg, std::vector<uint32_t> src_vec){
+bool dram_single_core (DispatchFixture* fixture, tt_metal::Device *device, const DRAMConfig &cfg, std::vector<uint32_t> src_vec){
     // Create a program
     tt_metal::Program program = CreateProgram();
 
@@ -139,7 +139,7 @@ bool dram_single_core (CommonFixture* fixture, tt_metal::Device *device, const D
 }
 }
 
-TEST_F(CommonFixture, TensixDRAMLoopbackSingleCore){
+TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore){
     uint32_t buffer_size = 2 * 1024 * 25;
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -155,7 +155,7 @@ TEST_F(CommonFixture, TensixDRAMLoopbackSingleCore){
     }
 }
 
-TEST_F(CommonFixture, TensixDRAMLoopbackSingleCoreDB){
+TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB){
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")){
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
