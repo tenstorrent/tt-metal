@@ -30,6 +30,7 @@ void DeviceProfiler::readRiscProfilerResults(
     int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
     ZoneScoped;
 
+    my_device_id = device_id;
     HalProgrammableCoreType CoreType;
     int riscCount;
     profiler_msg_t* profiler_msg;
@@ -384,7 +385,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -398,7 +399,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
 
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (lastDump) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
@@ -406,7 +407,7 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
                 EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }
         } else {
-            if (!lastDump) {
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
         }
@@ -433,9 +434,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    double delay = 0;
-    double frequency = 0;
-    uint64_t cpuTime = 0;
+    static double delay = 0;
+    static double frequency = 0;
+    static uint64_t cpuTime = 0;
 
     for (auto& device_core : device_cores) {
         int device_id = device_core.first;
@@ -482,8 +483,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    for (auto& event : device_events) {
+    for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
+        event.timestamp = event.timestamp * this->freqScale + this->shift;
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], event);
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {

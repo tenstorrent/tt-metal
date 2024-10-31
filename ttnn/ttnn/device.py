@@ -90,8 +90,8 @@ CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
 
 
-def DumpDeviceProfiler(device, last_dump: bool = False):
-    ttnn._ttnn.device.DumpDeviceProfiler(device, last_dump)
+def DumpDeviceProfiler(device):
+    ttnn._ttnn.device.DumpDeviceProfiler(device)
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices

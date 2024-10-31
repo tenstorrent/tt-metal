@@ -90,10 +90,8 @@ void DeallocateBuffers(DeviceHandle device);
  * @brief Dumps device-side profiler data to a CSV log.
  *
  * @param device The device holding the program being profiled.
- * @param worker_cores CoreRangeSet of worker cores being profiled.
- * @param last_dump If true, indicates the last dump before process termination.
  */
-void DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet& worker_cores, bool last_dump = false);
+void DumpDeviceProfileResults(DeviceHandle device);
 
 /**
  * @brief Retrieves the architecture of the device.
