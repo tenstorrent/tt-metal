@@ -6,6 +6,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
@@ -43,6 +44,12 @@ ttnn::Tensor permute_impl(const ttnn::Tensor &a, const SmallVector<uint32_t>& di
         TT_ASSERT(device != nullptr, "Requires setting default device if no inputs to op are on device");
     } else {
         device = a.device();
+    }
+
+    if (a.get_shape().rank() > 4) {
+        auto input = a.get_layout() == Layout::TILE ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr) : a;
+        input = ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
@@ -170,7 +177,6 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.get_layout();
     const auto input_rank = input_tensor.get_logical_shape().rank();
 
-    TT_FATAL(input_rank <= 4, "Error");
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
@@ -188,9 +194,9 @@ ttnn::Tensor ExecutePermute::invoke(
         return new_order;
     };
     auto itensor = (input_tensor.get_logical_shape().rank() < 4) ? ttnn::unsqueeze_to_4D(input_tensor) : input_tensor;
-    auto iorder = adjust_order(dims);  // internals of permute_impl already adjust negative indices
+    auto iorder = dims.size() < 4 ? adjust_order(dims) : dims;  // internals of permute_impl already adjust negative indices
 
-    TT_FATAL(detail::is_on_device(itensor) and itensor.get_logical_shape().rank() == 4, "Error");
+    TT_FATAL(detail::is_on_device(itensor), "Error");
     auto output_tensor = detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()));
     output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
 
