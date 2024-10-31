@@ -114,18 +114,18 @@ on:
           - eltwise.unary_backward.neg_bw
           - eltwise.unary_backward.hardshrink_bw
           - eltwise.unary_backward.softshrink_bw
-          - eltwise.unary_backward.acos_bw
-          - eltwise.unary_backward.acosh_bw
-          - eltwise.unary_backward.atan_bw
-          - eltwise.unary_backward.cos_bw
-          - eltwise.unary_backward.frac_bw
-          - eltwise.unary_backward.i0_bw
-          - eltwise.unary_backward.rad2deg_bw
-          - eltwise.unary_backward.relu_bw
-          - eltwise.unary_backward.rsqrt_bw
-          - eltwise.unary_backward.sigmoid_bw
-          - eltwise.unary_backward.tan_bw
-          - eltwise.unary_backward.trunc_bw
+          - eltwise.unary_backward.acos_bw.acos_bw
+          - eltwise.unary_backward.acosh_bw.acosh_bw
+          - eltwise.unary_backward.atan_bw.atan_bw
+          - eltwise.unary_backward.cos_bw.cos_bw
+          - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
@@ -252,7 +252,7 @@ on:
           - eltwise.ternary.addcmul.addcmul
           - eltwise.ternary.addcdiv.addcdiv
           - eltwise.ternary.mac.mac
-          - eltwise.ternary.lerp
+          - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
           - reduction.topk.topk
