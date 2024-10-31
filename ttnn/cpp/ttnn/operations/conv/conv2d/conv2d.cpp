@@ -666,7 +666,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     } else {
         // TODO: fix the need to check this. We should be able to accept any datatype and convert
-        TT_ASSERT(weight_tensor_.get_dtype() == weights_bias_dtype);
+        TT_ASSERT(weight_tensor_.get_dtype() == weights_bias_dtype, "Weight tensor dtype: {}, expected: {}", weight_tensor_.get_dtype(), weights_bias_dtype);
         if (bias_tensor.has_value()) {
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }

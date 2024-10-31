@@ -143,6 +143,7 @@ golden_pcc = {
 }
 
 golden_pcc = {
+    ttnn.device.Arch.BLACKHOLE: golden_pcc,
     ttnn.device.Arch.WORMHOLE_B0: golden_pcc,
     ttnn.device.Arch.GRAYSKULL: golden_pcc,
 }

@@ -7,6 +7,7 @@ import torch
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
+    is_blackhole,
     _nearest_y,
     pad_and_fold_conv_activation_for_unity_stride,
 )
@@ -628,6 +629,9 @@ class resnet50:
             elif is_wormhole_b0():  # untested due to unsupported batch20 on WH
                 num_cores_x = 8
                 num_cores_y = 5
+            elif is_blackhole():
+                num_cores_x = 10
+                num_cores_y = 8
         self.fold_compute_grid_size = (num_cores_x, num_cores_y)
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
@@ -752,7 +756,7 @@ class resnet50:
         x_width = 56
         x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
 
-        if is_wormhole_b0():
+        if is_wormhole_b0() or is_blackhole():
             # TODO: fix the need to do the reshard here
             mem_config = ttnn.create_sharded_memory_config_(
                 ttnn.Shape([self.batch_size * x_height * x_width, 64]),
