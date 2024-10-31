@@ -293,6 +293,7 @@ on:
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
           - data_movement.reshape.reshape
+          - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
