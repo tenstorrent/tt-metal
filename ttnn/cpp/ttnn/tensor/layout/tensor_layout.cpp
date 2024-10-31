@@ -6,7 +6,8 @@
 
 namespace tt::tt_metal {
 
-namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 size_t round_up(size_t value, size_t multiple) {
     TT_FATAL(multiple != 0, "round_up: multiple must not be 0");
 
@@ -33,7 +34,7 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_sh
     return result;
 }
 
-}
+} // namespace CMAKE_UNIQUE_NAMESPACE
 
 TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config)
     : TensorLayout(dtype, page_config, memory_config, {}) {
@@ -41,40 +42,40 @@ TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const 
 
 // Private
 TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment)
-    : m_dtype(dtype),
-      m_page_config(page_config),
-      m_memory_config(memory_config),
-      m_alignment(alignment) {
+    : dtype_(dtype),
+      page_config_(page_config),
+      memory_config_(memory_config),
+      alignment_(alignment) {
 
     initialize_alignment();
     validate_alignment();
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape) {
-    return TensorLayout(dtype, page_config, memory_config, legacyPaddedShapeToAlignment(legacy_padded_shape));
+    return TensorLayout(dtype, page_config, memory_config, CMAKE_UNIQUE_NAMESPACE::legacyPaddedShapeToAlignment(legacy_padded_shape));
 }
 
 void TensorLayout::initialize_alignment() {
-    if(!m_alignment.empty()) {
+    if(!alignment_.empty()) {
         return;
     }
 
-    m_alignment = m_page_config.create_default_alignment(m_dtype);
+    alignment_ = page_config_.create_default_alignment(dtype_);
 }
 
 void TensorLayout::validate_alignment() const
 {
-    return m_page_config.validate_alignment(m_alignment, m_dtype);
+    return page_config_.validate_alignment(alignment_, dtype_);
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
-    if (!m_memory_config.is_sharded()) {
+    if (!memory_config_.is_sharded()) {
         return std::nullopt;
     }
 
-    TT_FATAL(m_memory_config.shard_spec.has_value(), "MemoryConfig must have Shard Spec specified for sharded memory layout");
+    TT_FATAL(memory_config_.shard_spec.has_value(), "MemoryConfig must have Shard Spec specified for sharded memory layout");
 
-    auto& shard_spec = m_memory_config.shard_spec.value();
+    auto& shard_spec = memory_config_.shard_spec.value();
     const Size physical_size = compute_physical_shape(shape);
     const Size page_shape = compute_page_shape(physical_size);
 
@@ -111,12 +112,12 @@ size_t TensorLayout::compute_page_size_bytes(const ttnn::SimpleShape& shape) con
 }
 
 size_t TensorLayout::compute_page_size_bytes(const Size& page_size) const {
-    return m_page_config.get_page_size_bytes(page_size, m_dtype);
+    return page_config_.get_page_size_bytes(page_size, dtype_);
 }
 
 Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const {
     const int rank = static_cast<int>(shape.rank());
-    const int alignment_rank = static_cast<int>(m_alignment.size());
+    const int alignment_rank = static_cast<int>(alignment_.size());
     const int max_rank = std::max(rank, alignment_rank);
     size_t width = 1;
     size_t height = 1;
@@ -131,7 +132,7 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
 
         // Align the current dimension if alignment is available
         if (i >= -alignment_rank) {
-            dim = round_up(dim, m_alignment[i]);
+            dim = CMAKE_UNIQUE_NAMESPACE::round_up(dim, alignment_[i]);
         }
     }
 
@@ -140,16 +141,16 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
 }
 
 Size TensorLayout::compute_page_shape(const Size& physical_size) const {
-    if(m_memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+    if(memory_config_.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
         return physical_size;
     }
 
-    return m_page_config.get_page_shape(physical_size, m_memory_config);
+    return page_config_.get_page_shape(physical_size, memory_config_);
 }
 
 Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
     const int rank = static_cast<int>(shape.rank());
-    const int alignment_rank = static_cast<int>(m_alignment.size());
+    const int alignment_rank = static_cast<int>(alignment_.size());
 
     Strides strides(rank, 1);
     for (int i = rank - 2; i >= 0; i--) {
@@ -157,7 +158,7 @@ Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {
 
         const int alignment_index = i - (rank - alignment_rank) + 1;
         if(alignment_index >= 0) {
-            strides[i] = round_up(strides[i], m_alignment[alignment_index]);
+            strides[i] = CMAKE_UNIQUE_NAMESPACE::round_up(strides[i], alignment_[alignment_index]);
         }
     }
 
@@ -168,21 +169,21 @@ ttnn::SimpleShape TensorLayout::compute_padded_shape(const ttnn::SimpleShape& sh
 {
     ttnn::SmallVector<uint32_t> padded_shape(shape.rank());
     int rank_index = static_cast<int>(shape.rank()) - 1;
-    int alignment_index = static_cast<int>(m_alignment.size()) - 1;
+    int alignment_index = static_cast<int>(alignment_.size()) - 1;
     size_t accum_alignment = 1;
 
     for (;rank_index >= 0 && alignment_index >= 0; rank_index--, alignment_index--) {
         // The last 2 dimensions of a shape are special
         if (rank_index >= static_cast<int>(shape.rank()) - 2) {
-            padded_shape[rank_index] = round_up(shape[rank_index], m_alignment[alignment_index]);
+            padded_shape[rank_index] = CMAKE_UNIQUE_NAMESPACE::round_up(shape[rank_index], alignment_[alignment_index]);
         } else {
-            if (accum_alignment % m_alignment[alignment_index] == 0) {
+            if (accum_alignment % alignment_[alignment_index] == 0) {
                 // Alignment for this dimension is redundant, ignoring
                 padded_shape[rank_index] = shape[rank_index];
-            } else if (m_alignment[alignment_index] % accum_alignment == 0) {
-                padded_shape[rank_index] = round_up(shape[rank_index], m_alignment[alignment_index] / accum_alignment);
+            } else if (alignment_[alignment_index] % accum_alignment == 0) {
+                padded_shape[rank_index] = CMAKE_UNIQUE_NAMESPACE::round_up(shape[rank_index], alignment_[alignment_index] / accum_alignment);
             } else {
-                TT_THROW("Padded shape can't be deducted from TensorLayout parameters {} and Shape {}", m_alignment, shape);
+                TT_THROW("Padded shape can't be deducted from TensorLayout parameters {} and Shape {}", alignment_, shape);
             }
         }
 

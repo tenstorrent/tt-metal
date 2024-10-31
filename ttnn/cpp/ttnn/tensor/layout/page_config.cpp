@@ -6,7 +6,7 @@
 
 namespace tt::tt_metal {
 
-namespace utils {
+namespace CMAKE_UNIQUE_NAMESPACE {
 size_t element_size_bytes(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16: return sizeof(bfloat16);
@@ -23,10 +23,10 @@ size_t element_size_bytes(DataType dtype) {
             TT_THROW("Unsupported data type!");
     }
 }
-}
+} // namespace CMAKE_UNIQUE_NAMESPACE
 
 PageConfig::PageConfig(const Config& config)
-    : m_config(config) {
+    : config_(config) {
 }
 
 PageConfig::PageConfig(Layout layout)
@@ -35,37 +35,37 @@ PageConfig::PageConfig(Layout layout)
 
 PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
     if(layout == Layout::ROW_MAJOR) {
-        m_config = RowMajorPageConfig();
+        config_ = RowMajorPageConfig();
     }
     else {
-        m_config =  TilePageConfig(tile.value_or(Tile()));
+        config_ =  TilePageConfig(tile.value_or(Tile()));
     }
 }
 
 Alignment PageConfig::create_default_alignment(DataType dtype) const {
-    return std::visit([&](const auto& config) constexpr { return config.create_default_alignment(dtype); }, m_config);
+    return std::visit([&](const auto& config) constexpr { return config.create_default_alignment(dtype); }, config_);
 }
 
 void PageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
-    std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype); }, m_config);
+    std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype); }, config_);
 }
 
 Size PageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memory_config); }, m_config);
+    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memory_config); }, config_);
 }
 
 size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, m_config);
+    return std::visit([&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
 }
 
 bool PageConfig::is_row_major() const {
-    return std::holds_alternative<RowMajorPageConfig>(m_config);
+    return std::holds_alternative<RowMajorPageConfig>(config_);
 }
 
 std::optional<Tile> PageConfig::get_tile() const
 {
-    if(std::holds_alternative<TilePageConfig>(m_config)) {
-        return std::get<TilePageConfig>(m_config).get_tile();
+    if(std::holds_alternative<TilePageConfig>(config_)) {
+        return std::get<TilePageConfig>(config_).get_tile();
     }
 
     return std::nullopt;
@@ -73,48 +73,48 @@ std::optional<Tile> PageConfig::get_tile() const
 
 
 TilePageConfig::TilePageConfig(const Tile& tile)
- : m_tile(tile) {
+ : tile_(tile) {
 }
 
 Alignment TilePageConfig::create_default_alignment(DataType dtype) const {
-    return Alignment({m_tile.get_height(), m_tile.get_width()});
+    return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
 void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
     TT_FATAL(alignment.size() >= 2, "Alignment should have at least 2 dimensions for Tile layout");
     const auto widthAlignment = alignment[-1];
-    TT_FATAL(widthAlignment % m_tile.get_width() == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, m_tile.get_width());
+    TT_FATAL(widthAlignment % tile_.get_width() == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout innermost dimension should be multiple of tile width {}.", alignment, tile_.get_width());
     auto heightAlignment = alignment[-2];
-    TT_FATAL((heightAlignment % m_tile.get_height()) == 0,
-        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, m_tile.get_height());
+    TT_FATAL((heightAlignment % tile_.get_height()) == 0,
+        "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile_.get_height());
 }
 
 Size TilePageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const {
-    return Size(m_tile.get_height(), m_tile.get_width());
+    return Size(tile_.get_height(), tile_.get_width());
 }
 
 size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    const auto tiles_count = page_shape.height() / m_tile.get_height() * page_shape.width() / m_tile.get_width();
-    const auto size = tiles_count * m_tile.get_tile_size(datatype_to_dataformat_converter(dtype));
+    const auto tiles_count = page_shape.height() / tile_.get_height() * page_shape.width() / tile_.get_width();
+    const auto size = tiles_count * tile_.get_tile_size(datatype_to_dataformat_converter(dtype));
     return size;
 }
 
 const Tile& TilePageConfig::get_tile() const {
-    return m_tile;
+    return tile_;
 }
 
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType dtype) const {
 {
     TT_FATAL(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "BFLOAT4_B and BFLOAT8_B data types are not supported for ROW_MAJOR layout");
-    return Alignment({sizeof(uint32_t) / utils::element_size_bytes(dtype)});}
+    return Alignment({sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype)});}
 }
 
 void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType dtype) const {
     TT_FATAL(!alignment.empty(), "Alignment should have at least 1 dimension for Row Major layout");
     uint32_t widthAlignment = alignment[-1];
-    uint32_t element_size = utils::element_size_bytes(dtype);
+    uint32_t element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
     uint32_t page_alignment = sizeof(uint32_t) / element_size;
     TT_FATAL((widthAlignment % page_alignment) == 0,
         "Wrong custom Tensor Layout alignment {}. For Row Major layout with element size {}bytes the innermost dimension must align to {}. This is because Buffer data is packed as uint32_t (4 bytes).",
@@ -131,7 +131,7 @@ Size RowMajorPageConfig::get_page_shape(const Size& physical_size, const MemoryC
 }
 
 size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
-    const auto size = page_shape.height() * page_shape.width() * utils::element_size_bytes(dtype);
+    const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
     return size;
 }
 

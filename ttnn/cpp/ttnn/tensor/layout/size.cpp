@@ -8,7 +8,7 @@
 namespace tt::tt_metal {
 
 Size::Size(size_t height, size_t width)
-    : m_height(height), m_width(width) {}
+    : height_(height), width_(width) {}
 
 Size::Size(const std::pair<size_t, size_t>& size)
     : Size(size.first, size.second) {}
@@ -17,31 +17,31 @@ Size::Size(const std::array<size_t, 2>& size)
     : Size(size[0], size[1]) {}
 
 Size Size::operator*(size_t scalar) const {
-    return Size(m_height * scalar, m_width * scalar);
+    return Size(height_ * scalar, width_ * scalar);
 }
 
 Size::operator std::pair<size_t, size_t>() const {
-    return {m_height, m_width};
+    return {height_, width_};
 }
 
 Size::operator std::array<size_t, 2>() const {
-    return {m_height, m_width};
+    return {height_, width_};
 }
 
 Size::operator std::array<uint32_t, 2>() const {
-    return {static_cast<uint32_t>(m_height), static_cast<uint32_t>(m_width)};
+    return {static_cast<uint32_t>(height_), static_cast<uint32_t>(width_)};
 }
 
 size_t Size::height() const {
-    return m_height;
+    return height_;
 }
 
 size_t Size::width() const {
-    return m_width;
+    return width_;
 }
 
 bool Size::operator==(const Size& rhs) const {
-    return m_height == rhs.m_height && m_width == rhs.m_width;
+    return height_ == rhs.height_ && width_ == rhs.width_;
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Size& size)

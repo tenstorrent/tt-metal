@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 int32_t normalized_index(int32_t index, size_t original_size, size_t container_size) {
     int32_t orig_size = static_cast<int32_t>(original_size);
@@ -28,24 +28,24 @@ int32_t normalized_index(int32_t index, size_t original_size, size_t container_s
 
     return fixed_index;
 }
-}
+} // namespace CMAKE_UNIQUE_NAMESPACE
 
 void ShapeBase::init() {
-    m_original_size = m_value.size();
+    original_size_ = value_.size();
     const size_t min_internal_size = 4;
 
-    if(m_original_size < min_internal_size) {
-        Container ones(min_internal_size - m_original_size, 1);
-        m_value.insert(m_value.begin(), ones.begin(), ones.end());
+    if(original_size_ < min_internal_size) {
+        Container ones(min_internal_size - original_size_, 1);
+        value_.insert(value_.begin(), ones.begin(), ones.end());
     }
 }
 
 bool ShapeBase::empty() const {
-    return m_original_size == 0;
+    return original_size_ == 0;
 }
 
 size_t ShapeBase::size() const {
-    return m_original_size;
+    return original_size_;
 }
 
 std::span<const uint32_t> ShapeBase::view() const {
@@ -65,21 +65,21 @@ bool ShapeBase::operator==(const std::vector<uint32_t> &other) const {
 }
 
 uint32_t ShapeBase::operator[](int32_t index) const {
-    auto norm_index = normalized_index(index, m_original_size, m_value.size());
-    return m_value[norm_index];
+    auto norm_index = CMAKE_UNIQUE_NAMESPACE::normalized_index(index, original_size_, value_.size());
+    return value_[norm_index];
 }
 
 uint32_t& ShapeBase::operator[](int32_t index) {
-    auto norm_index = normalized_index(index, m_original_size, m_value.size());
-    return m_value[norm_index];
+    auto norm_index = CMAKE_UNIQUE_NAMESPACE::normalized_index(index, original_size_, value_.size());
+    return value_[norm_index];
 }
 
 ShapeBase::Container::const_iterator ShapeBase::cbegin() const {
-    return this->m_value.cbegin() + (m_value.size() - m_original_size);
+    return this->value_.cbegin() + (value_.size() - original_size_);
 }
 
 ShapeBase::Container::const_iterator ShapeBase::cend() const {
-    return this->m_value.cend();
+    return this->value_.cend();
 }
 
 } // namespace tt::tt_metal

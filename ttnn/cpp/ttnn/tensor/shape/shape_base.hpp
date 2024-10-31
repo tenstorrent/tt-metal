@@ -17,16 +17,16 @@ public:
     using Container = SmallVector<uint32_t>;
 
     ShapeBase() = default;
-    explicit ShapeBase(const Container& shape) : m_value(shape) { init(); }
-    explicit ShapeBase(Container&& shape) : m_value(std::move(shape)) { init(); }
-    explicit ShapeBase(std::initializer_list<uint32_t> ilist) : m_value(ilist) { init(); }
+    explicit ShapeBase(const Container& shape) : value_(shape) { init(); }
+    explicit ShapeBase(Container&& shape) : value_(std::move(shape)) { init(); }
+    explicit ShapeBase(std::initializer_list<uint32_t> ilist) : value_(ilist) { init(); }
     template<std::size_t N>
-    explicit ShapeBase(const std::array<uint32_t, N>& arr) : m_value(arr.begin(), arr.end()) { init(); }
+    explicit ShapeBase(const std::array<uint32_t, N>& arr) : value_(arr.begin(), arr.end()) { init(); }
 
     template<std::size_t N>
     bool operator==(const std::array<uint32_t, N> &other) const {
-        bool same_size = m_value.size() == N;
-        return same_size && std::equal(m_value.begin(), m_value.end(), other.begin());
+        bool same_size = value_.size() == N;
+        return same_size && std::equal(value_.begin(), value_.end(), other.begin());
     }
 
     bool operator==(const ShapeBase &other) const;
@@ -47,10 +47,10 @@ protected:
     void init();
     size_t size() const;
 
-    Container m_value;
+    Container value_;
 
 private:
-    size_t m_original_size = 0;
+    size_t original_size_ = 0;
 };
 
 } // namespace tt::tt_metal

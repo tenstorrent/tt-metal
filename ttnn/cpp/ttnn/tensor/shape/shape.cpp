@@ -13,7 +13,7 @@ namespace tt::tt_metal {
 bool SimpleShape::operator==(const SimpleShape &other) const = default;
 
 bool SimpleShape::operator==(const SmallVector<uint32_t> &other) const {
-    return this->m_value == other;
+    return this->value_ == other;
 }
 
 size_t SimpleShape::rank() const {
