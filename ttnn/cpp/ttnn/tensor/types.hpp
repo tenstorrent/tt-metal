@@ -19,71 +19,9 @@
 #include "tt_metal/tt_stl/reflection.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/tensor/small_vector.hpp"
 #include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
 
-namespace ttnn {
-    /**
-SimpleShape is a temporary measure aimed at making a clear distinction between Shape/LegacyShape when padding information is stripped.
-Context:
-    Both Shape and LegacyShape can carry padding information.
-    And we use Shape or LegacyShape to carry full shape info or separately logical or physical shape.
-    Absence of distinction between full shape and logical shape leads to confusion and makes further refactoring harder.
-Plan:
-    We want to replace `Shape Shape::with_tile_padding() const` with `SimpleShape padded_shape() const`
-    We will clearly see where full shape is used vs logical or physical shape is used.
-    Need to split .hpp and .cpp
-**/
-class SimpleShape final {
-public:
-    explicit SimpleShape(const SmallVector<uint32_t>& shape) : value(shape) {}
-    explicit SimpleShape(SmallVector<uint32_t>&& shape) : value(std::move(shape)) {}
-    explicit SimpleShape(std::initializer_list<uint32_t> ilist) : value(ilist) {}
-    template<std::size_t N>
-    explicit SimpleShape(const std::array<uint32_t, N>& arr) : value(arr.begin(), arr.end()) {}
-
-    template<std::size_t N>
-    bool operator==(const std::array<uint32_t, N> &other) const {
-        return value.size() == other.size() && std::equal(value.cbegin(), value.cend(), other.cbegin());
-    }
-
-    bool operator==(const SimpleShape &other) const;
-    bool operator==(const SmallVector<uint32_t> &other) const;
-
-    uint32_t operator[](int32_t index) const;
-    uint32_t &operator[](int32_t index);
-
-    size_t rank() const { return value.size(); }
-    uint64_t volume() const;
-
-    auto cbegin() const { return value.cbegin(); }
-    auto cend() const { return value.cend(); }
-
-    tt::stl::Span<const uint32_t> view() const { return value; }
-
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(value); }
-
-    friend std::ostream &operator<<(std::ostream &os, const SimpleShape &shape);
-
-private:
-    SmallVector<uint32_t> value;
-};
-
-inline std::ostream &operator<<(std::ostream &os, const ttnn::SimpleShape &shape) {
-    os << "SimpleShape([";
-    for (size_t i = 0; i < shape.rank(); ++i) {
-        if (i > 0) {
-            os << ", ";
-        }
-        os << shape[i];
-    }
-    os << "])";
-    return os;
-}
-
-} // namespace ttnn
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace tt {
 
@@ -620,8 +558,6 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 }  // namespace types
 
 using types::Shape;
-
-SimpleShape get_physical_shape(const SimpleShape& logical_shape, DataType data_type, Layout layout, const std::optional<Tile>& tile = std::nullopt);
 
 }  // namespace ttnn
 

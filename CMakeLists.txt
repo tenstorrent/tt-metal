@@ -215,7 +215,7 @@ target_compile_options(
 )
 
 # add additional compile warning flags depending on the compiler
-ADJUST_COMPILER_WARNINGS()
+ADJUST_METAL_COMPILER_WARNINGS()
 
 add_library(compiler_flags INTERFACE)
 target_link_libraries(

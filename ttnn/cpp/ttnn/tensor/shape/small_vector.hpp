@@ -12,7 +12,7 @@
 #include <pybind11/stl.h>
 #endif
 
-namespace ttnn {
+namespace tt::tt_metal {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
@@ -34,10 +34,14 @@ std::ostream &operator<<(std::ostream &os, const SmallVector<T, PREALLOCATED_SIZ
     return os;
 }
 
+}  // namespace tt::tt_metal
+
+namespace ttnn {
+    using tt::tt_metal::SmallVector;
 }
 
 template<typename T, size_t PREALLOCATED_SIZE>
-struct std::hash<ttnn::SmallVector<T, PREALLOCATED_SIZE>> {
+struct std::hash<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> {
     size_t operator()(const ttnn::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
         size_t hash = 0;
         for (const auto& element : vec) {
@@ -48,10 +52,10 @@ struct std::hash<ttnn::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<ttnn::SmallVector<T, PREALLOCATED_SIZE>> {
+struct fmt::formatter<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const ttnn::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const -> format_context::iterator {
+    auto format(const tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const -> format_context::iterator {
         std::stringstream ss;
         ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -61,6 +65,6 @@ struct fmt::formatter<ttnn::SmallVector<T, PREALLOCATED_SIZE>> {
 #if TTNN_WITH_PYTHON_BINDINGS
 namespace PYBIND11_NAMESPACE { namespace detail {
     template <typename T, size_t PREALLOCATED_SIZE>
-    struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {};
+    struct type_caster<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>, T> {};
 }}
 #endif

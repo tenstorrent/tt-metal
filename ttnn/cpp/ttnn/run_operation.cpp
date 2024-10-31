@@ -16,6 +16,7 @@
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -297,7 +298,7 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     uint8_t cq_id);
 
 std::vector<LegacyShape> extract_legacy_shapes(
-    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>>&& shapes, const std::function<std::pair<DataType, Layout>(size_t idx)>& layout_provider) {
+    const std::variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>>&& shapes, const std::function<TensorLayout(size_t idx)>& layout_provider) {
     if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(shapes)) {
         return std::get<std::vector<tt::tt_metal::LegacyShape>>(std::move(shapes));
     }
@@ -305,8 +306,8 @@ std::vector<LegacyShape> extract_legacy_shapes(
     std::vector<LegacyShape> legacy_shapes;
     legacy_shapes.reserve(simple_shapes.size());
     for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
-        auto [data_type, layout] = layout_provider(idx);
-        legacy_shapes.emplace_back(simple_shapes[idx].view(), get_physical_shape(simple_shapes[idx], data_type, layout).view());
+        TensorLayout tensor_layout = layout_provider(idx);
+        legacy_shapes.emplace_back(simple_shapes[idx].view(), tensor_layout.compute_padded_shape(simple_shapes[idx]).view());
     }
     return legacy_shapes;
 }
@@ -358,7 +359,8 @@ Tensors run_with_autoformat(
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
     auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
-        return std::pair{output_tensors[idx].get_dtype(), Layout::TILE};
+        auto tensor = output_tensors[idx];
+        return TensorLayout(tensor.get_dtype(), Layout::TILE, tensor.memory_config());
     });
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
@@ -420,7 +422,8 @@ Tensors run_with_autoformat(
     auto output_tensors = run<Tensors>(std::move(operation), formatted_input_tensors, formatted_optional_input_tensors, optional_output_tensors, cq_id);
 
     auto output_shapes = extract_legacy_shapes(operation.compute_output_shapes(input_tensors), [&](size_t idx) {
-        return std::pair{output_tensors[idx].get_dtype(), output_layouts[idx]};
+        auto tensor = output_tensors[idx];
+        return TensorLayout(tensor.get_dtype(), output_layouts[idx], tensor.memory_config());
     });
 
     TT_ASSERT(output_tensors.size() == output_shapes.size());
