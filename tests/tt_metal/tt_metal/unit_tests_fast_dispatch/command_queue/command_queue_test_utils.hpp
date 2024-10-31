@@ -26,3 +26,7 @@ inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> E
     EnqueueWriteBuffer(cq, *buffer, src, false);
     return std::make_pair(std::move(buffer), src);
 }
+
+inline bool does_device_have_active_eth_cores(const Device *device) {
+    return !(device->get_active_ethernet_cores(true).empty());
+}

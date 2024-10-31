@@ -44,10 +44,6 @@ struct DummyProgramMultiCBConfig {
 
 namespace local_test_functions {
 
-bool does_device_have_active_eth_cores(const Device *device) {
-    return !(device->get_active_ethernet_cores(true).empty());
-}
-
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
         program, "tt_metal/kernels/dataflow/blank.cpp", cr_set,
@@ -1404,8 +1400,8 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
 }
 
 TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
-    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -1421,8 +1417,8 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
 }
 
 TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
-    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -1460,8 +1456,8 @@ TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
 }
 
 TEST_F(RandomProgramFixture, TestProgramsOnEth) {
-    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -1482,8 +1478,8 @@ TEST_F(RandomProgramFixture, TestProgramsOnEth) {
 }
 
 TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
-    if (!local_test_functions::does_device_have_active_eth_cores(device_)) {
-        GTEST_SKIP() << "Skipping test because device " << device_->id() << "does not have any active ethernet cores";
+    if (!does_device_have_active_eth_cores(device_)) {
+        GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
 
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
