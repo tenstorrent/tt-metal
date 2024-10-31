@@ -275,9 +275,9 @@ on:
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - max_pool2d.short.max_pool2d_short_sweep
-          - transformers.concatenate_heads.concatenate_heads
-          - transformers.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
-          - transformers.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
+          - transformer.concatenate_heads.concatenate_heads
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads
+          - transformer.split_query_key_value_and_split_heads.split_query_key_value_and_split_heads_kv_input
   schedule:
     - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
