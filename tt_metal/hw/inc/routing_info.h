@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 struct eth_word_t {
     volatile uint32_t bytes_sent;
     volatile uint32_t dst_cmd_valid;
