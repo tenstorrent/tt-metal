@@ -145,19 +145,17 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
             batch_size_1_a > batch_size_1_b and batch_size_1_b == 1,
             "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
     }
-    if (height_a != height_b) {
-        TT_ASSERT(
-            height_a > height_b and height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
-    }
-    if (width_a != width_b) {
-        TT_ASSERT(
-            width_a > width_b and width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
-    }
+
+    TT_ASSERT(height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
+    TT_ASSERT(width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 }
 
 BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto input_shape_a = tensor_args.input_tensor_a.tensor_attributes->shape;
+    if (input_shape_a.logical_shape().volume() == 0) {
+        return input_shape_a;
+    }
     const auto& tensor_b = tensor_args.input_tensor_b;
     const auto input_shape_b = tensor_b.has_value() ? tensor_b->tensor_attributes->shape : ttnn::Shape{1, 1};
 

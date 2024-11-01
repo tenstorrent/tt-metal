@@ -155,10 +155,10 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
-    uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
+    uint32_t units_per_core_group_1 = target_num_cores == 0 ? 0 : units_to_divide / target_num_cores;
     uint32_t units_per_core_group_2 = 0;
     // Evenly divided units to all target cores
-    if (units_to_divide % target_num_cores == 0) {
+    if (target_num_cores == 0 || units_to_divide % target_num_cores == 0) {
         core_group_1 = all_cores;
         // Uneven division of units across cores
         // This case should only be hit when there are more units of work than a full grid of cores
