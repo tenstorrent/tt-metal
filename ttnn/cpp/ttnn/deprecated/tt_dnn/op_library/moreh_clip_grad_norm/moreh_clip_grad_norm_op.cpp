@@ -41,11 +41,11 @@ void MorehClipGradNormStep1::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
     for (const auto &input : input_tensors) {
-        check_tensor(input, "moreh_clip_grad_norm_step1", "input");
+        ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step1", "input");
     }
 
     const auto &tmp_pow_sum = optional_input_tensors.at(0).value();
-    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
+    ttnn::operations::check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
 
 std::vector<ttnn::SimpleShape> MorehClipGradNormStep1::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -99,10 +99,10 @@ void moreh_clip_grad_norm_step1(const std::vector<Tensor> &inputs, float norm_ty
 
 void MorehClipGradNormStep2::validate(const std::vector<Tensor> &input_tensors) const {
     const auto &tmp_pow_sum = input_tensors.at(0);
-    check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
+    ttnn::operations::check_tensor(tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
     const auto &total_norm = input_tensors.at(1);
-    check_tensor(total_norm, "moreh_clip_grad_norm_step2", "total_norm");
+    ttnn::operations::check_tensor(total_norm, "moreh_clip_grad_norm_step2", "total_norm");
 }
 
 std::vector<ttnn::SimpleShape> MorehClipGradNormStep2::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
@@ -139,11 +139,11 @@ void MorehClipGradNormStep3::validate(
     const std::vector<Tensor> &input_tensors,
     const std::vector<std::optional<const Tensor>> &optional_input_tensors) const {
     for (const auto &input : input_tensors) {
-        check_tensor(input, "moreh_clip_grad_norm_step3", "input");
+        ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step3", "input");
     }
 
     const auto &clip_coef_clamped = optional_input_tensors.at(0).value();
-    check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
+    ttnn::operations::check_tensor(clip_coef_clamped, "moreh_clip_grad_norm_step3", "clip_coef_clamped");
 }
 
 std::vector<ttnn::SimpleShape> MorehClipGradNormStep3::compute_output_shapes(const std::vector<Tensor> &) const { return {}; }
