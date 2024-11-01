@@ -47,21 +47,21 @@ inline void moreh_linear_backward_validate(
     if (input_grad.has_value()) {
         const auto& input_grad_tensor = input_grad.value();
         TT_FATAL(
-            tt::operations::primary::is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
+            is_same_shape(input, input_grad_tensor), "both tensors should be the same shape");
     }
 
     if (weight_grad.has_value()) {
         const auto& weight_grad_tensor = weight_grad.value();
         TT_FATAL(
-            tt::operations::primary::is_same_shape(weight, weight_grad_tensor),
+            is_same_shape(weight, weight_grad_tensor),
             "both tensors should be the same shape");
     }
 
     if (bias_grad.has_value()) {
         const auto& bias_grad_tensor = bias_grad.value();
         TT_FATAL(
-            tt::operations::primary::is_scalar(bias_grad_tensor) ||
-                tt::operations::primary::is_1d_tensor(bias_grad_tensor),
+            is_scalar(bias_grad_tensor) ||
+                is_1d_tensor(bias_grad_tensor),
             "bias_grad tensor should be 1d or scalar");
     }
 }
