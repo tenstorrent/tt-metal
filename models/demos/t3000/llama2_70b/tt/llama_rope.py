@@ -2,19 +2,12 @@ import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs
+from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, get_rot_transformation_mat
 from loguru import logger
 
 
-def get_rot_transformation_mat(dhead):
-    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
-    return rot_emb_matrix
-
-
-def compute_gather_cos_sin(dhead, end, theta, position_ids):
-    cos, sin = precompute_freqs(dhead, end, theta)
+def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope):
+    cos, sin = precompute_freqs(dhead, end, theta, use_scaled_rope)
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
     sin = sin.gather(0, position_id_expanded)
@@ -30,6 +23,7 @@ class TtLlamaRotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
+        use_scaled_rope: bool,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -42,7 +36,11 @@ class TtLlamaRotarySetup(LightweightModule):
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim, end=max_seq_len * 2, theta=rope_theta, position_ids=torch.arange(max_seq_len)
+            dhead=head_dim,
+            end=max_seq_len * 2,
+            theta=rope_theta,
+            position_ids=torch.arange(max_seq_len),
+            use_scaled_rope=use_scaled_rope,
         )
 
         self.cos_matrix = ttnn.from_torch(

@@ -71,7 +71,9 @@ class TtLlamaModel_optimized:
         transformation_mats_prefill = ttnn.to_device(transformation_mats_prefill, mesh_device)
 
         # Transformation matrix for rotary embeddings (decode)
-        self.rope_setup_decode = TtLlamaRotarySetup(self.mesh_device, self.head_dim, self.max_seq_len, self.rope_theta)
+        self.rope_setup_decode = TtLlamaRotarySetup(
+            self.mesh_device, self.head_dim, self.max_seq_len, self.rope_theta, self.use_scaled_rope
+        )
         transformation_mats_decode = self.rope_setup_decode.get_trans_mats()
 
         transformation_mats = {"prefill": transformation_mats_prefill, "decode": transformation_mats_decode}

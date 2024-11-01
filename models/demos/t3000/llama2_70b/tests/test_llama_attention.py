@@ -46,7 +46,7 @@ class PagedAttentionConfig:
 
 
 class PytorchLlamaAttentionModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num, rope_theta):
+    def __init__(self, hf_reference_model, layer_num, rope_theta, use_scaled_rope):
         super().__init__()
         self.attention = hf_reference_model.layers[layer_num].attention
 
@@ -59,6 +59,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         self.head_dim = hidden_dim // self.n_heads
         self.max_seq_len = configuration.max_seq_len
         self.rope_theta = rope_theta
+        self.use_scaled_rope = use_scaled_rope
 
     def prepare_inputs(self, x, start_pos):
         """
@@ -66,7 +67,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
@@ -82,7 +83,7 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -109,7 +110,9 @@ class PytorchLlamaAttentionModel(torch.nn.Module):
         return result
 
 
-def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode, rope_theta, rope_setup=None):
+def tt_llama_attention_prepare_inputs(
+    llama_attention_model, x, start_pos, mode, rope_theta, rope_setup=None, use_scaled_rope=False
+):
     assert len(x.size()) == 3
     batch, seq_len, _ = x.shape
 
@@ -132,7 +135,9 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, mode,
         )
         xs = ttnn.to_device(xs, llama_attention_model.mesh_device)
 
-        cos, sin = precompute_freqs(llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta)
+        cos, sin = precompute_freqs(
+            llama_attention_model.head_dim, llama_attention_model.max_seq_len * 2, rope_theta, use_scaled_rope
+        )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
         assert sin_gathered.size() == (1, 1, seq_len, llama_attention_model.head_dim)
@@ -237,13 +242,15 @@ def run_test_LlamaAttention_inference(
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaAttention_model = PytorchLlamaAttentionModel(
-        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
+        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta, configuration.use_scaled_rope
     )
     # TT model -------------------------------------------------------------------------
 
     if mode == "decode":
         head_dim = configuration.dim // configuration.n_heads
-        rope_setup = TtLlamaRotarySetup(t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta)
+        rope_setup = TtLlamaRotarySetup(
+            t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta, configuration.use_scaled_rope
+        )
         transformation_mats = rope_setup.get_trans_mats()
         transformation_mats = {"decode": transformation_mats}
     else:
@@ -332,6 +339,7 @@ def run_test_LlamaAttention_inference(
             mode,
             configuration.rope_theta,
             rope_setup=rope_setup if mode == "decode" else None,
+            use_scaled_rope=configuration.use_scaled_rope,
         )
 
         tt_out = tt_LlamaAttention_model(
