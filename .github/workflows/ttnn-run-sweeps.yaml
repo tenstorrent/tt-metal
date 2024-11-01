@@ -258,14 +258,12 @@ on:
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
           - eltwise.ternary_backward.addcmul_bw
+          - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
           - reduction.topk.topk
           - reduction.argmax.argmax
           - reduction.prod
           - reduction.sum
-          - embedding.embedding
-          - eltwise.ternary_backward.addcmul_bw
-          - eltwise.ternary_backward.addcdiv_bw
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
