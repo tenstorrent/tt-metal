@@ -156,8 +156,7 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
 
 Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
-        const auto element_size = CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype);
-        return Size(1, element_size);
+        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype));
     }
 
     if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
