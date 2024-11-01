@@ -65,12 +65,12 @@ void TensorLayout::initialize_alignment() {
         return;
     }
 
-    alignment_ = page_config_.create_default_alignment(dtype_);
+    alignment_ = page_config_.create_default_alignment(dtype_, memory_config_);
 }
 
 void TensorLayout::validate_alignment() const
 {
-    return page_config_.validate_alignment(alignment_, dtype_);
+    return page_config_.validate_alignment(alignment_, dtype_, memory_config_);
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
