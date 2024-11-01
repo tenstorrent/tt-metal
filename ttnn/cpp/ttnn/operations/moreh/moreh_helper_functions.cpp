@@ -102,7 +102,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
+            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
             .defines = defines});
 }
@@ -119,7 +119,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
+            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
             .defines = defines});
 }
