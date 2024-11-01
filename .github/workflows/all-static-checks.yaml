@@ -91,24 +91,38 @@ jobs:
   cmake-version:
     runs-on: ubuntu-22.04
     steps:
-    - uses: lukka/get-cmake@v3.30.5
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Check for changed CMake files
+      id: changed-cmake-files
+      uses: tj-actions/changed-files@c3a1bb2c992d77180ae65be6ae6c166cf40f857c
+      with:
+        files: |
+          **/*.cmake
+          **/CMakeLists.txt
+    - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
         cmakeVersion: "~3.16.0"
     - name: Check CMake version
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version
-    - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
     - name: Install LLVM and Clang
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: |
         wget https://apt.llvm.org/llvm.sh
         chmod u+x llvm.sh
         sudo ./llvm.sh 17
     - name: Install deps
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt update
         sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
     - name: Check CMake compatibility
+      if: steps.changed-cmake-files.outputs.any_changed == 'true'
       env:
         ARCH_NAME: wormhole_b0
         CMAKE_GENERATOR: Ninja
