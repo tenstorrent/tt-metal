@@ -36,7 +36,7 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
 
     tt::tt_metal::TensorLayout tensor_layout(dtype, PageConfig(Layout::TILE), mem_cfg);
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device( device, input_shape, tensor_layout);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, input_shape, tensor_layout);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
@@ -56,6 +56,11 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
 struct CreateTensorParams {
     ttnn::SimpleShape shape;
 };
+
+struct EmptyTensorParams {
+    ttnn::Shape shape;
+};
+
 }
 
 class CreateTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CreateTensorParams> {};
@@ -74,5 +79,36 @@ INSTANTIATE_TEST_SUITE_P(
         CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
         CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})},
         CreateTensorParams{.shape=ttnn::SimpleShape({0})}
+    )
+);
+
+class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<EmptyTensorParams> {};
+
+TEST_P(EmptyTensorTest, Tile) {
+    EmptyTensorParams params = GetParam();
+    auto tensor = tt::tt_metal::create_device_tensor(params.shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device_, ttnn::DRAM_MEMORY_CONFIG);
+    EXPECT_EQ(tensor.get_logical_shape(), params.shape.logical_shape());
+}
+
+TEST_P(EmptyTensorTest, RowMajor) {
+    EmptyTensorParams params = GetParam();
+    auto tensor = tt::tt_metal::create_device_tensor(params.shape, DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT, device_, ttnn::DRAM_MEMORY_CONFIG);
+    EXPECT_EQ(tensor.get_logical_shape(), params.shape.logical_shape());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EmptyTensorTestWithShape,
+    EmptyTensorTest,
+    ::testing::Values(
+        EmptyTensorParams{.shape=ttnn::Shape({1, 1, 32, 32})},
+        EmptyTensorParams{.shape=ttnn::Shape({2, 1, 32, 32})},
+        EmptyTensorParams{.shape=ttnn::Shape({64, 1, 256, 1})},
+        EmptyTensorParams{.shape=ttnn::Shape({1, 1, 21120, 16})},
+        EmptyTensorParams{.shape=ttnn::Shape({0, 0, 0, 0})},
+        EmptyTensorParams{.shape=ttnn::Shape({0, 1, 32, 32})},
+        EmptyTensorParams{.shape=ttnn::Shape({0})},
+        EmptyTensorParams{.shape=ttnn::Shape({1, 1, 1, 1})},
+        EmptyTensorParams{.shape=ttnn::Shape({1})},
+        EmptyTensorParams{.shape=ttnn::Shape({})}
     )
 );
