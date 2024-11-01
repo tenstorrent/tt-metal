@@ -6,6 +6,7 @@
 
 namespace tt::tt_metal {
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 size_t round_up(size_t value, size_t multiple) {
@@ -40,6 +41,7 @@ Alignment legacyShapeToAlignment(const ttnn::Shape& shape) {
 }
 
 } // namespace CMAKE_UNIQUE_NAMESPACE
+}
 
 TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config)
     : TensorLayout(dtype, page_config, memory_config, {}) {
