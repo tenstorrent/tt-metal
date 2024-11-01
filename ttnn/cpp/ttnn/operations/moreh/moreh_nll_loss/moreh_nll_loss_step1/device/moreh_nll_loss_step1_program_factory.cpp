@@ -75,7 +75,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
-        tt::operations::primary::CreateCircularBuffer(
+        CreateCircularBuffer(
             program,
             all_cores,
             data_format,
@@ -86,7 +86,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
                 {CB::c_out0, 1},                             // output
             });
     } else {
-        tt::operations::primary::CreateCircularBuffer(
+        CreateCircularBuffer(
             program,
             all_cores,
             data_format,
@@ -100,12 +100,12 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
         static_cast<uint32_t>(weight_has_value)};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
+        static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -126,9 +126,9 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();

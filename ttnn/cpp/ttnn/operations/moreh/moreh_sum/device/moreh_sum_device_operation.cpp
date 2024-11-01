@@ -42,13 +42,13 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    tt::operations::primary::check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
-    tt::operations::primary::check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
 
-    tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
+    validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        tt::operations::primary::validate_output_with_keepdim(
+        validate_output_with_keepdim(
             input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }

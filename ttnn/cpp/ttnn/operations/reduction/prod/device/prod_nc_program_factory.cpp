@@ -73,7 +73,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    CreateCircularBuffer(
+    ttnn::operations::CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -99,8 +99,8 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
 
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -109,13 +109,13 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = CreateComputeKernel(
+        compute_kernel_2_id = ttnn::operations::CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
              num_tiles_per_core,
              input_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(is_dram(input)),
+             static_cast<uint32_t>(ttnn::operations::is_dram(input)),
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim)
@@ -156,7 +156,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(), num_tiles_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
+            {output.buffer()->address(), num_tiles_per_core, tile_offset, static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.core_coord_in_core_ranges(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});

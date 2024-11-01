@@ -48,7 +48,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const uint32_t out0_t = 2;
     const uint32_t out1_t = 2;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
@@ -63,9 +63,9 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     bool has_other_grad = other_grad.has_value();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)tt::operations::primary::is_dram(src0_buffer),
-        (std::uint32_t)tt::operations::primary::is_dram(src1_buffer),
-        (std::uint32_t)tt::operations::primary::is_dram(src2_buffer)};
+        (std::uint32_t)is_dram(src0_buffer),
+        (std::uint32_t)is_dram(src1_buffer),
+        (std::uint32_t)is_dram(src2_buffer)};
 
     bool dst0_is_dram = false;
     bool dst1_is_dram = false;
@@ -76,7 +76,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         const auto& input_grad_tensor = input_grad.value();
         auto* dst0_buffer = input_grad_tensor.buffer();
         TT_ASSERT(dst0_buffer != nullptr, "input_grad buffer should be allocated on device!");
-        dst0_is_dram = tt::operations::primary::is_dram(dst0_buffer);
+        dst0_is_dram = is_dram(dst0_buffer);
         dst0_address = dst0_buffer->address();
     }
 
@@ -84,7 +84,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         const auto& other_grad_tensor = other_grad.value();
         auto* dst1_buffer = other_grad_tensor.buffer();
         TT_ASSERT(dst1_buffer != nullptr, "other_grad buffer should be allocated on device!");
-        dst1_is_dram = tt::operations::primary::is_dram(dst1_buffer);
+        dst1_is_dram = is_dram(dst1_buffer);
         dst1_address = dst1_buffer->address();
     }
 
@@ -101,16 +101,16 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/writer_moreh_dot_backward.cpp";
 
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
     std::map<string, string> compute_defines;
 
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";
-    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_id = CreateComputeKernel(
         program, compute_kernel_file, {core, core_num, compute_kernel_args}, compute_defines);
 
     SetRuntimeArgs(

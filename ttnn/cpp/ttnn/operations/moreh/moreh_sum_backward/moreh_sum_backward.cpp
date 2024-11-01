@@ -18,7 +18,7 @@ Tensor MorehSumBackward::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL((input.has_value() || input_grad.has_value()), "either input or input_grad must have a value");
     uint32_t rank = input.has_value() ? input->get_shape().value.rank() : input_grad->get_shape().value.rank();
-    ttnn::SmallVector<int64_t> dims = tt::operations::primary::get_dim(dim, rank);
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, rank);
     std::sort(dims.begin(), dims.end());
     return ttnn::prim::moreh_sum_backward(
         output_grad, input, dims, keepdim, input_grad, memory_config, compute_kernel_config);

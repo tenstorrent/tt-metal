@@ -30,7 +30,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     const auto input_shape = input.get_padded_shape();
     const auto input_shape_without_padding = input.get_logical_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
-        tt::operations::primary::extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
+        extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
     const auto num_output_tiles = output.volume() / tt::constants::TILE_HW;
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -69,7 +69,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -82,18 +82,18 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(input))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
     std::map<string, string> reader_defines;
     reader_defines["USE_FPU"] = "1";
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -111,7 +111,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         compute_kernel_file =
             "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc_gs.cpp";
     }
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -124,7 +124,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, num_reduce_input_tile};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},

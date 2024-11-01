@@ -19,8 +19,8 @@ inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, cons
         other.get_legacy_shape().rank() != 4) {
         return false;
     }
-    return tt::operations::primary::is_scalar(output_grad) && tt::operations::primary::is_1d_tensor(input) &&
-           tt::operations::primary::is_1d_tensor(other) && tt::operations::primary::is_same_shape(input, other);
+    return is_scalar(output_grad) && is_1d_tensor(input) &&
+           is_1d_tensor(other) && is_same_shape(input, other);
 }
 
 std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(

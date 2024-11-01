@@ -283,7 +283,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     const uint32_t im3_t{1};   // temp for bias add
     const uint32_t out0_t{2};  // output
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -305,8 +305,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     ////////////////////////////////////////////////////////////////////////////
     std::map<string, string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(other)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(other)),
         Kt,
         static_cast<uint32_t>(transpose_input),
         static_cast<uint32_t>(transpose_other),
@@ -318,36 +318,36 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
     if (bias.has_value()) {
         reader_defines["FUSE_BIAS"] = "1";
-        reader_compile_time_args.push_back(static_cast<uint32_t>(tt::operations::primary::is_dram(bias)));
+        reader_compile_time_args.push_back(static_cast<uint32_t>(is_dram(bias)));
         reader_compile_time_args.push_back(static_cast<uint32_t>(is_scalar_bias));
         log_debug(
             tt::LogOp,
             "{}:{} bias tensor. is bias dram {}",
             __func__,
             __LINE__,
-            tt::operations::primary::is_dram(bias));
+            is_dram(bias));
     }
 
     const std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
+        static_cast<uint32_t>(is_dram(output))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/reader_moreh_matmul.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/device/kernels/writer_moreh_matmul.cpp";
 
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
     log_debug(
         tt::LogOp,
         "{}:{} DMVK is_dram(input): {}, is_dram(other): {}, is_dram(output): {}",
         __func__,
         __LINE__,
-        tt::operations::primary::is_dram(input),
-        tt::operations::primary::is_dram(other),
-        tt::operations::primary::is_dram(output));
+        is_dram(input),
+        is_dram(other),
+        is_dram(output));
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -378,7 +378,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
         unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_output_tiles_per_core_group_1, compute_args_group_1},
@@ -406,7 +406,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
             compute_args_group_2.push_back(static_cast<uint32_t>(is_scalar_bias));
         }
 
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_output_tiles_per_core_group_2, compute_args_group_2},

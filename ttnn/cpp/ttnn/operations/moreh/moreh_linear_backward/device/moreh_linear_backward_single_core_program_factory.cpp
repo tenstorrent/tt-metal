@@ -65,7 +65,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
@@ -81,9 +81,9 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
 
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(output_grad))};
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(bias_grad))};
+        static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
@@ -92,9 +92,9 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -110,7 +110,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_single_core_hw.cpp";
 
-    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core, core_num, compute_kernel_args},

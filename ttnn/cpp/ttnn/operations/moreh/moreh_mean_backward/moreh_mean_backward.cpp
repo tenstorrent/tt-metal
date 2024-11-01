@@ -28,7 +28,7 @@ Tensor MorehMeanBackward::invoke(
             input_grad_rank += dims.size();
         }
     }
-    ttnn::SmallVector<int64_t> dims = tt::operations::primary::get_dim(dim, input_grad_rank);
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, input_grad_rank);
     return ttnn::prim::moreh_mean_backward(
         output_grad, dims, keepdim, input_grad_shape, input_grad, memory_config, compute_kernel_config);
 }

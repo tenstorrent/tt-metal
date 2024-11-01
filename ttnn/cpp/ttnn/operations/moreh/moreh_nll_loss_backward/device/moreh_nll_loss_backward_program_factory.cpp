@@ -54,7 +54,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -71,13 +71,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -107,12 +107,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
@@ -230,7 +230,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -247,13 +247,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -283,12 +283,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
@@ -404,7 +404,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -421,13 +421,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? tt::operations::primary::is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? tt::operations::primary::is_dram(divisor.value()) : false),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -457,12 +457,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {

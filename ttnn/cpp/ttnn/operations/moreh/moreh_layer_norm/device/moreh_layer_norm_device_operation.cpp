@@ -99,7 +99,7 @@ MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_o
 
     for (uint32_t dim = 0; dim < output_rank; dim++) {
         auto input_shape_without_padding_size = input_shape_without_padding[dim];
-        if (tt::operations::primary::is_hw_dim(dim, output_rank)) {
+        if (is_hw_dim(dim, output_rank)) {
             output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
             auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
             dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});

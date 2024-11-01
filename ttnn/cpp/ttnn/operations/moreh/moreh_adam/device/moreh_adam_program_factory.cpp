@@ -61,7 +61,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -94,17 +94,17 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
 
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_in))};
+        static_cast<uint32_t>(is_dram(param_in)),
+        static_cast<uint32_t>(is_dram(grad)),
+        static_cast<uint32_t>(is_dram(exp_avg_in)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_in)),
+        static_cast<uint32_t>(is_dram(max_exp_avg_sq_in))};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(max_exp_avg_sq_out.value()))};
+        static_cast<uint32_t>(is_dram(param_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
+        static_cast<uint32_t>(is_dram(max_exp_avg_sq_out.value()))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
@@ -120,9 +120,9 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (fp32_dest_acc_en) {
         data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    const auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -143,7 +143,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
         "moreh_adam.cpp";
 
-    auto compute_kernel_1_id = tt ::operations::primary::CreateComputeKernel(
+    auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_tiles_per_core_group_1, compute_args_group_1},
@@ -155,7 +155,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_tiles_per_core_group_2};
 
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_tiles_per_core_group_2, compute_args_group_2},

@@ -20,8 +20,8 @@ void MorehBiasAddBackwardOperation::validate_inputs(
         auto bias_grad_shape = bias_grad->get_shape();
         auto bias_grad_tensor = bias_grad.value();
         TT_FATAL(
-            tt::operations::primary::is_scalar(bias_grad_tensor) ||
-                tt::operations::primary::is_1d_tensor(bias_grad_tensor),
+            is_scalar(bias_grad_tensor) ||
+                is_1d_tensor(bias_grad_tensor),
             "bias_grad tensor should be 1d or scalar");
     }
 }
@@ -29,7 +29,7 @@ void MorehBiasAddBackwardOperation::validate_inputs(
 MorehBiasAddBackwardOperation::program_factory_t MorehBiasAddBackwardOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& bias_grad = tensor_args.bias_grad.value();
-    if (tt::operations::primary::is_scalar(bias_grad))
+    if (is_scalar(bias_grad))
         return SingleCoreProgramFactory();
     return MultiCoreProgramFactory();
 }

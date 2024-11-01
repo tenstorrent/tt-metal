@@ -17,8 +17,8 @@ void MorehMeanBackwardOperation::validate_tensors(
         input_grad.has_value() || operation_attributes.input_grad_shape.has_value() || operation_attributes.keepdim,
         "Either input_grad tensor or input_grad_shape or keepdim must be present");
 
-    tt::operations::primary::check_tensor(output_grad, "moreh_mean_backward", "output_grad", {DataType::BFLOAT16});
-    tt::operations::primary::check_tensor(input_grad, "moreh_mean_backward", "input_grad", {DataType::BFLOAT16});
+    check_tensor(output_grad, "moreh_mean_backward", "output_grad", {DataType::BFLOAT16});
+    check_tensor(input_grad, "moreh_mean_backward", "input_grad", {DataType::BFLOAT16});
 }
 
 MorehMeanBackwardOperation::program_factory_t MorehMeanBackwardOperation::select_program_factory(
@@ -45,7 +45,7 @@ MorehMeanBackwardOperation::shape_return_value_t MorehMeanBackwardOperation::com
     ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
 
     for (uint32_t dim = 0; dim < rank; dim++) {
-        if (tt::operations::primary::is_hw_dim(dim, rank)) {
+        if (is_hw_dim(dim, rank)) {
             uint32_t up32_shape = tt::round_up(input_grad_shape[dim], 32);
             uint32_t padding_back = up32_shape - input_grad_shape[dim];
             shape.push_back(up32_shape);
@@ -70,7 +70,7 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
         return tensor_args.input_grad.value();
     }
 
-    return tt::operations::primary::create_device_tensor(
+    return create_device_tensor(
         compute_output_shapes(operation_attributes, tensor_args),
         output_grad.get_dtype(),
         Layout::TILE,

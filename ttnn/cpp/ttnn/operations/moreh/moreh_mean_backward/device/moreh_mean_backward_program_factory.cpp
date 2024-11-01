@@ -119,7 +119,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -135,17 +135,17 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)), input_grad_rank};
+        static_cast<uint32_t>(is_dram(output_grad)), input_grad_rank};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/reader_moreh_mean_backward.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_mean_backward/device/kernels/writer_moreh_mean_backward.cpp";
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -160,14 +160,14 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
     const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
             {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
         },
-        tt::operations::primary::ComputeKernelConfig{
+        ComputeKernelConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,

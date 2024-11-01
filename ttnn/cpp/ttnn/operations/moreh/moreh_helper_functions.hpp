@@ -12,9 +12,8 @@
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt {
+namespace ttnn {
 namespace operations {
-namespace primary {
 
 using namespace tt::tt_metal;
 
@@ -60,7 +59,7 @@ inline bool is_same_shape(const Tensor &tensor_a, const Tensor &tensor_b) {
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     CoreRangeSet all_cores, CoreRangeSet core_group_1, CoreRangeSet core_group_2, uint32_t offset_x, uint32_t offset_y);
 
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_wt_core_range(
     CoreRange core_range, uint32_t units_to_divide);
 
 [[maybe_unused]] KernelHandle CreateReadKernel(
@@ -308,6 +307,5 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim);
 
-}  // namespace primary
 }  // namespace operations
 }  // namespace tt

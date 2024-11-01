@@ -50,8 +50,8 @@ void FastReduceNCDeviceOperation::validate_with_output_tensors(
     auto& output = output_tensors.at(0);
 
     // validate tensor
-    tt::operations::primary::check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
-    tt::operations::primary::check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(input, "FastReduceNC", "input", {DataType::BFLOAT16, DataType::BFLOAT8_B});
+    check_tensor(output, "FastReduceNC", "output", {DataType::BFLOAT16, DataType::BFLOAT8_B});
 
     // validate input dim
     const auto input_rank = input.get_logical_shape().rank();

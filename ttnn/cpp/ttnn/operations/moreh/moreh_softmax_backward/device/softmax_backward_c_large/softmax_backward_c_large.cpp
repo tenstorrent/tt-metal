@@ -35,7 +35,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(core_range, num_tiles);
+        split_work_to_cores_wt_core_range(core_range, num_tiles);
 
     auto arch = input_grad.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -46,7 +46,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     // create circular buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_grad.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -82,13 +82,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/reader_moreh_softmax_backward_c.cpp",
         all_cores,
         {y_is_dram, dy_is_dram},
         reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/writer_moreh_softmax_backward_c.cpp",
         all_cores,
@@ -103,7 +103,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     auto inner_size = outer_stride / dim_size;
 
     // create compute kernel
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_c_large.cpp",
         {

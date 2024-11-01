@@ -29,10 +29,10 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     const auto& other = tensor_args.other;
 
-    TT_FATAL(tt::operations::primary::is_scalar(output_grad), "Invalid value type");
-    TT_FATAL(tt::operations::primary::is_1d_tensor(input), "Invalid input tensor dimensions.");
-    TT_FATAL(tt::operations::primary::is_1d_tensor(other), "Invalid input tensor dimensions.");
-    TT_FATAL(tt::operations::primary::is_same_shape(input, other), "Tensor A and B should have the same shape.");
+    TT_FATAL(is_scalar(output_grad), "Invalid value type");
+    TT_FATAL(is_1d_tensor(input), "Invalid input tensor dimensions.");
+    TT_FATAL(is_1d_tensor(other), "Invalid input tensor dimensions.");
+    TT_FATAL(is_same_shape(input, other), "Tensor A and B should have the same shape.");
 
     TT_FATAL(
         input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B, "Unsupported data format");

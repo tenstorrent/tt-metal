@@ -21,8 +21,6 @@ void MorehGroupNormOperation::validate_tensors(
 
     auto num_groups = operation_attributes.num_groups;
 
-    using namespace tt::operations::primary;
-
     check_tensor(input, "moreh_group_norm", "input");
 
     check_tensor(output, "moreh_group_norm", "output");

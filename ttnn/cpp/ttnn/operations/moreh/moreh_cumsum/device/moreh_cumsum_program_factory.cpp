@@ -77,7 +77,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -98,9 +98,9 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/writer_moreh_cumsum_nc.cpp";
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -108,7 +108,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
     std::map<string, string> compute_defines;
     const auto compute_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_cumsum/device/kernels/moreh_cumsum_nc.cpp";
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -120,7 +120,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
@@ -154,7 +154,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              num_tiles_per_core,
              input_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
+             static_cast<uint32_t>(is_dram(input)),
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim),
@@ -169,7 +169,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
              num_tiles_per_core,
              input_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
+             static_cast<uint32_t>(is_dram(output)),
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim),

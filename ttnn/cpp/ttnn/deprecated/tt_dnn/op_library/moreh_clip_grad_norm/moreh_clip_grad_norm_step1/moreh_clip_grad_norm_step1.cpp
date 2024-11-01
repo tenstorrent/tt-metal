@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
 
-    CreateCircularBuffer(
+    ttnn::operations::CreateCircularBuffer(
         program,
         core_group_1,
         cb_data_format,
@@ -112,8 +112,8 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, core_group_1);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, core_group_1);
+    const auto reader_kernels_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, core_group_1);
+    const auto writer_kernels_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, core_group_1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         "moreh_clip_grad_norm_step1_kernel.cpp";
 
     const auto compute_kernels_id =
-        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
+        ttnn::operations::CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
@@ -146,7 +146,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
         // reader
         const std::array reader_runtime_args{
             input_addr,
-            static_cast<uint32_t>(is_dram(input)),
+            static_cast<uint32_t>(ttnn::operations::is_dram(input)),
             num_tiles,
             *reinterpret_cast<uint32_t*>(&decimal),
             origin_h,
@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step1_impl(
 
         // writer
         const std::array writer_runtime_args{
-            output_addr, static_cast<uint32_t>(is_dram(tmp_pow_sum)), tile_offset};
+            output_addr, static_cast<uint32_t>(ttnn::operations::is_dram(tmp_pow_sum)), tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute

@@ -63,7 +63,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -121,15 +121,15 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
 
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(grad)),
+        static_cast<uint32_t>(is_dram(param_in)),
+        static_cast<uint32_t>(is_dram(grad)),
         static_cast<uint32_t>(
-            momentum_buffer_in.has_value() ? tt::operations::primary::is_dram(momentum_buffer_in.value()) : 0)};
+            momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
 
-    std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(tt::operations::primary::is_dram(param_out))};
+    std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
     if (has_momentum_buffer_out)
         writer_compile_time_args.push_back(
-            static_cast<uint32_t>(tt::operations::primary::is_dram(momentum_buffer_out.value())));
+            static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
@@ -138,9 +138,9 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "writer_moreh_sgd.cpp";
 
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    const auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -152,7 +152,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "moreh_sgd.cpp";
 
-    auto compute_kernel_id = tt ::operations::primary::CreateComputeKernel(
+    auto compute_kernel_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {

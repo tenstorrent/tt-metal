@@ -18,31 +18,31 @@ void MorehAdamOperation::validate_inputs(
     auto& exp_avg_in = tensor_args.exp_avg_in;
     auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
 
-    tt::operations::primary::check_tensor(params_in, "moreh_adam", "params_in");
-    tt::operations::primary::check_tensor(grad, "moreh_adam", "grad");
-    tt::operations::primary::check_tensor(exp_avg_in, "moreh_adam", "exp_avg_in");
-    tt::operations::primary::check_tensor(exp_avg_sq_in, "moreh_adam", "exp_avg_sq_in");
+    check_tensor(params_in, "moreh_adam", "params_in");
+    check_tensor(grad, "moreh_adam", "grad");
+    check_tensor(exp_avg_in, "moreh_adam", "exp_avg_in");
+    check_tensor(exp_avg_sq_in, "moreh_adam", "exp_avg_sq_in");
 
     if (tensor_args.max_exp_avg_sq_in) {
-        tt::operations::primary::check_tensor(*tensor_args.max_exp_avg_sq_in, "moreh_adam", "max_exp_avg_sq_in");
+        check_tensor(*tensor_args.max_exp_avg_sq_in, "moreh_adam", "max_exp_avg_sq_in");
     }
 
     const auto& params_out = tensor_args.output_tensors.at(0);
 
     if (params_out.has_value()) {
-        tt::operations::primary::check_tensor(params_out.value(), "moreh_adam", "params_out");
+        check_tensor(params_out.value(), "moreh_adam", "params_out");
     }
 
     if (tensor_args.output_tensors.at(1).has_value()) {
-        tt::operations::primary::check_tensor(tensor_args.output_tensors.at(1).value(), "moreh_adam", "exp_avg_out");
+        check_tensor(tensor_args.output_tensors.at(1).value(), "moreh_adam", "exp_avg_out");
     }
 
     if (tensor_args.output_tensors.at(2).has_value()) {
-        tt::operations::primary::check_tensor(tensor_args.output_tensors.at(2).value(), "moreh_adam", "exp_avg_sq_out");
+        check_tensor(tensor_args.output_tensors.at(2).value(), "moreh_adam", "exp_avg_sq_out");
     }
 
     if (tensor_args.output_tensors.at(3).has_value()) {
-        tt::operations::primary::check_tensor(
+        check_tensor(
             tensor_args.output_tensors.at(3).value(), "moreh_adam", "max_exp_avg_sq_out");
     }
 }
