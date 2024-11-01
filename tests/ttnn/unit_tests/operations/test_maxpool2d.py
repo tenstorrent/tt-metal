@@ -25,8 +25,6 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
 ):
-    print("is_X2:", is_x2_harvested(device))
-
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding

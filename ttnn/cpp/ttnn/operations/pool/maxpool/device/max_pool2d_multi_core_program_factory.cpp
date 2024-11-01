@@ -295,7 +295,7 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
         input_shape[3] / num_shards_c,
         nblocks,
         split_reader,  // enable split reader
-        0,             // split reader id,
+        0,             // split reader id
         bf16_one_u32,
         in_nblocks_c,
         in_cb_sz,
