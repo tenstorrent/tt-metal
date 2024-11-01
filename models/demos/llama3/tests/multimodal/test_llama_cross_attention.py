@@ -134,6 +134,9 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
                 ttnn.DRAM_MEMORY_CONFIG,
                 force_replicated=True,
             )
+            # TODO Convert to sharded input for decode, since that's what attention expects from RMSnorm
+            tt_x = ttnn.interleaved_to_sharded(tt_x, model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"])
+
         xattn_mask = torch.bernoulli(
             torch.full(
                 (
@@ -205,7 +208,7 @@ def test_llama_cross_attention_inference(text_seq_len, mesh_device, use_program_
             mode=mode,
         )
 
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
         if mode == "prefill":
             tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(batch, seq_len, dim)
         else:

@@ -207,10 +207,10 @@ class TtLlamaCrossAttention(LightweightModule):
     def forward_decode(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
         batch = xattn_cache[0].shape[0]
 
-        x_11SH_sharded = ttnn.sharded_to_interleaved(x_11SH, ttnn.L1_MEMORY_CONFIG)  # TODO support sharded input
+        x_11SH = ttnn.sharded_to_interleaved(x_11SH, ttnn.L1_MEMORY_CONFIG)  # TODO support sharded input
 
         xq = ttnn.linear(
-            x_11SH_sharded,
+            x_11SH,
             self.wq,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
