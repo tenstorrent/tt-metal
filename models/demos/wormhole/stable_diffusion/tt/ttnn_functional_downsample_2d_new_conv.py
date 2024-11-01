@@ -104,11 +104,9 @@ class downsample_2d:
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            shard_layout=(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                if self.in_channels < 320
-                else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            ),
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if self.in_channels < 320
+            else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             input_channels_alignment=32,
             transpose_shards=False,
             reshard_if_not_optimal=True,
@@ -131,8 +129,6 @@ class downsample_2d:
             bias_tensor=self.conv_bias,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,

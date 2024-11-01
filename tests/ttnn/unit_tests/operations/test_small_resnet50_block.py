@@ -83,15 +83,15 @@ class resnet50Bottleneck:
         if downsample:
             self.ds_conv_weight_tensor = ttnn.from_torch(
                 parameters.ds_conv.weight,
-                dtype=(
-                    model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32
-                ),
+                dtype=model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b
+                else ttnn.float32,
             )
             self.ds_conv_bias_tensor = ttnn.from_torch(
                 parameters.ds_conv.bias,
-                dtype=(
-                    model_config["WEIGHTS_DTYPE"] if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b else ttnn.float32
-                ),
+                dtype=model_config["WEIGHTS_DTYPE"]
+                if model_config["WEIGHTS_DTYPE"] != ttnn.bfloat8_b
+                else ttnn.float32,
             )
             self.ds_conv_input_channels = self.ds_conv_weight_tensor.shape[1]
             self.ds_conv_output_channels = self.ds_conv_weight_tensor.shape[0]
@@ -121,8 +121,6 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
 
         out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
@@ -145,8 +143,6 @@ class resnet50Bottleneck:
                 activation="relu",
             ),
             conv_op_cache=conv_op_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
 
         if self.downsample:
@@ -169,8 +165,6 @@ class resnet50Bottleneck:
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
                 conv_op_cache=conv_op_cache,
-                return_output_size=True,
-                return_prepared_device_weights=True,
             )
             ttnn.deallocate(x)
         else:
@@ -197,8 +191,6 @@ class resnet50Bottleneck:
                 activation="relu",
             ),
             conv_op_cache=conv_op_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
 
         # conv3 is 1x1 conv
@@ -222,8 +214,6 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
             conv_op_cache=conv_op_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
 
         # underscore version is in_place = True

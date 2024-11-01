@@ -9,9 +9,6 @@
 #include "conv2d_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
-#include "conv2d_utils.hpp"
-#include "prepare_conv2d_weights.hpp"
-#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
@@ -122,85 +119,6 @@ void py_bind_conv2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = 0}
     );
-
-    module.def(
-        "prepare_conv_weights",
-        ttnn::operations::conv::conv2d::prepare_conv_weights<ttnn::Device>,
-        py::kw_only(),
-        py::arg("weight_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("weights_format"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
-
-
-    module.def(
-        "prepare_conv_weights",
-        ttnn::operations::conv::conv2d::prepare_conv_weights<ttnn::MeshDevice>,
-        py::kw_only(),
-        py::arg("weight_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("weights_format"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_bias",
-        ttnn::operations::conv::conv2d::prepare_conv_bias<ttnn::Device>,
-        py::kw_only(),
-        py::arg("bias_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_bias",
-        ttnn::operations::conv::conv2d::prepare_conv_bias<ttnn::MeshDevice>,
-        py::kw_only(),
-        py::arg("bias_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("conv_config") = std::nullopt);
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",

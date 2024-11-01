@@ -72,8 +72,6 @@ class Conv:
             input_width=input_tensor.shape[2],
             conv_config=conv_config,
             groups=self.groups,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         ## TODO: Op | WARNING  | Tensor at index 0 is not allocated
         # print("sr2a", output_tensor.shape)

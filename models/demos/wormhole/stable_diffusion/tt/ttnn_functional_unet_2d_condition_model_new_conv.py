@@ -409,8 +409,6 @@ class UNet2DConditionModel:
             input_width=self.input_width,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -674,8 +672,6 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_out_bias,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

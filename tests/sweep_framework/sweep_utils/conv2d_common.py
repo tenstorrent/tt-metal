@@ -153,8 +153,6 @@ def run_full(
         input_width=input_width,
         conv_config=conv_config,
         groups=groups,
-        return_output_size=True,
-        return_prepared_device_weights=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -237,8 +235,6 @@ def run_short(
         input_height=input_height,
         input_width=input_width,
         groups=groups,
-        return_output_size=True,
-        return_prepared_device_weights=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
