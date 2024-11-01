@@ -124,11 +124,11 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(out_memory_config.memory_layout));
 
     if (!input_tensor.is_sharded()) {
-        TT_FATAL(
-            input_tensor.get_layout() == Layout::TILE,
-            "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
-            "tensor layout: {}",
-            static_cast<int>(input_tensor.get_layout()));
+        // TT_FATAL(
+        //     input_tensor.get_layout() == Layout::TILE,
+        //     "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor. Input "
+        //     "tensor layout: {}",
+        //     static_cast<int>(input_tensor.get_layout()));
 
         TT_FATAL(
             input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
@@ -162,7 +162,7 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
 
     const auto output_shape = compute_output_shapes(args, tensor_args);
 
-    auto output_layout = Layout::TILE;
+    auto output_layout = tensor_args.input.get_layout();
     if (args.output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.get_layout();
     }
