@@ -10,6 +10,9 @@
 #include "conv2d_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
+#include "conv2d_utils.hpp"
+#include "prepare_conv2d_weights.hpp"
+#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
@@ -121,10 +124,9 @@ void py_bind_conv2d(py::module& module) {
             py::arg("queue_id") = 0}
     );
 
-
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_tiled_layout,
+        &convert_conv_weight_tensor_to_tiled_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
@@ -132,7 +134,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "convert_conv_weight_tensor_to_special_padding_tiled_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_special_padding_tiled_layout,
+        &convert_conv_weight_tensor_to_special_padding_tiled_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("in1_block_h"),
         py::arg("in1_block_w"),
@@ -140,7 +142,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "convert_conv_weight_tensor_to_grouped_layout",
-        &ttnn::operations::conv::conv2d::convert_conv_weight_tensor_to_grouped_layout,
+        &convert_conv_weight_tensor_to_grouped_layout,
         py::arg("conv_weight_tensor").noconvert(),
         py::arg("num_groups"),
         py::arg("output_dtype").noconvert() = std::nullopt);
@@ -157,7 +159,7 @@ void py_bind_conv2d(py::module& module) {
            ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
-            return ttnn::operations::conv::conv2d::determine_parallel_config(
+           return determine_parallel_config(
                 shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
         },
         py::arg("shard_layout"),
@@ -173,7 +175,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "create_sharded_memory_config_from_parallel_config",
-        &ttnn::operations::conv::conv2d::create_sharded_memory_config_from_parallel_config,
+        &create_sharded_memory_config_from_parallel_config,
         py::arg("tensor_shape"),
         py::arg("parallel_config"),
         py::arg("tile_size"));
