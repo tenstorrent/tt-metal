@@ -32,7 +32,7 @@ float sfpu_positive_nan(DataType dtype) {
             return float(0x7FFF) ;
         }
         case DataType::FLOAT32: {
-            return float(0x7FFF) ;
+            return float(0x7FFFFFFFF) ;
         }
         default:
             return std::numeric_limits<float>::quiet_NaN();
