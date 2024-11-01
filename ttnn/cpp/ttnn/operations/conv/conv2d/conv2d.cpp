@@ -119,27 +119,28 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config
         );
         weight_tensor_on_device = ttnn::operations::core::to_device(weight_tensor_on_device, device, std::nullopt);
-
-        if (bias_tensor.has_value()) {
-            bias_tensor_on_device = prepare_conv_bias(
-                bias_tensor.value(),
-                input_tensor_post_tm.memory_config(),
-                in_channels,
-                out_channels,
-                batch_size,
-                input_height,
-                input_width,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                groups,
-                device,
-                conv_config
-            );
-            bias_tensor_on_device = ttnn::operations::core::to_device(bias_tensor_on_device.value(), device, std::nullopt);
-        }
     }
+
+    if (bias_tensor.has_value() && !ttnn::is_tensor_on_device_or_multidevice(bias_tensor.value())) {
+        bias_tensor_on_device = prepare_conv_bias(
+            bias_tensor.value(),
+            input_tensor_post_tm.memory_config(),
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            device,
+            conv_config
+        );
+        bias_tensor_on_device = ttnn::operations::core::to_device(bias_tensor_on_device.value(), device, std::nullopt);
+    }
+
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     Tensor input_tensor_post_tm_out;
     if (mm_conv) {
