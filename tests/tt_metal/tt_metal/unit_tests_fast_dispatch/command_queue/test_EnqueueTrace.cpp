@@ -606,9 +606,9 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 
     std::vector<uint32_t> trace_ids;
     for (Program& program : this->programs) {
-        EnqueueProgram(this->device_->command_queue(), program, false);
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
             const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
             EnqueueProgram(this->device_->command_queue(), program, false);
             EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
@@ -617,6 +617,7 @@ TEST_F(RandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
 
             trace_ids.push_back(trace_id);
         }
+        EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
     Finish(this->device_->command_queue());
@@ -698,9 +699,9 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
 
     std::vector<uint32_t> trace_ids;
     for (Program& program : this->programs) {
-        EnqueueProgram(this->device_->command_queue(), program, false);
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
+            EnqueueProgram(this->device_->command_queue(), program, false);
             const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
             EnqueueProgram(this->device_->command_queue(), program, false);
             EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
@@ -709,6 +710,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
 
             trace_ids.push_back(trace_id);
         }
+        EnqueueProgram(this->device_->command_queue(), program, false);
     }
 
     Finish(this->device_->command_queue());
