@@ -126,8 +126,6 @@ def ttnn_vgg16(
                 input_width=conv_ttnn_params[iter_conv_id][3],
                 conv_config=conv_config,
                 conv_op_cache=conv_op_cache,
-                return_output_size=True,
-                return_prepared_device_weights=True,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)
