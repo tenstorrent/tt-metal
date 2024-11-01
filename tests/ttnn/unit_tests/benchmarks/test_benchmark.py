@@ -91,6 +91,13 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
+# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
+#
+# The inputs include:
+#   - m, k, n: Dimensions of the input tensors.
+#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
+#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
+
 matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1),
     (512, 1024, 1024, True, True, 1),
@@ -278,7 +285,7 @@ def test_matmul_2d_host_perf(
             ttnn.DumpDeviceProfiler(device)
             inference_time_avg = profiler.get("run") / num_measurement_iterations
             tflops = 2 * m * k * n / 1e12 / inference_time_avg
-            logger.info(f"inference time (avg): {inference_time_avg}, tflops (avg): {tflops}")
+            logger.info(f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}")
 
             output_tensor = ttnn.to_torch(output_t)
             ttnn.deallocate(output_t)
