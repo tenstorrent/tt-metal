@@ -127,9 +127,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         xattn_cache,
         mode,
     ):
-        seq_len = x_11SH.shape[-2]
-        # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
-
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
             xattn_mask=xattn_mask,
