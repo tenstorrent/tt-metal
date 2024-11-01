@@ -12,6 +12,8 @@ target_link_libraries(
     tt_metal
     PUBLIC
         metal_header_directories
+        Metalium::Metal::Impl
+        Metalium::Metal::STL
         umd::device
         metal_common_libs
         magic_enum
@@ -24,7 +26,6 @@ target_link_libraries(
         common
         jit_build
         llrt
-        impl
         detail
         distributed
 )
@@ -68,6 +69,7 @@ add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
+add_subdirectory(tt_stl)
 
 if(BUILD_PROGRAMMING_EXAMPLES)
     add_subdirectory(programming_examples)
