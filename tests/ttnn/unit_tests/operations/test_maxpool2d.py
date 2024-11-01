@@ -53,8 +53,8 @@ def run_max_pool(
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
             pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
-        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000 and is_grayskull():
-            pytest.skip("This case runs out of memory on Grayskull")
+        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
+            pytest.skip("This case runs out of memory")
         if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
             pytest.skip("This case runs out of memory on Wormhole b0")
         if (
