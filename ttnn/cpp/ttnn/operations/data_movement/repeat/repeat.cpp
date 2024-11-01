@@ -50,7 +50,9 @@ ttnn::Tensor RepeatOperation::invoke(
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR && dim == input_rank - 1) {
                     TT_FATAL(
                         (padded_input_shape[dim] * input_tensor.element_size()) % input_tensor.buffer()->alignment() == 0,
-                        "Current repeat implementation requires aligned last dim when repeating on last dim");
+                        "Current repeat implementation requires last dim ({}) to be aligned to {} repeating on last dim",
+                        (padded_input_shape[dim] * input_tensor.element_size()),
+                        input_tensor.buffer()->alignment());
                 }
                 auto outputs = operation::run_without_autoformat(RepeatDeviceOperation{dim, repeat_dims[dim], memory_config}, {output});
                 TT_FATAL(outputs.size() == 1, "ttnn.repeat: expected 1 output tensor from run_without_autoformat, but got {}", outputs.size());
