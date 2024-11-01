@@ -22,7 +22,7 @@ TEST(WorkingConfigBuffer, MarkCompletelyFull) {
 
     mgr.mark_completely_full(5);
 
-    // Allocation would succed, except buffer is marked completely full.
+    // Allocation would suceed, except buffer is marked completely full.
     auto new_reservation = mgr.reserve({12, 0});
     EXPECT_TRUE(new_reservation.first.need_sync);
     EXPECT_EQ(new_reservation.first.sync_count, 5u);
