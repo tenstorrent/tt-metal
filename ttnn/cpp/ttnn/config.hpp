@@ -30,6 +30,7 @@ struct Config {
         bool enable_graph_report = false;
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
+        bool enable_detailed_tensor_report_pytorch_converted = false;
         bool enable_comparison_mode = false;
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
@@ -86,6 +87,18 @@ struct Config {
                         tt::LogAlways,
                         "Logging cannot be enabled in fast runtime mode. Please disable fast runtime mode if you want "
                         "to enable logging.");
+                }
+            }
+        }
+
+        if (
+            name == "enable_detailed_tensor_report_pytorch_converted") {
+            if (not this->attributes.enable_detailed_tensor_report) {
+                if (this->attributes.enable_logging) {
+                    tt::log_warning(
+                        tt::LogAlways,
+                        "Running without detailed tensor report. Please enable detailed tensor report mode if you want "
+                        "to enable saving all tensors as pytorch.");
                 }
             }
         }

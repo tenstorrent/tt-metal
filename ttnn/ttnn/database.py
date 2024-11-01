@@ -463,25 +463,48 @@ def load_graph(report_path, operation_id):
 
 
 def store_tensor(report_path, tensor):
+    """Store a tensor in the appropriate format based on configuration and type."""
     import torch
 
+    DETACH_SAVED_TENSORS = ttnn.CONFIG.enable_detailed_tensor_report_pytorch_converted
+
+    # Prepare the tensors directory
     tensors_path = report_path / TENSORS_PATH
     tensors_path.mkdir(parents=True, exist_ok=True)
+
+    # Determine file extension and filename
+    extension = ".pt" if DETACH_SAVED_TENSORS else ".bin"
+    tensor_file_name = tensors_path / f"{tensor.tensor_id}{extension}"
+
+    # Check if the file already exists
+    if tensor_file_name.exists():
+        return
+
+    # Save the tensor based on its type
     if isinstance(tensor, ttnn.Tensor):
-        tensor_file_name = tensors_path / f"{tensor.tensor_id}.bin"
-        if tensor_file_name.exists():
-            return
-        ttnn.dump_tensor(
-            tensor_file_name,
-            ttnn.from_device(tensor),
-        )
+        save_tensor_as_ttnn(tensor, tensor_file_name, DETACH_SAVED_TENSORS)
     elif isinstance(tensor, torch.Tensor):
-        tensor_file_name = tensors_path / f"{tensor.tensor_id}.pt"
-        if tensor_file_name.exists():
-            return
-        torch.save(torch.Tensor(tensor), tensor_file_name)
+        save_tensor_as_torch(tensor, tensor_file_name, DETACH_SAVED_TENSORS)
     else:
         raise ValueError(f"Unsupported tensor type {type(tensor)}")
+
+
+def save_tensor_as_ttnn(tensor, tensor_file_name, detach_saved_tensors):
+    """Save a ttnn tensor to file, detaching if necessary."""
+    import torch
+
+    if detach_saved_tensors:
+        torch_tensor = ttnn.to_torch(tensor).detach().cpu()
+        torch.save(torch_tensor, tensor_file_name)
+    else:
+        ttnn.dump_tensor(tensor_file_name, ttnn.from_device(tensor))
+
+
+def save_tensor_as_torch(tensor, tensor_file_name, detach_saved_tensors):
+    """Save a torch tensor to file, detaching if necessary."""
+    if detach_saved_tensors:
+        tensor = tensor.detach().cpu()
+    torch.save(tensor, tensor_file_name)
 
 
 def insert_captured_graph(report_path, operation_id, captured_graph):
