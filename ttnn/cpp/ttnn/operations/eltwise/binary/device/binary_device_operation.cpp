@@ -146,8 +146,8 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
             "ttnn::operations::binary::BinaryDeviceOperation: batch size mismatch");
     }
 
-    TT_ASSERT(height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
-    TT_ASSERT(width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
+    TT_ASSERT(height_a == height_b || height_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: height mismatch");
+    TT_ASSERT(width_a == width_b || width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 }
 
 BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
