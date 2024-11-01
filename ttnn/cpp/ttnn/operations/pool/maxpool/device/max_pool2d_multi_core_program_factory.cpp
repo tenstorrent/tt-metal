@@ -62,11 +62,18 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     uint32_t in_ntiles_c = (uint32_t) std::ceil((float) input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     uint32_t out_ntiles_c = (uint32_t) std::ceil((float) output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
+
+    uint32_t max_rows_for_reduction = 16;
+    // TODO temporarily disable 32 row reductions due to issues in large kernels
+    /* uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
+    // For GRAYSKULL, make reduction for 16 rows at a time.
+    if (device->arch() == tt::ARCH::GRAYSKULL)
+        max_rows_for_reduction /= 2; */
+
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
-    constexpr uint32_t MAX_SMALL_KERNEL_SIZE_HW = 16;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    const bool is_large_kernel = kernel_size_hw > MAX_SMALL_KERNEL_SIZE_HW;
+    const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     TT_FATAL(nblocks == 1, "Multiple blocks not yet supported");
@@ -270,10 +277,6 @@ MaxPool2D::MultiCore::cached_program_t max_pool_2d_multi_core_sharded_with_halo_
     }
     #endif
 
-    uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
-    /* For GRAYSKULL, make reduction for 16 rows at a time.*/
-    if (device->arch() == tt::ARCH::GRAYSKULL)
-        max_rows_for_reduction /= 2;
     /**
      * Reader Kernel: input rows -> input cb
      */

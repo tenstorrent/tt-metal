@@ -8,7 +8,7 @@ import torch
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0, is_grayskull
+from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
@@ -25,6 +25,8 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
 ):
+    print("is_X2:", is_x2_harvested(device))
+
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
     pad_h, pad_w = padding
@@ -67,8 +69,20 @@ def run_max_pool(
             pytest.skip("This case runs out of memory on Grayskull")
         if kernel_h > 3 and kernel_w > 3 and act_shape == [16, 64, 112, 112] and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
-        if kernel_h == 13 and kernel_w == 13 and act_shape == [128, 32, 132, 20] and is_grayksull():
+        if kernel_size == (13, 13) and act_shape == [128, 32, 132, 20] and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
+        if kernel_h > 5 and kernel_w > 5 and act_shape == [16, 64, 112, 112] and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
+        if stride == (1, 1) and act_shape == [128, 32, 132, 20] and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
+        if stride == (1, 1) and kernel_size == (13, 13) and act_shape == [32, 32, 264, 40] and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
+        if (
+            dtype == ttnn.bfloat8_b
+            and (act_shape == [4, 16, 1056, 160] or act_shape == [16, 16, 528, 80])
+            and is_x2_harvested(device)
+        ):
+            pytest.skip("This case runs out of memory on Wormhole X2")
 
     if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         if in_c < max_cores:
@@ -81,6 +95,18 @@ def run_max_pool(
             and is_grayskull()
         ):
             pytest.skip("This case runs out of memory on Grayskull")
+        if (
+            stride == (1, 1)
+            and kernel_h > 5
+            and kernel_w > 5
+            and (act_shape == [4, 1024, 40, 40] or act_shape == [2, 2048, 40, 40] or act_shape == [8, 4096, 10, 16])
+            and is_x2_harvested(device)
+        ):
+            pytest.skip("This case runs out of memory on Wormhole X2")
+        if kernel_h > 5 and kernel_w > 5 and act_shape == [8, 4096, 10, 16] and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
+        if kernel_size == (13, 13) and act_shape == [1, 32768, 10, 10] and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
 
     if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
         if in_c < cores_x:
@@ -211,7 +237,7 @@ def run_max_pool(
             [1, 64, 112, 112],
             [4, 64, 112, 112],
             [8, 64, 112, 112],
-            [16, 64, 112, 112],  # oom with stride (1,1)
+            [16, 64, 112, 112],
             # [20, 64, 112, 112],   ## oom
             ## hpr shapes
             [8, 32, 132, 20],
@@ -226,15 +252,15 @@ def run_max_pool(
             # [64, 32, 264, 40],    ## oom
             # [128, 32, 264, 40],   ## oom
             # [256, 32, 264, 40],   ## oom
-            [4, 16, 1056, 160],  # oom with stride (1,1)
+            [4, 16, 1056, 160],
             # [8, 16, 1056, 160],     ## oom
             # [16, 16, 1056, 160],    ## oom
             # [32, 16, 1056, 160],    ## oom
             # [64, 16, 1056, 160],    ## oom
             # [128, 16, 1056, 160],   ## oom
             # [256, 16, 1056, 160],   ## oom
-            [8, 16, 528, 80],  # oom with stride (1,1)
-            [16, 16, 528, 80],  # oom with stride (1,1)
+            [8, 16, 528, 80],
+            [16, 16, 528, 80],
             # [32, 16, 528, 80],  ## oom
             # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
@@ -308,9 +334,9 @@ def test_run_max_pool(
             [1, 4096, 6, 6],
             [4, 1024, 40, 40],
             [2, 2048, 40, 40],
-            [8, 4096, 10, 16],  # oom with kernel (13,13)
+            [8, 4096, 10, 16],
             # wide yolo kernel
-            [1, 32768, 10, 10],  # oom with kernel (13,13)
+            [1, 32768, 10, 10],
         )
     ),
 )
