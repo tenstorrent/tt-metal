@@ -64,7 +64,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, ttnn::MemoryConfig& output
                 );
                 return std::make_tuple(itensors, dim + 4 - input_rank);
             },
-            .post_transform = [input_rank](const ttnn::Tensor& output, const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
                 ttnn::Tensor res = output;
                 while (res.get_shape().rank() > input_rank) {
                     const auto shape = res.get_shape();
@@ -116,7 +116,7 @@ MassagedConcat build_untilize_rm_retilize_concat(uint8_t queue_id, MemoryConfig 
                 );
                 return std::make_tuple(itensors, dim);
             },
-            .post_transform = [queue_id](const ttnn::Tensor& output, const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .post_transform = [queue_id](const ttnn::Tensor& output) -> ttnn::Tensor {
                 // now we have a rm tensor, so we need ensure its's padded to tile size and re-tilize it
                 if (output.get_layout() != ttnn::TILE_LAYOUT) {
                     auto padded = pad_to_tile_vol(queue_id,
@@ -172,7 +172,7 @@ MassagedConcat build_prepost_transpose_concat(uint8_t queue_id, MemoryConfig &ou
                 }
                 return std::make_tuple(itensors, swapped_dim);
             },
-            .post_transform = [dim1, dim2, &output_memory_config](const ttnn::Tensor& output, const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {
+            .post_transform = [dim1, dim2, &output_memory_config](const ttnn::Tensor& output) -> ttnn::Tensor {
                 return ttnn::transpose(output, dim1, dim2, output_memory_config);
             },
             .operation = [output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Tensor {

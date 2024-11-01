@@ -26,9 +26,7 @@ namespace data_movement {
         using OwnedArgsType = std::tuple<std::decay_t<OpInputTypes>...>;
         using PredicateFunc = std::function<bool(OpInputTypes...)>;
         using PreTransformFunc = std::function<OwnedArgsType(OpInputTypes...)>;
-        using PostTransformFuncWithArgs = std::function<OpOutputType(const OpOutputType&, OpInputTypes...)>;
-        using PostTransformFunctWithoutArgs = std::function<OpOutputType(const OpOutputType&)>;
-        using PostTransformFunc = std::variant<PostTransformFuncWithArgs, PostTransformFunctWithoutArgs>;
+        using PostTransformFunc = std::function<OpOutputType(const OpOutputType&)>;
         using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
         PredicateFunc predicate;      // Function to determine if formatting should be applied
@@ -45,9 +43,7 @@ namespace data_movement {
         using PreTransformFunc = std::function<OwnedArgsType(OpInputTypes...)>;
         // post transform takes the output and optionally the args; it may use
         // the args in order to know if it needs to post process the output.
-        using PostTransformFuncWithArgs = std::function<OpOutputType(const OpOutputType&, OpInputTypes...)>;
-        using PostTransformFunctWithoutArgs = std::function<OpOutputType(const OpOutputType&)>;
-        using PostTransformFunc = std::variant<PostTransformFuncWithArgs, PostTransformFunctWithoutArgs>;
+        using PostTransformFunc = std::function<OpOutputType(const OpOutputType&)>;
         using OpType = std::function<OpOutputType(OpInputTypes...)>;
 
         MassagedOperation(MassagedOperationParams<OpOutputType, OpInputTypes...> params)
@@ -64,21 +60,15 @@ namespace data_movement {
             return pre_transform_(args...);
         }
 
-        inline OpOutputType post_format(OpOutputType output, OpInputTypes... args) const {
-            return std::visit([&output, &args...](auto&& f) -> OpOutputType {
-                if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                    return f(output, args...);
-                } else {
-                    return f(output);
-                }
-            }, post_transform_);
+        inline OpOutputType post_format(OpOutputType output) const {
+            return post_transform_(output);
         }
 
         inline OpOutputType operator()(OpInputTypes... args) const {
             if (should_format(args...)) {
                 auto formatted_input = pre_format(args...);
                 auto op_output = std::apply(operation_, formatted_input);
-                return post_format(op_output, args...);
+                return post_format(op_output);
             }
             return operation_(args...);
         }
@@ -126,39 +116,16 @@ namespace data_movement {
                                           t2 = other.post_transform_,
                                           t1_then_t2_required,
                                           t1_required,
-                                          t2_required](OpOutputType output, OpInputTypes... args) -> OpOutputType {
+                                          t2_required](OpOutputType output) -> OpOutputType {
                 if (*t1_then_t2_required) {
-                    auto t2_output = std::visit([&output, &args...](auto&& f) -> OpOutputType {
-                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(output, args...);
-                        } else {
-                            return f(output);
-                        }
-                    }, t2);
-                    auto t1_output = std::visit([&t2_output, &args...](auto&& f) -> OpOutputType {
-                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(t2_output, args...);
-                        } else {
-                            return f(t2_output);
-                        }
-                    }, t1);
+                    // we go backwards for post-transform
+                    auto t2_output = t2(output);
+                    auto t1_output = t1(t2_output);
                     return t1_output;
                 } else if (*t1_required) {
-                    return std::visit([&output, &args...](auto&& f) -> OpOutputType {
-                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(output, args...);
-                        } else {
-                            return f(output);
-                        }
-                    }, t1);
+                    return t1(output);
                 } else if (*t2_required) {
-                    return std::visit([&output, &args...](auto&& f) -> OpOutputType {
-                        if constexpr (std::is_same_v<std::decay_t<decltype(f)>, PostTransformFuncWithArgs>) {
-                            return f(output, args...);
-                        } else {
-                            return f(output);
-                        }
-                    }, t2);
+                    return t2(output);
                 } else {
                     return output;
                 }
