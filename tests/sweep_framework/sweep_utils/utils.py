@@ -22,7 +22,6 @@ def sanitize_shape_rm(input_shape):
 
 def sanitize_shape(shape, method, **kwargs):
     if method == "topk":
-        print(shape)
         num_dims = len(shape)
         last_dim = shape[num_dims - 1]
         if not (last_dim & (last_dim - 1) == 0) and last_dim != 0:
@@ -30,7 +29,6 @@ def sanitize_shape(shape, method, **kwargs):
             if last_dim < 64:
                 last_dim = 64
         shape[num_dims - 1] = last_dim
-        print(shape)
 
     if method == "split_query_key_value_and_split_heads":
         assert len(shape) == 3
