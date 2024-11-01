@@ -80,7 +80,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
     const uint32_t im5_t{1};  // Add(|x + decimal|^p)
     const uint32_t im6_t{1};  // Sum(|x + decimal|^p)
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -110,8 +110,8 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_h/kernels/"
         "writer_moreh_norm_h.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores);
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -124,7 +124,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_h/kernels/"
         "moreh_norm_h_kernel.cpp";
 
-    const auto compute_kernels_id_1 = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernels_id_1 = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_units_per_core_group_1},
@@ -135,7 +135,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
 
     KernelHandle compute_kernels_id_2{0};
     if (!core_group_2.ranges().empty()) {
-        compute_kernels_id_2 = tt::operations::primary::CreateComputeKernel(
+        compute_kernels_id_2 = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_units_per_core_group_2},
@@ -166,7 +166,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
         // reader
         const std::vector<uint32_t> reader_runtime_args{
             input.buffer()->address(),
-            static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
+            static_cast<uint32_t>(is_dram(input)),
             *reinterpret_cast<uint32_t*>(&decimal),
             *reinterpret_cast<uint32_t*>(&recip_p_decimal),
             num_cols_per_core,
@@ -179,7 +179,7 @@ MorehNormOperation::ProgramFactoryH::cached_program_t MorehNormOperation::Progra
         // writer
         const std::vector<uint32_t> writer_runtime_args{
             output.buffer()->address(),
-            static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
+            static_cast<uint32_t>(is_dram(output)),
             num_cols_per_core,
             tile_offset};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);

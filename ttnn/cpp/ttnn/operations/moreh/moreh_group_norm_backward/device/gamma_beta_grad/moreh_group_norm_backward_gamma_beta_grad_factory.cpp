@@ -14,7 +14,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     tensor_return_value_t &outputs) {
     using namespace tt;
     using namespace tt::constants;
-    using namespace tt::operations::primary;
 
     const auto &output_grad = tensor_args.output_grad;
     const auto &input = tensor_args.input;
