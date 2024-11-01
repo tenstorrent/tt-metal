@@ -17,7 +17,6 @@ target_link_libraries(
         magic_enum
         fmt::fmt-header-only
         span
-        compiler_flags
         $<$<BOOL:${ENABLE_TRACY}>:TracyClient>
     PRIVATE
         profiler
