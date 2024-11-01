@@ -278,7 +278,7 @@ def test_matmul_2d_host_perf(
             ttnn.DumpDeviceProfiler(device)
             inference_time_avg = profiler.get("run") / num_measurement_iterations
             tflops = 2 * m * k * n / 1e12 / inference_time_avg
-            logger.info(f"inference time (avg): {inference_time_avg}, tflops (avg): {tflops}")
+            logger.info(f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}")
 
             output_tensor = ttnn.to_torch(output_t)
             ttnn.deallocate(output_t)
