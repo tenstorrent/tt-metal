@@ -16,7 +16,12 @@ size_t round_up(size_t value, size_t multiple) {
     return ((value + multiple - 1) / multiple) * multiple;
 };
 
-Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_shape) {
+Alignment legacyShapeToAlignment(const ttnn::Shape& shape) {
+    auto legacy_padded_shape = shape.padded_shape();
+    if (shape.logical_shape() == legacy_padded_shape) {
+        return Alignment{};
+    }
+
     const auto rank = legacy_padded_shape.rank();
     ttnn::SmallVector<uint32_t> values(rank);
 
@@ -30,7 +35,7 @@ Alignment legacyPaddedShapeToAlignment(const ttnn::SimpleShape& legacy_padded_sh
         values[i] = legacy_padded_shape[i] * values[i + 1];
     }
 
-    Alignment result(values);
+    Alignment result(std::move(values));
     return result;
 }
 
@@ -51,8 +56,8 @@ TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const 
     validate_alignment();
 }
 
-TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::SimpleShape& legacy_padded_shape) {
-    return TensorLayout(dtype, page_config, memory_config, CMAKE_UNIQUE_NAMESPACE::legacyPaddedShapeToAlignment(legacy_padded_shape));
+TensorLayout TensorLayout::fromLegacyPaddedShape(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape) {
+    return TensorLayout(dtype, page_config, memory_config, CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(legacy_shape));
 }
 
 void TensorLayout::initialize_alignment() {
@@ -141,11 +146,7 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
 }
 
 Size TensorLayout::compute_page_shape(const Size& physical_size) const {
-    if(memory_config_.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        return physical_size;
-    }
-
-    return page_config_.get_page_shape(physical_size, memory_config_);
+    return page_config_.get_page_shape(physical_size, dtype_, memory_config_);
 }
 
 Strides TensorLayout::compute_strides(const ttnn::SimpleShape& shape) const {

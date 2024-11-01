@@ -755,16 +755,16 @@ Tensor to_device(const Tensor& tensor, Device* target_device, const MemoryConfig
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
     TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
-    auto shape = tensor.get_logical_shape();
-    auto padded_shape = tensor.get_padded_shape();
+    auto shape = tensor.get_shape();
+    auto logical_shape = tensor.get_logical_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto tile = tensor.get_tile();
-    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, padded_shape);
+    TensorLayout tensor_layout = TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape);
 
-    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, shape, tensor_layout, queue);
+    auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.get_storage(), target_device, logical_shape, tensor_layout, queue);
 
-    return Tensor(DeviceStorage{device_buffer}, tensor.get_shape(), data_type, layout, tile);
+    return Tensor(DeviceStorage{device_buffer}, shape, data_type, layout, tile);
 }
 
 template Tensor to_device<bfloat16>(

@@ -6,6 +6,7 @@
 
 namespace tt::tt_metal {
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 size_t element_size_bytes(DataType dtype) {
     switch (dtype) {
@@ -24,6 +25,7 @@ size_t element_size_bytes(DataType dtype) {
     }
 }
 } // namespace CMAKE_UNIQUE_NAMESPACE
+}
 
 PageConfig::PageConfig(const Config& config)
     : config_(config) {
@@ -50,8 +52,8 @@ void PageConfig::validate_alignment(const Alignment& alignment, DataType dtype) 
     std::visit([&](const auto& config) constexpr { config.validate_alignment(alignment, dtype); }, config_);
 }
 
-Size PageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const {
-    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, memory_config); }, config_);
+Size PageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
+    return std::visit([&](const auto& config) constexpr { return config.get_page_shape(physical_size, dtype, memory_config); }, config_);
 }
 
 size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
@@ -90,7 +92,10 @@ void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dty
         "Wrong custom Tensor Layout alignment {}. For Tile layout second innermost dimension should be multiple of tile height {}.", alignment, tile_.get_height());
 }
 
-Size TilePageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const {
+Size TilePageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
+    if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 && physical_size.height() != 0) {
+        return physical_size;
+    }
     return Size(tile_.get_height(), tile_.get_width());
 }
 
@@ -121,7 +126,15 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
         alignment, element_size, page_alignment);
 }
 
-Size RowMajorPageConfig::get_page_shape(const Size& physical_size, const MemoryConfig& memory_config) const {
+Size RowMajorPageConfig::get_page_shape(const Size& physical_size, DataType dtype, const MemoryConfig& memory_config) const {
+    if (physical_size.height() == 0 || physical_size.width() == 0) {
+        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::element_size_bytes(dtype));
+    }
+
+    if(memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+        return physical_size;
+    }
+
     if (memory_config.shard_spec.has_value()) {
         const auto& shard_spec = memory_config.shard_spec.value();
         const auto& shard_shape = shard_spec.shape;
