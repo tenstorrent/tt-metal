@@ -16,7 +16,7 @@ import copy
 
 def sanitize_shape_rm(input_shape):
     if input_shape[-1] % 2 != 0:
-        input_shape[-1] = input_shape[-1] + input_shape[-1] % 2
+        input_shape[-1] = input_shape[-1] + 1
     return input_shape
 
 
