@@ -143,7 +143,7 @@ TEST_F(DispatchFixture, TensixDRAMtoL1MulticastLoopbackSrc){
         ASSERT_TRUE(unit_tests_common::dram::test_dram_to_l1_multicast::dram_to_l1_multicast(this, devices_.at(id), test_config));
     }
 }
-TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
+TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpLeft){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 0, //source core is in exclusion zone, don't count twice
@@ -160,7 +160,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpLeft){
     }
 }
 
-TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
+TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionUpRight){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -177,7 +177,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionUpRight){
     }
 }
 
-TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
+TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownLeft){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
@@ -194,7 +194,7 @@ TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownLeft){
     }
 }
 
-TEST_F(CommonFixture, DRAMtoL1MulticastExcludeRegionDownRight){
+TEST_F(DispatchFixture, TensixDRAMtoL1MulticastExcludeRegionDownRight){
     unit_tests_common::dram::test_dram_to_l1_multicast::DRAMtoL1MulticastConfig test_config = {
         .dest_buffer_addr = 200 * 1024,
         .target_grid_offset = 1,
