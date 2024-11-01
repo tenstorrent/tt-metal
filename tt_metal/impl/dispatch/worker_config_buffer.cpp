@@ -162,6 +162,27 @@ uint32_t WorkerConfigBufferMgr::get_last_slot_addr(HalProgrammableCoreType progr
     return this->reservation_[index].addr;
 }
 
+void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
+    size_t num_core_types = this->reservation_.size();
+    for (uint32_t idx = 0; idx < num_core_types; idx++) {
+        constexpr uint32_t kNewFreeIndex = 0;
+        constexpr uint32_t kNewAllocIndex = 1;
+        this->alloc_index_[idx] = kNewAllocIndex;
+        this->free_index_[idx] = kNewFreeIndex;
+
+        auto& free_entry = this->entries_[kNewFreeIndex][idx];
+        free_entry.addr = this->base_addrs_[idx];
+        free_entry.size = this->end_addrs_[idx] - this->base_addrs_[idx];
+        free_entry.sync_count = sync;
+
+        auto& alloc_entry = this->entries_[kNewAllocIndex][idx];
+        // This address will immediately cause a wrap and failure to allocate.
+        alloc_entry.addr = this->end_addrs_[idx];
+        alloc_entry.size = 0;
+        alloc_entry.sync_count = 0xbabababa;  // debug
+    }
+}
+
 }  // namespace tt_metal
 
 }  // namespace tt

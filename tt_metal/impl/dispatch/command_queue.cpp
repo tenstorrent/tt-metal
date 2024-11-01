@@ -2373,6 +2373,10 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     // Update the wptr on host to match state
     this->device->worker_launch_message_buffer_state.set_mcast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_multicast);
     this->device->worker_launch_message_buffer_state.set_unicast_wptr(trace_inst->desc->num_traced_programs_needing_go_signal_unicast);
+    // The config buffer manager is unaware of what memory is used inside the trace, so mark all memory as used so that
+    // it will force a stall and avoid stomping on in-use state.
+    // TODO(jbauman): Reuse old state from the trace.
+    this->manager.get_config_buffer_mgr().mark_completely_full(this->expected_num_workers_completed);
 
     if (blocking) {
         this->finish();

@@ -41,6 +41,7 @@ class WorkerConfigBufferMgr {
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reserve(const std::vector<uint32_t>& sizes);
     void free(uint32_t free_up_to_sync_count);
     void alloc(uint32_t when_freeable_sync_count);
+    void mark_completely_full(uint32_t sync);
 
     // Test/Debug
     uint32_t get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const;
