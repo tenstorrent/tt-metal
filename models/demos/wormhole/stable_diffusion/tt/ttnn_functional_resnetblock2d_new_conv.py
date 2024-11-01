@@ -432,8 +432,6 @@ class resnetBlock2D:
                 input_width=self.conv1_input_width,
                 conv_config=conv_config,
                 conv_op_cache=conv_cache,
-                return_output_size=True,
-                return_prepared_device_weights=True,
             )
 
         else:
@@ -512,8 +510,6 @@ class resnetBlock2D:
                     input_width=self.conv1_input_width,
                     conv_config=conv_config,
                     conv_op_cache=conv_cache,
-                    return_output_size=True,
-                    return_prepared_device_weights=True,
                 )
                 if i != 0:
                     split_hidden_states[i] = ttnn.add(
@@ -634,8 +630,6 @@ class resnetBlock2D:
             input_width=self.conv2_input_width,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
 
@@ -678,8 +672,6 @@ class resnetBlock2D:
                 input_width=self.conv_shortcut_input_width,
                 conv_config=conv_config,
                 conv_op_cache=conv_cache,
-                return_output_size=True,
-                return_prepared_device_weights=True,
             )
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):

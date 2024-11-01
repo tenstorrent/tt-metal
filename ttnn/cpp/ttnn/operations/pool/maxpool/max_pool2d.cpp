@@ -5,7 +5,7 @@
 #include "max_pool2d.hpp"
 
 #include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/math.hpp"
 #include "ttnn/common/constants.hpp"
