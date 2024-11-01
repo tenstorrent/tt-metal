@@ -111,4 +111,4 @@ def test_segformer_mix_ffn(
     ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)[0]
 
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.96)
+    assert_with_pcc(torch_output, ttnn_output, pcc=0.99)

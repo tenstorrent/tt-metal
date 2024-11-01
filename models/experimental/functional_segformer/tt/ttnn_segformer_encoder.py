@@ -48,10 +48,6 @@ class TtSegformerEncoder:
                     patch_size=config.patch_sizes[i],
                 )
             )
-            # print("EMB")
-            # print("")
-            # print(parameters["patch_embeddings"][i])
-            # print("stride=", config.strides[i], " -- patch size =", config.patch_sizes[i])
         self.patch_embeddings = embeddings  # self.patch_embeddings = nn.ModuleList(embeddings)
 
         # Transformer blocks
@@ -132,10 +128,11 @@ class TtSegformerEncoder:
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, -1))
             elif idx == len(self.patch_embeddings) - 1 and self.config.reshape_last_stage:
+                # last stage
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, -1))
-                hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
-                hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
+                # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
+                # hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
 
             # Original folded version is passed to the Decoder
             # if output_hidden_states:

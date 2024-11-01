@@ -60,7 +60,10 @@ class TtSegformerEfficientSelfAttention:
     ):
         device = hidden_states.device()
 
-        batch_size, __, seq_len, hidden_size = hidden_states.shape
+        if len(hidden_states.shape) == 4:
+            batch_size, __, seq_len, hidden_size = hidden_states.shape
+        elif len(hidden_states.shape) == 3:
+            batch_size, seq_len, hidden_size = hidden_states.shape
 
         mm_a_x_strategy = ttnn.ShardStrategy.HEIGHT
         mm_a_x_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
@@ -254,9 +257,8 @@ class TtSegformerEfficientSelfAttention:
         else:
             attention_probs = ttnn.to_memory_config(attention_probs, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
-        context_layer = ttnn.to_memory_config(context_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-
         if self.num_attention_heads > 1:
+            context_layer = ttnn.to_memory_config(context_layer, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
             context_layer = ttnn.experimental.nlp_concat_heads(
                 context_layer, memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
             )

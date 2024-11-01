@@ -135,7 +135,7 @@ class TtSegformerDecodeHead:
                 )
                 ttnn.deallocate(encoder_hidden_state)
                 ttnn.reallocate(concated_tensor)
-            # print("conc", index, concated_tensor.shape)
+            print("conc", index, concated_tensor.shape)
             index += 1
 
         # Replaced with the phased concat of each 2 inputs, to handle the L1 OOM
@@ -152,24 +152,28 @@ class TtSegformerDecodeHead:
         # concated_tensor = ttnn.reshape(concated_tensor, (concated_tensor[0], concated_tensor[-1], concated_tensor[1], concated_tensor[2]) )
 
         ttnn.reallocate(concated_tensor)
-        # print("conc_p", concated_tensor.shape)
+        print("conc_p", concated_tensor.shape)
+
+        # return concated_tensor
 
         hidden_states, __, __ = self.linear_fuse(device, concated_tensor)
-        # print("c1", hidden_states.shape)
+        print("c1", hidden_states.shape)
 
-        logits, __, __ = self.classifier(device, hidden_states)
-        logits_shape = logits.shape
-        logits = ttnn.to_device(logits, device=device)
-        logits = ttnn.to_memory_config(logits, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # print("logits", logits.shape)
-        h = w = int(math.sqrt(logits.shape[-2]))
-        logits = ttnn.reshape(logits, (logits_shape[0], h, w, logits_shape[-1]))
-        # print(logits.shape)
-        logits = ttnn.permute(logits, (0, 3, 1, 2))
-        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT)
-        logits = logits[:, :150, :, :]  # returns out_channel 160 instead of 150
-        logits = ttnn.to_layout(logits, layout=ttnn.TILE_LAYOUT)
-        # logits are of shape (batch_size, num_labels, height/4, width/4)
+        return hidden_states
 
-        return logits
+        # logits, __, __ = self.classifier(device, hidden_states)
+        # logits_shape = logits.shape
+        # logits = ttnn.to_device(logits, device=device)
+        # logits = ttnn.to_memory_config(logits, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        # logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # # print("logits", logits.shape)
+        # h = w = int(math.sqrt(logits.shape[-2]))
+        # logits = ttnn.reshape(logits, (logits_shape[0], h, w, logits_shape[-1]))
+        # # print(logits.shape)
+        # logits = ttnn.permute(logits, (0, 3, 1, 2))
+        # logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # logits = logits[:, :150, :, :]  # returns out_channel 160 instead of 150
+        # logits = ttnn.to_layout(logits, layout=ttnn.TILE_LAYOUT)
+        # # logits are of shape (batch_size, num_labels, height/4, width/4)
+
+        # return logits

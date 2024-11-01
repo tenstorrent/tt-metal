@@ -73,22 +73,6 @@ def test_segformer_overlap_patch_embeddings(
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
-    if width == 512:
-        ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-    else:
-        ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
-        )
 
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
@@ -114,10 +98,34 @@ def test_segformer_overlap_patch_embeddings(
         stride=stride,
     )
 
+    post_process_it = 0
+    if width == 512:
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        post_process_it = 1
+
     ttnn_output, height, width = ttnn_model(
         ttnn_input_tensor,
         parameters=parameters,
     )
     ttnn_output = ttnn.to_torch(ttnn_output)
+
+    print("EXP", ttnn_output.shape)
+    # if post_process_it:
+    #    ttnn_output = torch.permute(ttnn_output, (0,2,3,1))
 
     assert_with_pcc(torch_output[0], ttnn_output[0], pcc=0.99)

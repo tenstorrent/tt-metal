@@ -111,7 +111,7 @@ def test_segformer_layer(
     if is_ci_env:
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
-    torch_input_tensor = torch.randn(batch_size, seq_len, hidden_size)
+    torch_input_tensor = torch.randn(batch_size, 1, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
@@ -136,6 +136,7 @@ def test_segformer_layer(
     reference_model.load_state_dict(sd)
     reference_model.eval()
 
+    torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     torch_output = reference_model(torch_input_tensor, height=height, width=width)
 
     parameters = preprocess_model_parameters(
@@ -157,4 +158,4 @@ def test_segformer_layer(
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]
 
-    assert_with_pcc(torch_output[0], ttnn_final_output, pcc=0.94)
+    assert_with_pcc(torch_output[0], ttnn_final_output, pcc=0.99)
