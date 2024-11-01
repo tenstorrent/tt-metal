@@ -118,13 +118,11 @@ def test_llama_cross_attention_transformer_block_inference(
         if mode == "prefill":
             tt_x = model_args.prepare_inputs_ttnn_prefill(
                 tt_x,
-                force_replicated=True,
             )
         else:
             tt_x = model_args.prepare_inputs_ttnn_decode(
                 tt_x,
-                ttnn.DRAM_MEMORY_CONFIG,
-                force_replicated=True,
+                ttnn.DRAM_MEMORY_CONFIG,  # TODO for the current configuration the decode input needs to be on DRAM
             )
 
         xattn_mask = torch.bernoulli(
@@ -193,7 +191,7 @@ def test_llama_cross_attention_transformer_block_inference(
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
         )
         if mode == "decode":
             tt_full_text_mask_expand_11SD = ttnn.reshape(
@@ -217,7 +215,7 @@ def test_llama_cross_attention_transformer_block_inference(
             mode=mode,
         )
 
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
         if mode == "prefill":
             tt_output_torch = tt_output_torch[0, ..., :seq_len, :].view(batch, seq_len, dim)
