@@ -47,6 +47,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
+        self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
 
         self.configuration = configuration
 
@@ -220,16 +221,16 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # Below is how we want to reshape. It results in poor PCC
         # 1, B, D -> B, 1, NH, DH -> B, NH, 1, DH
-        # xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # xq = ttnn.reshape(xq, (batch, 1, self.n_local_heads, self.head_dim))
-        # xq = ttnn.transpose(xq, 1, 2)
-        # xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
-
-        xq, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
+        xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # Tell shape about padding
+        xq = ttnn.reshape(
+            xq,
+            shape=ttnn.Shape(
+                [1, 1, batch, xq.shape[-1]],
+                [1, 1, xq.shape[-2], xq.shape[-1]],
+            ),
         )
-        xq = ttnn.transpose(xq, 0, 2)
-        xq = ttnn.slice(xq, (0, 0, 0, 0), (batch, self.n_local_heads, 1, self.head_dim))
+        xq = ttnn.reshape(xq, (1, batch, self.n_local_heads, self.head_dim))
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
         xq = self.q_norm(xq, mode="decode")
@@ -237,39 +238,32 @@ class TtLlamaCrossAttention(LightweightModule):
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
 
-        scores = ttnn.matmul(
-            xq,
-            ttnn.transpose(xk, -1, -2),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_SCORE_PROGCFG"](batch, cache_seq_len),
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=32,
+            k_chunk_size=128,
+            exp_approx_mode=False,
         )
 
-        scores = ttnn.multiply(scores, self.scale)
-        # WARNING: This add is buggy if xattn_mask has to be broadcasted to n_local_heads. Workaround is to broadcast on host side
-        # Host side must explicitly create this tensor with same padding as input tensor
-        scores = ttnn.add(scores, xattn_mask)
-        scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
+        # TODO: Can I get rid of the KV repeat_interleave?
 
-        output = ttnn.matmul(
-            scores,
+        output = ttnn.transformer.scaled_dot_product_attention_decode(
+            xq,
+            xk,
             xv,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_OUTPUT_PROGCFG"](batch, cache_seq_len),
+            is_causal=False,
+            attn_mask=xattn_mask,
+            scale=self.scale,
+            program_config=program_config,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         # WARNING: this broadcast is also broken, must broadcast on host
         output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
 
-        output = ttnn.transpose(output, 0, 2)  # B, NH, 1, DH -> 1, NH, B, DH
-        output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
+        output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
+        output = ttnn.reshape(output, (1, 1, batch, self.n_local_heads * self.head_dim))
         output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
-        # B, NH, S, DH -> B, S, D
-        # B, NH, 1, DH -> 1, 1, B, D
-        output = ttnn.experimental.nlp_concat_heads(output)  # 1, NH, B, DH -> 1, 1, B, D
 
         output = ttnn.matmul(
             output,
