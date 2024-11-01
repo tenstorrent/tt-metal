@@ -13,13 +13,13 @@ However, said inversion point depends on the size and crossover point of each ca
 Therefore, the peak achieved flops changes based on the datatype, the size of the data, and the layout of the data. 
 
 
-## Test it yourself!
+# Test it yourself!
 
 Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com!), you can test and see the matrix multiply TFLOPS results for yourself by running: `pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf`, available in the ttMetal repository. 
 
 To do so, make sure to have followed the setup instructions guide available at https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md 
 
-NB: You'll need to comment out the skip the `#@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")` line.
+NB: You'll need to comment out `#@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")` line.
 
 ## Points of interest in the tests
 
