@@ -15,7 +15,13 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 
 # Test it yourself!
 
-Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com!), you can test and see the matrix multiply TFLOPS results for yourself by running: `pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf`, available in the ttMetal repository. 
+Assuming you have access to a device (if not, they're available for purchase at Tenstorrent.com!), you can test and see the matrix multiply TFLOPS results for yourself by running: 
+
+`pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf` (available in the ttMetal repository) on a N150 card. 
+
+Alternatively, to test on an N300 card, use the following command: 
+
+`WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf` on a N300 card.
 
 To do so, make sure to have followed the setup instructions guide available at https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md 
 
