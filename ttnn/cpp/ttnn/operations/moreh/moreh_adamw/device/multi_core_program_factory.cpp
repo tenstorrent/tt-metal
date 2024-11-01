@@ -64,7 +64,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     auto data_format = tt_metal::datatype_to_dataformat_converter(param_in.get_dtype());
     auto intermed_cb_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -96,19 +96,19 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_in)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_in)),
+        static_cast<uint32_t>(is_dram(param_in)),
+        static_cast<uint32_t>(is_dram(grad)),
+        static_cast<uint32_t>(is_dram(exp_avg_in)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_in)),
         static_cast<uint32_t>(
-            max_exp_avg_sq_in.has_value() ? tt::operations::primary::is_dram(max_exp_avg_sq_in.value()) : false)};
+            max_exp_avg_sq_in.has_value() ? is_dram(max_exp_avg_sq_in.value()) : false)};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(param_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_out)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(exp_avg_sq_out)),
+        static_cast<uint32_t>(is_dram(param_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_out)),
+        static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
         static_cast<uint32_t>(
-            max_exp_avg_sq_out.has_value() ? tt::operations::primary::is_dram(max_exp_avg_sq_out.value()) : false)};
+            max_exp_avg_sq_out.has_value() ? is_dram(max_exp_avg_sq_out.value()) : false)};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/"
@@ -128,15 +128,15 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernel_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    const auto writer_kernel_id = CreateWriteKernel(
         program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     const std::vector<uint32_t> compute_args_group_1{num_units_per_core_group_1};
     const std::vector<uint32_t> compute_args_group_2{num_units_per_core_group_2};
 
-    auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    auto compute_kernel_ids = CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/kernels/moreh_adamw.cpp",
         {

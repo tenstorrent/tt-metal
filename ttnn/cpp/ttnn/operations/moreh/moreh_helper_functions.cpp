@@ -10,10 +10,11 @@
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 
-namespace tt {
+namespace ttnn {
 namespace operations {
-namespace primary {
 
+using namespace tt;
+using namespace tt::tt_metal;
 using namespace constants;
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
@@ -51,9 +52,7 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     return std::make_tuple(new_all_cores, new_core_group_1, new_core_group_2);
 }
 
-// TODO(hyungsuk.choi): change function name. This function name duplicates a function in `tt::tt_metal` and causes
-// ambiguous behavior due to the `CoreCoord` constructor in `CoreRange`.
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_wt_core_range(
     CoreRange core_range, uint32_t units_to_divide) {
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -469,6 +468,5 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     return {Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-}  // namespace primary
 }  // namespace operations
 }  // namespace ttnn

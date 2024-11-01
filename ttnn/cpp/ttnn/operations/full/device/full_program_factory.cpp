@@ -40,7 +40,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
 
     // Create circular buffer
     auto cb_index = tt::CB::c_intermed0;
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -57,7 +57,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         default: break;
     }
 
-    auto writer_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
