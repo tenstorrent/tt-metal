@@ -10,7 +10,9 @@
 #include "command_queue_fixtures.hpp"
 #include "impl/kernels/kernel.hpp"
 
-class SingleDeviceTraceFixture : public ::testing::Test {
+class TraceFixture : virtual public ::testing::Test {};
+
+class SingleDeviceTraceFixture : virtual public TraceFixture {
    protected:
     Device* device_;
     tt::ARCH arch_;
@@ -43,11 +45,11 @@ class SingleDeviceTraceFixture : public ::testing::Test {
     }
 };
 
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
-    protected:
-     void SetUp() override {
+class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture, virtual public TraceFixture {
+   protected:
+    void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices(90000000);
-     }
+    }
 };

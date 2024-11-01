@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gtest/gtest.h"
+#include "event_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -13,7 +14,7 @@
 
 using namespace tt::tt_metal;
 
-class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
+class MultiCommandQueueSingleDeviceFixture : virtual public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -45,7 +46,9 @@ class MultiCommandQueueSingleDeviceFixture : public ::testing::Test {
     tt::ARCH arch_;
 };
 
-class MultiCommandQueueMultiDeviceFixture : public ::testing::Test {
+class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture, public EventFixture {};
+
+class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -85,3 +88,5 @@ class MultiCommandQueueMultiDeviceFixture : public ::testing::Test {
     size_t num_devices_;
     tt::ARCH arch_;
 };
+
+class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture, public EventFixture {};

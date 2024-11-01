@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,10 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/device/device_pool.hpp"
 
-class MultiDeviceFixture : public ::testing::Test {};
+class MultiDeviceFixture : public ::testing::Test {
+   protected:
+    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
+};
 
 class GalaxyFixture : public MultiDeviceFixture {
    protected:
@@ -49,8 +52,6 @@ class GalaxyFixture : public MultiDeviceFixture {
         this->device_ids_to_devices_.clear();
         this->devices_.clear();
     }
-
-    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
 
    private:
     std::map<chip_id_t, Device*> device_ids_to_devices_;
@@ -106,10 +107,10 @@ class N300DeviceFixture : public MultiDeviceFixture {
             TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
+        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
             tt::tt_metal::GetNumPCIeDevices() == 1) {
             std::vector<chip_id_t> ids;
             for (unsigned int id = 0; id < num_devices_; id++) {
@@ -132,7 +133,5 @@ class N300DeviceFixture : public MultiDeviceFixture {
         }
     }
 
-    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
-    tt::ARCH arch_;
     size_t num_devices_;
 };

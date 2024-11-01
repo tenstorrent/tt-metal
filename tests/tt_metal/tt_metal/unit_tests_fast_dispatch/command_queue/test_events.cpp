@@ -23,7 +23,7 @@ enum class DataMovementMode: uint8_t {
 constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
 constexpr uint32_t completion_queue_page_size = dispatch_constants::TRANSFER_PAGE_SIZE;
 
-TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrder) {
+TEST_F(CommandQueueEventFixture, TestEventsDataMovementWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
     uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));
@@ -75,7 +75,7 @@ TEST_F(CommandQueueFixture, TestEventsDataMovementWrittenToCompletionQueueInOrde
 }
 
 // Basic test, record events, check that Event struct was updated. Enough commands to trigger issue queue wrap.
-TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
+TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 
     const size_t num_events = 100000; // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     uint32_t cmds_issued_per_cq = 0;
@@ -96,7 +96,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
 }
 
 // Test where Host synchronously waits for event to be completed.
-TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronize) {
+TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
     const size_t num_events = 100;
     const size_t num_events_between_sync = 10;
 
@@ -128,7 +128,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
-TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
+TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
     tt::llrt::OptionsG.set_test_mode_enabled(true); // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
@@ -155,7 +155,7 @@ TEST_F(CommandQueueFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
 
 // Negative test. Device sync. Single CQ here syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
-TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventHang) {
+TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
     tt::llrt::OptionsG.set_test_mode_enabled(true); // Required for finish hang breakout.
@@ -183,7 +183,7 @@ TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventHang) {
 }
 
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
-TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventBasic) {
+TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventBasic) {
 
     const size_t num_events = 50;
     const size_t num_events_between_sync = 5;
@@ -214,7 +214,7 @@ TEST_F(CommandQueueFixture, TestEventsQueueWaitForEventBasic) {
 }
 
 // Device sync. Single CQ here, less interesting than 2CQ but still useful. Ensure no hangs.
-TEST_F(CommandQueueFixture, TestEventsEventsQueryBasic) {
+TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
 
     const size_t num_events = 50;
     const size_t num_events_between_query = 5;
@@ -260,7 +260,7 @@ TEST_F(CommandQueueFixture, TestEventsEventsQueryBasic) {
 
 
 // Mix of WritesBuffers, RecordEvent, WaitForEvent, EventSynchronize with some checking.
-TEST_F(CommandQueueFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
+TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) {
     const size_t num_buffers = 2;
     const uint32_t page_size = 2048;
     vector<uint32_t> page(page_size / sizeof(uint32_t));

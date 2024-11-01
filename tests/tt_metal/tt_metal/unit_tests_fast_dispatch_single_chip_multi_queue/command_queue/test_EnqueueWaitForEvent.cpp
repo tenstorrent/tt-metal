@@ -30,7 +30,7 @@ void FinishAllCqs(vector<std::reference_wrapper<CommandQueue>>& cqs) {
 namespace basic_tests {
 
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events, wrap issue queue)
-TEST_F(MultiCommandQueueMultiDeviceFixture, TestEventsEventSynchronizeSanity) {
+TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (Device *device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
@@ -70,7 +70,7 @@ TEST_F(MultiCommandQueueMultiDeviceFixture, TestEventsEventSynchronizeSanity) {
 }
 
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events, wrap issue queue)
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -108,7 +108,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEventSynchronizeSanity) {
 }
 
 // Simplest test to record and wait-for-events on same CQ.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventSanity) {
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> events_issued_per_cq = {0, 0};
     size_t num_events = 10;
@@ -136,7 +136,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventSanity
 
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
 // syncs from Host per CQ, and verify completion queues per CQ are correct.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossCQs) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventCrossCQs) {
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
     const size_t num_events_per_cq = 10;
@@ -200,7 +200,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsEnqueueWaitForEventCrossC
 
 // Simple 2CQ test to mix reads, writes, record-event, wait-for-event in a basic way. It's simple because
 // the write, record-event, wait-event, read-event are all on the same CQ, but cover both CQ's.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEventSameCQ) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventSameCQ) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 256, .buftype = BufferType::DRAM};
     vector<std::reference_wrapper<CommandQueue>> cqs = {this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
@@ -247,7 +247,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 // More interesting test where Blocking ReadBuffer, Non-Blocking WriteBuffer are on alternate CQs,
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
     if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
@@ -307,7 +307,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEvent
 // 2 CQs with single Buffer, and a loop where each iteration has non-blocking Write to Buffer via CQ0 and non-blocking Read
 // to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after write and
 // write after read before checking correct data read at the end after all cmds finished on device.
-TEST_F(MultiCommandQueueSingleDeviceFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
+TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
     if (tt::Cluster::instance().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }

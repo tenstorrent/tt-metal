@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bit_utils.h"
+#include "host_fixture.hpp"
 #include <gtest/gtest.h>
 #include <cstdint>
 
-TEST(NoFixture, ExtractBitArray) {
+TEST_F(HostFixture, ExtractBitArray) {
     uint32_t src[4] = {0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0};
     // 1. Extract the 20-bit elements from the 32-bit source array.
     uint32_t dest[4];
@@ -25,7 +26,7 @@ TEST(NoFixture, ExtractBitArray) {
     EXPECT_EQ(dest[3], 0x9abc);
 }
 
-TEST(NoFixture, PackBitArray) {
+TEST_F(HostFixture, PackBitArray) {
     uint32_t src[8] = { 1, 2, 3, 4, 5, 6, 7, 7 };
     uint32_t dest[8];
 
@@ -56,7 +57,7 @@ TEST(NoFixture, PackBitArray) {
     EXPECT_EQ(dest[0], expected);
 }
 
-TEST(NoFixture, PackExtractBitArray) {
+TEST_F(HostFixture, PackExtractBitArray) {
     uint32_t src[8] = { 1, 2, 3, 4, 5, 6, 7, 7 };
 
     for (uint num_pack_bits = 3; num_pack_bits <= 31; num_pack_bits++) {
@@ -70,7 +71,7 @@ TEST(NoFixture, PackExtractBitArray) {
     }
 }
 
-TEST(NoFixture, ExtractPackBitArray) {
+TEST_F(HostFixture, ExtractPackBitArray) {
     uint32_t src[4] = { 0x12345678, 0x9abcdef0, 0x13579bdf, 0x2468ace0 };
 
     // Compute the number of 3-bit elements that can be packed into 4 x 32-bit elements

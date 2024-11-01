@@ -87,7 +87,7 @@ protected:
 };
 
 // For usage by tests that need the dprint server devices disabled.
-class DPrintFixtureDisableDevices: public DPrintFixture {
+class DPrintDisableDevicesFixture: public DPrintFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable

@@ -4,7 +4,7 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
+#include "dispatch_fixture.hpp"
 
 using std::vector;
 

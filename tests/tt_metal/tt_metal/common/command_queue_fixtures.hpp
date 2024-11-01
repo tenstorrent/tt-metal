@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
-class CommandQueueSingleCardFixture : public ::testing::Test {
+class CommandQueueSingleCardFixture : virtual public DispatchFixture {
    protected:
     void SetUp() override {
         this->validate_dispatch_mode();
@@ -46,6 +47,5 @@ class CommandQueueSingleCardFixture : public ::testing::Test {
 
     std::vector<tt::tt_metal::Device *> devices_;
     std::map<chip_id_t, tt::tt_metal::Device *> reserved_devices_;
-    tt::ARCH arch_;
     size_t num_devices_;
 };

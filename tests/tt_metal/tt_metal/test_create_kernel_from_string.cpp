@@ -13,7 +13,7 @@
 #include "impl/program/program.hpp"
 #include "tt_cluster_descriptor_types.h"
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

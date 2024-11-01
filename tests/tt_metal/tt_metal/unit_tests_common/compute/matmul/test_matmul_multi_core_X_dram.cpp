@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
+#include "dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "common/bfloat16.hpp"

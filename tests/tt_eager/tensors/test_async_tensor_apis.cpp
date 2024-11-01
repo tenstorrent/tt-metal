@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/dispatch_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operations/numpy/functions.hpp"
 

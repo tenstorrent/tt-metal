@@ -24,7 +24,7 @@
 #include "tt_metal/tt_metal/unit_tests_common/common/test_utils.hpp"
 #include "tt_soc_descriptor.h"
 
-class CommandQueueFixture : public ::testing::Test {
+class CommandQueueFixture : public DispatchFixture {
    protected:
     tt::ARCH arch_;
     tt::tt_metal::Device* device_;
@@ -49,6 +49,7 @@ class CommandQueueFixture : public ::testing::Test {
     }
 };
 
+class CommandQueueEventFixture : virtual public CommandQueueFixture, virtual public EventFixture {};
 
 class CommandQueueMultiDeviceFixture : public ::testing::Test {
    protected:
@@ -422,7 +423,7 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {
     }
 };
 
-class RandomProgramTraceFixture : public RandomProgramFixture, public CommandQueueSingleCardTraceFixture {
+class RandomProgramTraceFixture : virtual public RandomProgramFixture, virtual public CommandQueueSingleCardTraceFixture {
    protected:
     static const uint32_t NUM_TRACE_ITERATIONS = 50;
     Program programs[NUM_PROGRAMS];
