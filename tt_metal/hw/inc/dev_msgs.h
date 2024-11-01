@@ -15,6 +15,7 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "routing_info.h"
 
 // TODO: move these to processor specific files
 #if defined(COMPILE_FOR_ERISC)
@@ -333,24 +334,9 @@ static_assert( sizeof(launch_msg_t) % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 #endif
 #endif
 
-struct eth_word_t {
-    volatile uint32_t bytes_sent;
-    volatile uint32_t dst_cmd_valid;
-    uint32_t reserved_0;
-    uint32_t reserved_1;
-};
-
 enum class SyncCBConfigRegion : uint8_t {
     DB_TENSIX = 0,
     TENSIX = 1,
     ROUTER_ISSUE = 2,
     ROUTER_COMPLETION = 3,
-};
-
-struct routing_info_t {
-    volatile uint32_t routing_enabled;
-    volatile uint32_t src_sent_valid_cmd;
-    volatile uint32_t dst_acked_valid_cmd;
-    volatile uint32_t unused_arg0;
-    eth_word_t fd_buffer_msgs[2];
 };
