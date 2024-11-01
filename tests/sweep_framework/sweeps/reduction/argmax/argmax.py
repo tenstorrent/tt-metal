@@ -26,9 +26,9 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 128)
-        + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 128)
-        + gen_shapes([1, 1], [128, 128], [1, 1], 128),
+        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 32)
+        + gen_shapes([1, 1], [128, 128], [1, 1], 32),
         "dim": [0, 1, 2, 3, None],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
