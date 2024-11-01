@@ -24,6 +24,12 @@ namespace tt {
 
 namespace tt_metal {
 
+std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
+    os << "ShardSpec(grid=?"
+       << ", shape={" << spec.shape[0] << ", " << spec.shape[1] << "})";
+    return os;
+}
+
 bool is_sharded(const TensorMemoryLayout &layout) {
     return (
         layout == TensorMemoryLayout::HEIGHT_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED ||

@@ -41,6 +41,8 @@ enum class DataType {
     INVALID = 8,
 };
 
+std::ostream& operator<<(std::ostream& os, DataType data_type);
+
 inline bool is_floating_point(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16:
@@ -279,6 +281,8 @@ struct MemoryConfig {
     bool is_l1() const;
     bool is_dram() const;
 };
+
+std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
