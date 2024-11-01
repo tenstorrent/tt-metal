@@ -5,6 +5,7 @@ set(UNIT_TESTS_FD_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_HostAsyncCQ.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/command_queue/test_worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/compute/sfpu/sfpu_compute.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/multichip/test_eth_EnqueueProgram.cpp

@@ -34,8 +34,9 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 }
 
 extern uint32_t __kernel_init_local_l1_base[];
+extern uint32_t __fw_export_end_text[];
 
-void kernel_launch()
+void kernel_launch(uint32_t kernel_base_addr)
 {
   DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
@@ -43,7 +44,7 @@ void kernel_launch()
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
 #else
-    firmware_kernel_common_init((void tt_l1_ptr *)(__kernel_init_local_l1_base));
+    firmware_kernel_common_init((void tt_l1_ptr *)(kernel_base_addr + (uint32_t) __kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed

@@ -35,6 +35,10 @@ class FreeList : public Algorithm {
 
     void dump_blocks(std::ofstream &out) const;
 
+    void shrink_size(DeviceAddr shrink_size, bool bottom_up=true);
+
+    void reset_size();
+
    private:
     struct Block {
         Block(DeviceAddr address, DeviceAddr size) : address(address), size(size) {}
