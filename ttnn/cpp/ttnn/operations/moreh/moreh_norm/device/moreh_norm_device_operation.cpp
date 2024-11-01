@@ -51,10 +51,10 @@ inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tenso
         ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
         ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
 
-        tt::operations::primary::expand_to_max_dim(input_dim, adjusted_input_shape);
-        tt::operations::primary::expand_to_max_dim(output_dim, output_shape);
-        tt::operations::primary::expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
-        tt::operations::primary::expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
+        expand_to_max_dim(input_dim, adjusted_input_shape);
+        expand_to_max_dim(output_dim, output_shape);
+        expand_to_max_dim(input_dim_wo_padding, adjusted_input_shape_wo_padding);
+        expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_rank; ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Input and output dimensions do not match at index {}.", i);
@@ -97,8 +97,8 @@ void MorehNormOperation::validate_inputs(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
     const auto dim = operation_attributes.dim;
-    tt::operations::primary::check_tensor(input, "moreh_norm", "input");
-    tt::operations::primary::check_tensor(output, "moreh_norm", "output");
+    check_tensor(input, "moreh_norm", "input");
+    check_tensor(output, "moreh_norm", "output");
     validate_input_tensor_with_dim(input, dim);
     if (output.has_value())
         validate_output_tensor_with_keepdim(input, output.value(), dim, operation_attributes.keepdim);
