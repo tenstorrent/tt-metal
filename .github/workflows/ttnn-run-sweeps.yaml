@@ -11,6 +11,8 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
+          - tilize
+          - untilize
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
@@ -255,10 +257,13 @@ on:
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
+          - eltwise.ternary_backward.addcmul_bw
+          - eltwise.ternary_backward.addcdiv_bw
+          - embedding.embedding
           - reduction.topk.topk
           - reduction.argmax.argmax
-          - embedding.embedding
-          - eltwise.ternary_backward.addcmul_bw
+          - reduction.prod
+          - reduction.sum
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -270,6 +275,8 @@ on:
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.short.matmul_user_program_config
           - matmul.short.matmul
+          - losses.l1_loss
+          - losses.mse_loss
           - data_movement.concat.concat_interleaved_n_tensors
           - data_movement.concat.concat_interleaved
           - data_movement.concat.concat_sharded
@@ -288,6 +295,8 @@ on:
           - data_movement.index_select.index_select_pytorch2
           - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
+          - data_movement.reshape.reshape
+          - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
