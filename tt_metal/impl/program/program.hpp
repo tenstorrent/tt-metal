@@ -52,6 +52,7 @@ struct KernelGroup {
     kernel_id_array_t kernel_ids;
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
+    uint32_t kernel_text_offsets[MaxProcessorsPerCoreType];
     uint32_t kernel_bin_sizes[MaxProcessorsPerCoreType];
     launch_msg_t launch_msg;
     go_msg_t go_msg;
@@ -132,6 +133,8 @@ class Program {
     void allocate_circular_buffers(const Device *device);
 
     bool is_finalized() const;
+    bool is_cached() const;
+    void set_cached();
     void finalize(Device *device);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 

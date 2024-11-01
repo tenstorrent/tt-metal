@@ -22,10 +22,12 @@
 #include <kernel_includes.hpp>
 
 extern uint32_t __kernel_init_local_l1_base[];
+extern uint32_t __fw_export_end_text[];
 
-void kernel_launch() {
+void kernel_launch(uint32_t kernel_base_addr) {
     DeviceZoneScopedMainChildN("ERISC-KERNEL");
-    firmware_kernel_common_init((void tt_l1_ptr *)__kernel_init_local_l1_base);
+
+    firmware_kernel_common_init((void tt_l1_ptr *)(kernel_base_addr + (uint32_t) __kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
     noc_local_state_init(NOC_INDEX);
 
