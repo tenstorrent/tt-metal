@@ -71,7 +71,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const uint32_t im1_t = 1;
     auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -88,9 +88,9 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const ::bfloat16 bfloat_scaler_value = ::bfloat16(1.0f);
     const uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)), packed_scaler_value};
+        static_cast<uint32_t>(is_dram(output_grad)), packed_scaler_value};
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(bias_grad))};
+        static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_h.cpp";
@@ -99,9 +99,9 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
     const auto reader_kernel_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernel_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -118,7 +118,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/moreh_bias_backward_multi_core_h.cpp";
 
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -131,7 +131,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
