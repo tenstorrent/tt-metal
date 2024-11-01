@@ -13,12 +13,8 @@ void kernel_main() {
 
     for (uint32_t id = 0; id < NUM_L1_BANKS; id += 1) {
         uint32_t bank_id;
-#ifdef IS_NOT_POW2_NUM_L1_BANKS
         bank_id = umodsi3_const_divisor<NUM_L1_BANKS>(id);
-#else
-        bank_id = id & (NUM_L1_BANKS - 1);
-#endif
-        uint32_t l1_address = base_l1_address + bank_to_l1_offset[bank_id];  
+        uint32_t l1_address = base_l1_address + bank_to_l1_offset[bank_id];
         uint32_t noc_xy = l1_bank_to_noc_xy[noc_index][bank_id];
         uint64_t noc_addr = get_noc_addr_helper(noc_xy, l1_address);
 
