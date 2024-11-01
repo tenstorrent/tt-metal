@@ -91,6 +91,13 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
+# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
+#
+# The inputs include:
+#   - m, k, n: Dimensions of the input tensors.
+#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
+#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
+
 matmul_shapes_bfloat16 = [
     (512, 512, 512, True, True, 1),
     (512, 1024, 1024, True, True, 1),
