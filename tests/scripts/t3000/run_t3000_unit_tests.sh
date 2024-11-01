@@ -88,23 +88,23 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
-run_t3000_llama3_tests() {
+run_t3000_llama3-small_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_llama_tests"
+  echo "LOG_METAL: Running run_t3000_llama3-small_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-1B
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
 
-  # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+  # Run all Llama3 tests for 1B, 3B and 8B weights
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
@@ -118,7 +118,103 @@ run_t3000_llama3_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_llama3-small_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3.2-11b_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3.2-11b_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_rms_norm.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_decoder.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_decoder_prefill.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3.2-11b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3.2-11b-vision_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_unit_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_block.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3.2-11b-vision_unit_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  # Use FAKE_DEVICE env variable to run on an N300 mesh
+  fake_device=N300
+
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_mlp.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_attention.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_block.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_block.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_conv2d_patch.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_class_embedding.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_tile_position_embedding.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_positional_embedding.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi

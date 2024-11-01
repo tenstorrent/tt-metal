@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.utils import gen_shapes
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -31,7 +31,6 @@ parameters = {
         + gen_shapes([32, 32], [256, 256], [32, 32], 8),
         "accurate_mode": [True, False],
         "round_mode": ["None", "floor", "trunc"],
-        "round_mode": [None],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],

@@ -632,7 +632,7 @@ int main(int argc, char **argv) {
         uint32_t num_cores = num_banks; // number of DRAM banks
         // uint32_t num_banks_all = 12;
 
-        CoreRangeSet all_cores = CoreRangeSet{{}};
+        CoreRangeSet all_cores;
         std::vector<CoreCoord> all_cores_list;
         if (device->arch() == tt::ARCH::WORMHOLE_B0) {
             get_dram_reader_core_coords_wormhole_b0(device, all_cores, all_cores_list);
@@ -673,18 +673,18 @@ int main(int argc, char **argv) {
                 input_size, 100, 1234);
         }
 
-        tt_metal::Buffer input_buffer(
+        auto input_buffer = tt_metal::Buffer::create(
             device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [program, kernel, cb_addr] = create_program(device, all_cores, single_tile_size, tile_format, num_tiles_cb, num_tiles_per_core, k, n, num_blocks, num_banks, all_cores_list, bank_start_id, input_buffer.address());
+        auto [program, kernel, cb_addr] = create_program(device, all_cores, single_tile_size, tile_format, num_tiles_cb, num_tiles_per_core, k, n, num_blocks, num_banks, all_cores_list, bank_start_id, input_buffer->address());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
+        tt_metal::detail::WriteToBuffer(*input_buffer, input_vec);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
@@ -713,7 +713,7 @@ int main(int argc, char **argv) {
 
         pass = validation(
             device,
-            input_buffer,
+            *input_buffer,
             input_vec,
             num_cores,
             all_cores_list,

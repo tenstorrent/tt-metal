@@ -5,7 +5,11 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    compare_pcc,
+    data_gen_with_range_dtype,
+)
 
 
 @pytest.mark.parametrize(
@@ -59,12 +63,60 @@ def test_bw_binary_assign(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
+def test_bw_binary_assign_bf8b(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b)
+    other_data, other_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b)
+    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, False, False, ttnn.bfloat8_b)
+
+    tt_output_tensor_on_device = ttnn.assign_bw(grad_tensor, input_tensor, other_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.assign_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
 def test_bw_unary_assign_opt_output(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     opt_tensor = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         opt_tensor, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    ttnn.assign_bw(grad_tensor, input_tensor, input_a_grad=input_grad, queue_id=0)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+
+    tt_output_tensor_on_device = [input_grad]
+    golden_function = ttnn.get_golden_function(ttnn.assign_bw)
+    golden_tensor = golden_function(grad_data, in_data)
+
+    status = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert status
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_bw_unary_assign_opt_output_rm(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, False, True)
+    opt_tensor = torch.zeros(input_shapes, dtype=torch.bfloat16)
+    input_grad = ttnn.from_torch(
+        opt_tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.assign_bw(grad_tensor, input_tensor, input_a_grad=input_grad, queue_id=0)

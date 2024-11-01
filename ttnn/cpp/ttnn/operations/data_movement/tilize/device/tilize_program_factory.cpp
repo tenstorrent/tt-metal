@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         core,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {
+    std::vector<uint32_t> compute_args = {
         num_tiles / num_tiles_per_block,  // per_core_block_cnt
         num_tiles_per_block               // per_core_block_tile_cnt
     };
@@ -206,8 +206,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     /** compute
      */
-    vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
-    vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
+    std::vector<uint32_t> compute_args = {nblocks_per_core, ntiles_per_block};
+    std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
     if (core_range.ranges().size() > 0) {
         auto tilize_kernel_id = CreateKernel(
@@ -370,7 +370,7 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args = {uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
+    std::vector<uint32_t> compute_args = {uint32_t(num_tiles_per_shard / num_tiles_per_row), uint32_t(num_tiles_per_row)};
 
     auto untilize_kernel_id = tt::tt_metal::CreateKernel(
         program,

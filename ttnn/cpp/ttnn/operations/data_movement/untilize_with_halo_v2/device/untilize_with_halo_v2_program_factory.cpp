@@ -49,7 +49,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto output_shard_shape = output_tensor.shard_spec().value().shape;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
     uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t remapped_input_shard_shape_for_output_grid = input_nhw_height / ncores_nhw;
+    uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
     uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;

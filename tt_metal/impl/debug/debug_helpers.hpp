@@ -22,7 +22,7 @@ struct CoreDescriptorComparator {
 #define CoreDescriptorSet std::set<CoreDescriptor, CoreDescriptorComparator>
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-static CoreDescriptorSet GetAllCores(Device *device) {
+static CoreDescriptorSet GetAllCores(tt::tt_metal::Device *device) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size = device->logical_grid_size();
@@ -43,10 +43,10 @@ static CoreDescriptorSet GetAllCores(Device *device) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-static CoreDescriptorSet GetDispatchCores(Device* device) {
+static CoreDescriptorSet GetDispatchCores(tt::tt_metal::Device* device) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = device->num_hw_cqs();
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    CoreType dispatch_core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_type)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
@@ -54,10 +54,10 @@ static CoreDescriptorSet GetDispatchCores(Device* device) {
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(Device *device, const CoreCoord &phys_core, int risc_id) {
+inline uint64_t GetDprintBufAddr(tt::tt_metal::Device *device, const CoreCoord &phys_core, int risc_id) {
 
-    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, HalL1MemAddrType::DPRINT);
-    return reinterpret_cast<uint64_t>(buf->data[risc_id]);
+    dprint_buf_msg_t *buf = device->get_dev_addr<dprint_buf_msg_t *>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
+    return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
 inline int GetNumRiscs(const CoreDescriptor &core) {

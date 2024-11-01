@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import torch
 from models.utility_functions import is_wormhole_b0
 import copy
 import pytest
@@ -12,11 +13,9 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-compute_kernel_options = [
-    False,  # for grayskull
-]
+compute_kernel_options = [False]
 compute_kernel_ids = ["fp32_dest_acc_en=False"]
-if is_wormhole_b0:
+if is_wormhole_b0():
     compute_kernel_options.append(True)
     compute_kernel_ids.append("fp32_dest_acc_en=True")
 
@@ -34,7 +33,7 @@ def get_compute_kernel_options(compute_kernel_options):
             packer_l1_acc=packer_l1_acc,
         )
     else:
-        # Grayskull doesn't support fp32 but test passing a GS config is ok
+        # Grayskull doesn't support FP32, but passing a Grayskull config in the test is OK.
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
@@ -165,14 +164,36 @@ def get_lib_dtype(lib, dtype):
     lib: library module (e.g., torch, ttnn)
         The library for which the dtype mapping is required.
     dtype: str
-        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32').
+        The string representation of the data type (e.g., 'bfloat16', 'float32', 'int32', 'bfloat8_b').
 
     Returns:
     Corresponding library-specific dtype or None if not found.
     """
+    if hasattr(lib, "bfloat8_b") and dtype == "bfloat8_b":
+        return lib.bfloat8_b
+    else:
+        dtype_map = {
+            "bfloat16": lib.bfloat16,
+            "float32": lib.float32,
+            "int32": lib.int32,
+        }
+        return dtype_map.get(dtype, None)
+
+
+def get_ttnn_torch_dtype(ttnn_dtype: ttnn.DataType) -> torch.dtype:
+    """
+    Maps a ttnn.DataType to the corresponding torch dtype that can handle them.
+    Parameters:
+    ttnn_dtype: ttnn.DataType
+        The ttnn data type to be mapped.
+    Returns:
+    torch.dtype or None
+        The corresponding torch dtype if the mapping exists, otherwise None.
+    """
     dtype_map = {
-        "bfloat16": lib.bfloat16,
-        "float32": lib.float32,
-        "int32": lib.int32,
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat8_b: torch.bfloat16,
+        ttnn.int32: torch.int32,
     }
-    return dtype_map.get(dtype, None)
+    return dtype_map.get(ttnn_dtype, None)

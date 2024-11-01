@@ -56,9 +56,11 @@ run_t3000_llama3_tests() {
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k full ; fail+=$?
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/test_llama_model_prefill.py ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
@@ -68,6 +70,64 @@ run_t3000_llama3_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3.2-11b-vision_freq_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3.2-11b-vision_freq_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3.2-11b-vision_freq_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  # Use FAKE_DEVICE env variable to run on an N300 mesh
+  fake_device=N300
+
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
+  FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -100,9 +160,11 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/test_all_gather_matmul.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/test_reduce_scatter_post_commit.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
 
   # distributed layernorm
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?

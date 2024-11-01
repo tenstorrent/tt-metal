@@ -57,9 +57,11 @@ run_t3000_llama3_tests() {
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
-  for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/demo.py --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
@@ -68,6 +70,36 @@ run_t3000_llama3_tests() {
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_llama3_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_llama3_vision_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_llama3_vision_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+  # Llama3.2-11B
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  n300=N300
+  t3k=T3K
+
+  # Install Vision-specific packages
+  pip install -r models/demos/llama3/requirements.txt
+
+  for fake_device in "$n300" "$t3k"; do
+    FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/multimodal_demo_chat.py -k "tt and 1" --timeout 600; fail+=$?
+    echo "LOG_METAL: Llama3 vision tests for $fake_device completed"
+  done
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_llama3_vision_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi

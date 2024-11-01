@@ -127,6 +127,7 @@ Let's see how to split our data across two devices:
 
 ```py
 import ttnn
+import torch
 
 # Open our 1x2 MeshDevice
 mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))
@@ -139,7 +140,7 @@ torch_tensor[..., 32:64] = 2.0
 # Convert to ttnn.Tensor; MeshTensor holds buffers to two shards in host-memory
 mesh_tensor: ttnn.Tensor = ttnn.from_torch(
     torch_tensor,
-    mesh_mapper=ttnn.ShardTensorToMesh(device_mesh, dim=3),
+    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
     layout=ttnn.TILE_LAYOUT,
 )
 ```
@@ -600,7 +601,7 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
         model.forward(activations, device=submesh_device, ...)
 ```
 
-3. Capture Model Trace: See [Advanced Performance Optimization For Models](../AdvancedPerformanceOperationsForModels/AdvancedPerformanceOptimizationsForModels.md) guide for more details on how to capture and replay a trace.
+3. Capture Model Trace: See [Advanced Performance Optimizations For Models](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) guide for more details on how to capture and replay a trace.
 
 ```python
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)

@@ -1,12 +1,17 @@
 CircularBuffers
 ================
 
-.. doxygenfunction:: CreateCircularBuffer
+.. doxygenfunction:: tt::tt_metal::v0::CreateCircularBuffer
 
-.. doxygenfunction:: GetCircularBufferConfig
+.. doxygenfunction:: tt::tt_metal::v0::GetCircularBufferConfig
 
-.. doxygenfunction:: UpdateCircularBufferTotalSize
+.. doxygenfunction:: tt::tt_metal::v0::UpdateCircularBufferTotalSize
 
-.. doxygenfunction:: UpdateCircularBufferPageSize
+.. doxygenfunction:: tt::tt_metal::v0::UpdateCircularBufferPageSize
 
-.. doxygenfunction:: UpdateDynamicCircularBufferAddress
+.. doxygenfunction:: tt::tt_metal::v0::UpdateDynamicCircularBufferAddress
+
+
+Version 1
+-------------------------
+.. doxygenfunction:: tt::tt_metal::v1::CreateCircularBuffer

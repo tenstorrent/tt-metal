@@ -14,6 +14,8 @@
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
 
+using namespace tt::tt_metal;
+
 // 32 buckets to match the number of bits in uint32_t lengths on device
 #define NOC_DATA_SIZE sizeof(uint32_t) * 8
 using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
@@ -97,7 +99,7 @@ void ClearNocData(Device *device) {
         CoreCoord phys_core = device->physical_core_from_logical_core(logical_core);
         for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
             uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
-            vector<uint32_t> initbuf = vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
+            std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
             tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, addr);
         }
     }

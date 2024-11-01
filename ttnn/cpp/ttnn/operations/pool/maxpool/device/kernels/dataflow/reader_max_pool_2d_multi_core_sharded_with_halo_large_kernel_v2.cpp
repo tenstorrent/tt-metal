@@ -67,11 +67,12 @@ void kernel_main() {
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(12);
 
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
+
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-    constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CB::c_in1 : tt::CB::c_in0;
@@ -112,7 +113,7 @@ void kernel_main() {
     }
     uint32_t counter = reader_id;
     uint32_t total_elems_to_reduce = window_h * window_w;
-    uint32_t remaining_elems = total_elems_to_reduce % MAX_ROWS_FOR_REDUCTION;
+    uint32_t remaining_elems = total_elems_to_reduce % max_rows_for_reduction;
     while (counter < reader_nindices) {
         for (uint32_t j = 0; j < num_8_tile_blocks; j++) {
             for (uint32_t i = 0; i < nblocks; ++i) {
@@ -122,6 +123,9 @@ void kernel_main() {
                 uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
                 uint32_t out_l1_write_addr = out_l1_write_addr_base;
                 cb_reserve_back(in_cb_id, npages_to_reserve);
+                // If next is last chunk, fill whole buffer with -inf.
+                if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
+                    fill_with_val(out_l1_write_addr, TILE_SIZE * MAX_TILES_PER_REDUCTION, minus_inf);
                 for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
                     uint32_t stick_offset = top_left_local_index + h_multiples;
                     uint32_t read_offset =
@@ -131,14 +135,14 @@ void kernel_main() {
                         out_l1_write_addr += read_bytes;
                         read_offset += in_nbytes_c;
                         processed_rows++;
-                        if ((processed_rows % MAX_ROWS_FOR_REDUCTION) == 0) {
+                        if ((processed_rows % max_rows_for_reduction) == 0) {
                             noc_async_read_barrier();
                             cb_push_back(in_cb_id, npages_to_reserve);
                             out_l1_write_addr_base = get_write_ptr(in_cb_id);
                             out_l1_write_addr = out_l1_write_addr_base;
                             cb_reserve_back(in_cb_id, npages_to_reserve);
                             // If next is last chunk, fill whole buffer with -inf.
-                            if ((total_elems_to_reduce - processed_rows) < MAX_ROWS_FOR_REDUCTION)
+                            if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction)
                                 fill_with_val(out_l1_write_addr, TILE_SIZE * MAX_TILES_PER_REDUCTION, minus_inf);
                         }
                     }

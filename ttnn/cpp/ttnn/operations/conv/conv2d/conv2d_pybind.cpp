@@ -9,6 +9,9 @@
 #include "conv2d_pybind.hpp"
 #include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
+#include "conv2d_utils.hpp"
+#include "prepare_conv2d_weights.hpp"
+#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 
@@ -121,6 +124,85 @@ void py_bind_conv2d(py::module& module) {
     );
 
     module.def(
+        "prepare_conv_weights",
+        ttnn::operations::conv::conv2d::prepare_conv_weights<ttnn::Device>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+
+    module.def(
+        "prepare_conv_weights",
+        ttnn::operations::conv::conv2d::prepare_conv_weights<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("weight_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("weights_format"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_bias",
+        ttnn::operations::conv::conv2d::prepare_conv_bias<ttnn::Device>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
+        "prepare_conv_bias",
+        ttnn::operations::conv::conv2d::prepare_conv_bias<ttnn::MeshDevice>,
+        py::kw_only(),
+        py::arg("bias_tensor"),
+        py::arg("input_memory_config"),
+        py::arg("in_channels"),
+        py::arg("out_channels"),
+        py::arg("batch_size"),
+        py::arg("input_height"),
+        py::arg("input_width"),
+        py::arg("kernel_size"),
+        py::arg("stride"),
+        py::arg("padding"),
+        py::arg("dilation"),
+        py::arg("groups"),
+        py::arg("device"),
+        py::arg("conv_config") = std::nullopt);
+
+    module.def(
         "get_conv_padded_input_shape_and_mem_config",
         [](ttnn::Device* device,
            const ttnn::Tensor& input_tensor,
@@ -129,14 +211,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t height,
            uint32_t width,
            uint32_t in_channels,
-           uint32_t out_channels,
-           std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride,
-           std::array<uint32_t, 2> padding,
-           std::array<uint32_t, 2> dilation,
-           uint32_t weights_width,
-           uint32_t input_width,
-           uint32_t groups) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
                 device,
                 input_tensor,
@@ -145,14 +220,7 @@ void py_bind_conv2d(py::module& module) {
                 height,
                 width,
                 in_channels,
-                out_channels,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                weights_width,
-                input_width,
-                groups);
+                out_channels);
         },
         py::kw_only(),
         py::arg("device"),
@@ -162,14 +230,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("height"),
         py::arg("width"),
         py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("weights_width"),
-        py::arg("input_width"),
-        py::arg("groups"));
+        py::arg("out_channels"));
 
     module.def(
         "get_conv_padded_input_shape_and_mem_config",
@@ -180,14 +241,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t height,
            uint32_t width,
            uint32_t in_channels,
-           uint32_t out_channels,
-           std::array<uint32_t, 2> kernel_size,
-           std::array<uint32_t, 2> stride,
-           std::array<uint32_t, 2> padding,
-           std::array<uint32_t, 2> dilation,
-           uint32_t weights_width,
-           uint32_t input_width,
-           uint32_t groups) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> {
+           uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
             return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
                 device,
                 input_tensor,
@@ -196,14 +250,7 @@ void py_bind_conv2d(py::module& module) {
                 height,
                 width,
                 in_channels,
-                out_channels,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                weights_width,
-                input_width,
-                groups);
+                out_channels);
         },
         py::kw_only(),
         py::arg("device"),
@@ -213,14 +260,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("height"),
         py::arg("width"),
         py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("weights_width"),
-        py::arg("input_width"),
-        py::arg("groups"));
+        py::arg("out_channels"));
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -253,11 +293,11 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_height,
            uint32_t output_width,
            uint32_t output_channels,
-           ttnn::Device* device,
+           const CoreCoord& compute_grid_size,
            ShardOrientation block_shard_orientation,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
-            return ttnn::operations::conv::conv2d::determine_parallel_config<Device>(
-                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, device, block_shard_orientation, is_out_tiled);
+            return ttnn::operations::conv::conv2d::determine_parallel_config(
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, is_out_tiled);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
@@ -265,31 +305,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_height"),
         py::arg("output_width"),
         py::arg("output_channels"),
-        py::arg("device"),
-        py::arg("block_shard_orientation"),
-        py::arg("is_out_tiled") = true);
-
-    module.def(
-        "determine_parallel_config",
-        [](const ttnn::TensorMemoryLayout& shard_layout,
-           uint32_t batch_size,
-           uint32_t input_channels,
-           uint32_t output_height,
-           uint32_t output_width,
-           uint32_t output_channels,
-           ttnn::MeshDevice* device,
-           ShardOrientation block_shard_orientation,
-           bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
-            return ttnn::operations::conv::conv2d::determine_parallel_config<MeshDevice>(
-                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, device, block_shard_orientation, is_out_tiled);
-        },
-        py::arg("shard_layout"),
-        py::arg("batch_size"),
-        py::arg("input_channels"),
-        py::arg("output_height"),
-        py::arg("output_width"),
-        py::arg("output_channels"),
-        py::arg("device"),
+        py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
         py::arg("is_out_tiled") = true);
 

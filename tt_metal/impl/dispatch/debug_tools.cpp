@@ -23,7 +23,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     host_dispatch_dump_file.open(host_file);
     device_dispatch_dump_file.open(device_file);
 
-    vector<pair<string, vector<string>>> host_map;
+    std::vector<std::pair<string, std::vector<string>>> host_map;
 
 
     string line;
@@ -36,7 +36,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
         } else if (line.find("BINARY SPAN") != string::npos or line.find("SEM") != string::npos or line.find("CB") != string::npos) {
             type = line;
         } else {
-            vector<string> host_data = {line};
+            std::vector<string> host_data = {line};
             while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == string::npos)) {
                 host_data.push_back(line);
             }
@@ -44,8 +44,8 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
         }
     }
 
-    vector<vector<string>> device_map;
-    vector<string> device_data;
+    std::vector<std::vector<string>> device_map;
+    std::vector<string> device_data;
     while (std::getline(device_dispatch_dump_file, line) and line != "EXIT_CONDITION") {
         if (line == "CHUNK") {
             if (not device_data.empty()) {
@@ -63,7 +63,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     for (const auto& [type, host_data] : host_map) {
         bool match = false;
 
-        for (const vector<string>& device_data : device_map) {
+        for (const std::vector<string>& device_data : device_map) {
             if (host_data == device_data) {
                 tt::log_info("Matched on {}", type);
                 match = true;
@@ -292,7 +292,7 @@ void dump_completion_queue_entries(
     uint32_t base_addr = (cq_interface.issue_fifo_limit << 4);
 
     // Read out in pages, this is fine since all completion Q entries are page aligned.
-    vector<uint8_t> read_data;
+    std::vector<uint8_t> read_data;
     read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
     tt::log_info("Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     cq_file << fmt::format(
@@ -382,7 +382,7 @@ void dump_issue_queue_entries(
     uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
-    vector<uint8_t> read_data;
+    std::vector<uint8_t> read_data;
     read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
     tt::log_info("Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
     iq_file << fmt::format(
@@ -542,7 +542,7 @@ void dump_command_queue_raw_data(
     }
 
     // Read out in pages
-    vector<uint8_t> read_data;
+    std::vector<uint8_t> read_data;
     read_data.resize(dispatch_constants::TRANSFER_PAGE_SIZE);
     out_file << std::endl;
     out_file << fmt::format(

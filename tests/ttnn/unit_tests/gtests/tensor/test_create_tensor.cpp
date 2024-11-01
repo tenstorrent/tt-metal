@@ -13,6 +13,8 @@
 
 #include "ttnn_test_fixtures.hpp"
 
+namespace {
+
 void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -32,12 +34,13 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
         host_data[i] = 1;
     }
 
-    auto input_buffer = ttnn::allocate_buffer_on_device(input_buf_size_datums * datum_size_bytes, device, input_shape, dtype, Layout::TILE, mem_cfg);
+    tt::tt_metal::TensorLayout tensor_layout(dtype, PageConfig(Layout::TILE), mem_cfg);
+    ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(input_shape));
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device( device, input_shape, tensor_layout);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer};
 
     Tensor input_tensor = Tensor(input_storage, input_shape, dtype, Layout::TILE);
-    tt::log_debug("input_data: \n {}", input_tensor.write_to_string());
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -53,6 +56,7 @@ void run_create_tensor_test(tt::tt_metal::Device* device, ttnn::SimpleShape inpu
 struct CreateTensorParams {
     ttnn::SimpleShape shape;
 };
+}
 
 class CreateTensorTest : public ttnn::TTNNFixtureWithDevice, public ::testing::WithParamInterface<CreateTensorParams> {};
 
@@ -65,6 +69,10 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})}
+        CreateTensorParams{.shape=ttnn::SimpleShape({1, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({2, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 0, 0, 0})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0, 1, 32, 32})},
+        CreateTensorParams{.shape=ttnn::SimpleShape({0})}
     )
 );

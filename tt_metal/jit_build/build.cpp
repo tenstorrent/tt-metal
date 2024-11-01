@@ -33,7 +33,6 @@ namespace tt::tt_metal {
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
@@ -55,7 +54,6 @@ void JitBuildEnv::init(uint32_t build_key, tt::ARCH arch) {
 
     // Tools
     this->gpp_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++ ";
-    this->objcopy_ = this->root_ + "tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-objcopy ";
 
     // Flags
     string common_flags;
@@ -352,8 +350,8 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     finish_init();
 }
 
-JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid ethernet processor");
+JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -404,7 +402,31 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
                             env_.root_ + linker_str;
             break;
         }
-        case 1:
+        default:
+            TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+    }
+    this->process_defines_at_compile = true;
+
+    finish_init();
+}
+
+JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid idle ethernet processor");
+    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
+
+    this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
+                      "/metal/llk_io ";
+
+    this->defines_ = env_.defines_;
+    uint32_t l1_cache_disable_mask =
+        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
+        this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
+    }
+
+    switch (this->core_id_) {
+        case 0: {
             this->target_name_ = "idle_erisc";
             this->cflags_ =
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -430,6 +452,9 @@ JitBuildEthernet::JitBuildEthernet(const JitBuildEnv& env, const JitBuiltStateCo
             }
 
             break;
+        }
+        default:
+            TT_THROW("Invalid processor ID {} for Idle Ethernet core.", this->core_id_);
     }
     this->process_defines_at_compile = true;
 
@@ -454,7 +479,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj) const {
-    ZoneScoped;
+    //ZoneScoped;
     fs::create_directories(out_dir);
 
     // Add kernel specific defines
@@ -491,7 +516,7 @@ void JitBuildState::compile_one(
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
-    ZoneScoped;
+    //ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         launch_build_step(
@@ -508,7 +533,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
+    //ZoneScoped;
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
@@ -538,7 +563,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
+    //ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
@@ -551,7 +576,7 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const 
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
-    ZoneScoped;
+    //ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
@@ -570,7 +595,7 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
 }
 
 void JitBuildState::build(const JitBuildSettings* settings) const {
-    ZoneScoped;
+    //ZoneScoped;
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
@@ -590,13 +615,13 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    ZoneScoped;
+    //ZoneScoped;
 
     build.build(settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
-    ZoneScoped;
+    //ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference

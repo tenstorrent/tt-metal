@@ -289,7 +289,7 @@ ttnn.attach_golden_function(ttnn.polygamma, golden_function=_golden_function_pol
 def _golden_function_clamp(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
-    return torch.clamp(input=input_tensor_a, min=min, max=max)
+    return torch.clamp(input_tensor_a, min, max)
 
 
 ttnn.attach_golden_function(ttnn.clamp, golden_function=_golden_function_clamp)
@@ -298,7 +298,7 @@ ttnn.attach_golden_function(ttnn.clamp, golden_function=_golden_function_clamp)
 def _golden_function_clip(input_tensor_a, min=None, max=None, *args, **kwargs):
     import torch
 
-    return torch.clip(input=input_tensor_a, min=min, max=max)
+    return torch.clip(input_tensor_a, min, max)
 
 
 ttnn.attach_golden_function(ttnn.clip, golden_function=_golden_function_clip)
@@ -674,6 +674,22 @@ def _golden_function_normalize_global(input_tensor_a, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.normalize_global, golden_function=_golden_function_normalize_global)
+
+
+def _golden_function_normalize_hw(input_tensor_a, *args, **kwargs):
+    import torch
+
+    mean_hw = torch.mean(input_tensor_a, [-2, -1], keepdim=True)
+    std_hw = torch.std(input_tensor_a, [-2, -1], keepdim=True)
+
+    for i in range(input_tensor_a.shape[0]):
+        for j in range(input_tensor_a.shape[1]):
+            input_tensor_a[i, j, :, :] = (input_tensor_a[i, j, :, :] - mean_hw[i, j, :, :]) / std_hw[i, j, :, :]
+
+    return input_tensor_a
+
+
+ttnn.attach_golden_function(ttnn.normalize_hw, golden_function=_golden_function_normalize_hw)
 
 
 def _golden_function_rpow(input_tensor_a, dim, *args, **kwargs):

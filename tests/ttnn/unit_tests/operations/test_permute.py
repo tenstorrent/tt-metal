@@ -10,6 +10,8 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+torch.manual_seed(2005)
+
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
@@ -127,5 +129,20 @@ def test_permute_bfloat8(device):
 
     tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
+    tt_output = ttnn.to_torch(tt_output)
+    assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape", [(8, 2, 2, 3, 4), [1, 1370, 1, 3, 1280], [1, 197, 1, 3, 1024], [1, 197, 1, 3, 768], [1, 50, 1, 3, 1024]]
+)
+@pytest.mark.parametrize("perm", [(0, 3, 2, 1, 4), (3, 1, 2, 0, 4), (0, 3, 2, 1, 4), (1, 3, 2, 0, 4), (0, 3, 1, 2, 4)])
+def test_permute_5d(shape, perm, device):
+    input_a = torch.randn(shape)
+    torch_output = torch.permute(input_a, perm)
+
+    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_output = ttnn.permute(tt_input, perm)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)

@@ -56,12 +56,12 @@ MorehNormBackwardOperation::invoke(
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    std::optional<std::variant<int64_t, std::vector<int64_t>>> dim,
+    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    std::vector<int64_t> dims = tt::operations::primary::get_dim(dim, input.get_legacy_shape().rank());
+    ttnn::SmallVector<int64_t> dims = tt::operations::primary::get_dim(dim, input.get_legacy_shape().rank());
     std::sort(dims.begin(), dims.end());
     return {
         operation_attributes_t{

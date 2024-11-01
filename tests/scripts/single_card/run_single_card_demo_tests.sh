@@ -14,6 +14,8 @@ run_common_func_tests() {
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.2-11B  (#Skip: Weights too big for single-chip ci VM)
+  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   for llama_dir in "$llama8b" "$llama1b" "$llama3b"; do
@@ -22,7 +24,8 @@ run_common_func_tests() {
   done
 
   # Mistral7B
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo.py --timeout 420; fail+=$?
+  # Skipping: kills WH cards, check issue #14440
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo.py --timeout 420; fail+=$?
 
   #VGG11/VGG16
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600; fail+=$?
@@ -48,7 +51,8 @@ run_common_perf_tests(){
   fail=0
 
   # Mistral7B
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo_with_prefill.py --timeout 420; fail+=$?
+  # Skipping: kills WH cards, check issue #14440
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/mistral7b/demo/demo_with_prefill.py --timeout 420; fail+=$?
 
   # Mamba
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420; fail+=$?

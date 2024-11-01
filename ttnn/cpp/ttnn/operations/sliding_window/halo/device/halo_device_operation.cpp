@@ -37,7 +37,7 @@ std::vector<tt::tt_metal::LegacyShape> HaloDeviceOperation::compute_output_shape
     // output_shape[1] remains same
     // output_shape[2] changes
     // output_shape[3] remains same
-    output_shape[2] = (uint32_t) ceil((float) total_nsticks / nbatch);
+    output_shape[2] = (uint32_t) std::ceil((float) total_nsticks / nbatch);
 
     log_debug(tt::LogOp, "output_shape: [{} {} {} {}]", output_shape[0], output_shape[1], output_shape[2], output_shape[3]);
     log_debug(tt::LogOp, "max_out_nsticks_per_core: {}", max_out_nsticks_per_core_);
@@ -124,8 +124,8 @@ Tensor halo_op(const Tensor& input_tensor,
                 uint32_t reshard_num_cores_nhw,
                 MemoryConfig output_memory_config,
                 bool is_out_tiled) {
-    TT_ASSERT(input_tensor.memory_config().is_sharded());
-    TT_ASSERT(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED);
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
+    TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED || input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Only height, width or block sharded tensors are supported.");
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;

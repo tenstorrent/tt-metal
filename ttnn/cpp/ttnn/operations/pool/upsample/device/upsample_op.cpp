@@ -45,7 +45,7 @@ std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std
     uint32_t out_h = input_shape[1] * scale_factor_h_;
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
-    const auto out_dims = std::vector<uint32_t>({ out_n, out_h, out_w, out_c }); //in the NHWC format
+    const ttnn::SmallVector<uint32_t> out_dims({ out_n, out_h, out_w, out_c }); //in the NHWC format
 
     return {tt::tt_metal::LegacyShape{out_dims}};
 }
@@ -59,7 +59,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
             auto output_shape = compute_output_shapes(inputs).at(0);
             if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                 auto ncores = input_shard_spec.num_cores();
-                array<uint32_t, 2> output_shard_shape = {div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
+                std::array<uint32_t, 2> output_shard_shape = {div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
                 auto output_shard_spec = input_shard_spec;
                 output_shard_spec.shape = output_shard_shape;
                 mem_config.shard_spec = output_shard_spec;
@@ -72,7 +72,7 @@ std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor> &i
                 auto core_range = *shard_grid.begin();
                 uint32_t ncores_w = core_range.end_coord.x + 1;
                 uint32_t ncores_h = core_range.end_coord.y + 1;
-                // array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] / ncores_h, output_shape[-1] / ncores_w};
+                // std::array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] / ncores_h, output_shape[-1] / ncores_w};
                 // auto output_shard_spec = input_shard_spec;
                 // output_shard_spec.shape = output_shard_shape;
                 // mem_config.shard_spec = output_shard_spec;

@@ -94,6 +94,13 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst));
             break;
+        case BinaryOpType::LOGICAL_XOR:
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            op_name = "sub_tiles";
+            op_binary_type = "EltwiseBinaryType::ELWSUB";
+            defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst));
+            break;
         case BinaryOpType::LDEXP:
             defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";

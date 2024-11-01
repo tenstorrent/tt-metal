@@ -194,7 +194,7 @@ class UNetConv2D:
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     def __call__(self, x):
-        x, _, _, self.weight, self.bias = ttnn.conv2d(
+        x, self.weight, self.bias = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -209,6 +209,7 @@ class UNetConv2D:
             padding=self.padding,
             conv_config=self.conv_config,
             conv_op_cache=self.cache,
+            return_prepared_device_weights=True,
         )
         return x
 
@@ -266,7 +267,7 @@ class UNetDownblock:
                 output_height=self.conv2.input_height,
                 output_width=self.conv2.input_width,
                 output_channels=self.conv1.out_channels,
-                device=device,
+                compute_grid_size=device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
@@ -320,7 +321,7 @@ class UNetUpblock:
                 output_height=self.conv2.input_height,
                 output_width=self.conv2.input_width,
                 output_channels=self.conv1.out_channels,
-                device=device,
+                compute_grid_size=device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 is_out_tiled=True,
             )
@@ -448,7 +449,7 @@ class UNet:
             output_height=self.bnc2.input_height,
             output_width=self.bnc2.input_width,
             output_channels=self.bnc.out_channels,
-            device=device,
+            compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
             is_out_tiled=True,
         )
