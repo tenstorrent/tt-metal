@@ -88,6 +88,34 @@ jobs:
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
+  cmake-version:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: lukka/get-cmake@v3.30.5
+      with:
+        cmakeVersion: "~3.16.0"
+    - name: Check CMake version
+      run: cmake --version
+    - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+    - name: Install LLVM and Clang
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod u+x llvm.sh
+        sudo ./llvm.sh 17
+    - name: Install deps
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt update
+        sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
+    - name: Check CMake compatibility
+      env:
+        ARCH_NAME: wormhole_b0
+        CMAKE_GENERATOR: Ninja
+      # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
+      run: |
+        echo "Checking compatibility with $(cmake --version)"
+        cmake -B build .
   clang-tidy:
     runs-on: ubuntu-latest
     container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
