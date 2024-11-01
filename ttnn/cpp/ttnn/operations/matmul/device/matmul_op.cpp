@@ -1182,7 +1182,17 @@ void Matmul::validate(
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
             // We can uplift these variants to skip mcasting to support single core (1D) or single row/col (2D)
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                if (program_config.mcast_in0) {
+                TT_FATAL(!(program_config.mcast_in0 && program_config.gather_in0), "Matmul1D does not support mcast_in0 and gather_in0 at the same time.");
+
+                if (program_config.gather_in0) {
+                    TT_FATAL(input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Input tensor A must be width sharded when using gather_in0.");
+                    TT_FATAL(input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Input tensor B must be width sharded when using gather_in0.");
+                    TT_FATAL(input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid, "Input tensor A and B must be sharded on the same cores when using gather_in0.");
+                    TT_FATAL(this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
+
+                    TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
+                }
+                if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
                         TT_FATAL(program_config.fuse_batch, "Error");
                         TT_FATAL(
@@ -1783,6 +1793,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fuse_batch,
                     program_config.fused_activation,
                     program_config.mcast_in0,
+                    program_config.gather_in0,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

@@ -1622,6 +1622,89 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+operation::ProgramWithCallbacks create_program_gather_in0(
+    tt_metal::Program& program,
+    const Tensor& a,
+    tt_metal::Device* device,
+    MathFidelity math_fidelity,
+    bool fp32_dest_acc_en,
+    bool math_approx_mode,
+    bool packer_l1_acc,
+    CoreCoord compute_with_storage_grid_size,
+    uint32_t B,
+    uint32_t M,
+    uint32_t N,
+    uint32_t K,
+    bool bcast_batch,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    std::optional<UnaryWithParam> fused_activation,
+    tt_metal::Buffer* in0_buffer,
+    tt_metal::Buffer* in1_buffer,
+    tt_metal::Buffer* bias_buffer,
+    tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const tt::tt_metal::Tile& bias_tile,
+    const tt::tt_metal::Tile& output_tile,
+    tt::DataFormat in0_data_format,
+    tt::DataFormat in1_data_format,
+    tt::DataFormat bias_data_format,
+    tt::DataFormat output_data_format,
+    bool in0_is_sharded,
+    bool in1_is_sharded,
+    bool bias_is_sharded,
+    bool output_is_sharded,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> &fused_op_signaler
+) {
+    std::cout << "USING GATHER IN0" << std::endl;
+
+    return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
+        program,
+        a,
+        device,
+        math_fidelity,
+        fp32_dest_acc_en,
+        math_approx_mode,
+        packer_l1_acc,
+        compute_with_storage_grid_size,
+        B,
+        M,
+        N,
+        K,
+        bcast_batch,
+        in0_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        per_core_M,
+        per_core_N,
+        fused_activation,
+        in0_buffer,
+        in1_buffer,
+        bias_buffer,
+        out_buffer,
+        in0_tile,
+        in1_tile,
+        bias_tile,
+        output_tile,
+        in0_data_format,
+        in1_data_format,
+        bias_data_format,
+        output_data_format,
+        in0_is_sharded,
+        in1_is_sharded,
+        bias_is_sharded,
+        output_is_sharded,
+        untilize_out,
+        fused_op_signaler
+    );
+
+}
+
 }  // namespace reuse_mcast_1d_optimized_helpers
 
 namespace ttnn {
@@ -1647,6 +1730,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     bool fuse_batch,
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
+    bool gather_in0,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
@@ -1743,6 +1827,48 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
+
+    if (gather_in0) {
+        return reuse_mcast_1d_optimized_helpers::create_program_gather_in0(
+            program,
+            a,
+            device,
+            math_fidelity,
+            fp32_dest_acc_en,
+            math_approx_mode,
+            packer_l1_acc,
+            compute_with_storage_grid_size,
+            B,
+            Mt,
+            Nt,
+            Kt,
+            bcast_batch,
+            in0_block_w,
+            out_subblock_h,
+            out_subblock_w,
+            per_core_M,
+            per_core_N,
+            fused_activation,
+            in0_buffer,
+            in1_buffer,
+            bias_buffer,
+            out_buffer,
+            in0_tile,
+            in1_tile,
+            bias.has_value() ? bias->get_tile() : output_tile,
+            output_tile,
+            in0_data_format,
+            in1_data_format,
+            bias_data_format,
+            output_data_format,
+            a.memory_config().is_sharded(),
+            b.memory_config().is_sharded(),
+            bias.has_value() ? bias->memory_config().is_sharded() : false,
+            output.memory_config().is_sharded(),
+            untilize_out,
+            fused_op_signaler);
+    }
+
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::create_program_mcast_in0(
             program,
@@ -1835,6 +1961,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool fuse_batch,
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
+    bool gather_in0,
     bool untilize_out) {
     tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
@@ -1856,6 +1983,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
         fuse_batch,
         std::move(fused_activation),
         mcast_in0,
+        gather_in0,
         untilize_out,
         empty_fused_op_signaler);
 }
@@ -1891,6 +2019,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
         config.fuse_batch,
         config.fused_activation,
         config.mcast_in0,
+        config.gather_in0,
         untilize_out,
         fused_op_signaler);
 }

@@ -143,7 +143,8 @@ def test_multi_core_matmul_1d_wh(
         per_core_N=out_block_w,
         fuse_batch=True,
         fused_activation=None,
-        mcast_in0=True,
+        mcast_in0=False,
+        gather_in0=True,
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
