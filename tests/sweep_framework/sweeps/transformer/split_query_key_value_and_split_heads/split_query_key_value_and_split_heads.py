@@ -33,11 +33,11 @@ parameters = {
     "nightly": {
         "input_spec": list(
             gen_split_qkv_heads_spec(
-                batch_size_list=list(gen_rand_integers(1, 10, 2)),
-                sequence_size_list=list(gen_rand_integers(1, 512, 4)),
+                input_shape_list=gen_shapes([1, 1, 1], [6, 512, 2048], [1, 1, 1], 16),
                 num_heads_list=list(gen_rand_integers(1, 20, 6)),
                 transpose_key_list=[True, False],
                 num_kv_heads_list=[None, 1],
+                use_invalid_hidden_size=False,
             )
         ),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -49,30 +49,35 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if (
-        test_vector["input_spec"]["hidden_size"]
-        % (test_vector["input_spec"]["num_heads"] + test_vector["input_spec"]["num_kv_heads"] * 2)
-        != 0
-    ):
-        return True, "Hidden side must be divisible by the total number of heads"
-    if (
-        test_vector["input_spec"]["hidden_size"]
-        // (test_vector["input_spec"]["num_heads"] + test_vector["input_spec"]["num_kv_heads"] * 2)
-    ) % 32 != 0:
-        return True, "Head size must be a multiple of 32"
-    if test_vector["input_spec"]["num_kv_heads"] != test_vector["input_spec"]["num_heads"] and (
-        test_vector["input_spec"]["hidden_size"] != 4672
-        or test_vector["input_spec"]["num_kv_heads"] != 1
-        or test_vector["input_spec"]["num_heads"] != 71
-    ):
-        return (
-            True,
-            "When using num_kv_heads, hidden_size must be 4672, num_kv_heads must be 1 and num_heads must be 71",
-        )
-    if (test_vector["input_spec"]["num_kv_heads"] != test_vector["input_spec"]["num_heads"]) and test_vector[
-        "input_spec"
-    ]["transpose_key"] is True:
-        return True, "Can't transpose key when using separate kv heads"
+    if test_vector["input_spec"]["num_kv_heads"] is not None:
+        if (
+            test_vector["input_spec"]["hidden_size"]
+            % (test_vector["input_spec"]["num_heads"] + test_vector["input_spec"]["num_kv_heads"] * 2)
+            != 0
+        ):
+            return True, "Hidden size must be divisible by the total number of heads"
+        if (
+            test_vector["input_spec"]["hidden_size"]
+            // (test_vector["input_spec"]["num_heads"] + test_vector["input_spec"]["num_kv_heads"] * 2)
+        ) % 32 != 0:
+            return True, "Head size must be a multiple of 32"
+        if (
+            test_vector["input_spec"]["hidden_size"] != 4672
+            or test_vector["input_spec"]["num_kv_heads"] != 1
+            or test_vector["input_spec"]["num_heads"] != 71
+        ):
+            return (
+                True,
+                "When using num_kv_heads, hidden_size must be 4672, num_kv_heads must be 1 and num_heads must be 71",
+            )
+        if test_vector["input_spec"]["transpose_key"] is True:
+            return True, "Can't transpose key when using separate kv heads"
+    else:
+        if test_vector["input_spec"]["hidden_size"] % (test_vector["input_spec"]["num_heads"] * 3) != 0:
+            return True, "Hidden size must be divisible by the total number of heads"
+        if (test_vector["input_spec"]["hidden_size"] // (test_vector["input_spec"]["num_heads"] * 3)) % 32 != 0:
+            return True, "Head size must be a multiple of 32"
+
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Inputs to eltwise binary must be tilized"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
@@ -99,35 +104,19 @@ def run(
     batch_size, sequence_size, hidden_size, num_heads, num_kv_heads, _, transpose_key = input_spec.values()
     input_shape = (batch_size, sequence_size, hidden_size)
 
-    if num_kv_heads == num_heads:
-        num_kv_heads = num_heads
-
-    head_size = hidden_size // (2 * num_kv_heads + num_heads)
+    if num_kv_heads is not None:
+        head_size = hidden_size // (2 * num_kv_heads + num_heads)
+    else:
+        head_size = hidden_size // (3 * num_heads)
 
     torch_input_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    intermediate_result = torch.reshape(
-        torch_input_tensor, (batch_size, sequence_size, num_heads + (2 * num_kv_heads), head_size)
+
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
+    torch_output_tensors = golden_function(
+        torch_input_tensor, num_heads=num_heads, num_kv_heads=num_kv_heads, transpose_key=transpose_key
     )
-    query, key, value = (
-        intermediate_result[..., :num_heads, :],
-        intermediate_result[..., num_heads : num_heads + num_kv_heads, :],
-        intermediate_result[..., num_heads + num_kv_heads :, :],
-    )
-
-    query = torch.reshape(query, (batch_size, sequence_size, num_heads, head_size))
-    key = torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size))
-    value = torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size))
-
-    query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
-    key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
-    value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
-
-    if transpose_key:
-        key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
-
-    torch_output_tensors = (query, key, value)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor,
