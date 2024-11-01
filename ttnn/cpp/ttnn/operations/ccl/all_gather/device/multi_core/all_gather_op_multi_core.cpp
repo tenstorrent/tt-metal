@@ -261,7 +261,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     auto const& topology_config = ttnn::ccl::RingTopology(device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
 
     bool enable_print = false;
-    all_gather_config.print();
+        all_gather_config.print();
 
     bool is_sharded = input_tensor.is_sharded();
 
@@ -289,6 +289,20 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
     bool width = input_tensor.get_legacy_shape().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
+    bool use_logical_shape = true;
+    bool subtile_all_gather = false;
+    auto input_shape = use_logical_shape ? input_tensor.get_logical_shape() : input_tensor.get_padded_shape();
+    uint32_t gather_dim_size = input_shape[dim];
+
+    if (gather_dim_size%32 != 0) {
+        subtile_all_gather = true;
+        TT_FATAL(dim == 2, "Only dim 2 is supported for all gather on sub-tile, got dim: {}", dim);
+        TT_FATAL(input_shape[0] == 1 && input_shape[1] == 1, "Dim 0 and 1 must be 1 for all gather on sub-tile, got shape: {}", input_shape);
+        TT_FATAL(gather_dim_size*ring_size <= 32, "Subtile all gather only supports output dimension size <= 32, got: {}", gather_dim_size*ring_size);
+        TT_FATAL(is_sharded, "Subtile all gather only supports sharded tensors");
+        TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Subtile all gather only supports tiled tensors");
+        TT_FATAL(input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16, "Subtile all gather only supports float32 and bfloat16 tensors, got: {}", input_tensor.get_dtype());
+    }
 
     std::map<string, string> worker_defines;
     if (rm) {
@@ -396,7 +410,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(ring_index),
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
             static_cast<uint32_t>(cb_num_pages / 2),
-            static_cast<uint32_t>(ring_size)
+            static_cast<uint32_t>(ring_size),
+            static_cast<uint32_t>(gather_dim_size),
         };
         if (is_sharded) {
             emit_sharded_tensor_kernel_ct_args(device, input_tensor, worker_reader_sender_ct_args, input_pages_per_shard_y, input_pages_per_shard_x);
@@ -440,6 +455,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(sender_worker_writer_semaphore_id),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(num_edm_buffers_per_channel),
+            static_cast<uint32_t>(gather_dim_size),
         };
 
         if (is_sharded) {
@@ -501,7 +517,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
             static_cast<uint32_t>(sender_worker_reader_semaphore_id),
             static_cast<uint32_t>(cb_num_pages / 2),
             static_cast<uint32_t>(ring_size),
-            static_cast<bool>(fuse_op)
+            static_cast<bool>(fuse_op),
+            static_cast<uint32_t>(gather_dim_size),
         };
 
         if (is_sharded) {
@@ -810,7 +827,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)), // move to rt
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)), // move to rt
                             static_cast<uint32_t>(tensor_slicer.input_start_page_idx),
-                            static_cast<uint32_t>(tensor_slicer.output_start_page_idx),
+                            static_cast<uint32_t>(subtile_all_gather ? tensor_slicer.output_start_page_idx - ring_index*tensor_slicer.num_cols : tensor_slicer.output_start_page_idx),
                             static_cast<uint32_t>(tensor_slicer.output_start_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.row_idx),
                             static_cast<uint32_t>(tensor_slicer.col_idx),
@@ -818,8 +835,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.col_offset),
                             static_cast<uint32_t>(tensor_slicer.num_rows),
                             static_cast<uint32_t>(tensor_slicer.num_cols),
-                            static_cast<uint32_t>(last_output_page_offset),
-                            static_cast<uint32_t>(tensor_slicer.output_page_offset),
+                            static_cast<uint32_t>(subtile_all_gather ? 0:last_output_page_offset),
+                            static_cast<uint32_t>(subtile_all_gather ? 0:tensor_slicer.output_page_offset),
                             static_cast<uint32_t>(last_output_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.output_addr_offset),
                             static_cast<uint32_t>(is_clockwise_direction ? 1 : 0),
@@ -873,7 +890,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
                             static_cast<uint32_t>(tensor_slicer.input_start_page_idx),
-                            static_cast<uint32_t>(tensor_slicer.output_start_page_idx),
+                            static_cast<uint32_t>(subtile_all_gather ? tensor_slicer.output_start_page_idx - ring_index*tensor_slicer.num_cols : tensor_slicer.output_start_page_idx),
                             static_cast<uint32_t>(tensor_slicer.output_start_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.row_idx),
                             static_cast<uint32_t>(tensor_slicer.col_idx),
@@ -1023,7 +1040,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(num_full_chunks_per_worker.at(b)),
                             static_cast<uint32_t>(pages_per_eth_l1_buffer.at(b)),
                             static_cast<uint32_t>(rem_pages_per_worker.at(b)),
-                            static_cast<uint32_t>(receiver_output_start_page_idx),
+                            static_cast<uint32_t>(subtile_all_gather ? tensor_slicer.output_start_page_idx - ring_index*tensor_slicer.num_cols : receiver_output_start_page_idx),
                             static_cast<uint32_t>(receiver_output_start_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.row_idx),
                             static_cast<uint32_t>(tensor_slicer.col_idx),
@@ -1031,8 +1048,8 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                             static_cast<uint32_t>(tensor_slicer.col_offset),
                             static_cast<uint32_t>(tensor_slicer.num_rows),
                             static_cast<uint32_t>(tensor_slicer.num_cols),
-                            static_cast<uint32_t>(last_output_page_offset),
-                            static_cast<uint32_t>(tensor_slicer.output_page_offset),
+                            static_cast<uint32_t>(subtile_all_gather ? 0:last_output_page_offset),
+                            static_cast<uint32_t>(subtile_all_gather ? 0:tensor_slicer.output_page_offset),
                             static_cast<uint32_t>(last_output_addr_offset),
                             static_cast<uint32_t>(tensor_slicer.output_addr_offset),
                             static_cast<uint32_t>(receiver_ring_index),

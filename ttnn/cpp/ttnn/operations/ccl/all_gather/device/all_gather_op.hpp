@@ -130,6 +130,7 @@ struct AllGather {
     const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
+    const bool use_logical_shape = true;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;

@@ -55,18 +55,20 @@ void kernel_main() {
     volatile uint32_t *const writer_send_sem_ptr = reinterpret_cast<volatile uint32_t *const >(get_semaphore(get_compile_time_arg_val(4)));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(5);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(6);
+    constexpr uint32_t gather_dim_size = get_compile_time_arg_val(7);
+    constexpr bool subtile_all_gather = (gather_dim_size % 32 != 0);
 
     ASSERT(half_cb_n_pages > rem_num_pages);
 
     #ifdef SHARDED_MEM_LAYOUT
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(7));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(8);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(9);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(10);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(11);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(12);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(13);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(14) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(8));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(9);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(10);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(11);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(12);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(13);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(14);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(15) != 0;
     #endif
 
     constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
@@ -133,16 +135,25 @@ void kernel_main() {
 
     uint32_t ID = (my_y[0] << 16) | my_x[0];
 
+    uint32_t intile_start_row = input_start_ring_idx*gather_dim_size;
+    uint32_t intile_end_row = intile_start_row + gather_dim_size;
+
     if (num_full_chunks > 0) {
         for (uint32_t c = 0; c < num_full_chunks; ++c) {
             sender.wait_for_empty_write_slot();
-            write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages_per_full_chunk, page_size, sender);
+            if constexpr(subtile_all_gather)
+                write_and_send_chunk_partial(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages_per_full_chunk, page_size, sender, intile_start_row, intile_end_row);
+            else
+                write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, num_pages_per_full_chunk, page_size, sender);
         }
     }
 
     if (rem_num_pages > 0) {
         sender.wait_for_empty_write_slot();
-        write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, sender);
+        if constexpr(subtile_all_gather)
+            write_and_send_chunk_partial(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, sender, intile_start_row, intile_end_row);
+        else
+            write_and_send_chunk(output_page_idx, col_idx, row_idx, cb_id_in0, d, num_cols, num_rows, col_offset, row_offset, rem_num_pages, page_size, sender);
         ASSERT(num_pages_per_full_chunk == 0 || num_pages_per_full_chunk > rem_num_pages);
         ASSERT(half_cb_n_pages > rem_num_pages);
         pop_filler_pages_from_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);

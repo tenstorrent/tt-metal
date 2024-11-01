@@ -55,25 +55,28 @@ void kernel_main() {
     uint32_t sem_addr = get_semaphore(get_compile_time_arg_val(5));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(6);
     constexpr uint32_t ring_size = get_compile_time_arg_val(7);
+    constexpr uint32_t gather_dim_size = get_compile_time_arg_val(8);
+    constexpr bool subtile_all_gather = (gather_dim_size % 32 != 0);
+
     #ifdef SHARDED_MEM_LAYOUT
 
-    constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(8));
-    constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(9);
-    constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(10);
-    constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(11);
-    constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(12);
-    constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(13);
-    constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(14);
-    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(15) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout input_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(9));
+    constexpr uint32_t input_tensor_shard_grid_height = get_compile_time_arg_val(10);
+    constexpr uint32_t input_tensor_shard_grid_width = get_compile_time_arg_val(11);
+    constexpr uint32_t input_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(12);
+    constexpr uint32_t input_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(13);
+    constexpr uint32_t input_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(14);
+    constexpr uint32_t input_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(15);
+    constexpr bool input_tensor_shard_grid_transposed = get_compile_time_arg_val(16) != 0;
 
-    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(16));
-    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(17);
-    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(18);
-    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(19);
-    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(20);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(21);
-    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(22);
-    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(23) != 0;
+    constexpr tt::tt_metal::TensorMemoryLayout output_tensor_memory_layout = static_cast<tt::tt_metal::TensorMemoryLayout>(get_compile_time_arg_val(17));
+    constexpr uint32_t output_tensor_shard_grid_height = get_compile_time_arg_val(18);
+    constexpr uint32_t output_tensor_shard_grid_width = get_compile_time_arg_val(19);
+    constexpr uint32_t output_tensor_shard_grid_start_y_logical = get_compile_time_arg_val(20);
+    constexpr uint32_t output_tensor_shard_grid_start_x_logical = get_compile_time_arg_val(21);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_y = get_compile_time_arg_val(22);
+    constexpr uint32_t output_tensor_shard_pages_per_shard_x = get_compile_time_arg_val(23);
+    constexpr bool output_tensor_shard_grid_transposed = get_compile_time_arg_val(24) != 0;
     #endif
 
     ASSERT(half_cb_n_pages > rem_num_pages);
@@ -173,13 +176,23 @@ void kernel_main() {
     uint32_t col_idx = col_start_idx;
     uint32_t row_idx = row_start_idx;
 
+    uint32_t read_intile_start_row = 0;
+    uint32_t read_intile_end_row = gather_dim_size;
+    uint32_t write_intile_start_row = input_start_ring_idx*gather_dim_size;
+
     if (num_full_chunks > 0) {
         for (uint32_t c = 0; c < num_full_chunks; ++c) {
-            read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, num_pages, page_size);
+            if constexpr(subtile_all_gather)
+                read_partial_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, num_pages, page_size, read_intile_start_row, read_intile_end_row, write_intile_start_row);
+            else
+                read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, num_pages, page_size);
         }
     }
     if (rem_num_pages > 0) {
-        read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, rem_num_pages, page_size);
+        if constexpr(subtile_all_gather)
+            read_partial_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, rem_num_pages, page_size, read_intile_start_row, read_intile_end_row, write_intile_start_row);
+        else
+            read_chunk_from_input_tensor(input_page_idx, cb_id_in0, s, rem_num_pages, page_size);
         ASSERT(num_pages == 0 || num_pages > rem_num_pages);
         ASSERT(half_cb_n_pages > rem_num_pages);
         push_filler_pages_to_cb(cb_id_in0, half_cb_n_pages - rem_num_pages);
