@@ -32,6 +32,82 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
 
+def prepare_conv_weights(
+    *,
+    weight_tensor,
+    input_memory_config,
+    input_layout,
+    weights_format,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv2d.prepare_conv_weights(
+        weight_tensor=weight_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        weights_format=weights_format,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
+
+
+def prepare_conv_bias(
+    *,
+    bias_tensor,
+    input_memory_config,
+    input_layout,
+    in_channels,
+    out_channels,
+    batch_size,
+    input_height,
+    input_width,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    groups,
+    device,
+    conv_config=None,
+):
+    return ttnn._ttnn.operations.conv2d.prepare_conv_bias(
+        bias_tensor=bias_tensor,
+        input_memory_config=input_memory_config,
+        input_tensor_layout=input_layout,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        groups=groups,
+        device=device,
+        conv_config=conv_config,
+    )
+
+
 def convert_conv_weight_tensor_to_tiled_layout(conv_weight_tensor, in1_block_h, in1_block_w, output_dtype=None):
     """
     Converts convolution weights to 2d matrix tiled layout on host
@@ -103,8 +179,16 @@ def conv2d(
     memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,  # ignored
+    return_output_size=False,
+    return_prepared_device_weights=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn._ttnn.operations.conv.conv2d(
+    (
+        conv_output,
+        output_height,
+        output_width,
+        prepared_device_weight,
+        prepared_device_bias,
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
@@ -122,6 +206,15 @@ def conv2d(
         conv_config=conv_config,
         memory_config=memory_config,
     )
+
+    if return_output_size and return_prepared_device_weights:
+        return conv_output, output_height, output_width, prepared_device_weight, prepared_device_bias
+    elif return_prepared_device_weights:
+        return conv_output, prepared_device_weight, prepared_device_bias
+    elif return_output_size:
+        return conv_output, output_height, output_width
+    else:
+        return conv_output
 
 
 __all__ = []

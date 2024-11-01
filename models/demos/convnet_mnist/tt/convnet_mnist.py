@@ -50,6 +50,8 @@ def convnet_mnist(
         conv_op_cache={},
         debug=True,
         groups=1,
+        return_output_size=True,
+        return_prepared_device_weights=True,
     )
     x = ttnn.relu(x)
 
@@ -93,6 +95,8 @@ def convnet_mnist(
         conv_op_cache={},
         debug=False,
         groups=1,
+        return_output_size=True,
+        return_prepared_device_weights=True,
     )
 
     x = ttnn.relu(x)
