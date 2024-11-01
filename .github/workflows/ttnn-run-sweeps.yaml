@@ -11,6 +11,8 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
+          - tilize
+          - untilize
           - ccl.line_all_gather
           - ccl.all_gather_n300
           - ccl.all_gather_n300_focused
@@ -256,6 +258,7 @@ on:
           - eltwise.ternary.where.where
           - eltwise.ternary.where.where_pytorch2
           - eltwise.ternary_backward.addcmul_bw
+          - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
           - reduction.topk.topk
           - reduction.argmax.argmax
