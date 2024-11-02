@@ -16,6 +16,7 @@ target_link_libraries(
         magic_enum
         fmt::fmt-header-only
         span
+        Metalium::Metal::STL
 )
 
 target_include_directories(
