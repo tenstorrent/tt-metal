@@ -455,7 +455,7 @@ def run_llama3_demo(
             # Write to host
             ttnn.wait_for_event(1, op_event)
             tt_output_torch = ttnn.to_torch(
-                tt_out_tok.cpu(blocking=False, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+                tt_out_tok.cpu(blocking=True, cq_id=1), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)
             )[0, 0, 0, :batch_size]
             ttnn.record_event(1, write_event)
 
