@@ -228,6 +228,13 @@ ttnn.attach_golden_function(
     ),
 )
 
+ttnn.attach_golden_function(
+    ttnn.clip_bw,
+    golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
+        torch.clamp, grad, input, a, b, *args, **kwargs
+    ),
+)
+
 
 def _golden_function_abs_cmplx(grad_tensor, input_tensor, *args, **kwargs):
     import torch
