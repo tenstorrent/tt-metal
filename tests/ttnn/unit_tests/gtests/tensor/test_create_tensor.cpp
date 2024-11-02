@@ -95,10 +95,18 @@ TEST_P(EmptyTensorTest, Combinations) {
         return;
     }
 
+    auto tensor_layout = tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
+
+    // Ignoring too large single bank allocations
+    if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
+        if (tensor_layout.compute_page_size_bytes(shape.logical_shape()) >= 650 * 1024) {
+            return;
+        }
+    }
+
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
     EXPECT_EQ(tensor.get_logical_shape(), shape.logical_shape());
 
-    auto tensor_layout = tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
     test_utils::test_tensor_on_device(shape.logical_shape(), tensor_layout, device_);
 }
 
