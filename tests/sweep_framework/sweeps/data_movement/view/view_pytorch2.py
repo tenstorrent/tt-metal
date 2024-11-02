@@ -40,31 +40,35 @@ def extract_brackets_content(line):
 def parse_md_file_simple_no_regex(file_path):
     view_specs = []
     i = 0
-    with open(file_path, "r") as file:
-        for line in file:
-            # Extract all sets of content inside brackets
-            brackets_content = extract_brackets_content(line)
 
-            if len(brackets_content) >= 3:  # Ensure we have both shape and size
-                shape_str = brackets_content[0]  # First set of brackets for shape
-                size_str = brackets_content[2]  # Third set of brackets for size
+    try:
+        with open(file_path, "r") as file:
+            for line in file:
+                # Extract all sets of content inside brackets
+                brackets_content = extract_brackets_content(line)
 
-                # Convert the shape and size strings to lists of integers
-                if "s" in shape_str or "s" in size_str:
-                    continue
-                shape = list(map(int, shape_str.split(",")))
-                size = list(map(int, size_str.split(",")))
+                if len(brackets_content) >= 3:  # Ensure we have both shape and size
+                    shape_str = brackets_content[0]  # First set of brackets for shape
+                    size_str = brackets_content[2]  # Third set of brackets for size
 
-                # Append the dictionary to the list
-                view_specs.append({"shape": shape, "size": size})
-            i += 1
+                    # Convert the shape and size strings to lists of integers
+                    if "s" in shape_str or "s" in size_str:
+                        continue
+                    shape = list(map(int, shape_str.split(",")))
+                    size = list(map(int, size_str.split(",")))
+
+                    # Append the dictionary to the list
+                    view_specs.append({"shape": shape, "size": size})
+                i += 1
+    except:
+        return []
 
     return view_specs
 
 
 parameters = {
     "nightly": {
-        "view_specs": parse_md_file_simple_no_regex("sweeps/data_movement/view/view_trace.md"),
+        "view_specs": parse_md_file_simple_no_regex("tests/sweep_framework/sweeps/data_movement/view/view_trace.md"),
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }

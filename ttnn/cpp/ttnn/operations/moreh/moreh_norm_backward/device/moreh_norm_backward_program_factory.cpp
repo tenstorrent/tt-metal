@@ -135,7 +135,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     const uint32_t im6_t{1};
     const uint32_t im7_t{1};
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -170,16 +170,16 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         "writer_moreh_norm_backward.cpp";
 
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(output)),
+        static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(input_grad_rank)};
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
     const auto reader_kernels_id =
-        tt::operations::primary::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -193,7 +193,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     }
 
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    const auto compute_kernels_id_1 = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernels_id_1 = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -206,7 +206,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{
             num_cols_per_core_group_2, need_bcast_dim[0], need_bcast_dim[1]};
-        compute_kernels_id_2 = tt::operations::primary::CreateComputeKernel(
+        compute_kernels_id_2 = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_cols_per_core_group_2, compute_args_group_2},

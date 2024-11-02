@@ -20,8 +20,8 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
         return false;
     }
 
-    return tt::operations::primary::is_1d_tensor(input) && tt::operations::primary::is_1d_tensor(other) &&
-           tt::operations::primary::is_same_shape(input, other);
+    return is_1d_tensor(input) && is_1d_tensor(other) &&
+           is_same_shape(input, other);
 }
 
 Tensor MorehMatmul::invoke(

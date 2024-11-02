@@ -32,7 +32,7 @@ function(setup_ttnn_test_target target_name)
         PUBLIC
             test_common_libs
             ttnn
-            tt_metal
+            Metalium::Metal
     )
     target_include_directories(
         ${target_name}

@@ -424,6 +424,83 @@ void FreeList::dump_blocks(std::ofstream &out) const {
     out << "\n";
 }
 
+void FreeList::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
+    if (shrink_size == 0) {
+        return;
+    }
+    TT_FATAL(bottom_up, "Shrinking from the top is currently not supported");
+    TT_FATAL(
+        shrink_size <= this->max_size_bytes_,
+        "Shrink size {} must be smaller than max size {}",
+        shrink_size,
+        this->max_size_bytes_);
+    if (this->lowest_occupied_address_.has_value()) {
+        TT_FATAL(
+            shrink_size <= *this->lowest_occupied_address_,
+            "Shrinking size by {} that would cut into allocated memory at address {} and is not supported",
+            shrink_size,
+            *this->lowest_occupied_address_);
+    }
+    TT_FATAL(this->shrink_size_ == 0, "Can only shrink size if it is not already shrunk");
+
+    // Since we know the lowest occupied addr is greater or equal to shrink size, there should be a free block at start
+    // with size of at least shrink size
+    // Case 1: There is a free block at head and its size is greater than shrink size,
+    // so we just need to modify its attributes
+    TT_ASSERT(this->free_block_head_ != nullptr, "Free block head should not be null");
+    if (this->free_block_head_->size > shrink_size) {
+        TT_ASSERT(this->free_block_head_->address == 0, "Free block head should start at 0");
+        this->free_block_head_->address = shrink_size;
+        this->free_block_head_->size -= shrink_size;
+    }
+    // Case 2: The free block at head is the exact shrink size, so we need to remove it
+    else {
+        // Free block head is also the block head
+        this->block_head_ = this->block_head_->next_block;
+        this->block_head_->prev_block = nullptr;
+        // Free block head is also the free block tail when there is only 1 free block
+        if (this->free_block_head_->next_free == nullptr) {
+            this->free_block_tail_ = nullptr;
+            this->free_block_head_ = nullptr;
+        } else {
+            this->free_block_head_->next_free->prev_free = nullptr;
+            this->free_block_head_ = this->free_block_head_->next_free;
+        }
+    }
+    this->max_size_bytes_ -= shrink_size;
+    this->shrink_size_ = shrink_size;
+}
+
+void FreeList::reset_size() {
+    if (shrink_size_ == 0) {
+        return;
+    }
+    // Case 1: No free blocks exist
+    // We create a new free block which will be the free head and tail, and will also be our new block head
+    if (this->free_block_head_ == nullptr) {
+        this->free_block_head_ = boost::make_local_shared<FreeList::Block>(0, this->shrink_size_);
+        this->free_block_head_->next_block = this->block_head_;
+        this->free_block_tail_ = this->free_block_head_;
+        this->block_head_ = this->free_block_head_;
+    }
+    // Case 2: Free blocks exist but not at the start
+    else if (this->free_block_head_->address != this->shrink_size_) {
+        auto new_free_block = boost::make_local_shared<FreeList::Block>(0, this->shrink_size_);
+        new_free_block->next_block = this->block_head_;
+        new_free_block->next_free = this->free_block_head_;
+        this->free_block_head_->prev_free = new_free_block;
+        this->free_block_head_ = new_free_block;
+        this->block_head_ = this->free_block_head_;
+    }
+    // Case 3: There is a free block at the start and we just need to modify its attributes
+    else {
+        this->free_block_head_->address = 0;
+        this->free_block_head_->size += this->shrink_size_;
+    }
+    this->max_size_bytes_ += this->shrink_size_;
+    this->shrink_size_ = 0;
+}
+
 }  // namespace allocator
 
 }  // namespace tt_metal
