@@ -8,6 +8,9 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_log.h"
 
+// FIXME: ARCH_NAME specific include
+#include "tensix_types.h" // L1_SIZE
+
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(const Tensor &input_tensor, const uint16_t k, const int8_t dim, Tensor &value_tensor, Tensor &index_tensor) {
