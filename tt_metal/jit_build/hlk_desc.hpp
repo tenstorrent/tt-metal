@@ -6,6 +6,7 @@
 
 #include <string>
 
+#include "hostdevcommon/common_runtime_address_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/base_types.hpp"
@@ -29,17 +30,14 @@ class tt_hlk_desc
     size_t hlk_args_size;  // size of hlk_args_t in bytes (result of sizeof())
 
    public:
-    DataFormat input_buf_dataformat_arr[8];
-    DataFormat param_buf_dataformat_arr[8];
-    DataFormat output_buf_dataformat_arr[8];
-    DataFormat intermediate_buf_dataformat_arr[8];
-    uint32_t buf_num_faces_arr[32];
-    uint32_t buf_partial_face_arr[32];
-    uint32_t buf_face_r_dim_arr[32];
-    uint32_t buf_narrow_tile_arr[32];
-    uint32_t buf_tile_r_dim_arr[32];
-    uint32_t buf_tile_c_dim_arr[32];
-    uint32_t buf_tile_size_arr[32];
+    DataFormat buf_dataformat_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_num_faces_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_partial_face_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_face_r_dim_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_narrow_tile_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_tile_r_dim_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_tile_c_dim_arr[NUM_CIRCULAR_BUFFERS];
+    uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS];
 
     tt_hlk_desc() {
         math_fidelity = MathFidelity::Invalid;
@@ -47,16 +45,9 @@ class tt_hlk_desc
         hlk_args_size = 0;
         approximation_mode = true;
 
-        for (int i = 0; i < 8; ++i)
+        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; ++i)
         {
-            input_buf_dataformat_arr[i] = DataFormat::Invalid;
-            param_buf_dataformat_arr[i] = DataFormat::Invalid;
-            output_buf_dataformat_arr[i] = DataFormat::Invalid;
-            intermediate_buf_dataformat_arr[i] = DataFormat::Invalid;
-        }
-
-        for (int i = 0; i < 32; ++i)
-        {
+            buf_dataformat_arr[i] = DataFormat::Invalid;
             buf_num_faces_arr[i] = constants::TILE_HW / constants::FACE_HW;
             buf_partial_face_arr[i] = 0;
             buf_face_r_dim_arr[i] = constants::FACE_HEIGHT;
@@ -69,16 +60,9 @@ class tt_hlk_desc
 
     tt_hlk_desc(tt_hlk_desc &in)
     {
-        for(int i=0;i<8;++i)
+        for(int i=0;i<NUM_CIRCULAR_BUFFERS;++i)
         {
-            input_buf_dataformat_arr[i]  = in.input_buf_dataformat_arr[i] ;
-            param_buf_dataformat_arr[i] = in.param_buf_dataformat_arr[i] ;
-            output_buf_dataformat_arr[i] = in.output_buf_dataformat_arr[i];
-            intermediate_buf_dataformat_arr[i] = in.intermediate_buf_dataformat_arr[i];
-        }
-
-        for (int i = 0; i < 32; ++i)
-        {
+            buf_dataformat_arr[i]  = in.buf_dataformat_arr[i] ;
             buf_num_faces_arr[i] = in.buf_num_faces_arr[i];
             buf_partial_face_arr[i] = in.buf_partial_face_arr[i];
             buf_face_r_dim_arr[i] = in.buf_face_r_dim_arr[i];
@@ -94,44 +78,14 @@ class tt_hlk_desc
         approximation_mode = in.approximation_mode;
     }
 
-    DataFormat get_input_buf_dataformat(int buf_idx) const
+    DataFormat get_buf_dataformat(int buf_idx) const
     {
-        return input_buf_dataformat_arr[buf_idx];
+        return buf_dataformat_arr[buf_idx];
     }
 
-    void set_input_buf_dataformat(int buf_idx, DataFormat data_format)
+    void set_buf_dataformat(int buf_idx, DataFormat data_format)
     {
-        input_buf_dataformat_arr[buf_idx] = data_format;
-    }
-
-    DataFormat get_param_buf_dataformat(int buf_idx) const
-    {
-        return param_buf_dataformat_arr[buf_idx];
-    }
-
-    void set_param_buf_dataformat(int buf_idx, DataFormat data_format)
-    {
-        param_buf_dataformat_arr[buf_idx] = data_format;
-    }
-
-    DataFormat get_output_buf_dataformat(int buf_idx) const
-    {
-        return output_buf_dataformat_arr[buf_idx];
-    }
-
-    void set_output_buf_dataformat(int buf_idx, DataFormat data_format)
-    {
-        output_buf_dataformat_arr[buf_idx] = data_format;
-    }
-
-    DataFormat get_intermediate_buf_dataformat(int buf_idx) const
-    {
-        return intermediate_buf_dataformat_arr[buf_idx];
-    }
-
-    void set_intermediate_buf_dataformat(int buf_idx, DataFormat data_format)
-    {
-        intermediate_buf_dataformat_arr[buf_idx] = data_format;
+        buf_dataformat_arr[buf_idx] = data_format;
     }
 
     uint32_t get_buf_num_faces(int buf_idx) const
@@ -241,25 +195,12 @@ class tt_hlk_desc
         return hlk_args_size;
     }
 
-    const DataFormat* get_input_buf_dataformats() const
+    const DataFormat* get_buf_dataformats() const
     {
-        return input_buf_dataformat_arr;
+        return buf_dataformat_arr;
     }
 
-    const DataFormat* get_param_buf_dataformats() const
-    {
-        return param_buf_dataformat_arr;
-    }
 
-    const DataFormat* get_output_buf_dataformats() const
-    {
-        return output_buf_dataformat_arr;
-    }
-
-    const DataFormat* get_intermediate_buf_dataformats() const
-    {
-        return intermediate_buf_dataformat_arr;
-    }
 };  // tt_hlk_desc
 }  // namespace tt
 
@@ -279,20 +220,14 @@ struct std::hash<tt::tt_hlk_desc>
     std::size_t operator()(tt::tt_hlk_desc const& obj) const noexcept
     {
         std::size_t hash_value = 0;
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++)
         {
-            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_input_buf_dataformat(i)));
-            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_param_buf_dataformat(i)));
-            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_output_buf_dataformat(i)));
-            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_intermediate_buf_dataformat(i)));
-        }
-        tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
-        tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
-        for (int i = 0; i < 32; i++)
-        {
+            tt::utils::hash_combine(hash_value, hash<tt::DataFormat>{}(obj.get_buf_dataformat(i)));
             tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_r_dim(i)));
             tt::utils::hash_combine(hash_value, hash<uint32_t>{}(obj.get_buf_tile_c_dim(i)));
         }
+        tt::utils::hash_combine(hash_value, hash<MathFidelity>{}(obj.get_hlk_math_fidelity()));
+        tt::utils::hash_combine(hash_value, hash<bool>{}(obj.get_hlk_math_approx_mode()));
 
         // Get hash for hlk_args here
         void *hlk_args = obj.get_hlk_args();

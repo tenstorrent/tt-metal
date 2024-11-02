@@ -74,15 +74,15 @@ ExpPrecision get_exp_precison(DataFormat data_format) {
     return (is_exp_b_format(data_format) ? ExpPrecision::B : ExpPrecision::A);
 }
 
-void dump_data_formats(DataFormat data_format[NUM_OPERANDS]) {
-    for (int i = 0; i < NUM_OPERANDS; i++) {
+void dump_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         std::cout << "Operand idx " << i << ": " << data_format[i] << "," <<std::endl;
     }
 }
 
-DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPERANDS]) {
+DataFormat check_consistent_format_across_buffers(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
     DataFormat last_valid_format = DataFormat::Invalid;
-    for (int i = 0; i < NUM_OPERANDS; i++) {
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((data_format[i] == DataFormat::Float32) || (data_format[i] == DataFormat::RawUInt32) ||
             (data_format[i] == DataFormat::UInt32) || (data_format[i] == DataFormat::RawUInt16) ||
@@ -109,9 +109,9 @@ DataFormat check_consistent_format_within_operand(DataFormat data_format[NUM_OPE
     return last_valid_format;
 }
 
-DataFormat check_same_format_within_operand(DataFormat data_format[NUM_OPERANDS]) {
+DataFormat check_same_format_within_operand(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
     DataFormat last_valid_format = DataFormat::Invalid;
-    for (int i = 0; i < NUM_OPERANDS; i++) {
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         if (data_format[i] != DataFormat::Invalid && last_valid_format != DataFormat::Invalid) {
             // TT_FATAL(data_format[i] == last_valid_format,
             //     "Not all buffer data-formats within this operand are the same");
@@ -124,9 +124,9 @@ DataFormat check_same_format_within_operand(DataFormat data_format[NUM_OPERANDS]
     return last_valid_format;
 }
 
-DataFormat check_valid_formats_within_operand(DataFormat data_format[NUM_OPERANDS]) {
+DataFormat check_valid_formats_in_out_data_formats(DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
     DataFormat last_valid_format = DataFormat::Invalid;
-    for (int i = 0; i < NUM_OPERANDS; i++) {
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         if (data_format[i] != DataFormat::Invalid) {
             TT_FATAL(ALL_VALID_FORMATS.find(data_format[i]) != ALL_VALID_FORMATS.end(),
                 "Format = {} not supported", data_format[i]);
@@ -136,67 +136,19 @@ DataFormat check_valid_formats_within_operand(DataFormat data_format[NUM_OPERAND
     return last_valid_format;
 }
 
-// Checks consistency between input operand data-formats.
-// Data-formats for all input operands must have the same -b- exponent precision type.
-void check_consistent_format_across_input_operands(DataFormat input_format[NUM_OPERANDS], DataFormat param_format[NUM_OPERANDS]) {
-
-    DataFormat last_input_valid_format = check_consistent_format_within_operand(input_format);
-    DataFormat last_param_valid_format = check_consistent_format_within_operand(param_format);
-    if (last_input_valid_format != DataFormat::Invalid && last_param_valid_format != DataFormat::Invalid) {
-        TT_FATAL(is_exp_b_format(last_input_valid_format) == is_exp_b_format(last_param_valid_format),
-            "Formats don't have same exponent width");
-    }
+DataFormat get_pack_data_format(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
+    return check_same_format_within_operand(data_formats);
 }
 
-DataFormat get_pack_data_format(DataFormat output_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
-    DataFormat output_format = check_same_format_within_operand(output_formats);
-    if (output_format == DataFormat::Invalid) {
-        DataFormat intermed_format = check_same_format_within_operand(intermed_formats);
-        return intermed_format;
-    } else {
-        return output_format;
-    }
-}
-
-ExpPrecision get_data_exp_precision(DataFormat data_formats[NUM_OPERANDS]) {
-    DataFormat last_valid_format = check_consistent_format_within_operand(data_formats);
+ExpPrecision get_data_exp_precision(DataFormat data_formats[NUM_CIRCULAR_BUFFERS]) {
+    DataFormat last_valid_format = check_consistent_format_across_buffers(data_formats);
     return get_exp_precison(last_valid_format);
 }
 
-ExpPrecision get_input_data_exp_precision(DataFormat input_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
-    DataFormat last_valid_format = check_consistent_format_within_operand(input_formats);
-    if (last_valid_format == DataFormat::Invalid) {
-        last_valid_format = check_consistent_format_within_operand(intermed_formats);
-    }
 
-    return get_exp_precison(last_valid_format);
-}
-
-void check_valid_in_out_data_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat output_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
-
-    //inputs must have same exp_width, save last found formats with exp width
-    DataFormat last_valid_input_format = check_consistent_format_within_operand(input_formats);
-    DataFormat last_valid_param_format = check_consistent_format_within_operand(param_formats);
-    if (last_valid_input_format != DataFormat::Invalid && last_valid_param_format != DataFormat::Invalid) {
-        TT_FATAL((is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_param_format)),
-            "Input format = {} and Param format = {} must have same exp width", last_valid_input_format, last_valid_param_format);
-    }
-
-    //If intermediate buffers are used, check they have same exp width as inputs
-    DataFormat last_valid_intermed_format = check_consistent_format_within_operand(intermed_formats);
-    if (last_valid_input_format != DataFormat::Invalid && last_valid_intermed_format != DataFormat::Invalid) {
-        TT_FATAL(is_exp_b_format(last_valid_input_format) == is_exp_b_format(last_valid_intermed_format),
-            "Input format = {} and Intermed format = {} must have same exp width", last_valid_input_format, last_valid_intermed_format);
-    }
-
-    // MT: Why is this check not enabled?
-    // DataFormat last_out_valid_format = check_valid_formats_within_operand(output_formats);
-    // TT_FATAL((last_out_valid_format != DataFormat::Invalid), "Output format not found");
-}
-
-std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS]) {
+std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[NUM_CIRCULAR_BUFFERS]) {
     std::vector<DataFormat> unpack_src_format;
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
+    for (int i=0 ; i<NUM_CIRCULAR_BUFFERS ; i++) {
         DataFormat src_format = input_formats[i];
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 || src_format == DataFormat::RawUInt8) {
             switch (src_format) {
@@ -205,14 +157,6 @@ std::vector<DataFormat> get_unpack_src_formats(DataFormat input_formats[NUM_OPER
                default: src_format = DataFormat::Lf8; break;
             }
         }
-        unpack_src_format.push_back(src_format);
-    }
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        DataFormat src_format = param_formats[i];
-        unpack_src_format.push_back(src_format);
-    }
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        DataFormat src_format = intermed_formats[i];
         unpack_src_format.push_back(src_format);
     }
     return unpack_src_format;
@@ -232,8 +176,8 @@ const DataFormat get_single_unpack_dst_format(const DataFormat src_format, const
     return dst_format;
 }
 
-bool is_all_fp32_formats(const DataFormat data_format[NUM_OPERANDS]) {
-    for (int i = 0; i < NUM_OPERANDS; i++) {
+bool is_all_fp32_formats(const DataFormat data_format[NUM_CIRCULAR_BUFFERS]) {
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         if (data_format[i] != DataFormat::Invalid && data_format[i] != DataFormat::Float32) {
             return false;
         }
@@ -242,10 +186,7 @@ bool is_all_fp32_formats(const DataFormat data_format[NUM_OPERANDS]) {
 }
 
 std::vector<DataFormat> get_unpack_dst_formats(
-    DataFormat input_formats[NUM_OPERANDS],
-    DataFormat param_formats[NUM_OPERANDS],
-    DataFormat intermed_formats[NUM_OPERANDS],
-    DataFormat output_formats[NUM_OPERANDS],
+    DataFormat buf_formats[NUM_CIRCULAR_BUFFERS],
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
@@ -255,15 +196,10 @@ std::vector<DataFormat> get_unpack_dst_formats(
         TT_FATAL(unpack_to_dest_mode.size() == NUM_CIRCULAR_BUFFERS, "unpack_to_dest_mode vector must have 32 elements");
     }
 
-    DataFormat pack_format = get_pack_data_format(output_formats, intermed_formats);
-    ExpPrecision input_precision = get_data_exp_precision(input_formats);
-
     std::vector<DataFormat> unpack_dst_format;
 
-    const bool en_unpack_tf32 = fp32_dest_acc_en && (tt::is_all_fp32_formats(input_formats) || (input_precision == ExpPrecision::B));
-    DataFormat unpack_cond_dst_format = en_unpack_tf32 ? DataFormat::Tf32 : unpack_conditional_dst_format;
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        DataFormat src_format = input_formats[i];
+    for (int i=0 ; i<NUM_CIRCULAR_BUFFERS ; i++) {
+        DataFormat src_format = buf_formats[i];
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 || src_format == DataFormat::RawUInt8) {
             switch (src_format) {
                case DataFormat::RawUInt32: src_format = DataFormat::Float32; break;
@@ -274,25 +210,12 @@ std::vector<DataFormat> get_unpack_dst_formats(
         } else if (int_fpu_en) {
             unpack_dst_format.push_back(src_format);
         } else {
-            if (input_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, DataFormat::Float32));
+            if (buf_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[i] != UnpackToDestMode::Default) {
+                unpack_dst_format.push_back(get_single_unpack_dst_format(src_format, DataFormat::Invalid, DataFormat::Float32));
             } else {
-                unpack_dst_format.push_back(get_single_unpack_dst_format(input_formats[i], pack_format, unpack_cond_dst_format));
+                unpack_dst_format.push_back(get_single_unpack_dst_format(src_format, DataFormat::Invalid, unpack_conditional_dst_format));
             }
-        }
-    }
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (param_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[NUM_OPERANDS+i] != UnpackToDestMode::Default) {
-            unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, DataFormat::Float32));
-        } else {
-            unpack_dst_format.push_back(get_single_unpack_dst_format(param_formats[i], pack_format, unpack_cond_dst_format));
-        }
-    }
-    for (int i=0 ; i<NUM_OPERANDS ; i++) {
-        if (intermed_formats[i] == DataFormat::Float32 && !unpack_to_dest_mode.empty() && unpack_to_dest_mode[3*NUM_OPERANDS+i] != UnpackToDestMode::Default) {
-            unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, DataFormat::Float32));
-        } else {
-            unpack_dst_format.push_back(get_single_unpack_dst_format(intermed_formats[i], pack_format, unpack_cond_dst_format));
+
         }
     }
     return unpack_dst_format;
@@ -407,48 +330,28 @@ const DataFormat get_single_pack_src_format(
 }
 
 std::vector<DataFormat> get_pack_src_formats(
-    DataFormat input_formats[NUM_OPERANDS],
-    DataFormat param_formats[NUM_OPERANDS],
-    DataFormat intermed_formats[NUM_OPERANDS],
-    DataFormat output_formats[NUM_OPERANDS],
+    DataFormat data_formats[NUM_CIRCULAR_BUFFERS],
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     bool int_fpu_en,
     tt::ARCH arch
 ) {
-    DataFormat pack_output_format = get_pack_data_format(output_formats, intermed_formats);
+    DataFormat pack_output_format = get_pack_data_format(data_formats);
 
     std::vector<DataFormat> pack_src_formats;
     DataFormat pack_src_format;
-    for (int i = 0; i < NUM_OPERANDS; i++) {
-        pack_src_format = get_single_pack_src_format(input_formats[i], pack_output_format, unpack_conditional_dst_format, fp32_dest_acc_en, int_fpu_en, arch);
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        pack_src_format = get_single_pack_src_format(data_formats[i], pack_output_format, unpack_conditional_dst_format, fp32_dest_acc_en, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
     }
 
-    // Intermediates
-    for (int i = 0; i < NUM_OPERANDS; i++) {
-        //Intermediates can be inputs & outputs to same op, provide same format per operand id
-        pack_src_format = get_single_pack_src_format(intermed_formats[i], intermed_formats[i], unpack_conditional_dst_format, fp32_dest_acc_en, int_fpu_en, arch);
-        pack_src_formats.push_back(pack_src_format);
-    }
     return pack_src_formats;
 }
 
-std::vector<DataFormat> get_pack_dst_formats(DataFormat input_formats[NUM_OPERANDS], DataFormat param_formats[NUM_OPERANDS], DataFormat intermed_formats[NUM_OPERANDS], DataFormat output_formats[NUM_OPERANDS]) {
-    DataFormat pack_format = get_pack_data_format(output_formats, intermed_formats);
-
+std::vector<DataFormat> get_pack_dst_formats(DataFormat buf_formats[NUM_CIRCULAR_BUFFERS]) {
     std::vector<DataFormat> pack_dst_format;
-    for (int i = 0; i < NUM_OPERANDS; i++) {
-        if (i == 0) {
-            pack_dst_format.push_back(pack_format);
-        } else {
-            pack_dst_format.push_back(output_formats[i]);
-        }
-    }
-
-    // Intermediates
-    for (int i = 0; i < NUM_OPERANDS; i++) {
-        pack_dst_format.push_back(intermed_formats[i]);
+    for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+        pack_dst_format.push_back(buf_formats[i]);
     }
     return pack_dst_format;
 }

@@ -559,8 +559,6 @@ void detail::Program_::CircularBufferAllocator::mark_address(uint64_t address, u
 CBHandle detail::Program_::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
     TT_FATAL(this->compiled_.empty(), "Cannot add circular buffer to an already compiled program {}", this->id);
     std::shared_ptr<CircularBuffer> circular_buffer = std::make_shared<CircularBuffer>(core_range_set, config);
-    // #7493
-    circular_buffer->set_cb_enum(static_cast<CB>(this->circular_buffers_.size()));
     // Globally allocated circular buffer do not invalidate allocation because their addresses are tracked by memory
     // allocator
     if (not circular_buffer->globally_allocated()) {

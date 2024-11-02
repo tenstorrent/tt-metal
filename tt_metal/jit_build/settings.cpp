@@ -54,21 +54,7 @@ namespace tt::tt_metal
 
     void JitBuildOptions::set_hlk_operand_dataformat_all_cores(HlkOperand op_id, DataFormat data_format)
     {
-        static_assert(HlkOperand::in7 == int(HlkOperand::param0)-1);
-        static_assert(HlkOperand::param7 == int(HlkOperand::out0)-1);
-        static_assert(HlkOperand::out7 == int(HlkOperand::intermed0)-1);
-        if (op_id <= HlkOperand::in7) {
-            hlk_desc.set_input_buf_dataformat((int)op_id, data_format);
-        } else if (op_id <= HlkOperand::param7) {
-            hlk_desc.set_param_buf_dataformat((int)op_id - ((int)HlkOperand::in7+1), data_format);
-        } else if (op_id <= HlkOperand::out7) {
-            hlk_desc.set_output_buf_dataformat((int)op_id - ((int)HlkOperand::param7+1), data_format);
-        } else if (op_id <= HlkOperand::intermed7) {
-            hlk_desc.set_intermediate_buf_dataformat((int)op_id - ((int)HlkOperand::out7+1), data_format);
-        } else {
-            std::cout << "Error: incorrect operand identifier" << std::endl;
-            TT_ASSERT(false);
-        }
+        hlk_desc.set_buf_dataformat((int)op_id, data_format);
     }
 
 } // end namespace tt
