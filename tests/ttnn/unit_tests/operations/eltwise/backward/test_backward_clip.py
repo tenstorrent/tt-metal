@@ -32,14 +32,14 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
         (0.0, 1.0),
     ],
 )
-def test_unary_bw_clamp(input_shapes, min, max, device):
+def test_unary_bw_clip(input_shapes, min, max, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
     if min is None and max is None:
         pytest.xfail("Only one of 'min' or 'max' can be None. Please provide one value")
     else:
-        tt_output_tensor_on_device = ttnn.clamp_bw(grad_tensor, input_tensor, min, max)
-        golden_function = ttnn.get_golden_function(ttnn.clamp_bw)
+        tt_output_tensor_on_device = ttnn.clip_bw(grad_tensor, input_tensor, min, max)
+        golden_function = ttnn.get_golden_function(ttnn.clip_bw)
         golden_tensor = golden_function(grad_data, in_data, min, max)
         comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
         assert comp_pass
