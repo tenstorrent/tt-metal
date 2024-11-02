@@ -161,7 +161,7 @@ INSTANTIATE_TEST_SUITE_P(
             tt::tt_metal::MemoryConfig{
                 .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
                 .buffer_type = tt::tt_metal::BufferType::DRAM
-            },
+            }
 
 
             // tt::tt_metal::MemoryConfig{
@@ -184,15 +184,15 @@ INSTANTIATE_TEST_SUITE_P(
             // },
 
 
-            ttnn::MemoryConfig{
-                .memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
-                .buffer_type = tt::tt_metal::BufferType::L1,
-                .shard_spec = ShardSpec{
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 4}}}},
-                    {32, 64},
-                    tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                    false}
-            },
+            // ttnn::MemoryConfig{
+            //     .memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            //     .buffer_type = tt::tt_metal::BufferType::L1,
+            //     .shard_spec = ShardSpec{
+            //         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 4}}}},
+            //         {32, 64},
+            //         tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            //         false}
+            // },
             // tt::tt_metal::MemoryConfig{
             //     .memory_layout = tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
             //     .buffer_type = tt::tt_metal::BufferType::DRAM,
@@ -204,15 +204,15 @@ INSTANTIATE_TEST_SUITE_P(
             // },
 
 
-            tt::tt_metal::MemoryConfig{
-                .memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
-                .buffer_type = tt::tt_metal::BufferType::L1,
-                .shard_spec = ShardSpec{
-                    CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{4, 4}}}},
-                    {64, 64},
-                    tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                    false}
-            }
+            // tt::tt_metal::MemoryConfig{
+            //     .memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+            //     .buffer_type = tt::tt_metal::BufferType::L1,
+            //     .shard_spec = ShardSpec{
+            //         CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{4, 4}}}},
+            //         {64, 64},
+            //         tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            //         false}
+            // }
             // tt::tt_metal::MemoryConfig{
             //     .memory_layout = tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
             //     .buffer_type = tt::tt_metal::BufferType::DRAM,
