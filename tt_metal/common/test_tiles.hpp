@@ -43,7 +43,6 @@ std::vector<T> convert_to_tile_layout(
     auto face_W = face_shape.has_value() ? face_shape.value()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
     auto face_HW = face_H * face_W;
-    TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
@@ -102,7 +101,6 @@ std::vector<T> convert_to_flat_layout(
     auto face_HW = face_H * face_W;
     auto num_faces_row = tile_W / face_W;
     auto num_faces_col = tile_H / face_H;
-    TT_ASSERT(data.size() / tile_HW > 0);
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
