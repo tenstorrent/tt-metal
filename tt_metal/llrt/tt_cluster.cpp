@@ -288,8 +288,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
-        log_info(tt::LogDevice, "Opening Silicon device driver all_chips_set size {} first all_chips_set {}",
-                 all_chips_set.size(), *all_chips_set.begin());
         device_driver = std::make_unique<tt_SiliconDevice>(
             sdesc_path,
             this->cluster_desc_path_,
@@ -580,7 +578,6 @@ void Cluster::l1_barrier(chip_id_t chip_id) const {
 
 uint32_t Cluster::get_num_host_channels(chip_id_t device_id) const {
     bool mmio_capable = this->cluster_desc_->is_chip_mmio_capable(device_id);
-    log_info(tt::LogDevice, "Cluster::get_num_host_channels device_id {} mmio_capable {}", device_id, mmio_capable);
     return mmio_capable ? this->driver_->get_num_host_channels(device_id) : 0;
 }
 
