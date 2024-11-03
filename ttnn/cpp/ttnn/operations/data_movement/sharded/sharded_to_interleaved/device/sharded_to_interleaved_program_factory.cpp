@@ -98,6 +98,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
+    bool output_64b_aligned = (input.device()->arch() == tt::ARCH::BLACKHOLE) and dst_is_dram;
 
     tt_metal::KernelHandle unary_writer_kernel_id;
     if (input.get_layout() == Layout::TILE) {
@@ -216,6 +217,9 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                         shard_height = num_units_per_shard_height_last;
                     }
                 }
+            }
+            if (output_64b_aligned) {
+                padded_shard_width = shard_width;
             }
             tt_metal::SetRuntimeArgs(
                 program,
