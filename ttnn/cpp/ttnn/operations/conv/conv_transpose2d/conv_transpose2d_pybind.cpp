@@ -21,26 +21,73 @@ void py_bind_conv_transpose2d(py::module& module) {
         module,
         ttnn::conv_transpose2d,
         R"doc(
-        Conv Tranpose 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | out_pad_h         | output padding in height dim  | uint32_t      |             | No       |
-        | out_pad_w         | output padding in width dim   | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | memory_config     | Output memory config          | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
+        Returns the matrix product of two tensors.
+
+        Applies a 2D transposed convolution operator over an input image composed of several input planes.
+
+        This module can be seen as the gradient of Conv2d with respect to its input. It is also known as a
+        fractionally-strided convolution or a deconvolution
+
+        The input tensor is expected in the following format (N x H x W x C) **differs from PyTorch** where:
+            - N is the batch size
+            - H is the height of the input
+            - W is the width of the input
+            - C is the number of channels in the input
+
+        The weight tensor is expected in the following format (C x O / G x K_H x K_W).
+        The bias tensor is optional and expected in the following format (O / G ).
+        Where:
+            - C is the number of input channels
+            - O is the number of output channels
+            - G is the number of groups
+            - K_H is the height of the kernel
+            - K_W is the width of the kernel
+
+       The shape of the output tensor is given by the following equation :
+            - H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1
+            - W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1
+
+        Keyword Args:
+            input_tensor  (ttnn.Tensor): the input tensor.
+            weight_tensor (ttnn.Tensor): the weight tensor.
+            device        (ttnn.Device): the device on which to run the operation.
+            in_channels   (int): the number of input channels.
+            out_channels  (int): the number of output channels.
+            batch_size    (int): the batch size.
+            input_height  (int): the input height.
+            input_width   (int): the input width.
+            kernel_size   (List of [int]): the kernel size.
+            stride        (List of [int]): the stride of the forward Conv2d. Actually corresponds to the dilation of the input_tensor
+            padding       (List of [int]): the padding of the forward Conv2d. Increasing padding reduces the output size.
+            output_padding (List of [int]): the output padding. Additional padding used when stride > 1, to specify the exact output size.
+            dilation    (List of [int]): kernel dilation.
+            groups  (int): the number of groups for grouped convolution.
+            bias_tensor (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
+            conv_config (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
+            queue_id    (int): the queue id to use for the operation. Defaults to `0`.
+
+        Returns:
+            (ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>): the output tensor, the output height, the output width, & the on-device weight and the bias tensor.
+
+        Example:
+            >>> [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
+                    input_tensor=tt_input_tensor,
+                    weight_tensor=tt_weight_tensor,
+                    in_channels=input_channels,
+                    out_channels=output_channels,
+                    device=device,
+                    bias_tensor=tt_bias_tensor,
+                    kernel_size=(filter_height, filter_width),
+                    stride=(stride_h, stride_w),
+                    padding=(pad_h, pad_w),
+                    output_padding=(out_pad_h, out_pad_w),
+                    dilation=(dilation, dilation),
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
+                    conv_config=conv_config,
+                    groups=groups,
+                )
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv_transpose2d)& self, const ttnn::Tensor& input_tensor,
