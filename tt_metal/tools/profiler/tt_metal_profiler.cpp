@@ -11,7 +11,6 @@
 
 #include "tools/profiler/profiler.hpp"
 #include "hostdevcommon/profiler_common.h"
-#include "dev_msgs.h"
 
 #include "tt_metal/detail/tt_metal.hpp"
 
