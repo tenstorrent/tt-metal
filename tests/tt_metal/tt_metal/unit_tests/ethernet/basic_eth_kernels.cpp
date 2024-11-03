@@ -837,24 +837,29 @@ TEST_F(N300DeviceFixture, EthKernelsRandomEthPacketSizeDirectSendTests) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc0) {
+TEST_F(DeviceFixture, EthKernelOnIdleErisc0) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
     tt_metal::EthernetConfig noc1_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_0};
 
-    for (const auto& eth_core : device_->get_inactive_ethernet_cores()) {
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            device_, WORD_SIZE * 2048, eth_l1_address, eth_core, noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            device_, WORD_SIZE * 2048, eth_l1_address, eth_core, noc1_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            device_, WORD_SIZE * 2048, eth_l1_address, eth_core, noc0_ethernet_config));
-        ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
-            device_, WORD_SIZE * 2048, eth_l1_address, eth_core, noc1_ethernet_config));
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        auto device = devices_[id];
+        for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                device, WORD_SIZE * 2048, eth_l1_address, eth_core, noc0_ethernet_config));
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                device, WORD_SIZE * 2048, eth_l1_address, eth_core, noc1_ethernet_config));
+            ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+                device, WORD_SIZE * 2048, eth_l1_address, eth_core, noc0_ethernet_config));
+            ASSERT_TRUE(unit_tests::erisc::kernels::writer_kernel_no_receive(
+                device, WORD_SIZE * 2048, eth_l1_address, eth_core, noc1_ethernet_config));
+        }
     }
 }
 
 TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc1) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
     tt_metal::EthernetConfig noc1_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_1, .processor = tt_metal::DataMovementProcessor::RISCV_1};
@@ -872,6 +877,7 @@ TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc1) {
 }
 
 TEST_F(BlackholeSingleCardFixture, EthKernelOnBothIdleEriscs) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
     uint32_t reader_dst_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     uint32_t writer_src_address = reader_dst_address + read_write_size_bytes;
