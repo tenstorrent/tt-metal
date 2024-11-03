@@ -66,8 +66,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     auto n = static_cast<float>(normalized_numel);
     auto recip_n = 1.0f / n;
 
-    auto num_inner = tt::operations::primary::compute_inner(output_grad_shape, normalized_dims);
-    auto num_outer = tt::operations::primary::compute_outer(output_grad_shape, normalized_dims);
+    auto num_inner = compute_inner(output_grad_shape, normalized_dims);
+    auto num_outer = compute_outer(output_grad_shape, normalized_dims);
 
     const bool gamma_has_value = gamma.has_value();
 
@@ -129,7 +129,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         log_info(tt::LogTest, "Small moreh_layer_norm_backward_input_grad algorithm is selected.");
     }
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -157,17 +157,17 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(mean)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(rstd)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(gamma)),
+        static_cast<uint32_t>(is_dram(output_grad)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(mean)),
+        static_cast<uint32_t>(is_dram(rstd)),
+        static_cast<uint32_t>(is_dram(gamma)),
         static_cast<uint32_t>(gamma_has_value),
         static_cast<uint32_t>(do_mask_h),
         static_cast<uint32_t>(do_mask_w)};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+        static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
@@ -191,10 +191,10 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_input_grad.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernels_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -211,7 +211,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
                                          : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
                                            "moreh_layer_norm_backward_input_grad_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
@@ -230,7 +230,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},

@@ -264,8 +264,6 @@ class transformer_2d_model:
             bias_tensor=self.proj_in_conv_bias,
             conv_config=conv_config,
             conv_op_cache=conv_cache,
-            return_output_size=True,
-            return_prepared_device_weights=True,
         )
 
         inner_dim = hidden_states.shape[-1]
@@ -314,8 +312,6 @@ class transformer_2d_model:
                     bias_tensor=self.proj_out_conv_bias,
                     conv_config=conv_config,
                     conv_op_cache=conv_cache,
-                    return_output_size=True,
-                    return_prepared_device_weights=True,
                 )
 
                 if output_bfloat16:

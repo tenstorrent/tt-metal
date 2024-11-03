@@ -30,8 +30,6 @@ def Conv1d(
     conv_config: Conv1dConfig = None,  # config overrides by user
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
-    return_output_length=False,
-    return_prepared_device_weights=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     # Reshape the input and weight tensors to 4D for conv2d operation
     # Should be no-op as input_tensor is in RM layout
@@ -64,14 +62,12 @@ def Conv1d(
         conv_config=conv_config,
     )
 
-    if return_output_length and return_prepared_device_weights:
-        return output_tensor_new, output_length_new, weight_tensor_on_dev_new, bias_tensor_on_dev_new
-    elif return_prepared_device_weights:
-        return output_tensor_new, weight_tensor_on_dev_new, bias_tensor_on_dev_new
-    elif return_output_length:
-        return output_tensor_new, output_length_new
-    else:
-        return output_tensor_new
+    return (
+        output_tensor_new,
+        output_length_new,
+        weight_tensor_on_dev_new,
+        bias_tensor_on_dev_new,
+    )
 
 
 __all__ = []

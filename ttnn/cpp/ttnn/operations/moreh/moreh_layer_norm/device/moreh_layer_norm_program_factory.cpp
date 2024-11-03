@@ -71,8 +71,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    auto num_inner = tt::operations::primary::compute_inner(input_shape, normalized_dims);
-    auto num_outer = tt::operations::primary::compute_outer(input_shape, normalized_dims);
+    auto num_inner = compute_inner(input_shape, normalized_dims);
+    auto num_outer = compute_outer(input_shape, normalized_dims);
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
@@ -168,7 +168,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         log_info(tt::LogTest, "Small moreh_layer_norm algorithm is selected.");
     }
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
@@ -197,15 +197,15 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(gamma)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(beta)),
+        static_cast<uint32_t>(is_dram(input)),
+        static_cast<uint32_t>(is_dram(gamma)),
+        static_cast<uint32_t>(is_dram(beta)),
         block_size};
 
     const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(mean_as_tensor)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(rstd_as_tensor)),
+        static_cast<uint32_t>(is_dram(output)),
+        static_cast<uint32_t>(is_dram(mean_as_tensor)),
+        static_cast<uint32_t>(is_dram(rstd_as_tensor)),
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
         block_size};
@@ -242,10 +242,10 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
-    const auto reader_kernels_id = tt::operations::primary::CreateReadKernel(
+    const auto reader_kernels_id = CreateReadKernel(
         program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
     const auto writer_kernels_id =
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,
@@ -265,7 +265,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp"
             : "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_small_kernel.cpp";
 
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
@@ -288,7 +288,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
             static_cast<uint32_t>(is_lastdim_layer_norm),
             static_cast<uint32_t>(is_groupnorm)};
 
-        tt::operations::primary::CreateComputeKernel(
+        CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
