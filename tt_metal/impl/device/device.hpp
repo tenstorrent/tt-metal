@@ -17,7 +17,6 @@
 #include "tt_metal/jit_build/build.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
-#include "dev_msgs.h"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "program_cache.hpp"
 
