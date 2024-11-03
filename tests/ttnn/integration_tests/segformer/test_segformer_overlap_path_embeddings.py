@@ -100,6 +100,7 @@ def test_segformer_overlap_patch_embeddings(
 
     post_process_it = 0
     if width == 512:
+        torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
             dtype=ttnn.bfloat16,
@@ -124,7 +125,6 @@ def test_segformer_overlap_patch_embeddings(
     )
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    print("EXP", ttnn_output.shape)
     # if post_process_it:
     #    ttnn_output = torch.permute(ttnn_output, (0,2,3,1))
 

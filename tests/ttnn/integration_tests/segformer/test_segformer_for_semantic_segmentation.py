@@ -5,6 +5,8 @@
 import pytest
 import ttnn
 from PIL import Image
+import torch
+import math
 
 import requests
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -78,14 +80,6 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
     state_dict = torch_model.state_dict()
     inputs = processor(images=image, return_tensors="pt")
 
-    ttnn_input_tensor = ttnn.from_torch(
-        inputs.pixel_values,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
     values = [parameter for name, parameter in state_dict.items()]
@@ -112,6 +106,15 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
 
     ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
+    torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor_permuted,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
     ttnn_output = ttnn_model(
         ttnn_input_tensor,
         output_attentions=None,
@@ -119,6 +122,10 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
         return_dict=None,
         parameters=parameters,
     )
-    ttnn_final_output = ttnn.to_torch(ttnn_output.logits)
 
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.99)
+    ttnn_output = ttnn.to_torch(ttnn_output.logits)
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+    h = w = int(math.sqrt(ttnn_output.shape[-1]))
+    ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
+
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.985)

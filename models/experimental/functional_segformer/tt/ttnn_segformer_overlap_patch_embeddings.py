@@ -20,13 +20,17 @@ class TtSegformerOverlapPatchEmbeddings:
     ):
         device = pixel_values.device()
 
-        if pixel_values.shape[-3] == 3:
-            pixel_values = ttnn.permute(pixel_values, (0, 2, 3, 1))
-            pixel_values = ttnn.from_device(pixel_values)
-            pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.ROW_MAJOR_LAYOUT)
-        embeddings, input_height, input_width = self.proj(device, pixel_values)
+        if pixel_values.shape[-1] == 3:
+            # pixel_values = ttnn.permute(pixel_values, (0, 2, 3, 1))
+            pixel_values_rm = ttnn.from_device(pixel_values)
+            pixel_values_rm = ttnn.to_layout(pixel_values_rm, layout=ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            pixel_values_rm = pixel_values
+
+        embeddings, input_height, input_width = self.proj(device, pixel_values_rm)
         embeddings = ttnn.to_memory_config(embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(pixel_values)
+        embeddings = ttnn.reallocate(embeddings)
 
         embeddings = ttnn.layer_norm(
             embeddings,

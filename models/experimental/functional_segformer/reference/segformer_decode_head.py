@@ -50,6 +50,7 @@ class SegformerDecodeHead(SegformerPreTrainedModel):
             encoder_hidden_state = mlp(encoder_hidden_state)
             encoder_hidden_state = encoder_hidden_state.permute(0, 2, 1)
             encoder_hidden_state = encoder_hidden_state.reshape(batch_size, -1, height, width)
+
             # upsample
             encoder_hidden_state = nn.functional.interpolate(
                 encoder_hidden_state, size=encoder_hidden_states[0].size()[2:], mode="bilinear", align_corners=False
@@ -58,15 +59,13 @@ class SegformerDecodeHead(SegformerPreTrainedModel):
 
         all_hidden_states_merged = torch.cat(all_hidden_states[::-1], dim=1)
 
-        return all_hidden_states_merged
+        hidden_states = self.linear_fuse(all_hidden_states_merged)
 
-        # hidden_states = self.linear_fuse(all_hidden_states_merged)
+        hidden_states = self.batch_norm(hidden_states)
+        hidden_states = self.activation(hidden_states)
+        hidden_states = self.dropout(hidden_states)
 
-        # hidden_states = self.batch_norm(hidden_states)
-        # hidden_states = self.activation(hidden_states)
-        # hidden_states = self.dropout(hidden_states)
+        # logits are of shape (batch_size, num_labels, height/4, width/4)
+        logits = self.classifier(hidden_states)
 
-        # # logits are of shape (batch_size, num_labels, height/4, width/4)
-        # logits = self.classifier(hidden_states)
-
-        # return logits
+        return logits

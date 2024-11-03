@@ -25,31 +25,6 @@ class TtSegformerEfficientSelfAttention:
         if sequence_reduction_ratio > 1:
             self.sr = Conv([sequence_reduction_ratio, sequence_reduction_ratio, 0, 0], parameters["sr"])
 
-    def transpose_for_scores(self, hidden_states):
-        # new_shape = tuple(hidden_states.shape)[:-1] + (self.num_attention_heads, self.attention_head_size)
-        new_shape = (
-            hidden_states.shape[0],
-            hidden_states.shape[-2],
-            self.num_attention_heads,
-            self.attention_head_size,
-        )
-        device = hidden_states.device()
-        hidden_states = ttnn.from_device(hidden_states)
-        hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn.reshape(hidden_states, new_shape)
-        hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
-        hidden_states = ttnn.to_device(hidden_states, device)
-
-        if len(hidden_states.shape) == 5:
-            output = ttnn.permute(hidden_states, (0, 1, 3, 2, 4))
-        elif len(hidden_states.shape) == 4:
-            output = ttnn.permute(hidden_states, (0, 2, 1, 3))
-        if len(hidden_states.shape) == 3:
-            output = ttnn.permute(hidden_states, (0, 2, 1))
-        ttnn.deallocate(hidden_states)
-
-        return output
-
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
@@ -127,13 +102,6 @@ class TtSegformerEfficientSelfAttention:
             query_layer = ttnn.experimental.nlp_create_qkv_heads_segformer(query, memory_config=ttnn.L1_MEMORY_CONFIG)[
                 0
             ]
-
-        # print("sr0", hidden_states.shape)
-        # Runs for the first 3 modules, and the last module doesn't need reduction
-        # sr0 ttnn.Shape([1, 1, 16384, 32])
-        # sr1 ttnn.Shape([1, 128, 128, 32])
-        # sr2 ttnn.Shape([1, 1, 256, 32])
-        # sr3 ttnn.Shape([1, 1, 256, 32])
 
         if self.sr_ratio > 1:
             if len(hidden_states.shape) == 3:

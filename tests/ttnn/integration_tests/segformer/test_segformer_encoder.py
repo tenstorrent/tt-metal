@@ -93,13 +93,6 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
         pytest.skip("Skip in CI, model is WIP, issue# 13357")
 
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
     torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     config = torch_model.config
 
@@ -126,6 +119,15 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
     parameters = move_to_device(parameters, device)
 
     ttnn_model = TtSegformerEncoder(config, parameters)
+
+    torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor_permuted,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
 
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters=parameters)
 

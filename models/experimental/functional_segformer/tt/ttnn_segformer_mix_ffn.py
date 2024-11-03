@@ -58,10 +58,7 @@ class TtSegformerMixFFN:
 
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         hidden_states, __, __ = self.dwconv(hidden_states, height, width, device)
-        # hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         # # TODO: GeLU on sharded data
-        # hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.gelu(hidden_states)
 
         hidden_states = ttnn.to_memory_config(
@@ -72,7 +69,6 @@ class TtSegformerMixFFN:
                 strategy=mm_f_x_strategy,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             ),
-            # dtype=ttnn.bfloat8_b,
         )
         hidden_states = ttnn.linear(
             hidden_states,

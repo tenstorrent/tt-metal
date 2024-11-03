@@ -119,7 +119,6 @@ class TtSegformerEncoder:
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
             )
-
             # pass the unflolded version to the Decoder
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
@@ -131,12 +130,6 @@ class TtSegformerEncoder:
                 # last stage
                 hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
                 hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, -1))
-                # hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.TILE_LAYOUT)
-                # hidden_states = ttnn.permute(hidden_states, (0, 3, 1, 2))
-
-            # Original folded version is passed to the Decoder
-            # if output_hidden_states:
-            #    all_hidden_states = all_hidden_states + (hidden_states,)
 
         if not return_dict:
             return tuple(v for v in [hidden_states, all_hidden_states, all_self_attentions] if v is not None)

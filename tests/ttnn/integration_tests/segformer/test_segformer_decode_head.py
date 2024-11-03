@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import math
 import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -69,28 +70,28 @@ def test_segformer_decode_head(device, is_ci_env):
 
     ttnn_input_tensor_0 = ttnn.from_torch(
         torch_input_tensor_0_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_1 = ttnn.from_torch(
         torch_input_tensor_1_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_2 = ttnn.from_torch(
         torch_input_tensor_2_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
     ttnn_input_tensor_3 = ttnn.from_torch(
         torch_input_tensor_3_folded,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -134,21 +135,10 @@ def test_segformer_decode_head(device, is_ci_env):
     ttnn_output = ttnn_model(ttnn_input_tensor, parameters)
     ttnn.deallocate(ttnn_input_tensor_0)
 
-    print(ttnn_output)
-
-    print("back")
-    print("ddd", torch_output.shape, ttnn_output.shape)
-
-    # ttnn_output = ttnn.from_device(ttnn_output)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    print("back")
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
+    h = w = int(math.sqrt(ttnn_output.shape[-1]))
+    ttnn_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    # # torch_output = torch.permute(torch_output,(0,3,2,1))
-    # # torch_output = torch.reshape(torch_output,(batch_size, 1, 16384, 256))
-
-    # # concat output
-    # torch_output = torch.permute(torch_output,(0,2,3,1))
-
-    # print("ddd", torch_output.shape, ttnn_output.shape)
-
-    # assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    print(torch_output.shape, ttnn_output.shape)
+    assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
