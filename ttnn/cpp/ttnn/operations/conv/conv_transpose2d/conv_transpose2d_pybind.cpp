@@ -21,8 +21,6 @@ void py_bind_conv_transpose2d(py::module& module) {
         module,
         ttnn::conv_transpose2d,
         R"doc(
-        Returns the matrix product of two tensors.
-
         Applies a 2D transposed convolution operator over an input image composed of several input planes.
 
         This module can be seen as the gradient of Conv2d with respect to its input. It is also known as a
