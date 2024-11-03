@@ -86,9 +86,11 @@ inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
     }
 }
 
-inline void wait_slave_eriscs() {
+inline void wait_slave_eriscs(uint32_t &heartbeat) {
     WAYPOINT("SEW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        RISC_POST_HEARTBEAT(heartbeat);
+    }
     WAYPOINT("SED");
 }
 
@@ -158,7 +160,7 @@ int main() {
                 WAYPOINT("D");
             }
 
-            wait_slave_eriscs();
+            wait_slave_eriscs(heartbeat);
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
@@ -173,12 +175,6 @@ int main() {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
-
-#ifndef ARCH_BLACKHOLE
-            while (1) {
-                RISC_POST_HEARTBEAT(heartbeat);
-            }
-#endif
         }
     }
 
