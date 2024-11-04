@@ -13,24 +13,24 @@ You can then analyze the trace with some of the provided utility functions
 https://github.com/tenstorrent/tt-metal/blob/4ae4ac3c30cd24ea27cbac8cc5811c90d077e9c0/tests/ttnn/unit_tests/gtests/test_graph_add.cpp#L64-L66
 or process it manually to extract whatever data in whatever format, like this table
 ```
-           current_op                           event  total_cb  total_buffer                                                                                 info
-0            ttnn::add                        begin_op         0       9011200                                                 {'inputs': '8', 'name': 'ttnn::add'}
-1         ttnn::repeat                        begin_op         0       9011200                                              {'inputs': '2', 'name': 'ttnn::repeat'}
-2         ttnn::repeat                 buffer_allocate         0      17203200    {'address': '753696', 'layout': 'INTERLEAVED', 'size': '8192000', 'type': 'DRAM'}
-3         ttnn::repeat                 buffer_allocate         0      17209344   {'address': '1073735680', 'layout': 'INTERLEAVED', 'size': '6144', 'type': 'DRAM'}
-4         ttnn::repeat        circular_buffer_allocate      4096      17209344    {'addr': '107360', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096'}
-5         ttnn::repeat               buffer_deallocate      4096      17203200                               {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
-6         ttnn::repeat  circular_buffer_deallocate_all         0      17203200                                                                                   {}
-7   ttnn::prim::binary                        begin_op         0      17203200                                       {'inputs': '10', 'name': 'ttnn::prim::binary'}
-8   ttnn::prim::binary                 buffer_allocate         0      25395200   {'address': '1437728', 'layout': 'INTERLEAVED', 'size': '8192000', 'type': 'DRAM'}
-9   ttnn::prim::binary                 buffer_allocate         0      25409536  {'address': '1073735680', 'layout': 'INTERLEAVED', 'size': '14336', 'type': 'DRAM'}
-10  ttnn::prim::binary        circular_buffer_allocate      4096      25409536    {'addr': '107360', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096'}
-11  ttnn::prim::binary        circular_buffer_allocate      8192      25409536    {'addr': '111456', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096'}
-12  ttnn::prim::binary        circular_buffer_allocate     12288      25409536    {'addr': '115552', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096'}
-13  ttnn::prim::binary               buffer_deallocate     12288      25395200                               {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
-14  ttnn::prim::binary  circular_buffer_deallocate_all         0      25395200                                                                                   {}
-15           ttnn::add               buffer_deallocate         0      17203200                               {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
-16           ttnn::add  circular_buffer_deallocate_all         0      17203200                                                                                   {}
+        current_op                           event  total_cb  total_buffer                                                                                                                   info
+0            ttnn::add                        begin_op         0       9011200                                                                                {'inputs': '8', 'name': 'ttnn::add'}
+1         ttnn::repeat                        begin_op         0       9011200                                                                             {'inputs': '2', 'name': 'ttnn::repeat'}
+2         ttnn::repeat                 buffer_allocate         0      17203200                                   {'address': '753696', 'layout': 'INTERLEAVED', 'size': '8192000', 'type': 'DRAM'}
+3         ttnn::repeat                 buffer_allocate         0      17209344                                  {'address': '1073735680', 'layout': 'INTERLEAVED', 'size': '6144', 'type': 'DRAM'}
+4         ttnn::repeat        circular_buffer_allocate      4096      17209344    {'addr': '107360', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096', 'globally_allocated': 'false'}
+5         ttnn::repeat               buffer_deallocate      4096      17203200                                                              {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
+6         ttnn::repeat  circular_buffer_deallocate_all         0      17203200                                                                                                                  {}
+7   ttnn::prim::binary                        begin_op         0      17203200                                                                      {'inputs': '10', 'name': 'ttnn::prim::binary'}
+8   ttnn::prim::binary                 buffer_allocate         0      25395200                                  {'address': '1437728', 'layout': 'INTERLEAVED', 'size': '8192000', 'type': 'DRAM'}
+9   ttnn::prim::binary                 buffer_allocate         0      25409536                                 {'address': '1073735680', 'layout': 'INTERLEAVED', 'size': '14336', 'type': 'DRAM'}
+10  ttnn::prim::binary        circular_buffer_allocate      4096      25409536    {'addr': '107360', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096', 'globally_allocated': 'false'}
+11  ttnn::prim::binary        circular_buffer_allocate      8192      25409536    {'addr': '111456', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096', 'globally_allocated': 'false'}
+12  ttnn::prim::binary        circular_buffer_allocate     12288      25409536    {'addr': '115552', 'core_range_set': '{[(x=0,y=0) - (x=7,y=7)]}', 'size': '4096', 'globally_allocated': 'false'}
+13  ttnn::prim::binary               buffer_deallocate     12288      25395200                                                              {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
+14  ttnn::prim::binary  circular_buffer_deallocate_all         0      25395200                                                                                                                  {}
+15           ttnn::add               buffer_deallocate         0      17203200                                                              {'layout': 'INTERLEAVED', 'size': '0', 'type': 'DRAM'}
+16           ttnn::add  circular_buffer_deallocate_all         0      17203200                                                                                                                  {}
 ```
 or a graph
 ![trace](https://github.com/user-attachments/assets/42501a1f-8354-4b3b-a5d9-707f30b23f4f)
@@ -137,6 +137,7 @@ Represents the allocation of a circular buffer, typically used in handling strea
 * `size`: The size of the circular buffer in bytes.
 * `address`: The memory address associated with the buffer.
 * `core_range_set`: The range of cores involved in the circular buffer.
+* `globally_allocated`: Does the circular buffer has global address set, i.e., does it share space with the corresponding operand.
 
 #### Connections
 Usually empty
@@ -493,7 +494,8 @@ Deallocate Device Buffer
         "params": {
             "address": "0",
             "core_range_set": "{[(x=0,y=0) - (x=0,y=7)], [(x=1,y=0) - (x=1,y=3)]}",
-            "size": "4096"
+            "size": "4096",
+            "globally_allocated": "false"
         }
     },
     {
@@ -620,7 +622,8 @@ Deallocate Device Buffer
         "params": {
             "address": "0",
             "core_range_set": "{[(x=0,y=0) - (x=7,y=7)]}",
-            "size": "4096"
+            "size": "4096",
+            "globally_allocated": "false"
         }
     },
     {
@@ -630,7 +633,8 @@ Deallocate Device Buffer
         "params": {
             "address": "0",
             "core_range_set": "{[(x=0,y=0) - (x=7,y=7)]}",
-            "size": "4096"
+            "size": "4096",
+            "globally_allocated": "false"
         }
     },
     {
@@ -640,7 +644,8 @@ Deallocate Device Buffer
         "params": {
             "address": "0",
             "core_range_set": "{[(x=0,y=0) - (x=7,y=7)]}",
-            "size": "4096"
+            "size": "4096",
+            "globally_allocated": "false"
         }
     },
     {

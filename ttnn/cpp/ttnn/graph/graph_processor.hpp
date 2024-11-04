@@ -44,7 +44,7 @@ namespace ttnn::graph {
 
         void track_deallocate(tt::tt_metal::Buffer* buffer) override;
 
-        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size) override;
+        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size, bool is_globally_allocated) override;
 
         void track_deallocate_cb() override;
 
