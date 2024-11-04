@@ -48,7 +48,8 @@ def sanitize_shape(shape, method, **kwargs):
                 hidden_size = min_sum_heads_size
             else:
                 hidden_size = (hidden_size // min_sum_heads_size) * min_sum_heads_size
-            shape[2] = hidden_size
+
+        shape[2] = hidden_size
 
     return shape
 
