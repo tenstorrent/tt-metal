@@ -726,7 +726,7 @@ def filter_by_id_range(rows, id_range):
     return rows
 
 
-def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output, no_advice):
+def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output_file, no_advice):
     df = pd.read_csv(csv_file, low_memory=False)
 
     # Add a column for original row numbers
@@ -788,7 +788,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
         "Math Fidelity",
     ]
 
-    if csv_output:
+    if csv_output_file:
         all_headers = visible_headers + [
             "Output Datatype",
             "Input 0 Datatype",
@@ -799,9 +799,11 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
             "Output Subblock H",
             "Output Subblock W",
         ]
-        print(",".join(all_headers))
-        for op_data in rows:
-            print(",".join(str(op_data[header].raw_value) for header in all_headers))
+        print(colored(f"Writing CSV output to {csv_output_file}", "cyan"))
+        with open(csv_output_file, 'w') as f:
+            f.write(",".join(all_headers) + "\n")
+            for op_data in rows:
+                f.write(",".join(str(op_data[header].raw_value) for header in all_headers) + "\n")
     else:
         col_widths = [
             max(max(visible_length(str(row[header])) for row in rows), visible_length(header))
@@ -827,7 +829,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--color", action="store_true", help="Force colored output even when output is redirected")
     parser.add_argument("--no-color", action="store_true", help="Force output without color")
-    parser.add_argument("--csv", action="store_true", help="Output in CSV format")
+    parser.add_argument("--csv", type=str, help="Output filename for CSV format", metavar="OUTPUT_FILE")
     parser.add_argument("--no-advice", action="store_true", help="Only show the table section of the report")
     args = parser.parse_args()
 
