@@ -728,7 +728,8 @@ void bind_unary_backward_shape(
     const unary_backward_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype) {
     auto doc = fmt::format(
         R"doc(
         {4}
@@ -744,6 +745,9 @@ void bind_unary_backward_shape(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {5}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -754,7 +758,8 @@ void bind_unary_backward_shape(
         operation.python_fully_qualified_name(),
         parameter_name_a,
         parameter_a_doc,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -1292,7 +1297,16 @@ void py_module(py::module& module) {
         ttnn::repeat_bw,
         "shape",
         "Shape of tensor",
-        R"doc(Performs backward operations for repeat on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`shape`.)doc");
+        R"doc(Performs backward operations for repeat on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`shape`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      4            |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_gelu(
         module,
