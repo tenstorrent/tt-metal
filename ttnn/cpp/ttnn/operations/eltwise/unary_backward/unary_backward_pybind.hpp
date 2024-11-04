@@ -237,7 +237,7 @@ void bind_unary_backward_op_reciprocal(
 
 template <typename unary_backward_operation_t>
 void bind_unary_backward_op_overload_abs(
-    py::module& module, const unary_backward_operation_t& operation, const std::string_view description) {
+    py::module& module, const unary_backward_operation_t& operation, const std::string_view description, const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -252,6 +252,9 @@ void bind_unary_backward_op_overload_abs(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {3}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -260,7 +263,8 @@ void bind_unary_backward_op_overload_abs(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -672,7 +676,7 @@ void bind_unary_backward_unary_optional_float(
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
-            {2} (ttnn.Tensor or Number): {3}.
+            {2} (Number): {3}.
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -689,7 +693,7 @@ void bind_unary_backward_unary_optional_float(
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-            >>> output = {1}(grad_tensor, tensor, `{2}`)
+            >>> output = {1}(grad_tensor, tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -1698,7 +1702,16 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op_overload_abs(
         module,
         ttnn::abs_bw,
-        R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_neg(
         module,
