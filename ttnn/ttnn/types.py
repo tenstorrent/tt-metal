@@ -78,6 +78,7 @@ class ShardStrategy(Enum):
 
 
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
+ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
