@@ -18,6 +18,15 @@ set(TYPES
     kernel
 )
 
+add_custom_target(
+    sfpi
+    ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.sh ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.version ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.md5
+    ${PROJECT_SOURCE_DIR}/runtime/sfpi
+    DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/sfpi.version
+    USES_TERMINAL
+)
+
 foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
@@ -78,7 +87,7 @@ function(get_alias INPUT_STRING OUTPUT_VAR)
 endfunction()
 
 # Define the compiler command
-set(GPP_CMD ${PROJECT_SOURCE_DIR}/tt_metal/third_party/sfpi/compiler/bin/riscv32-unknown-elf-g++)
+set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-g++)
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -189,6 +198,7 @@ foreach(ARCH IN LISTS ARCHS)
                 ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_LIB_DIR}/${HWLIB}.o ${${HWLIB}_SOURCE}
             DEPENDS
                 ${${HWLIB}_SOURCE}
+                sfpi
             COMMENT "Building hw lib ${HWLIB}.o"
             VERBATIM
         )
