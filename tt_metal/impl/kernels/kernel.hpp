@@ -102,7 +102,7 @@ class Kernel : public JitBuildSettings {
     virtual Config config() const = 0;
 
     std::string compute_hash() const;
-    virtual void set_build_options(JitBuildOptions &build_options) const = 0;
+    virtual void set_build_options(JitBuildOptions &build_options) const {}
     virtual void generate_binaries(Device *device, JitBuildOptions &build_options) const = 0;
     uint32_t get_binary_packed_size(Device *device, int index) const;
     uint32_t get_binary_text_size(Device *device, int index) const;
@@ -166,7 +166,6 @@ class DataMovementKernel : public Kernel {
 
     RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
     void read_binaries(Device *device) override;
 
@@ -188,14 +187,13 @@ class EthernetKernel : public Kernel {
    public:
     EthernetKernel(const KernelSource &kernel_src, const CoreRangeSet &cr_set, const EthernetConfig &config) :
         Kernel(kernel_src, cr_set, config.compile_args, config.defines), config_(config) {
-        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM);
+        this->dispatch_class_ = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(config.processor);
     }
 
     ~EthernetKernel() {}
 
     RISCV processor() const override;
 
-    void set_build_options(JitBuildOptions &build_options) const override;
     void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
     void read_binaries(Device *device) override;
 

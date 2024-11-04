@@ -308,30 +308,12 @@ uint32_t Kernel::get_binary_text_size(Device *device, int index) const {
         0;
 }
 
-void DataMovementKernel::set_build_options(JitBuildOptions &build_options) const {
-    //ZoneScoped;
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: {
-            build_options.brisc_defines = this->defines_;
-        } break;
-        case DataMovementProcessor::RISCV_1: {
-            build_options.ncrisc_defines = this->defines_;
-        } break;
-        default: TT_THROW("Unsupported data movement processor!"); break;
-    }
-}
-
-void EthernetKernel::set_build_options(JitBuildOptions &build_options) const {
-    build_options.erisc_defines = this->defines_;
-}
-
 void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
     build_options.dst_full_sync_en = this->config_.dst_full_sync_en;
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
-    build_options.hlk_defines = this->defines_;
 }
 
 void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
@@ -350,7 +332,8 @@ void EthernetKernel::generate_binaries(Device *device, JitBuildOptions &build_op
         this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
     );
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    jit_build(device->build_kernel_state(erisc_core_type, dm_class_idx, 0), this);
+    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    jit_build(device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id), this);
 }
 
 void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
@@ -398,12 +381,13 @@ void EthernetKernel::read_binaries(Device *device) {
         this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
     );
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
-    const JitBuildState &build_state = device->build_kernel_state(erisc_core_type, dm_class_idx, 0);
-    int erisc_id = this->config_.eth_mode == Eth::IDLE ? 1 : 0;
+    int erisc_id = magic_enum::enum_integer(this->config_.processor);
+    const JitBuildState &build_state = device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id);
+    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
-    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), erisc_id + 5, ll_api::memory::PackSpans::PACK, relo_type);
+    ll_api::memory binary_mem = llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), risc_id, ll_api::memory::PackSpans::PACK, relo_type);
    binaries.push_back(binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
@@ -457,7 +441,8 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, ui
     ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
 
     if (this->config_.eth_mode == Eth::IDLE) {
-        llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[0]);
+        uint32_t offset_idx = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
+        llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
         int riscv_id = 5;
         tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, riscv_id);
