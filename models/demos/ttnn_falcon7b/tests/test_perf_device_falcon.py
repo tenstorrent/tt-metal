@@ -11,7 +11,7 @@ from models.perf.device_perf_utils import run_device_perf, check_device_perf, pr
     "batch_size, test, expected_perf",
     [
         [1, "BFLOAT16-L1-falcon_7b-layers_32-prefill_seq256", 3.666],
-        [32, "BFLOAT16-L1-falcon_7b-layers_32-decode_batch32", 139],
+        [32, "BFLOAT16-L1-falcon_7b-layers_32-decode_batch32", 142],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
