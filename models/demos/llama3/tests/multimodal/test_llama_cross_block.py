@@ -28,8 +28,9 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("batch", (1,))
 def test_llama_cross_attention_transformer_block_inference(
-    text_seq_len, mesh_device, use_program_cache, reset_seeds, ensure_gc
+    text_seq_len, batch, mesh_device, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -53,7 +54,6 @@ def test_llama_cross_attention_transformer_block_inference(
     reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = 1
     num_chunks = 4
     vision_seq_len = num_chunks * nearest_32(model_args.vision_chunk_ntok)
 
@@ -138,9 +138,9 @@ def test_llama_cross_attention_transformer_block_inference(
         xattn_mask = xattn_mask.unsqueeze(1)
         xattn_mask = xattn_mask * -1e9
 
-        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)  # B, NH, St, Sv
         if mode == "decode":
-            xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
+            xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
         tt_xattn_mask = ttnn.from_torch(
             xattn_mask_expand,
             device=mesh_device,
@@ -168,9 +168,11 @@ def test_llama_cross_attention_transformer_block_inference(
             )
         )
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
-        full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        full_text_mask_expand_1NSH = full_text_mask.expand(
+            -1, n_heads // model_args.num_devices, -1, head_dim
+        )  # B, NH, St, Hd
         if mode == "decode":
-            full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.transpose(1, 2).contiguous()
+            full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.permute(2, 0, 1, 3).contiguous()
         tt_full_text_mask_expand_1NSH = ttnn.from_torch(
             full_text_mask_expand_1NSH,
             device=mesh_device,

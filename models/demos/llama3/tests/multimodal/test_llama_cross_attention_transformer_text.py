@@ -39,8 +39,10 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("batch", (1,))
 def test_llama_cross_attention_transformer_text_inference(
     text_seq_len,
+    batch,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -82,7 +84,6 @@ def test_llama_cross_attention_transformer_text_inference(
     reference_model.setup_cache(model_args.max_batch_size, torch.float32)
     reference_model.load_state_dict(partial_state_dict)
 
-    batch = 1
     num_chunks = 4
     chunk_length = nearest_32(model_args.vision_chunk_ntok)
     vision_seq_len = num_chunks * chunk_length
@@ -235,6 +236,8 @@ def test_llama_cross_attention_transformer_text_inference(
                 transformation_mats = None
 
             xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+            if mode == "decode":
+                xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
                 device=mesh_device,
@@ -247,11 +250,13 @@ def test_llama_cross_attention_transformer_text_inference(
                 tt_xattn_mask = ttnn.reshape(
                     tt_xattn_mask,
                     shape=ttnn.Shape(
-                        [batch, n_heads // model_args.num_devices, seq_len, vision_seq_len],
-                        [batch, n_heads // model_args.num_devices, 32, vision_seq_len],
+                        [1, batch, n_heads // model_args.num_devices, vision_seq_len],
+                        [1, batch, 32, vision_seq_len],
                     ),
                 )
             full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+            if mode == "decode":
+                full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.permute(2, 0, 1, 3).contiguous()
             tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                 full_text_mask_expand_1NSH,
                 device=mesh_device,
@@ -264,8 +269,8 @@ def test_llama_cross_attention_transformer_text_inference(
                 tt_full_text_mask_expand_1NSH = ttnn.reshape(
                     tt_full_text_mask_expand_1NSH,
                     shape=ttnn.Shape(
-                        [batch, n_heads // model_args.num_devices, seq_len, head_dim],
-                        [batch, n_heads // model_args.num_devices, 32, head_dim],
+                        [1, batch, n_heads // model_args.num_devices, head_dim],
+                        [1, batch, 32, head_dim],
                     ),
                 )
 
