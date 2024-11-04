@@ -7,15 +7,16 @@
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <memory>
 #include <vector>
 
 #include "tt_metal/tt_stl/any_range.hpp"
 
 // convenience alias that guarantees at least vector and deque will fit within the capacity
-using AnySizedRandomAccessIntRange = tt::stl::AnySizedRandomAccessRangeFor<int, std::vector<int>, std::deque<int>>;
+MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int &, std::vector<int>, std::deque<int>>);
 
 TEST(AnyRangeTest, CanTypeEraseSizedRandomAccessRange) {
-    AnySizedRandomAccessIntRange range{std::vector{1, 2, 3, 4, 5}};
+    IntRange range{std::vector{1, 2, 3, 4, 5}};
 
     auto begin = range.begin();
     const auto end = range.end();
@@ -34,7 +35,7 @@ TEST(AnyRangeTest, CanTypeEraseSizedRandomAccessRange) {
     EXPECT_EQ(begin, end);
 
     {
-        AnySizedRandomAccessIntRange another_range{std::deque{6, 7, 8}};
+        IntRange another_range{std::deque{6, 7, 8}};
 
         using std::swap;
         swap(range, another_range);
@@ -147,4 +148,155 @@ TEST(AnyRangeTest, CanTypeEraseSizedRandomAccessRange) {
     EXPECT_EQ(range[2], 32);
     EXPECT_EQ(range[3], 33);
     EXPECT_EQ(range[4], 34);
+}
+
+TEST(AnyRangeTest, CanReturnNonOwning) {
+    std::vector foo{1, 2, 3, 4, 5};
+    const auto make_range = [&]() -> IntRange {
+        // lvalue does not transfer ownership of vector
+        return foo;
+    };
+    const auto range = make_range();
+
+    range[2] = 9;
+
+    EXPECT_EQ(foo[2], 9);
+    EXPECT_EQ(range[2], 9);
+}
+
+TEST(AnyRangeTest, CanReturnOwning) {
+    const auto make_range = []() -> IntRange {
+        std::vector foo{1, 2, 3, 4, 5};
+        // NRVO promotes foo to rvalue which transfers ownership of vector
+        return foo;
+    };
+    const auto range = make_range();
+
+    range[2] = 9;
+
+    EXPECT_EQ(range[0], 1);
+    EXPECT_EQ(range[1], 2);
+    EXPECT_EQ(range[2], 9);
+    EXPECT_EQ(range[3], 4);
+    EXPECT_EQ(range[4], 5);
+}
+
+MAKE_ANY_RANGE(
+    SharedIntRange, tt::stl::AnyRandomAccessRangeFor<std::shared_ptr<int> &, std::array<std::shared_ptr<int>, 4>>);
+
+TEST(AnyRangeTest, NotConstructibleIfTooSmall) {
+    static_assert(std::is_constructible_v<SharedIntRange, std::array<std::shared_ptr<int>, 4>>);
+    static_assert(not std::is_constructible_v<SharedIntRange, std::array<std::shared_ptr<int>, 5>>);
+}
+
+TEST(AnyRangeTest, CanReferenceRangeOfNonTrivialElements) {
+    int delete_count = 0;
+    const auto deleter = [&](int *ptr) {
+        ::delete ptr;
+        ++delete_count;
+    };
+
+    {
+        std::array foo{
+            std::shared_ptr<int>(::new int(0), deleter),
+            std::shared_ptr<int>(::new int(10), deleter),
+            std::shared_ptr<int>(::new int(20), deleter),
+            std::shared_ptr<int>(::new int(30), deleter),
+        };
+
+        {
+            const SharedIntRange range = foo;
+
+            // ownership not transferred from array to range
+            EXPECT_EQ(range[0], foo[0]);
+            EXPECT_EQ(range[1], foo[1]);
+            EXPECT_EQ(range[2], foo[2]);
+            EXPECT_EQ(range[3], foo[3]);
+
+            // no extra copies stored
+            EXPECT_EQ(range[0].use_count(), 1);
+            EXPECT_EQ(range[1].use_count(), 1);
+            EXPECT_EQ(range[2].use_count(), 1);
+            EXPECT_EQ(range[3].use_count(), 1);
+
+            EXPECT_EQ(*range[0], 0);
+            EXPECT_EQ(*range[1], 10);
+            EXPECT_EQ(*range[2], 20);
+            EXPECT_EQ(*range[3], 30);
+        }
+
+        // range destructor does not end lifetime of shared pointers
+        EXPECT_EQ(delete_count, 0);
+    }
+
+    // array destructor ends lifetime of shared pointers
+    EXPECT_EQ(delete_count, 4);
+}
+
+TEST(AnyRangeTest, CanTransferOwnershipFromRangeOfNonTrivialElements) {
+    int delete_count = 0;
+    const auto deleter = [&](int *ptr) {
+        ::delete ptr;
+        ++delete_count;
+    };
+
+    {
+        std::array foo{
+            std::shared_ptr<int>(::new int(0), deleter),
+            std::shared_ptr<int>(::new int(10), deleter),
+            std::shared_ptr<int>(::new int(20), deleter),
+            std::shared_ptr<int>(::new int(30), deleter),
+        };
+
+        {
+            const SharedIntRange range = std::move(foo);
+
+            // ownership transferred from array to range
+            EXPECT_EQ(foo[0], nullptr);
+            EXPECT_EQ(foo[1], nullptr);
+            EXPECT_EQ(foo[2], nullptr);
+            EXPECT_EQ(foo[3], nullptr);
+
+            // no extra copies stored
+            EXPECT_EQ(range[0].use_count(), 1);
+            EXPECT_EQ(range[1].use_count(), 1);
+            EXPECT_EQ(range[2].use_count(), 1);
+            EXPECT_EQ(range[3].use_count(), 1);
+
+            EXPECT_EQ(*range[0], 0);
+            EXPECT_EQ(*range[1], 10);
+            EXPECT_EQ(*range[2], 20);
+            EXPECT_EQ(*range[3], 30);
+        }
+
+        // range destructor ends lifetime of shared pointers
+        EXPECT_EQ(delete_count, 4);
+    }
+
+    // array destructor does not double-delete shared pointers
+    EXPECT_EQ(delete_count, 4);
+}
+
+MAKE_ANY_RANGE(BoolRange, tt::stl::AnyRandomAccessRangeFor<bool, std::vector<bool>>);
+
+template <class T, class TEnable = void>
+inline constexpr bool arrow_operator_enabled = false;
+
+template <class T>
+inline constexpr bool arrow_operator_enabled<T, std::void_t<decltype(std::declval<T>().operator->())>> = true;
+
+TEST(AnyRangeTest, DisablesArrowOperatorForValue) { static_assert(not arrow_operator_enabled<BoolRange::iterator>); }
+
+TEST(AnyRangeTest, ConstructibleIfRangeReferenceConvertibleToValue) {
+    static_assert(std::is_constructible_v<BoolRange, std::vector<bool>>);
+    static_assert(std::is_constructible_v<BoolRange, std::array<bool, 4>>);
+}
+
+MAKE_ANY_RANGE(BoolRefRange, tt::stl::AnyRandomAccessRangeFor<bool &, std::vector<bool>>);
+
+TEST(AnyRangeTest, EnablesArrowOperatorForLvalue) { static_assert(arrow_operator_enabled<BoolRefRange::iterator>); }
+
+TEST(AnyRangeTest, NotConstructibleIfRangeReferenceNotConvertibleToLvalue) {
+    static_assert(not std::is_constructible_v<BoolRefRange, std::vector<bool>>);
+    static_assert(std::is_constructible_v<BoolRefRange, std::array<bool, 4>>);
 }

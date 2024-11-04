@@ -7,14 +7,20 @@
 #include <algorithm>
 #include <iterator>
 #include <type_traits>
+#include <typeinfo>
 #include <utility>
 
 namespace tt::stl {
 
+// Most types are not typically aligned more than the size of a pointer. If in the future there is a special case to
+// accommodate, these can be parameterized then.
 inline constexpr std::size_t any_iterator_alignment = alignof(void *);
 inline constexpr std::size_t any_range_alignment = alignof(void *);
-inline constexpr std::size_t default_any_iterator_capacity = 16;
-inline constexpr std::size_t default_any_range_capacity = 32;
+// Typical size of an iterator is the size of a pointer. Default is size of two pointers to account for vtable pointer.
+inline constexpr std::size_t default_any_iterator_capacity = 2 * sizeof(void *);
+// Typical size of std::vector implementation is the size of three pointers. Default is the size of four pointers to
+// account for vtable pointer.
+inline constexpr std::size_t default_any_range_capacity = 4 * sizeof(void *);
 
 struct input_range_tag {
     using iterator_category = std::input_iterator_tag;
@@ -55,43 +61,56 @@ struct sized_random_access_range_tag : random_access_range_tag, sized_range_tag 
 
 namespace detail {
 
+// https://en.cppreference.com/w/cpp/concepts/destructible
 template <class T>
 inline constexpr bool destructible = std::is_nothrow_destructible_v<T>;
 
+// https://en.cppreference.com/w/cpp/concepts/constructible_from
 template <class T, class... TArgs>
 inline constexpr bool constructible_from = destructible<T> and std::is_constructible_v<T, TArgs...>;
 
 template <class TFrom, class TTo, class TEnable = void>
 inline constexpr bool convertible_to = false;
 
+// https://en.cppreference.com/w/cpp/concepts/convertible_to
 template <class TFrom, class TTo>
 inline constexpr bool convertible_to<TFrom, TTo, std::void_t<decltype(static_cast<TTo>(std::declval<TFrom>()))>> =
     std::is_convertible_v<TFrom, TTo>;
 
+// https://en.cppreference.com/w/cpp/concepts/move_constructible
 template <class T>
 inline constexpr bool move_constructible = constructible_from<T, T> and convertible_to<T, T>;
 
+// https://en.cppreference.com/w/cpp/concepts/copy_constructible
 template <class T>
 inline constexpr bool copy_constructible =
     move_constructible<T> and constructible_from<T, T &> and convertible_to<T &, T> and
     constructible_from<T, const T &> and convertible_to<const T &, T> and constructible_from<T, const T> and
     convertible_to<const T, T>;
 
+// https://en.cppreference.com/w/cpp/types/remove_cvref
+template <class T>
+using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
+
+// https://en.cppreference.com/w/cpp/ranges/iterator_t
 template <class TRange>
 using iterator_t = decltype(std::begin(std::declval<TRange &>()));
 
 template <class TRange>
 using sentinel_t = decltype(std::end(std::declval<TRange &>()));
 
+// https://en.cppreference.com/w/cpp/iterator/iter_t
 template <class TIterator>
 using iter_reference_t = decltype(*std::declval<TIterator &>());
 
+// https://en.cppreference.com/w/cpp/ranges/common_range
 template <class TRange>
 inline constexpr bool common_range = std::is_same_v<iterator_t<TRange>, sentinel_t<TRange>>;
 
 template <class TRange, class TEnable = void>
 inline constexpr bool sized_range = false;
 
+// https://en.cppreference.com/w/cpp/ranges/sized_range
 template <class TRange>
 inline constexpr bool sized_range<TRange, std::void_t<decltype(std::size(std::declval<TRange &>()))>> = true;
 
@@ -126,13 +145,6 @@ inline constexpr bool
     range_compatible<TRange, TReference, TRangeTag, std::enable_if_t<std::is_base_of_v<sized_range_tag, TRangeTag>>> =
         range_compatible<TRange, TReference, base_tag_t<TRangeTag>> and sized_range<TRange>;
 
-template <class T>
-using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
-
-template <class TIterator, class TReference, class TIteratorTag>
-inline constexpr bool iterator_compatible_cvref =
-    iterator_compatible<remove_cvref_t<TIterator>, TReference, TIteratorTag>;
-
 template <class TRangeTag, class TCanonicalTag, class TEnable = void>
 inline constexpr bool is_tag_v = std::is_base_of_v<TCanonicalTag, TRangeTag>;
 
@@ -140,21 +152,57 @@ template <class TRangeTag, class TCanonicalTag>
 inline constexpr bool is_tag_v<TRangeTag, TCanonicalTag, std::void_t<base_tag_t<TRangeTag>>> =
     std::is_base_of_v<TCanonicalTag, TRangeTag> and not std::is_base_of_v<TCanonicalTag, base_tag_t<TRangeTag>>;
 
-struct type_info {};
+template <class TPointer>
+using pointer_dereference_t = decltype(std::declval<const TPointer &>().operator->());
 
+template <class TPointer, class TEnable = void>
+struct address {};
+
+template <class TPointer>
+struct address<TPointer, std::void_t<pointer_dereference_t<TPointer>>> : address<pointer_dereference_t<TPointer>> {};
+
+template <class TValue>
+struct address<TValue *> {
+    using type = TValue *;
+};
+
+template <class TPointer>
+using address_t = typename address<TPointer>::type;
+
+// https://en.cppreference.com/w/cpp/memory/to_address
 template <class TValue>
 constexpr TValue *to_address(TValue *ptr) noexcept {
     return ptr;
 }
 
 template <class TPointer>
-constexpr auto to_address(const TPointer &ptr) noexcept {
+constexpr address_t<TPointer> to_address(const TPointer &ptr) noexcept {
     return detail::to_address(ptr.operator->());
 }
 
+template <class TReference>
+using addressof_t = decltype(detail::to_address(&std::declval<TReference>()));
+
+template <class TReference, class TIteratorTag, class TEnable = void>
+struct AnyIteratorTraits {
+    using difference_type = std::ptrdiff_t;
+    using value_type = detail::remove_cvref_t<TReference>;
+    using pointer = void;
+    using reference = TReference;
+    using iterator_category = TIteratorTag;
+};
+
+template <class TReference, class TIteratorTag>
+struct AnyIteratorTraits<TReference, TIteratorTag, std::void_t<addressof_t<TReference>>> {
+    using difference_type = std::ptrdiff_t;
+    using value_type = detail::remove_cvref_t<TReference>;
+    using pointer = addressof_t<TReference>;
+    using reference = TReference;
+    using iterator_category = TIteratorTag;
+};
+
 class ICopyConstructible {
    public:
-    [[nodiscard]] virtual const type_info *id() const = 0;
     virtual void uninitialized_copy_to(void *dst_ptr) const = 0;
     virtual void uninitialized_move_to(void *dst_ptr) noexcept = 0;
     virtual ~ICopyConstructible() noexcept = default;
@@ -166,9 +214,9 @@ class IAnyIteratorAdaptor;
 template <class TAnyIterator>
 class IAnyIteratorAdaptor<TAnyIterator, std::input_iterator_tag> : public ICopyConstructible {
    public:
+    [[nodiscard]] virtual const std::type_info &type() const noexcept = 0;
     [[nodiscard]] virtual bool operator==(const IAnyIteratorAdaptor &other) const = 0;
     [[nodiscard]] virtual typename TAnyIterator::reference operator*() const = 0;
-    [[nodiscard]] virtual typename TAnyIterator::pointer operator->() const = 0;
     virtual void operator++() = 0;
 };
 
@@ -198,32 +246,27 @@ class IAnyIteratorAdaptor<TAnyIterator, std::random_access_iterator_tag>
     [[nodiscard]] virtual typename TAnyIterator::reference operator[](typename TAnyIterator::difference_type) const = 0;
 };
 
+template <class T>
+class Final final : public T {
+    using T::T;
+};
+
 template <class TAnyIterator, class TIterator, class TIteratorTag = iterator_category_t<TAnyIterator>>
 class AnyIteratorAdaptor;
 
 template <class TAnyIterator, class TIterator>
-class FinalAnyIteratorAdaptor final : public AnyIteratorAdaptor<TAnyIterator, TIterator> {
-    using AnyIteratorAdaptor<TAnyIterator, TIterator>::AnyIteratorAdaptor;
-};
-
-template <class TAnyIterator, class TIterator>
 class AnyIteratorAdaptor<TAnyIterator, TIterator, std::input_iterator_tag> : public IAnyIteratorAdaptor<TAnyIterator> {
-    using final_iterator_adaptor_type = FinalAnyIteratorAdaptor<TAnyIterator, TIterator>;
+    using final_iterator_adaptor_type = Final<AnyIteratorAdaptor<TAnyIterator, TIterator>>;
 
    protected:
     TIterator iterator;
 
    public:
-    inline AnyIteratorAdaptor(const AnyIteratorAdaptor &) = default;
-    inline AnyIteratorAdaptor(AnyIteratorAdaptor &&) noexcept = default;
+    AnyIteratorAdaptor(const AnyIteratorAdaptor &) = default;
+    AnyIteratorAdaptor(AnyIteratorAdaptor &&) noexcept = default;
 
     template <class UIterator, class = std::enable_if_t<std::is_same_v<remove_cvref_t<UIterator>, TIterator>>>
     AnyIteratorAdaptor(UIterator &&iterator) : iterator(static_cast<UIterator &&>(iterator)) {}
-
-    [[nodiscard]] const type_info *id() const override {
-        static const type_info unique{};
-        return &unique;
-    }
 
     void uninitialized_copy_to(void *dst_ptr) const override {
         ::new (dst_ptr) final_iterator_adaptor_type(static_cast<const final_iterator_adaptor_type &>(*this));
@@ -233,16 +276,16 @@ class AnyIteratorAdaptor<TAnyIterator, TIterator, std::input_iterator_tag> : pub
         ::new (dst_ptr) final_iterator_adaptor_type(static_cast<final_iterator_adaptor_type &&>(*this));
     }
 
+    [[nodiscard]] const std::type_info &type() const noexcept override { return typeid(AnyIteratorAdaptor); }
+
     [[nodiscard]] bool operator==(
         const IAnyIteratorAdaptor<TAnyIterator, std::input_iterator_tag> &other) const override {
-        return id() == other.id() and iterator == static_cast<const AnyIteratorAdaptor &>(other).iterator;
+        return type() == other.type() and iterator == static_cast<const AnyIteratorAdaptor &>(other).iterator;
     }
 
     [[nodiscard]] typename TAnyIterator::reference operator*() const override {
         return static_cast<typename TAnyIterator::reference>(*iterator);
     }
-
-    [[nodiscard]] typename TAnyIterator::pointer operator->() const override { return detail::to_address(iterator); }
 
     void operator++() override { ++iterator; }
 };
@@ -281,8 +324,8 @@ class AnyIteratorAdaptor<TAnyIterator, TIterator, std::random_access_iterator_ta
 
     [[nodiscard]] typename TAnyIterator::difference_type operator-(
         const IAnyIteratorAdaptor<TAnyIterator> &other) const override {
-        return this->id() == other.id() ? this->iterator - static_cast<const AnyIteratorAdaptor &>(other).iterator
-                                        : this->iterator - TIterator{};
+        return this->type() == other.type() ? this->iterator - static_cast<const AnyIteratorAdaptor &>(other).iterator
+                                            : this->iterator - TIterator{};
     }
 
     [[nodiscard]] typename TAnyIterator::reference operator[](
@@ -293,65 +336,70 @@ class AnyIteratorAdaptor<TAnyIterator, TIterator, std::random_access_iterator_ta
 
 }  // namespace detail
 
-template <class TElement, class TIteratorTag, std::size_t Capacity = default_any_iterator_capacity>
-class AnyIterator {
+template <class TReference, class TIteratorTag, std::size_t Capacity = default_any_iterator_capacity>
+class AnyIterator : public detail::AnyIteratorTraits<TReference, TIteratorTag> {
+    using traits = detail::AnyIteratorTraits<TReference, TIteratorTag>;
+
    public:
-    using difference_type = std::ptrdiff_t;
-    using value_type = std::remove_cv_t<TElement>;
-    using pointer = TElement *;
-    using reference = TElement &;
-    using iterator_category = TIteratorTag;
+    using typename traits::difference_type;
+    using typename traits::iterator_category;
+    using typename traits::pointer;
+    using typename traits::reference;
+    using typename traits::value_type;
 
    private:
     alignas(any_iterator_alignment) std::byte bytes[Capacity];
 
     using iterator_adaptor_type = detail::IAnyIteratorAdaptor<AnyIterator>;
 
-    inline iterator_adaptor_type &iterator_adaptor() noexcept {
+    iterator_adaptor_type &iterator_adaptor() noexcept {
         return *static_cast<iterator_adaptor_type *>(static_cast<void *>(bytes));
     }
 
-    inline const iterator_adaptor_type &iterator_adaptor() const noexcept {
+    const iterator_adaptor_type &iterator_adaptor() const noexcept {
         return *static_cast<const iterator_adaptor_type *>(static_cast<const void *>(bytes));
     }
 
    public:
     AnyIterator() = delete;
 
-    inline AnyIterator(const AnyIterator &other) { other.iterator_adaptor().uninitialized_copy_to(bytes); }
+    AnyIterator(const AnyIterator &other) { other.iterator_adaptor().uninitialized_copy_to(bytes); }
 
-    inline AnyIterator(AnyIterator &&other) noexcept { other.iterator_adaptor().uninitialized_move_to(bytes); }
+    AnyIterator(AnyIterator &&other) noexcept { other.iterator_adaptor().uninitialized_move_to(bytes); }
 
    private:
     template <class TIterator, class TEnable = void>
-    struct enable_if_iterator_compatible_cvref
-        : std::enable_if<detail::iterator_compatible_cvref<TIterator, reference, iterator_category>> {};
+    struct enable_if_iterator_compatible : std::enable_if<
+                                               detail::iterator_compatible<TIterator, reference, iterator_category>,
+                                               detail::Final<detail::AnyIteratorAdaptor<AnyIterator, TIterator>>> {};
 
     // Don't hide copy and move constructors
     template <class TIterator>
-    struct enable_if_iterator_compatible_cvref<
-        TIterator,
-        std::enable_if_t<std::is_same_v<detail::remove_cvref_t<TIterator>, AnyIterator>>> {};
+    struct enable_if_iterator_compatible<TIterator, std::enable_if_t<std::is_same_v<TIterator, AnyIterator>>> {};
 
     // Discard candidate for implicit construction from adaptor type
     template <class TIterator>
-    struct enable_if_iterator_compatible_cvref<
+    struct enable_if_iterator_compatible<
         TIterator,
-        std::enable_if_t<std::is_same_v<detail::remove_cvref_t<TIterator>, iterator_adaptor_type>>> {};
+        std::enable_if_t<std::is_same_v<TIterator, iterator_adaptor_type>>> {};
+
+    template <class TAdaptor>
+    struct enable_if_storage_compatible
+        : std::enable_if<
+              sizeof(AnyIterator) >= sizeof(TAdaptor) and detail::is_aligned_to_v<TAdaptor, alignof(AnyIterator)>,
+              TAdaptor> {};
 
    public:
-    template <class TIterator, class = typename enable_if_iterator_compatible_cvref<TIterator>::type>
+    template <
+        class TIterator,
+        class TAdaptor = typename enable_if_iterator_compatible<detail::remove_cvref_t<TIterator>>::type,
+        class = typename enable_if_storage_compatible<TAdaptor>::type>
     // NOLINTNEXTLINE(bugprone-forwarding-reference-overload)
     AnyIterator(TIterator &&iterator) {
-        using final_adaptor_type = detail::FinalAnyIteratorAdaptor<AnyIterator, detail::remove_cvref_t<TIterator>>;
-
-        static_assert(sizeof(AnyIterator) >= sizeof(final_adaptor_type));
-        static_assert(alignof(AnyIterator) % alignof(final_adaptor_type) == 0);
-
-        ::new (bytes) final_adaptor_type(static_cast<TIterator &&>(iterator));
+        ::new (bytes) TAdaptor(static_cast<TIterator &&>(iterator));
     }
 
-    inline void swap(AnyIterator &rhs) noexcept {
+    void swap(AnyIterator &rhs) noexcept {
         AnyIterator tmp(static_cast<AnyIterator &&>(rhs));
         rhs.iterator_adaptor().~iterator_adaptor_type();
         iterator_adaptor().uninitialized_move_to(rhs.bytes);
@@ -359,7 +407,7 @@ class AnyIterator {
         tmp.iterator_adaptor().uninitialized_move_to(bytes);
     }
 
-    inline AnyIterator &operator=(const AnyIterator &other) {
+    AnyIterator &operator=(const AnyIterator &other) {
         if (this != &other) {
             iterator_adaptor().~iterator_adaptor_type();
             other.iterator_adaptor().uninitialized_copy_to(bytes);
@@ -367,7 +415,7 @@ class AnyIterator {
         return *this;
     }
 
-    inline AnyIterator &operator=(AnyIterator &&other) noexcept {
+    AnyIterator &operator=(AnyIterator &&other) noexcept {
         if (this != &other) {
             iterator_adaptor().~iterator_adaptor_type();
             other.iterator_adaptor().uninitialized_move_to(bytes);
@@ -375,26 +423,31 @@ class AnyIterator {
         return *this;
     }
 
-    inline ~AnyIterator() noexcept { iterator_adaptor().~iterator_adaptor_type(); }
+    ~AnyIterator() noexcept { iterator_adaptor().~iterator_adaptor_type(); }
 
     // input methods
     static_assert(std::is_base_of_v<std::input_iterator_tag, iterator_category>);
 
-    [[nodiscard]] friend inline bool operator==(const AnyIterator &lhs, const AnyIterator &rhs) {
+    [[nodiscard]] friend bool operator==(const AnyIterator &lhs, const AnyIterator &rhs) {
         return lhs.iterator_adaptor() == rhs.iterator_adaptor();
     }
 
-    [[nodiscard]] friend inline bool operator!=(const AnyIterator &lhs, const AnyIterator &rhs) {
-        return not(lhs == rhs);
+    [[nodiscard]] friend bool operator!=(const AnyIterator &lhs, const AnyIterator &rhs) { return not(lhs == rhs); }
+
+    [[nodiscard]] reference operator*() const { return *iterator_adaptor(); }
+
+   private:
+    struct enable_if_addressable : std::enable_if<not std::is_void_v<pointer>, enable_if_addressable> {};
+
+   public:
+    template <class TEnable = enable_if_addressable, class = typename TEnable::type>
+    [[nodiscard]] pointer operator->() const {
+        static_assert(std::is_same_v<TEnable, enable_if_addressable>);
+        return detail::to_address(&*iterator_adaptor());
     }
 
-    [[nodiscard]] inline reference operator*() const { return *iterator_adaptor(); }
-
-    [[nodiscard]] inline pointer operator->() const { return iterator_adaptor().operator->(); }
-
-    inline AnyIterator &operator++() {
-        auto &adaptor = iterator_adaptor();
-        adaptor.operator++();
+    AnyIterator &operator++() {
+        ++iterator_adaptor();
         return *this;
     }
 
@@ -506,31 +559,28 @@ class AnyIterator {
     }
 };
 
-template <class TElement, class TIteratorTag, std::size_t Capacity>
+template <class TReference, class TIteratorTag, std::size_t Capacity>
 void swap(
-    AnyIterator<TElement, TIteratorTag, Capacity> &lhs, AnyIterator<TElement, TIteratorTag, Capacity> &rhs) noexcept {
+    AnyIterator<TReference, TIteratorTag, Capacity> &lhs,
+    AnyIterator<TReference, TIteratorTag, Capacity> &rhs) noexcept {
     lhs.swap(rhs);
 }
 
 namespace detail {
 
-template <class TElement, class TRangeTag, class TIterator, class TEnable = void>
-struct AnyRangeTraits {
-    using value_type = std::remove_cv_t<TElement>;
-    using difference_type = std::ptrdiff_t;
+template <class TReference, class TRangeTag, class TIterator, class TEnable = void>
+struct AnyRangeTraits : AnyIteratorTraits<TReference, iterator_category_t<TRangeTag>> {
     using size_type = std::size_t;
-    using reference = TElement &;
-    using pointer = TElement *;
     using iterator = TIterator;
 };
 
-template <class TElement, class TRangeTag, class TIterator>
+template <class TReference, class TRangeTag, class TIterator>
 struct AnyRangeTraits<
-    TElement,
+    TReference,
     TRangeTag,
     TIterator,
     std::enable_if_t<std::is_base_of_v<std::bidirectional_iterator_tag, iterator_category_t<TRangeTag>>>>
-    : AnyRangeTraits<TElement, forward_range_tag, TIterator> {
+    : AnyRangeTraits<TReference, forward_range_tag, TIterator> {
     using reverse_iterator = std::reverse_iterator<typename AnyRangeTraits::iterator>;
 };
 
@@ -575,28 +625,18 @@ template <class TAnyRange, class TRange, class TRangeTag = typename TAnyRange::r
 class AnyRangeAdaptor;
 
 template <class TAnyRange, class TRange>
-class FinalAnyRangeAdaptor final : public AnyRangeAdaptor<TAnyRange, TRange> {
-    using AnyRangeAdaptor<TAnyRange, TRange>::AnyRangeAdaptor;
-};
-
-template <class TAnyRange, class TRange>
 class AnyRangeAdaptor<TAnyRange, TRange, input_range_tag> : public IAnyRangeAdaptor<TAnyRange> {
-    using final_range_adaptor_type = FinalAnyRangeAdaptor<TAnyRange, TRange>;
+    using final_range_adaptor_type = Final<AnyRangeAdaptor<TAnyRange, TRange>>;
 
    protected:
     TRange range;
 
    public:
-    inline AnyRangeAdaptor(const AnyRangeAdaptor &) = default;
-    inline AnyRangeAdaptor(AnyRangeAdaptor &&) noexcept = default;
+    AnyRangeAdaptor(const AnyRangeAdaptor &) = default;
+    AnyRangeAdaptor(AnyRangeAdaptor &&) noexcept = default;
 
     template <class URange, class = std::enable_if_t<std::is_same_v<remove_cvref_t<TRange>, remove_cvref_t<URange>>>>
-    inline AnyRangeAdaptor(URange &&range) : range(static_cast<URange &&>(range)) {}
-
-    [[nodiscard]] const type_info *id() const override {
-        static const type_info unique{};
-        return &unique;
-    }
+    AnyRangeAdaptor(URange &&range) : range(static_cast<URange &&>(range)) {}
 
     void uninitialized_copy_to(void *dst_ptr) const override {
         ::new (dst_ptr) final_range_adaptor_type(static_cast<const final_range_adaptor_type &>(*this));
@@ -651,44 +691,51 @@ class AnyRangeAdaptor<TAnyRange, TRange, TRangeTag, std::enable_if_t<is_tag_v<TR
 
 }  // namespace detail
 
+/**
+ * @brief Container for type-erasing ranges to a common range interface.
+ * @tparam TReference The reference type for the common range interface.
+ * @tparam TRangeTag A tag type that indicates the iterator category of the common iterator interface and whether the
+ * common range interface should include size-related methods.
+ * @tparam TAnyIterator The common iterator interface to use.
+ * @tparam Capacity The number of bytes in the common range interface class layout for storing type-erased ranges.
+ */
 template <
-    class TElement,
+    class TReference,
     class TRangeTag,
-    class TAnyIterator = AnyIterator<TElement, detail::iterator_category_t<TRangeTag>>,
+    class TAnyIterator = AnyIterator<TReference, detail::iterator_category_t<TRangeTag>>,
     std::size_t Capacity = default_any_range_capacity>
-class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIterator> {
+class BasicAnyRange : public detail::AnyRangeTraits<TReference, TRangeTag, TAnyIterator> {
+    using traits = detail::AnyRangeTraits<TReference, TRangeTag, TAnyIterator>;
+
    public:
     using range_category = TRangeTag;
-
-   private:
-    alignas(any_range_alignment) mutable std::byte bytes[Capacity];
-
-    using iterator_category = detail::iterator_category_t<range_category>;
-    using range_adaptor_type = detail::IAnyRangeAdaptor<BasicAnyRange, range_category>;
-
-    inline range_adaptor_type &range_adaptor() const noexcept {
-        return *static_cast<range_adaptor_type *>(static_cast<void *>(bytes));
-    }
-
-    using traits = detail::AnyRangeTraits<TElement, TRangeTag, TAnyIterator>;
-
-   public:
     using typename traits::difference_type;
     using typename traits::iterator;
-    using typename traits::pointer;
     using typename traits::reference;
     using typename traits::size_type;
     using typename traits::value_type;
 
+   private:
+    alignas(any_range_alignment) mutable std::byte bytes[Capacity];
+
+    using range_adaptor_type = detail::IAnyRangeAdaptor<BasicAnyRange, range_category>;
+
+    range_adaptor_type &range_adaptor() const noexcept {
+        return *static_cast<range_adaptor_type *>(static_cast<void *>(bytes));
+    }
+
+   public:
     BasicAnyRange() = delete;
 
-    inline BasicAnyRange(const BasicAnyRange &other) { other.range_adaptor().uninitialized_copy_to(bytes); }
+    BasicAnyRange(const BasicAnyRange &other) { other.range_adaptor().uninitialized_copy_to(bytes); }
 
-    inline BasicAnyRange(BasicAnyRange &&other) noexcept { other.range_adaptor().uninitialized_move_to(bytes); }
+    BasicAnyRange(BasicAnyRange &&other) noexcept { other.range_adaptor().uninitialized_move_to(bytes); }
 
    private:
     template <class TRange, class TEnable = void>
-    struct enable_if_range_compatible : std::enable_if<detail::range_compatible<TRange, reference, range_category>> {};
+    struct enable_if_range_compatible : std::enable_if<
+                                            detail::range_compatible<TRange, reference, range_category>,
+                                            detail::Final<detail::AnyRangeAdaptor<BasicAnyRange, TRange>>> {};
 
     // Don't hide copy and move constructors
     template <class TRange>
@@ -696,19 +743,52 @@ class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIte
         TRange,
         std::enable_if_t<std::is_same_v<detail::remove_cvref_t<TRange>, BasicAnyRange>>> {};
 
+    template <class TAdaptor>
+    struct enable_if_storage_compatible
+        : std::enable_if<
+              sizeof(BasicAnyRange) >= sizeof(TAdaptor) and detail::is_aligned_to_v<TAdaptor, alignof(BasicAnyRange)>,
+              TAdaptor> {};
+
+    template <class TIterator>
+    struct enable_if_iterator_compatible : std::enable_if<std::is_constructible_v<iterator, TIterator>> {};
+
    public:
-    template <class TRange, class = typename enable_if_range_compatible<TRange>::type>
+    /**
+     * @brief Constructor from forwarding reference of underlying range type
+     * @param range The cvref-qualified range type to erase; lvalues are stored as reference, rvalues are
+     * move-constructed into storage, transferring ownership.
+     */
+    template <
+        class TRange,
+        class TAdaptor = typename enable_if_range_compatible<TRange>::type,
+        class = typename enable_if_storage_compatible<TAdaptor>::type,
+        class = typename enable_if_iterator_compatible<detail::iterator_t<TRange>>::type>
     // NOLINTNEXTLINE(bugprone-forwarding-reference-overload)
     BasicAnyRange(TRange &&range) {
-        using final_adaptor_type = detail::FinalAnyRangeAdaptor<BasicAnyRange, TRange>;
-
-        static_assert(sizeof(BasicAnyRange) >= sizeof(final_adaptor_type));
-        static_assert(alignof(BasicAnyRange) % alignof(final_adaptor_type) == 0);
-
-        ::new (static_cast<void *>(bytes)) final_adaptor_type(static_cast<TRange &&>(range));
+        ::new (static_cast<void *>(bytes)) TAdaptor(static_cast<TRange &&>(range));
     }
 
-    inline void swap(BasicAnyRange &rhs) noexcept {
+#ifdef __has_cpp_attribute
+#if __has_cpp_attribute(clang::lifetimebound)
+
+    /**
+     * @brief Higher-priority constructor from lvalue reference of underlying range type
+     * @note Diagnoses attempts to type-erase a dangling reference if lifetimebound attribute is supported.
+     * @param range The lvalue reference range type to erase; stored as reference.
+     */
+    template <
+        class TRange,
+        class TAdaptor = typename enable_if_range_compatible<TRange &>::type,
+        class = typename enable_if_storage_compatible<TAdaptor>::type,
+        class = typename enable_if_iterator_compatible<detail::iterator_t<TRange>>::type>
+    BasicAnyRange(TRange &range [[clang::lifetimebound]]) {
+        ::new (static_cast<void *>(bytes)) TAdaptor(range);
+    }
+
+#endif
+#endif
+
+    void swap(BasicAnyRange &rhs) noexcept {
         BasicAnyRange tmp(static_cast<BasicAnyRange &&>(rhs));
         rhs.range_adaptor().~range_adaptor_type();
         range_adaptor().uninitialized_move_to(rhs.bytes);
@@ -716,7 +796,7 @@ class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIte
         tmp.range_adaptor().uninitialized_move_to(bytes);
     }
 
-    inline BasicAnyRange &operator=(const BasicAnyRange &other) {
+    BasicAnyRange &operator=(const BasicAnyRange &other) {
         if (this != &other) {
             range_adaptor().~range_adaptor_type();
             other.range_adaptor().uninitialized_copy_to(bytes);
@@ -724,7 +804,7 @@ class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIte
         return *this;
     }
 
-    inline BasicAnyRange &operator=(BasicAnyRange &&other) noexcept {
+    BasicAnyRange &operator=(BasicAnyRange &&other) noexcept {
         if (this != &other) {
             range_adaptor().~range_adaptor_type();
             other.range_adaptor().uninitialized_move_to(bytes);
@@ -732,14 +812,14 @@ class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIte
         return *this;
     }
 
-    inline ~BasicAnyRange() noexcept { range_adaptor().~range_adaptor_type(); }
+    ~BasicAnyRange() noexcept { range_adaptor().~range_adaptor_type(); }
 
     // input methods
     static_assert(std::is_base_of_v<input_range_tag, range_category>);
 
-    [[nodiscard]] inline iterator begin() const { return range_adaptor().begin(); }
+    [[nodiscard]] iterator begin() const { return range_adaptor().begin(); }
 
-    [[nodiscard]] inline iterator end() const { return range_adaptor().end(); }
+    [[nodiscard]] iterator end() const { return range_adaptor().end(); }
 
     // bidirectional methods
 
@@ -785,103 +865,108 @@ class BasicAnyRange : public detail::AnyRangeTraits<TElement, TRangeTag, TAnyIte
     }
 };
 
-template <class TElement, class TRangeTag, class TAnyIterator, std::size_t Capacity>
+template <class TReference, class TRangeTag, class TAnyIterator, std::size_t Capacity>
 void swap(
-    BasicAnyRange<TElement, TRangeTag, TAnyIterator, Capacity> &lhs,
-    BasicAnyRange<TElement, TRangeTag, TAnyIterator, Capacity> &rhs) noexcept {
+    BasicAnyRange<TReference, TRangeTag, TAnyIterator, Capacity> &lhs,
+    BasicAnyRange<TReference, TRangeTag, TAnyIterator, Capacity> &rhs) noexcept {
     lhs.swap(rhs);
 }
 
 template <
-    class TElement,
+    class TReference,
     class TRangeTag,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
 using AnyRange = BasicAnyRange<
-    TElement,
+    TReference,
     TRangeTag,
-    AnyIterator<TElement, detail::iterator_category_t<TRangeTag>, IteratorCapacity>,
+    AnyIterator<TReference, detail::iterator_category_t<TRangeTag>, IteratorCapacity>,
     RangeCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnyInputRange = AnyRange<TElement, input_range_tag, RangeCapacity, IteratorCapacity>;
+using AnyInputRange = AnyRange<TReference, input_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnyForwardRange = AnyRange<TElement, forward_range_tag, RangeCapacity, IteratorCapacity>;
+using AnyForwardRange = AnyRange<TReference, forward_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnyBidirectionalRange = AnyRange<TElement, bidirectional_range_tag, RangeCapacity, IteratorCapacity>;
+using AnyBidirectionalRange = AnyRange<TReference, bidirectional_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnyRandomAccessRange = AnyRange<TElement, random_access_range_tag, RangeCapacity, IteratorCapacity>;
+using AnyRandomAccessRange = AnyRange<TReference, random_access_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnySizedInputRange = AnyRange<TElement, sized_input_range_tag, RangeCapacity, IteratorCapacity>;
+using AnySizedInputRange = AnyRange<TReference, sized_input_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnySizedForwardRange = AnyRange<TElement, sized_forward_range_tag, RangeCapacity, IteratorCapacity>;
+using AnySizedForwardRange = AnyRange<TReference, sized_forward_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnySizedBidirectionalRange = AnyRange<TElement, sized_bidirectional_range_tag, RangeCapacity, IteratorCapacity>;
+using AnySizedBidirectionalRange = AnyRange<TReference, sized_bidirectional_range_tag, RangeCapacity, IteratorCapacity>;
 
 template <
-    class TElement,
+    class TReference,
     std::size_t RangeCapacity = default_any_range_capacity,
     std::size_t IteratorCapacity = default_any_iterator_capacity>
-using AnySizedRandomAccessRange = AnyRange<TElement, sized_random_access_range_tag, RangeCapacity, IteratorCapacity>;
+using AnySizedRandomAccessRange = AnyRange<TReference, sized_random_access_range_tag, RangeCapacity, IteratorCapacity>;
 
-template <class TElement, class TRangeTag, class... TRanges>
+template <class TReference, class TRangeTag, class... TRanges>
 using AnyRangeFor = AnyRange<
     // cause substitution failure if any type in pack does not satisfy alignment requirement for range or iterator
-    std::enable_if_t<(... and detail::is_aligned_to_v<TRanges, any_range_alignment>), TElement>,
+    std::enable_if_t<(... and detail::is_aligned_to_v<TRanges, any_range_alignment>), TReference>,
     std::enable_if_t<(... and detail::is_aligned_to_v<detail::iterator_t<TRanges>, any_iterator_alignment>), TRangeTag>,
     // add sizeof vtable pointer
     sizeof(void *) + std::max({sizeof(TRanges)...}),
     sizeof(void *) + std::max({sizeof(detail::iterator_t<TRanges>)...})>;
 
-template <class TElement, class... TRanges>
-using AnyInputRangeFor = AnyRangeFor<TElement, input_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnyInputRangeFor = AnyRangeFor<TReference, input_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnyForwardRangeFor = AnyRangeFor<TElement, forward_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnyForwardRangeFor = AnyRangeFor<TReference, forward_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnyBidirectionalRangeFor = AnyRangeFor<TElement, bidirectional_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnyBidirectionalRangeFor = AnyRangeFor<TReference, bidirectional_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnyRandomAccessRangeFor = AnyRangeFor<TElement, random_access_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnyRandomAccessRangeFor = AnyRangeFor<TReference, random_access_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnySizedInputRangeFor = AnyRangeFor<TElement, sized_input_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnySizedInputRangeFor = AnyRangeFor<TReference, sized_input_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnySizedForwardRangeFor = AnyRangeFor<TElement, sized_forward_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnySizedForwardRangeFor = AnyRangeFor<TReference, sized_forward_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnySizedBidirectionalRangeFor = AnyRangeFor<TElement, sized_bidirectional_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnySizedBidirectionalRangeFor = AnyRangeFor<TReference, sized_bidirectional_range_tag, TRanges...>;
 
-template <class TElement, class... TRanges>
-using AnySizedRandomAccessRangeFor = AnyRangeFor<TElement, sized_random_access_range_tag, TRanges...>;
+template <class TReference, class... TRanges>
+using AnySizedRandomAccessRangeFor = AnyRangeFor<TReference, sized_random_access_range_tag, TRanges...>;
+
+#define MAKE_ANY_RANGE(NAME, ...)         \
+    class NAME : public __VA_ARGS__ {     \
+        using __VA_ARGS__::BasicAnyRange; \
+    }
 
 }  // namespace tt::stl
