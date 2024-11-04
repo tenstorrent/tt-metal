@@ -148,7 +148,7 @@ void RowMajorPageConfig::validate_alignment(const Alignment& alignment, DataType
         const auto& shard_shape = shard_spec.shape;
         const auto shard_width = shard_shape[1];
         TT_FATAL(
-            width_alignment == shard_width,
+            width_alignment % shard_width == 0,
             "Alignment mismatch for sharded tensor: Expected alignment width of {} to match shard shape {} for Row Major layout.",
             width_alignment, shard_shape);
     }
