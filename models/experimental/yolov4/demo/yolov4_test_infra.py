@@ -61,12 +61,6 @@ class yolov4TestInfra:
         height = 320
 
         img = cv2.imread(imgfile)
-
-        # Inference input size is 416*416 does not mean training size is the same
-        # Training size could be 608*608 or even other sizes
-        # Optional inference sizes:
-        #   Hight in {320, 416, 512, 608, ... 320 + 96 * n}
-        #   Width in {320, 416, 512, 608, ... 320 + 96 * m}
         sized = cv2.resize(img, (width, height))
         torch_pixel_values = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
         torch_pixel_values = torch.from_numpy(torch_pixel_values.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
@@ -93,14 +87,12 @@ class yolov4TestInfra:
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
-        # input_mem_config = ttnn.MemoryConfig(
-        #     ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
-        # )
+
         tt_inputs_host = ttnn.from_torch(
             self.torch_pixel_values,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-        )  # device=device, memory_config=input_mem_config)
+        )
 
         return tt_inputs_host, input_mem_config
 
@@ -123,9 +115,6 @@ class yolov4TestInfra:
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
         )
-        # sharded_mem_config_DRAM = ttnn.MemoryConfig(
-        #     ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM
-        # )
 
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 

@@ -410,7 +410,6 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         t0 = time.time()
 
         if type(img) == np.ndarray and len(img.shape) == 3:  # cv2 image
-            print("CVVVVVV")
             img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
         elif type(img) == np.ndarray and len(img.shape) == 4:
             img = torch.from_numpy(img.transpose(0, 3, 1, 2)).float().div(255.0)
@@ -421,9 +420,12 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         img = torch.autograd.Variable(img)
 
         if not is_torch_model:
+            ## TT-NN
             input_shape = img.shape
-            input_tensor = torch.permute(img, (0, 2, 3, 1))
-            input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0))
+            input_tensor = torch.permute(img, (0, 2, 3, 1))  # put channel at the end
+            input_tensor = torch.nn.functional.pad(
+                input_tensor, (0, 13, 0, 0, 0, 0, 0, 0)
+            )  # pad channel dim from 3 to 16
             N, H, W, C = input_tensor.shape
             input_tensor = torch.reshape(input_tensor, (N, 1, H * W, C))
 
