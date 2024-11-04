@@ -486,6 +486,12 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
+    // check if we need to allocate a scratch buffer
+    // The kernel reads several 16 element face lines (32B for BFLOAT16) from different input tiles to form a single output tile, one output tile at a time
+    // Each face line is 32 bytes, so if our minimum read alignment is greater than that (64B for Blackhole) then we will have reads from unaligned face-lines into differently aligned destination face-lines
+    // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C tiles
+    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    bool misaligned = alignment > sub_tile_line_bytes;
     if (row_major) {
         auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1 : num_tiles_per_core_group_2;
         auto stick_size = W * a.element_size();
@@ -497,6 +503,14 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
         tt::tt_metal::CircularBufferConfig cb_src0_config = tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
         auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+
+        // need some scratch memory here - if we need data from a misaligned address then we need to read from the nearest aligned address and then copy the data to the correct location
+        if (misaligned) {
+            uint32_t src1_cb_index = 1;
+            tt::tt_metal::CircularBufferConfig cb_src1_config = tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, alignment);
+            auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+        }
     }
 
     tt::tt_metal::Buffer *src0_buffer = a.buffer();
@@ -522,6 +536,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(const Tensor &a, Tensor 
     } else {
         reader_compile_time_args.push_back((std::uint32_t) sub_tile_line_bytes);
         reader_compile_time_args.push_back((std::uint32_t) (cb_data_format == tt::DataFormat::Float32));
+        reader_compile_time_args.push_back((std::uint32_t) alignment);
     }
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {

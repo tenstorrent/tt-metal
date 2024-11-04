@@ -57,7 +57,8 @@ inline Tensor transpose_(const Tensor &a, TransposeOpDim transpose_dim, const Me
     bool tiled_only = false;
     bool pad_n = false;
     constexpr uint32_t FACE_WIDTH = tt::constants::FACE_WIDTH; // this is a highly restrictive constraint on the RM transpose_wh kernel, and with all the other bugs/limitations we should rewrite it
-    auto BUFFER_ALIGNMENT = a.buffer()->alignment(); // Need stick width to be read alignment (currently 32 for DRAM and 16 for L1)
+    // use device->get_allocator_alignment when the it reflects the alignment of the buffer and doesn't just default to DRAM
+    auto BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
     uint32_t W = a.get_padded_shape()[-1];
     uint32_t H = a.get_padded_shape()[-2];
     switch (transpose_dim) {
