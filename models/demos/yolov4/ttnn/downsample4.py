@@ -4,7 +4,7 @@
 
 import torch
 import ttnn
-from models.experimental.yolov4.ttnn.common import Conv
+from models.demos.yolov4.ttnn.common import Conv
 
 
 class Down4:

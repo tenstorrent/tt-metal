@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from models.experimental.yolov4.reference.downsample1 import DownSample1
-from models.experimental.yolov4.reference.downsample2 import DownSample2
-from models.experimental.yolov4.reference.downsample3 import DownSample3
-from models.experimental.yolov4.reference.downsample4 import DownSample4
-from models.experimental.yolov4.reference.downsample5 import DownSample5
-from models.experimental.yolov4.reference.neck import Neck
-from models.experimental.yolov4.reference.head import Head
+from models.demos.yolov4.reference.downsample1 import DownSample1
+from models.demos.yolov4.reference.downsample2 import DownSample2
+from models.demos.yolov4.reference.downsample3 import DownSample3
+from models.demos.yolov4.reference.downsample4 import DownSample4
+from models.demos.yolov4.reference.downsample5 import DownSample5
+from models.demos.yolov4.reference.neck import Neck
+from models.demos.yolov4.reference.head import Head
 
 import torch
 import torch.nn as nn
