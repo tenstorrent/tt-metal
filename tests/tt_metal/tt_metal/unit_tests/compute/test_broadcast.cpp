@@ -289,11 +289,11 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
 }
 }
 
-class BroadcastParametrizedDeviceFixture : public DeviceFixture,
+class BroadcastParameterizedDeviceFixture : public DeviceFixture,
                                            public testing::WithParamInterface<unit_tests::compute::broadcast::BroadcastConfig> {
 };
 
-TEST_P(BroadcastParametrizedDeviceFixture, TensixComputeSingleTileBroadcast) {
+TEST_P(BroadcastParameterizedDeviceFixture, TensixComputeSingleTileBroadcast) {
     unit_tests::compute::broadcast::BroadcastConfig test_config = GetParam();
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) continue;
@@ -307,7 +307,7 @@ using namespace unit_tests::compute::broadcast;
 
 INSTANTIATE_TEST_SUITE_P(
     ComputeSingleTileBroadcast,
-    BroadcastParametrizedDeviceFixture,
+    BroadcastParameterizedDeviceFixture,
     ::testing::Values(
         (BroadcastConfig){ApiConvention::DEFAULT,    EltwiseOp::ADD, BroadcastDim::ROW},
         (BroadcastConfig){ApiConvention::DEFAULT,    EltwiseOp::ADD, BroadcastDim::COL},

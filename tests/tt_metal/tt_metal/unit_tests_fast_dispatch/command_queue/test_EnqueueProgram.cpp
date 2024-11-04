@@ -1386,7 +1386,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
     Finish(this->device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TensixTestSimplePrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
@@ -1399,7 +1399,7 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
+TEST_F(RandomProgramFixture, ActiveEthTestSimplePrograms) {
     if (!does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
@@ -1416,7 +1416,7 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
+TEST_F(RandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     if (!does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
@@ -1442,7 +1442,7 @@ TEST_F(RandomProgramFixture, TestSimpleProgramsOnTensixAndEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TensixTestPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
@@ -1455,7 +1455,7 @@ TEST_F(RandomProgramFixture, TestProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestProgramsOnEth) {
+TEST_F(RandomProgramFixture, ActiveEthTestPrograms) {
     if (!does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
@@ -1477,7 +1477,7 @@ TEST_F(RandomProgramFixture, TestProgramsOnEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
+TEST_F(RandomProgramFixture, TensixActiveEthTestPrograms) {
     if (!does_device_have_active_eth_cores(device_)) {
         GTEST_SKIP() << "Skipping test because device " << device_->id() << " does not have any active ethernet cores";
     }
@@ -1511,7 +1511,7 @@ TEST_F(RandomProgramFixture, TestProgramsOnTensixAndEth) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
@@ -1532,7 +1532,7 @@ TEST_F(RandomProgramFixture, TestAlternatingLargeAndSmallProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TensixTestLargeProgramFollowedBySmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);
@@ -1553,7 +1553,7 @@ TEST_F(RandomProgramFixture, TestLargeProgramFollowedBySmallProgramsOnTensix) {
     Finish(device_->command_queue());
 }
 
-TEST_F(RandomProgramFixture, TestLargeProgramInBetweenFiveSmallProgramsOnTensix) {
+TEST_F(RandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPrograms) {
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
         if (i % 10 == 0) {
             log_info(tt::LogTest, "Creating Program {}", i);

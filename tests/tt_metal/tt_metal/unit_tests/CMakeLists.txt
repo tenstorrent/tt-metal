@@ -37,6 +37,7 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_apis/test_tilize_untilize.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/fast_dispatch_kernels/test_write_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/basic_eth_kernels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/buffer_movement_kernels.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/device_cluster_api.cpp

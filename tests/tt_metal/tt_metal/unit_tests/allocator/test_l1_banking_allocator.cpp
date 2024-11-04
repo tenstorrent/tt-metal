@@ -26,7 +26,7 @@ uint64_t get_alloc_limit(const tt::tt_metal::Device *device) {
 
 }   // namespace unit_tests::test_l1_banking_allocator
 
-TEST_F(DeviceSingleCardFixture, TestL1BuffersAllocatedTopDown) {
+TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
 
     std::vector<uint32_t> alloc_sizes = {32 * 1024, 64 * 1024, 128 * 1024};
     size_t total_size_bytes = 0;
@@ -50,7 +50,7 @@ TEST_F(DeviceSingleCardFixture, TestL1BuffersAllocatedTopDown) {
     buffers.clear();
 }
 
-TEST_F(DeviceSingleCardFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
+TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersDoNotGrowBeyondBankSize) {
     uint64_t alloc_limit = unit_tests::test_l1_banking_allocator::get_alloc_limit(this->device_);
 
     tt::tt_metal::InterleavedBufferConfig l1_config{

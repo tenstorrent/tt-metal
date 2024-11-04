@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include "buffer_fixtures.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -52,50 +53,47 @@ class DeviceFixture : public ::testing::Test {
     size_t num_devices_;
 };
 
-
-class DeviceSingleCardFixture : public ::testing::Test {
+class DeviceSingleCardFixture : virtual public ::testing::Test {
    protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (not slow_dispatch) {
-            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
+        this->validate_dispatch_mode();
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        const chip_id_t mmio_device_id = 0;
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
-        device_ = reserved_devices_.at(mmio_device_id);
-
-
-        num_devices_ = reserved_devices_.size();
+        this->create_devices();
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    tt::tt_metal::Device* device_;
+    void validate_dispatch_mode() {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (slow_dispatch) {
+            TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+            GTEST_SKIP();
+        }
+    }
+
+    void create_devices(const std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        const chip_id_t mmio_device_id = 0;
+        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
+        device_ = reserved_devices_.at(mmio_device_id);
+        num_devices_ = reserved_devices_.size();
+    }
+
+    tt::tt_metal::Device *device_;
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
 
+class DeviceSingleCardBufferFixture : virtual public DeviceSingleCardFixture, virtual public BufferFixture {};
+
 class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
    protected:
     void SetUp() override {
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (not slow_dispatch) {
-            TT_THROW("This suite can only be run with TT_METAL_SLOW_DISPATCH_MODE set");
-            GTEST_SKIP();
-        }
+        this->validate_dispatch_mode();
         arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
         if (arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
-
-        const chip_id_t mmio_device_id = 0;
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices({mmio_device_id});
-        device_ = reserved_devices_.at(mmio_device_id);
-
-        num_devices_ = reserved_devices_.size();
+        this->create_devices();
     }
 };

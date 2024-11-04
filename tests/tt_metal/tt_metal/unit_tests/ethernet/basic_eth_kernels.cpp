@@ -838,7 +838,7 @@ TEST_F(N300DeviceFixture, ActiveEthEthKernelsRandomEthPacketSizeDirectSendTests)
 }
 
 // TODO #14640: Run this on WH when i$ flush issue is addressed
-TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc0) {
+TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_0};
@@ -856,7 +856,7 @@ TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc0) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc1) {
+TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     tt_metal::EthernetConfig noc0_ethernet_config{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = tt_metal::DataMovementProcessor::RISCV_1};
@@ -874,7 +874,7 @@ TEST_F(BlackholeSingleCardFixture, EthKernelOnIdleErisc1) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, EthKernelOnBothIdleEriscs) {
+TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
     uint32_t reader_dst_address = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
