@@ -23,7 +23,7 @@
 #if defined(TYPE_FIRMWARE)
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
-#if defined(TARGET_IERISC)
+#if defined(TARGET_IERISC) || defined(TARGET_SLAVE_IERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0
@@ -77,7 +77,9 @@ SECTIONS
 
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = .;
+#if defined(TARGET_NCRISC)
   PROVIDE (KERNEL_ENTRY_SYMBOL = __fw_export_end_text);
+#endif
 #endif
 
 #if defined(TYPE_KERNEL)

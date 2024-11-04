@@ -58,6 +58,11 @@ endif()
 ############################################################################################################################
 
 CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
+if(reflect_ADDED)
+    add_library(reflect INTERFACE)
+    add_library(Reflect::Reflect ALIAS reflect)
+    target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+endif()
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum
