@@ -29,10 +29,10 @@ parameters = {
         + gen_shapes([1, 8], [256, 256], [1, 8], 4),
         "num_heads": [1, 2, 4, 8],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT
+        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "mask_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "mask_layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT
+        "mask_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "mask_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -83,7 +83,7 @@ def run(
     )(input_shape)
     torch_mask_tensor = (torch_mask_tensor > 0).to(torch.float32)
 
-    print(f"input_shape {input_shape} input_a_dtype {input_a_dtype} input_a_layout {input_a_layout}")
+    # print(f"input_shape {input_shape} input_a_dtype {input_a_dtype} input_a_layout {input_a_layout}")
 
     golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
     tmp_input = torch.clone(torch_input_tensor_a)
@@ -111,7 +111,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    print(pcc)
+    # print(pcc)
     return [pcc, e2e_perf]
 
 
