@@ -196,13 +196,11 @@ def test_llama_cross_attention_transformer_text_inference(
             if mode == "prefill":
                 tt_h = model_args.prepare_inputs_ttnn_prefill(
                     h,
-                    force_replicated=True,
                 )
             else:
                 tt_h = model_args.prepare_inputs_ttnn_decode(
                     h,
                     ttnn.DRAM_MEMORY_CONFIG,
-                    force_replicated=True,
                 )
 
             tt_position_id = ttnn.from_torch(
@@ -278,7 +276,7 @@ def test_llama_cross_attention_transformer_text_inference(
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             )
             if mode == "decode":
                 tt_full_text_mask_expand_11SD = ttnn.reshape(

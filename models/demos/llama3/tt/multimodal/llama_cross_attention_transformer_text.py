@@ -10,6 +10,7 @@ import torch.nn as nn
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.demos.llama3.tt.llama_model import LMHead
+from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from typing import Optional
@@ -62,13 +63,20 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             {k[len(tok_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(tok_embedding_prefix)}
         )
 
-        self.norm = RMSNorm(
-            device=mesh_device,
-            dim=configuration.dim,
-            state_dict=state_dict,
-            state_dict_prefix=configuration.get_state_dict_prefix("", None),
-            weight_cache_path=weight_cache_path,
-            weight_key="norm",
+        self.norm = DistributedNorm(
+            RMSNorm(
+                device=mesh_device,
+                dim=configuration.dim,
+                state_dict=state_dict,
+                state_dict_prefix=configuration.get_state_dict_prefix("", None),
+                weight_cache_path=weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="norm",
+                is_distributed=configuration.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+            ),
+            configuration,
         )
 
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
@@ -249,7 +257,10 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 mode=mode,
             )
 
-        h = self.norm(h)
+        h = self.norm(h, mode=mode)
+
+        if mode == "decode":  # h is expected to be interleaved for the lm head
+            h = ttnn.sharded_to_interleaved(h)
 
         seq_len = h.shape[2]
         MAX_MM_SEQ_LEN = 1024
