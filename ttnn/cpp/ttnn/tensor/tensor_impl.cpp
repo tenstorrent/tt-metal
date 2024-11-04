@@ -53,7 +53,7 @@ void validate_sharded_buffer_allocation(
     DataType data_type,
     const ShardSpecBuffer& shard_params,
     const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
+    const Tile& tile) {
     const auto& shard_spec = memory_config.shard_spec.value();
     const auto& shard_shape = shard_spec.shape;
 
@@ -114,7 +114,7 @@ void validate_sharded_buffer_allocation(
         TT_THROW("Unsupported sharding scheme");
     }
     if (layout == Layout::TILE) {
-        auto tile_shape = tile.value_or(Tile{{constants::TILE_HEIGHT, constants::TILE_WIDTH}}).get_tile_shape();
+        auto tile_shape = tile.get_tile_shape();
         TT_FATAL(
             (shard_shape[0] % tile_shape[0] == 0 && shard_shape[1] % tile_shape[1] == 0),
             "Shard shape {} must be tile {} sized!", shard_shape, tile_shape);

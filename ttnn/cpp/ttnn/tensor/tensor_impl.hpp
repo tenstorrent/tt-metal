@@ -236,7 +236,7 @@ void validate_sharded_buffer_allocation(
     DataType data_type,
     const ShardSpecBuffer& shard_params,
     const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile = std::nullopt);
+    const Tile& tile);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
