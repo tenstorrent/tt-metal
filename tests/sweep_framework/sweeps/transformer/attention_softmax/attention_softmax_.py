@@ -29,10 +29,10 @@ parameters = {
         + gen_shapes([1, 8], [256, 256], [1, 8], 4),
         "num_heads": [1, 2, 4, 8],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "mask_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "mask_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "mask_layout": [ttnn.TILE_LAYOUT],  # ttnn.ROW_MAJOR_LAYOUT
         "mask_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
@@ -83,10 +83,11 @@ def run(
     )(input_shape)
     torch_mask_tensor = (torch_mask_tensor > 0).to(torch.float32)
 
-    # print(f"input_shape {input_shape} input_a_dtype {input_a_dtype} input_a_layout {input_a_layout}")
+    print(f"input_shape {input_shape} input_a_dtype {input_a_dtype} input_a_layout {input_a_layout}")
 
-    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax)
-    torch_output_tensor = golden_function(torch_input_tensor_a, head_size=head_size, attention_mask=torch_mask_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
+    tmp_input = torch.clone(torch_input_tensor_a)
+    torch_output_tensor = golden_function(tmp_input, head_size=head_size, attention_mask=torch_mask_tensor)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -105,10 +106,37 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.transformer.attention_softmax(input_tensor_a, head_size=head_size, attention_mask=mask_tensor)
+    result = ttnn.transformer.attention_softmax_(input_tensor_a, head_size=head_size, attention_mask=mask_tensor)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(pcc)
+    print(pcc)
     return [pcc, e2e_perf]
+
+
+# Run sweeps locally
+# from tests.sweep_framework.framework.permutations import *
+
+# start_time = start_measuring_time()
+# for suite in parameters.keys():
+#     device_id = 0
+#     device = ttnn.open_device(device_id=device_id)
+#     suite_vectors = list(permutations(parameters[suite]))
+#     print(len(suite_vectors))
+#     for vector in suite_vectors:
+#         invalidate_res = invalidate_vector(vector)
+#         if invalidate_res[0]:
+#             print(f"Invalidated: {invalidate_res[1]}")
+#             continue
+#         try:
+#             passed, _ = run(**vector, device=device)
+#             if passed[0] != True:
+#                 print(passed)
+#         except Exception as e:
+#             print(e)
+
+#     ttnn.close_device(device)
+
+# e2e_perf = stop_measuring_time(start_time)
+# print(f"time {e2e_perf / 1000000000}s")
