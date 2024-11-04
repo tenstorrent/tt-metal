@@ -18,7 +18,7 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -35,7 +35,7 @@ def run_unary_test_fixed(device, h, w, fill_value, ttnn_function, pcc=0.9999):
     torch_input_tensor = torch.full((h, w), fill_value, dtype=torch.bfloat16)
 
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
@@ -411,7 +411,7 @@ def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function, pcc=0.99
 
     torch_input_tensor = torch.full(size=(h, w), fill_value=fill_value).to(torch.int32)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)

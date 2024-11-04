@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/device.hpp"
 
 namespace ttnn::operations::unary{
 

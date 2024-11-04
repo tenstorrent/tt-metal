@@ -22,7 +22,7 @@ def test_unary_composite_acosh_ttnn(input_shapes, device):
 
     output_tensor = ttnn.acosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.acosh)
-    golden_tensor = golden_function(in_data1, device=device)
+    golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -791,7 +791,7 @@ def test_unary_logit(input_shapes, param, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
     output_tensor = ttnn.logit(input_tensor, eps=param)
     golden_function = ttnn.get_golden_function(ttnn.logit)
-    golden_tensor = golden_function(in_data, eps=param, device=device)
+    golden_tensor = golden_function(in_data, eps=param)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

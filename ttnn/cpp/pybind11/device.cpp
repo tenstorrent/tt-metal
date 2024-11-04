@@ -136,24 +136,8 @@ void device_module(py::module& m_device) {
     m_device.attr("EPS_WHB0") = EPS_WHB0;
     m_device.attr("EPS_BH") = EPS_BH;
 
-    m_device.attr("NAN_GS") = NAN_GS;
-    m_device.attr("NAN_WHB0") = NAN_WHB0;
-    m_device.attr("NAN_BH") = NAN_BH;
-
-    m_device.attr("INF_GS") = INF_GS;
-    m_device.attr("INF_WHB0") = INF_WHB0;
-    m_device.attr("INF_BH") = INF_BH;
-
     pyDevice.def("sfpu_eps", &Device::sfpu_eps, R"doc(
         Returns machine epsilon value for current device.
-        )doc");
-
-    pyDevice.def("sfpu_nan", &Device::sfpu_nan, R"doc(
-        Returns NaN value for current device.
-        )doc");
-
-    pyDevice.def("sfpu_inf", &Device::sfpu_inf, R"doc(
-        Returns Infinity value for current device.
         )doc");
 
     m_device.def(
