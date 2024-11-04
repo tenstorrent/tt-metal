@@ -3405,6 +3405,39 @@ void Device::generate_device_headers(const std::string &path) const
     );
 }
 
+size_t Device::get_device_defines_hash() {
+    std::map<std::string, std::string> device_defines;
+
+    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+
+    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
+    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
+
+    device_defines.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
+    device_defines.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
+
+    if (is_dram_pow2) {
+        device_defines.emplace("LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(log2(num_dram_banks)));
+    } else {
+        device_defines.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
+    }
+    if (is_l1_pow2) {
+        device_defines.emplace("LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(log2(num_l1_banks)));
+    } else {
+        device_defines.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
+    }
+    return DeviceDefinesHash{}(device_defines);
+}
+
+size_t DeviceDefinesHash::operator()(const std::map<std::string, std::string> &c_defines) const {
+    size_t hash_value = 0;
+    for (auto it = c_defines.begin(); it != c_defines.end(); ++it)
+        tt::utils::hash_combine(hash_value, std::hash<std::string>{}(it->first + it->second));
+    return hash_value;
+}
+
+
 }  // namespace tt_metal
 
 }  // namespace tt

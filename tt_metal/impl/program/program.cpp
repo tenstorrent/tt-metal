@@ -44,17 +44,18 @@ void GenerateBinaries(Device *device, JitBuildOptions &build_options, std::share
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_defines_hash) {
     // Account for device id in hash because generated headers are dependent on harvesting config, which can differ per
     // device This can be removed with https://github.com/tenstorrent/tt-metal/issues/3381
 
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
+        "{}_{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
+        device_defines_hash,
         tt::llrt::OptionsG.get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
@@ -1377,7 +1378,7 @@ void detail::Program_::compile(Device *device, bool fd_bootloader_mode) {
                     this->set_cb_data_fmt(device, kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(device, kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key());
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);

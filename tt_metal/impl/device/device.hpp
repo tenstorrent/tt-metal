@@ -61,6 +61,12 @@ static constexpr float  INF_BH = INF_WHB0;
 
 inline namespace v0 {
 
+struct DeviceDefinesHash {
+    DeviceDefinesHash() {}
+
+    size_t operator()(const std::map<std::string, std::string> &c_defines) const;
+};
+
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:
@@ -342,6 +348,7 @@ class Device {
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
+    size_t get_device_defines_hash();
 
    private:
     void MarkAllocationsUnsafe();
