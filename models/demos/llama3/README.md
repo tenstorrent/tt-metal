@@ -82,5 +82,5 @@ When running the demo, do not forget to setup the `$LLAMA_DIR` environment varia
 pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
 
 # Run 2 continuous batches with general weights
-pytest models/demos/llama3/demo/demo.py -k 'general and 2_batch'
+pytest models/demos/llama3/demo/demo.py -k 'general and 3_batch'
 ```
