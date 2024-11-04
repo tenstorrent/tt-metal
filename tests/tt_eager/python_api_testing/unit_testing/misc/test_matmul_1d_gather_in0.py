@@ -47,7 +47,7 @@ from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b
             2304,
             3840,
             None,
-            ttnn.bfloat8_b,
+            ttnn.bfloat16,
             ttnn.MathFidelity.HiFi2,
             True,
             True,
@@ -91,7 +91,7 @@ def test_multi_core_matmul_1d_wh(
     out_block_w = N // num_cores // 32
 
     out_subblock_h = 1
-    out_subblock_w = 4
+    out_subblock_w = 8
     while out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
 
@@ -116,6 +116,23 @@ def test_multi_core_matmul_1d_wh(
     in0 = torch.randn(in0_shape)
     in1 = torch.randn(in1_shape)
     bias = torch.randn(bias_shape)
+
+    # FIXME: Because .set_globally_allocated address is broken, need to add padding to input tensor
+    padded_K = K * (num_cores - 1)
+    input_tensor_padding = torch.randn([1, 1, M, padded_K]).float()
+    in0_padded_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=input_tensor_padding.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    _ = ttnn.from_torch(
+        input_tensor_padding,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        memory_config=in0_padded_sharded_mem_config,
+    )
 
     in0_t = ttnn.from_torch(
         in0,
