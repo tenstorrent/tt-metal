@@ -37,4 +37,4 @@ public:
 
 std::ostream &operator<<(std::ostream &os, const tt::tt_metal::Alignment &shape);
 
-} // namespace ttnn
+} // namespace tt::tt_metal

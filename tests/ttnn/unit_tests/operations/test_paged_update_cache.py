@@ -41,11 +41,12 @@ def run_test_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+            xt.logical_volume() // xt.shape[-1] // num_cores,
             xt.shape.with_tile_padding()[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
+        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -151,11 +152,12 @@ def test_update_cache_decode(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                xt.shape.with_tile_padding()[-1],
+                xt.logical_volume() // xt.shape[-1] // num_cores,
+                xt.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
+            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -234,11 +236,12 @@ def test_update_cache_decode_program_cache(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                xt.shape.with_tile_padding()[-1],
+                xt.logical_volume() // xt.shape[-1] // num_cores,
+                xt.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
+            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -276,11 +279,12 @@ def run_test_tensor_index_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-            xt.shape.with_tile_padding()[-1],
+            xt.logical_volume() // xt.shape[-1] // num_cores,
+            xt.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
+        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -414,11 +418,12 @@ def run_test_paged_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-            xt.shape.with_tile_padding()[-1],
+            xt.logical_volume() // xt.shape[-1] // num_cores,
+            xt.shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
         False,
+        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -543,11 +548,12 @@ def test_paged_update_cache_decode_program_caching(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                xt.shape.with_tile_padding()[-1],
+                xt.logical_volume() // xt.shape[-1] // num_cores,
+                xt.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
             False,
+            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec

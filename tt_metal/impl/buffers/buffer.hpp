@@ -49,12 +49,27 @@ struct ShardSpec {
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
     bool halo = false;
 
+    // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
+    ShardMode mode = ShardMode::PHYSICAL;
+    std::optional<std::array<uint32_t, 2>> physical_shard_shape = std::nullopt;
+
     ShardSpec(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
+        const bool &halo_ = false,
+        const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
+    }
+
+    ShardSpec(
+        const CoreRangeSet &core_sets_,
+        const std::array<uint32_t, 2> &shard_shape_,
+        const std::array<uint32_t, 2> &physical_shard_shape_,
+        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
         const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
+        TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
 
     const uint32_t num_cores() const { return this->grid.num_cores(); }
@@ -63,9 +78,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode);
     }
 };
 

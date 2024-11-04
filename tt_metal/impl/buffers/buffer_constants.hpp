@@ -22,6 +22,11 @@ enum class ShardOrientation {
     COL_MAJOR,
 };
 
+enum class ShardMode {
+    PHYSICAL, // TODO: Deprecate this option to treat shard shape as physical
+    LOGICAL,
+};
+
 enum class BufferType {
     DRAM,
     L1,
