@@ -17,13 +17,11 @@
 
 #include "dprint_server.hpp"
 #include "debug_helpers.hpp"
-#include "llrt/tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 #include "common/bfloat8.hpp"
 
 #include "hostdevcommon/dprint_common.h"
 #include "tt_metal/impl/device/device.hpp"
-#include "tensix_types.h"
 
 using std::uint32_t;
 using std::int32_t;
