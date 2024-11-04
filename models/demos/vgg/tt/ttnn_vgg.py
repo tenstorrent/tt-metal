@@ -104,6 +104,7 @@ def ttnn_vgg16(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=True,
+                enable_weights_double_buffer=True,
             )
 
             tt_weight = parameters.features[conv_feature_ids[iter_conv_id]].weight
@@ -134,11 +135,7 @@ def ttnn_vgg16(
     tt_x = ttnn.to_device(tt_x, device)
     tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
     tt_x = ttnn.permute(tt_x, (0, 3, 1, 2))
-    tt_x = ttnn.from_device(tt_x)
-    tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
     tt_x = ttnn.reshape(tt_x, (batch_size, 1, 1, -1))
-    tt_x = ttnn.to_layout(tt_x, layout=ttnn.TILE_LAYOUT)
-    tt_x = ttnn.to_device(tt_x, device)
 
     # Linear 1
     tt_x = ttnn.linear(
@@ -228,6 +225,7 @@ def ttnn_vgg11(
                 shard_layout=(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
+                enable_weights_double_buffer=True,
             )
 
             tt_weight = parameters.features[conv_feature_ids_2[iter_conv_id]].weight
@@ -259,11 +257,7 @@ def ttnn_vgg11(
     tt_x = ttnn.to_device(tt_x, device)
     tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
     tt_x = ttnn.permute(tt_x, (0, 3, 1, 2))
-    tt_x = ttnn.from_device(tt_x)
-    tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
     tt_x = ttnn.reshape(tt_x, (batch_size, 1, 1, -1))
-    tt_x = ttnn.to_layout(tt_x, layout=ttnn.TILE_LAYOUT)
-    tt_x = ttnn.to_device(tt_x, device)
 
     # Linear 1
     tt_x = ttnn.linear(

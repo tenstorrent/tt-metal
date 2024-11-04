@@ -106,16 +106,28 @@ Tensor _isclose(
 }
 
 // minimum(a,b) = a - (a - b > 0 )*(a-b)
-Tensor _minimum(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_diff = ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, input_b, input_a);
     return result;
 }
 
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_diff = ttnn::subtract(input_a, value, std::nullopt, output_mem_config);
+    Tensor result = ttnn::where(t_diff, value, input_a);
+    return result;
+}
+
 // maximum(a,b) = a + (b - a > 0 )*(b-a)
-Tensor _maximum(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteMaximum::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_diff = ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, input_b, input_a);
+    return result;
+}
+
+Tensor ExecuteMaximum::invoke(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_diff = ttnn::rsub(input_a, value, output_mem_config);
+    Tensor result = ttnn::where(t_diff, value, input_a);
     return result;
 }
 
@@ -277,7 +289,8 @@ Tensor ExecuteBinaryFmod::invoke(const Tensor& input_a, const Tensor& input_b, c
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor div_res = typecast(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(div_res, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
 }

@@ -297,7 +297,6 @@ class EnqueueProgramCommand : public Command {
     uint32_t unicast_cores_launch_message_wptr = 0;
 
    public:
-
     EnqueueProgramCommand(
         uint32_t command_queue_id,
         Device* device,

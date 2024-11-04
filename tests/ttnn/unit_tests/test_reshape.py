@@ -327,3 +327,26 @@ def test_reshape_host(input_shape, output_shape, device):
     output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)
+
+
+# required for Embedding
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 12), (12, 1)),
+        ((1, 32), (32, 1)),
+        ((64, 32), (1, 1, 64, 32)),
+    ],
+)
+def test_reshape_int(input_shape, output_shape, device):
+    torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)

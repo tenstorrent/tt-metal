@@ -33,7 +33,6 @@ namespace tt::tt_metal {
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
@@ -196,6 +195,11 @@ void JitBuildState::finish_init() {
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
+
+    if (not this->is_fw_) {
+        // Emit relocations, so we can relocate the resulting binary
+        this->lflags_ += "-Wl,--emit-relocs ";
+    }
 }
 
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
@@ -412,7 +416,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 }
 
 JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid idle ethernet processor");
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -433,9 +437,9 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
-                "-DCOMPILE_FOR_IDLE_ERISC "
+                "-DCOMPILE_FOR_IDLE_ERISC=0 "
                 "-DERISC "
-                "-DRISC_B0_HW ";
+                "-DRISC_B0_HW ";    // do we need this for BH?
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
@@ -452,6 +456,28 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ierisc.ld ";
             }
 
+            break;
+        }
+        case 1: {
+            this->target_name_ = "slave_idle_erisc";
+            this->cflags_ =
+                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->defines_ +=
+                "-DCOMPILE_FOR_IDLE_ERISC=1 "
+                "-DERISC "
+                "-DRISC_B0_HW ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            if (this->is_fw_) {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/slave_idle_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+            }
+            this->lflags_ = env_.lflags_ + "-Os ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_slave_ierisc.ld ";
+            }
             break;
         }
         default:

@@ -18,5 +18,10 @@ set(LLRT_SRC
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
-target_link_libraries(llrt PUBLIC common)
+target_link_libraries(
+    llrt
+    PUBLIC
+        common
+        umd::device
+)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

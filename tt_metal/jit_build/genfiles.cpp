@@ -256,6 +256,7 @@ static void emit_unpack_data_formats(
     // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
     ofstream file_stream;
     file_stream.open(unpack_data_format_descs);
+    file_stream << "#pragma once\n\n";
     file_stream << create_formats_array_string(
         "constexpr std::int32_t",
         "unpack_src_format",
@@ -308,6 +309,7 @@ static void emit_pack_data_formats(
     std::vector<DataFormat> dst_formats_all_cbs) {
     ofstream file_stream;
     file_stream.open(pack_data_format_descs);
+    file_stream << "#pragma once\n\n";
     file_stream << create_formats_array_string(
         "constexpr unsigned char",
         "pack_src_format",
@@ -422,6 +424,7 @@ static std::string array_to_string(const uint32_t arr[]) {
 static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(unpack_tile_dims_descs);
+    file_stream << "#pragma once\n\n";
     file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "unpack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "unpack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
@@ -435,12 +438,14 @@ static void emit_unpack_tile_dims(std::string unpack_tile_dims_descs, tt_hlk_des
 static void emit_pack_tile_dims(std::string pack_tile_dims_descs, tt_hlk_desc& desc) {
     ofstream file_stream;
     file_stream.open(pack_tile_dims_descs);
+    file_stream << "#pragma once\n\n";
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_num_faces", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_num_faces_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_partial_face", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_partial_face_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_face_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_face_r_dim_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_narrow_tile", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_narrow_tile_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_r_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_r_dim_arr));
     file_stream << create_formats_array_string("constexpr uint8_t", "pack_tile_c_dim", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_c_dim_arr));
+    file_stream << create_formats_array_string("constexpr uint16_t", "pack_tile_size", NUM_CIRCULAR_BUFFERS, array_to_string(desc.buf_tile_size_arr));
     file_stream.close();
 }
 
@@ -565,8 +570,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define ALLOCATOR_ALIGNMENT " << allocator_alignment << endl;
-    ss << "#define LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT " << std::bit_width(allocator_alignment) - 1 << endl;
     ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
     ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
 
@@ -580,10 +583,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     } else {
         ss << "#define IS_NOT_POW2_NUM_L1_BANKS 1" << endl;
     }
-    ss << endl;
-
-    ss << "constexpr uint8_t noc_size_x = " << grid_size.x << ";" << endl;
-    ss << "constexpr uint8_t noc_size_y = " << grid_size.y << ";" << endl;
     ss << endl;
 
     ss << "static_assert(NUM_NOCS == 2);" << endl;
@@ -680,6 +679,10 @@ void jit_build_genfiles_bank_to_noc_coord_descriptor(
     ofstream file_stream_iec(path + "/idle_erisc/generated_bank_to_noc_coord_mapping.h");
     file_stream_iec << output_string;
     file_stream_iec.close();
+    fs::create_directories(path + "/slave_idle_erisc");
+    ofstream file_stream_siec(path + "/slave_idle_erisc/generated_bank_to_noc_coord_mapping.h");
+    file_stream_siec << output_string;
+    file_stream_siec.close();
 }
 
 static string generate_noc_core_xy_range_define(const std::vector<CoreCoord>& cores) {

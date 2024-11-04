@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
 
     const auto cb_data_format = tt_metal::datatype_to_dataformat_converter(inputs.at(0).get_dtype());
 
-    CreateCircularBuffer(
+    ttnn::operations::CreateCircularBuffer(
         program,
         core_group_1,
         cb_data_format,
@@ -82,8 +82,8 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
         "ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh_clip_grad_norm/moreh_clip_grad_norm_step3/kernels/"
         "writer_moreh_clip_grad_norm_step3.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, core_group_1);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, core_group_1);
+    const auto reader_kernels_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, core_group_1);
+    const auto writer_kernels_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, core_group_1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
         "moreh_clip_grad_norm_step3_kernel.cpp";
 
     const auto compute_kernels_id =
-        CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1});
+        ttnn::operations::CreateComputeKernel(program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
@@ -109,14 +109,14 @@ operation::ProgramWithCallbacks moreh_clip_grad_norm_step3_impl(
         // reader
         const std::array reader_runtime_args{
             input_addr,
-            static_cast<uint32_t>(is_dram(input)),
+            static_cast<uint32_t>(ttnn::operations::is_dram(input)),
             clip_coef_clamped_addr,
-            static_cast<uint32_t>(is_dram(clip_coef_clamped)),
+            static_cast<uint32_t>(ttnn::operations::is_dram(clip_coef_clamped)),
             num_tiles};
         SetRuntimeArgs(program, reader_kernels_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{input_addr, static_cast<uint32_t>(is_dram(input)), num_tiles};
+        const std::array writer_runtime_args{input_addr, static_cast<uint32_t>(ttnn::operations::is_dram(input)), num_tiles};
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
 
         // compute

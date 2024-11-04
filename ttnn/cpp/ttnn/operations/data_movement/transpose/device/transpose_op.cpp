@@ -54,7 +54,8 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
-            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0, "Error");
+            auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+            TT_FATAL((W * input_tensor.element_size()) % BUFFER_ALIGNMENT == 0, "Buffer is not aligned for this implementation row_size_bytes {} buffer_alignment {}", W * input_tensor.element_size(), BUFFER_ALIGNMENT);
         } else {
             TT_FATAL(C % TILE_HEIGHT == 0, "Error");
         }

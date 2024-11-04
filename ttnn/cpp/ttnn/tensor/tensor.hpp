@@ -17,6 +17,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/tile/tile.hpp"
 #include "tt_metal/impl/device/device.hpp"
@@ -298,15 +299,12 @@ struct Tensor {
 
 Tensor create_device_tensor(
     const ttnn::SimpleShape &logical_shape,
-    DataType dtype,
-    Layout layout,
-    Device *device,
-    const MemoryConfig &memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
+    const TensorLayout& layout,
+    Device *device);
 
+[[deprecated]]
 Tensor create_device_tensor(
-    const ttnn::SimpleShape &logical_shape,
-    const ttnn::SimpleShape &padded_shape,
+    const ttnn::SimpleShape &shape,
     DataType dtype,
     Layout layout,
     Device *device,
@@ -314,6 +312,7 @@ Tensor create_device_tensor(
     const std::optional<Tile>& tile = std::nullopt);
 
 // TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
+[[deprecated("Use create_device_tensor(const ttnn::SimpleShape&, const TensorLayout&, Device*) instead")]]
 Tensor create_device_tensor(
     const ttnn::Shape &shape,
     DataType dtype,

@@ -149,7 +149,6 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
             dram_channel_0_x = tt::umd::grayskull::DRAM_CHANNEL_0_X;
             dram_channel_0_y = tt::umd::grayskull::DRAM_CHANNEL_0_Y;
             break;
-        case tt::ARCH::WORMHOLE:
         case tt::ARCH::WORMHOLE_B0:
             get_static_tlb_index = wormhole::get_static_tlb_index;
             dynamic_tlb_base_index = tt::umd::wormhole::DYNAMIC_TLB_BASE_INDEX;
@@ -206,7 +205,7 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
         }
     }
 
-    device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
+    device_driver.setup_core_to_tlb_map(mmio_device_id, get_static_tlb_index);
 }
 
 }  // namespace ll_api

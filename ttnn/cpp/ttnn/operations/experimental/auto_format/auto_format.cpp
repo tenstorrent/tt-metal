@@ -102,7 +102,17 @@ Tensor AutoFormat::format_input_tensor(
             }
         } else if (convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR && target_layout == Layout::TILE) {
-                return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value, mem_config);
+                PadValue pad_value_variant;
+                if (formatted_input.get_dtype() == ttnn::DataType::BFLOAT16 or formatted_input.get_dtype() == ttnn::DataType::FLOAT32) {
+                    pad_value_variant = (float) pad_value;
+                }
+                else {
+                    pad_value_variant = (uint32_t) pad_value;
+                }
+                return ttnn::tilize_with_val_padding(formatted_input,
+                                                padded_shape,
+                                                pad_value_variant,
+                                                mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
