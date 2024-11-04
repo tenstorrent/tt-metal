@@ -24,7 +24,7 @@ namespace unary {
 namespace detail {
 
 template <typename unary_operation_t>
-void detail::bind_unary_composite_optional_floats_with_default(
+void bind_unary_composite_optional_floats_with_default(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
