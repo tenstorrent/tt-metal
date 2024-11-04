@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 from collections import OrderedDict
-from models.experimental.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.reference.yolov4 import Yolov4
 
 
 def custom_summary(model, input_size, batch_size=-1, device="cuda"):
