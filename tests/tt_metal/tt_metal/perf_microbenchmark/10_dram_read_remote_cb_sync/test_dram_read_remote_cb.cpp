@@ -476,15 +476,12 @@ bool validation_mixed_df(
             page_size = 1088;
         }
         layer_transfer_size = page_size * kt * nt / num_receivers;
-        // num_pages = fifo_size / page_size;
-        // fifo_size_page_aligned = page_size * num_pages;
 
         uint32_t block_size = block_num_tiles * 32*32*2; // fp16
         uint32_t num_blocks = fifo_size / block_size;
         uint32_t cb_size_block_aligned = num_blocks * block_size;
 
         bool fifo_wr_ptr_exceed_fifo_limit = fifo_wr_ptr > cb_size_block_aligned;
-        // uint32_t num_pages_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / page_size;
         uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
         fifo_wr_ptr = fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
