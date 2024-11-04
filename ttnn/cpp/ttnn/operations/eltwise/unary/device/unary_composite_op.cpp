@@ -496,7 +496,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> 
 
 Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
-    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' tensors can be None. Please provide one tensor value");
+    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         return ttnn::where( ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
     }else if(!min.has_value()) {
