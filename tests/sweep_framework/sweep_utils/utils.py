@@ -41,6 +41,7 @@ def sanitize_shape(shape, method, **kwargs):
             min_sum_heads_size = 32 * (3 * num_heads)
         else:
             min_sum_heads_size = 32 * (num_heads + 2 * num_kv_heads)
+            hidden_size = 4672
 
         if hidden_size % min_sum_heads_size != 0:
             if hidden_size < min_sum_heads_size:

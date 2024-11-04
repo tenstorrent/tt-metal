@@ -61,15 +61,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             // (test_vector["input_spec"]["num_heads"] + test_vector["input_spec"]["num_kv_heads"] * 2)
         ) % 32 != 0:
             return True, "Head size must be a multiple of 32"
-        if (
-            test_vector["input_spec"]["hidden_size"] != 4672
-            or test_vector["input_spec"]["num_kv_heads"] != 1
-            or test_vector["input_spec"]["num_heads"] != 71
-        ):
-            return (
-                True,
-                "When using num_kv_heads, hidden_size must be 4672, num_kv_heads must be 1 and num_heads must be 71",
-            )
+        if test_vector["input_spec"]["hidden_size"] != 4672:
+            return True, "When using num_kv_heads, hidden_size must be 4672"
+        if not (test_vector["input_spec"]["num_kv_heads"] == 1 and test_vector["input_spec"]["num_kv_heads"] == 71):
+            return True, "When using num_kv_heads, num_kv_heads must be 1, and num_heads must be 71"
         if test_vector["input_spec"]["transpose_key"] is True:
             return True, "Can't transpose key when using separate kv heads"
     else:
