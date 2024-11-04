@@ -12,9 +12,9 @@ def run_profile_and_extract_csv():
     command = [
         "./tt_metal/tools/profiler/profile_this.py",
         "-n",
-        "all_gather_n300",
+        "all_gather_t3000",
         "-c",
-        "pytest /home/ubuntu/tt-metal/tests/ttnn/unit_tests/operations/ccl/perf/test_all_gather_N300_post_commit.py",
+        "pytest tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py::test_all_gather_on_t3000",
     ]
 
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
