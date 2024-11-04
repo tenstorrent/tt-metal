@@ -195,72 +195,60 @@ target_link_libraries(
         numa
 )
 
-# Note on flags:
-#   ttnn and tt_lib will break if built with LTO, so leaving -fno-lto in compile options
-add_library(linker_flags INTERFACE)
-
-add_library(compiler_warnings INTERFACE)
-target_compile_options(
-    compiler_warnings
-    INTERFACE
-        -Werror
-        -Wdelete-non-virtual-dtor
-        -Wreturn-type
-        -Wswitch
-        -Wuninitialized
-        -Wno-unused-parameter
+string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
+add_compile_definitions(ARCH_${ARCH_NAME_DEF})
+add_compile_options(
+    -Werror
+    -Wdelete-non-virtual-dtor
+    -Wreturn-type
+    -Wswitch
+    -Wuninitialized
+    -Wno-unused-parameter
+    -mavx2
+    -fPIC
+    -fvisibility-inlines-hidden
+    -fno-lto # FIXME: This seems to be here for ttnn; it should go to TTNN, then.
+    "$<$<CXX_COMPILER_ID:Clang>:-Wsometimes-uninitialized>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-error=local-type-template-args>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-delete-non-abstract-non-virtual-dtor>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-c99-designator>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-shift-op-parentheses>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-non-c-typedef-for-linkage>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-this-capture>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-builtins>"
+    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-declarations>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-deprecated-declarations>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-attributes>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-missing-requires>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
+    "$<$<CXX_COMPILER_ID:GNU>:-Wno-error=non-template-friend>"
+    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
+    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
+    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
+    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
-
-# add additional compile warning flags depending on the compiler
-ADJUST_METAL_COMPILER_WARNINGS()
-
-add_library(compiler_flags INTERFACE)
-target_link_libraries(
-    compiler_flags
-    INTERFACE
-        linker_flags
-        compiler_warnings
-)
-target_compile_options(
-    compiler_flags
-    INTERFACE
-        -mavx2
-        -fPIC
-        -fvisibility-inlines-hidden
-        -fno-lto
+add_link_options(
+    "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
+    "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
+    "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
+    "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
 
 if(ENABLE_CODE_TIMERS)
-    target_compile_options(compiler_flags INTERFACE -DTT_ENABLE_CODE_TIMERS)
+    add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
 if(ENABLE_TRACY)
-    target_compile_options(
-        compiler_flags
-        INTERFACE
-            -DTRACY_ENABLE
-            -fno-omit-frame-pointer
-    )
-    target_link_options(linker_flags INTERFACE -rdynamic)
+    add_compile_definitions(TRACY_ENABLE)
+    add_compile_options(-fno-omit-frame-pointer)
+    add_link_options(-rdynamic)
 endif()
-target_compile_options(
-    compiler_flags
-    INTERFACE
-        $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
-        $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
-        $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
-        $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>
-)
-target_link_options(
-    linker_flags
-    INTERFACE
-        $<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>
-        $<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>
-        $<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>
-        $<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>
-)
-
-string(TOUPPER $ENV{ARCH_NAME} ARCH_NAME_DEF)
-target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)

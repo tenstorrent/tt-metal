@@ -11,7 +11,6 @@ target_link_libraries(common PRIVATE yaml-cpp::yaml-cpp)
 target_link_libraries(
     common
     PUBLIC
-        compiler_flags
         metal_header_directories
         magic_enum
         fmt::fmt-header-only
