@@ -19,7 +19,23 @@ import ttnn
 from models.utility_functions import skip_for_grayskull
 from models.perf.perf_utils import prep_perf_report
 from loguru import logger
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
+
+from models.experimental.yolov4.demo.yolov4_test_infra import create_test_infra
+from models.utility_functions import (
+    is_wormhole_b0,
+    torch2tt_tensor,
+    is_blackhole,
+    profiler,
+    enable_persistent_kernel_cache,
+    disable_persistent_kernel_cache,
+)
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 def yolo_forward_dynamic(
@@ -410,7 +426,6 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         t0 = time.time()
 
         if type(img) == np.ndarray and len(img.shape) == 3:  # cv2 image
-            print("CVVVVVV")
             img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
         elif type(img) == np.ndarray and len(img.shape) == 4:
             img = torch.from_numpy(img.transpose(0, 3, 1, 2)).float().div(255.0)
@@ -423,31 +438,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
         if not is_torch_model:
             input_shape = img.shape
             input_tensor = torch.permute(img, (0, 2, 3, 1))
-            input_tensor = torch.nn.functional.pad(input_tensor, (0, 13, 0, 0, 0, 0, 0, 0))
-            N, H, W, C = input_tensor.shape
-            input_tensor = torch.reshape(input_tensor, (N, 1, H * W, C))
-
-            shard_grid = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(7, 7),
-                    ),
-                }
-            )
-            n_cores = 64
-            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
-            input_mem_config = ttnn.MemoryConfig(
-                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-            )
-            input_tensor = ttnn.from_torch(
-                input_tensor,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=input_mem_config,
-            )
-
+            input_tensor = ttnn.from_torch(input_tensor, ttnn.bfloat16)
             img = input_tensor
             t1 = time.time()
 
@@ -557,91 +548,167 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             plot_boxes_cv2(img, boxes[0], "torch_prediction_demo.jpg", class_names)
 
 
+####
+
+
+def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations):
+    ops_parallel_config = {}
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
+    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
+    # Initialize the op event so we can write
+    ttnn.record_event(0, op_event)
+
+    profiler.start("compile")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
+    ttnn.record_event(0, op_event)
+    # _ = ttnn.from_device(test_infra.run(), blocking=True)
+    _ = test_infra.run()
+    profiler.end("compile")
+    ttnn.DumpDeviceProfiler(device)
+
+    profiler.start("cache")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    # test_infra.output_tensor.deallocate(force=True)
+    test_infra.output_tensor[0].deallocate(force=True)
+    test_infra.output_tensor[1].deallocate(force=True)
+    test_infra.output_tensor[2].deallocate(force=True)
+    # _ = ttnn.from_device(test_infra.run(), blocking=True)
+    test_infra.run()
+    profiler.end("cache")
+    ttnn.DumpDeviceProfiler(device)
+
+    # Capture
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    ttnn.record_event(0, op_event)
+    # test_infra.output_tensor.deallocate(force=True)
+    test_infra.output_tensor[0].deallocate(force=True)
+    test_infra.output_tensor[1].deallocate(force=True)
+    test_infra.output_tensor[2].deallocate(force=True)
+    trace_input_addr = test_infra.input_tensor.buffer_address()
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    tt_output_res = test_infra.run()
+    reshard_out = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    assert trace_input_addr == reshard_out.buffer_address()
+    ttnn.DumpDeviceProfiler(device)
+
+    for iter in range(0, num_warmup_iterations):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.synchronize_device(device)
+    if use_signpost:
+        signpost(header="start")
+    outputs = []
+    profiler.start(f"run")
+    for iter in range(0, num_measurement_iterations):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+        # TODO: Add in place support to ttnn to_memory_config
+        reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        outputs.append(tt_output_res[0].cpu(blocking=False))
+    ttnn.synchronize_device(device)
+    profiler.end(f"run")
+    if use_signpost:
+        signpost(header="stop")
+    ttnn.DumpDeviceProfiler(device)
+
+    ttnn.release_trace(device, tid)
+
+
+#############################
+
+
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [True, False],
-    ids=[
-        "pretrained_weight_true",
-        "pretrained_weight_false",
-    ],
+    "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1755136}], indirect=True
 )
-def test_yolov4_model(device, model_location_generator, reset_seeds, input_path, use_pretrained_weight):
-    model_path = model_location_generator("models", model_subdir="Yolo")
-    if use_pretrained_weight:
-        if model_path == "models":
-            if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-                os.system(
-                    "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-                )  # execute the yolov4_weights_download.sh file
+def test_yolov4(device, use_program_cache):
+    torch.manual_seed(0)
 
-            weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-        else:
-            weights_pth = str(model_path / "yolov4.pth")
+    profiler.clear()
+    disable_persistent_kernel_cache()
 
-        ttnn_model = TtYOLOv4(weights_pth)
-        torch_model = Yolov4()
-        new_state_dict = {}
-        ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
-
-        keys = [name for name, parameter in torch_model.state_dict().items()]
-        values = [parameter for name, parameter in ds_state_dict.items()]
-
-        for i in range(len(keys)):
-            new_state_dict[keys[i]] = values[i]
-
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
-    else:
-        torch_model = Yolov4.from_random_weights()
-        ttnn_weights = update_weight_parameters(OrderedDict(torch_model.state_dict()))
-        ttnn_model = TtYOLOv4(ttnn_weights)
-
-    n_classes = 80
-    namesfile = "models/experimental/yolov4/demo/coco.names"
-    if input_path == "":
-        imgfile = "models/experimental/yolov4/demo/giraffe_320.jpg"
-    else:
-        imgfile = input_path
-    width = 320
-    height = 320
-
-    img = cv2.imread(imgfile)
-
-    # Inference input size is 416*416 does not mean training size is the same
-    # Training size could be 608*608 or even other sizes
-    # Optional inference sizes:
-    #   Hight in {320, 416, 512, 608, ... 320 + 96 * n}
-    #   Width in {320, 416, 512, 608, ... 320 + 96 * m}
-    sized = cv2.resize(img, (width, height))
-    sized = cv2.cvtColor(sized, cv2.COLOR_BGR2RGB)
-
-    durations = []
-    for i in range(2):  # This 'for' loop is for speed check
-        start = time.time()
-        # Because the first iteration is usually longer
-        do_detect(ttnn_model, sized, 0.3, 0.4, n_classes, device, class_name=namesfile, imgfile=imgfile)
-        end = time.time()
-        durations.append(end - start)
-
-    inference_and_compile_time, inference_time, *_ = durations
-
-    # expected_compile_time, expected_inference_time = get_expected_times(ttnn_optimized_yolov4)
-    expected_compile_time, expected_inference_time = 10, 10
     batch_size = 1
 
+    first_key = f"first_iter_batchsize{batch_size}"
+    second_key = f"second_iter_batchsize{batch_size}"
+
+    test_infra = create_test_infra(
+        device,
+        batch_size,
+        # final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    ttnn.synchronize_device(device)
+
+    num_warmup_iterations = 5
+    num_measurement_iterations = 15
+
+    run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measurement_iterations)
+
+    #####
+    #####
+    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
+
+    # ensuring inference time fluctuations is not noise
+    inference_time_avg = profiler.get("run") / num_measurement_iterations
+
+    compile_time = first_iter_time - 2 * inference_time_avg
     prep_perf_report(
-        model_name="YoloV4_320x320",
+        model_name=f"ttnn_yolov4_320_batch_size{batch_size}",
         batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
+        inference_and_compile_time=first_iter_time,
+        inference_time=inference_time_avg,
+        expected_compile_time=0,
+        expected_inference_time=0,
         comments="",
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    model_name = f"ttnn_yolov4_320_batch_size{batch_size}"
+    comments = ""
+    logger.info(f"{model_name} {comments} inference time (avg): {inference_time_avg}")
+    logger.info(f"{model_name} compile time: {compile_time}")
+    logger.info(f"Samples per second: {1 / inference_time_avg * batch_size}")
