@@ -8,8 +8,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import time
 from models.utility_functions import skip_for_grayskull
-from models.experimental.yolov4.reference.downsample4 import DownSample4
-from models.experimental.yolov4.ttnn.downsample4 import Down4
+from models.demos.yolov4.reference.downsample4 import DownSample4
+from models.demos.yolov4.ttnn.downsample4 import Down4
 from loguru import logger
 import os
 
@@ -17,6 +17,7 @@ import os
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_down4(device, reset_seeds, model_location_generator):
+    torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":
