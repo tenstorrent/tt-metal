@@ -46,26 +46,26 @@ void py_bind_conv_transpose2d(py::module& module) {
             - W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1
 
         Keyword Args:
-            input_tensor  (ttnn.Tensor): the input tensor.
-            weight_tensor (ttnn.Tensor): the weight tensor.
-            device        (ttnn.Device): the device on which to run the operation.
-            in_channels   (int): the number of input channels.
-            out_channels  (int): the number of output channels.
-            batch_size    (int): the batch size.
-            input_height  (int): the input height.
-            input_width   (int): the input width.
-            kernel_size   (List of [int]): the kernel size.
-            stride        (List of [int]): the stride of the forward Conv2d. Actually corresponds to the dilation of the input_tensor
-            padding       (List of [int]): the padding of the forward Conv2d. Increasing padding reduces the output size.
-            output_padding (List of [int]): the output padding. Additional padding used when stride > 1, to specify the exact output size.
-            dilation    (List of [int]): kernel dilation.
-            groups  (int): the number of groups for grouped convolution.
-            bias_tensor (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
-            conv_config (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
-            queue_id    (int): the queue id to use for the operation. Defaults to `0`.
+            input_tensor   (ttnn.Tensor): the input tensor.
+            weight_tensor  (ttnn.Tensor): the weight tensor.
+            device         (ttnn.Device): the device on which to run the operation.
+            in_channels    (int): the number of input channels.
+            out_channels   (int): the number of output channels.
+            batch_size     (int): the batch size.
+            input_height   (int): the input height.
+            input_width    (int): the input width.
+            kernel_size    (list[int]): the kernel size.
+            stride         (list[int]): the stride of the forward Conv2d. Actually corresponds to the dilation of the input_tensor
+            padding        (list[int]): the padding of the forward Conv2d. Increasing padding reduces the output size.
+            output_padding (list[int]): the output padding. Additional padding used when stride > 1, to specify the exact output size.
+            dilation       (list[int]): kernel dilation.
+            groups         (int): the number of groups for grouped convolution.
+            bias_tensor    (ttnn.Tensor, optional): the bias tensor. Defaults to `None`.
+            conv_config    (ttnn.Conv2dConfig, optional): the configuration for the convolution operation. Defaults to `None`.
+            queue_id       (int): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
-            (ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>): the output tensor, the output height, the output width, & the on-device weight and the bias tensor.
+            (ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor): the output tensor, the output height, the output width, & the on-device weight and the bias tensor.
 
         Example:
             >>> [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
