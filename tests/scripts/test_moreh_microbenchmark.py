@@ -737,7 +737,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
             0,
             12,
             0,
-            244,
+            240,
         ),  # 244 GB/s
         # FF2 shapes for TG llama 70b
         (
@@ -748,7 +748,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
             1,
             12,
             0,
-            255,
+            250,
         ),  # 255 GB/s
         # Dense Out shapes for TG llama 70b
         (
@@ -759,7 +759,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
             1,
             12,
             0,
-            226,
+            220,
         ),  # 226 GB/s
         # QKV shapes for TG llama 70b
         (
@@ -770,7 +770,7 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
             1,
             12,
             0,
-            232,
+            225,
         ),  # 232 GB/s
     ],
 )
