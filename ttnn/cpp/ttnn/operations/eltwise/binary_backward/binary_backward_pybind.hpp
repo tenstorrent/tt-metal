@@ -988,6 +988,8 @@ void py_module(py::module& module) {
            |    BFLOAT16                |       TILE                      |      2, 3, 4      |
            +----------------------------+---------------------------------+-------------------+
 
+        supported only in WHB0.
+
         )doc");
 
     detail::bind_binary_backward_overload(
