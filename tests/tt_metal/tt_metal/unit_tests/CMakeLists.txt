@@ -35,11 +35,12 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord/test_CoreRangeSet_merge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dram/direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_apis/test_tilize_untilize.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/basic_eth_kernels.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/buffer_movement_kernels.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/device_cluster_api.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/erisc_app_direct_send.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/multichip/ring_gather_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/basic_eth_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/buffer_movement_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/device_cluster_api.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/erisc_app_direct_send.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/ring_gather_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/test_any_range.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/slotmap.cpp
 )
 
@@ -49,7 +50,7 @@ add_executable(
     $<TARGET_OBJECTS:unit_tests_common_o>
 )
 TT_ENABLE_UNITY_BUILD(unit_tests)
-add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/multichip/galaxy_cluster_api.cpp)
+add_executable(unit_tests_galaxy ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/galaxy_cluster_api.cpp)
 
 target_link_libraries(
     unit_tests

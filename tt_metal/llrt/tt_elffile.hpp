@@ -25,12 +25,13 @@ class ElfFile {
     using word_t = std::uint32_t;     // Contents
 
     struct Segment {
+        std::vector<offset_t> relocs;      // 32-bit relocs to apply
         std::span<word_t const> contents;  // Non-owning span
         address_t address = 0;             // byte address or 0 for XIP
         offset_t bss = 0;                  // words of BSS
 
        public:
-        constexpr Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
+         inline Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
             contents(contents), address(addr), bss(bss) {}
     };
 
@@ -74,6 +75,9 @@ class ElfFile {
     // strong (can be non-data symbols).  Names can be exact or simple
     // globs ending in '*'.
     void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
+    // XIPify
+    void MakeExecuteInPlace();
 
    private:
     class Impl;

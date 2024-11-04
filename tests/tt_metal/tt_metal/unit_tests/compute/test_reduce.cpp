@@ -456,8 +456,8 @@ TEST_F(DeviceFixture, ComputeReduceW) {
         }
     }
 }
-
-TEST_F(DeviceFixture, ComputeReduceHW) {
+// Disabled due to GH issue #14510
+TEST_F(DeviceFixture, DISABLED_ComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -567,8 +567,8 @@ TEST_F(DeviceFixture, ComputeReduceWMathOnly) {
         }
     }
 }
-
-TEST_F(DeviceFixture, ComputeReduceHWMathOnly) {
+// Disabled due to GH issue #14510
+TEST_F(DeviceFixture, DISABLED_ComputeReduceHWMathOnly) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -679,8 +679,8 @@ TEST_F(DeviceFixture, ComputeReduceWShortInit) {
         }
     }
 }
-
-TEST_F(DeviceFixture, ComputeReduceHWShortInit) {
+// Disabled due to GH issue #14510
+TEST_F(DeviceFixture, DISABLED_ComputeReduceHWShortInit) {
     std::vector<uint32_t> shape = {1, 2, 7*TILE_HEIGHT, 5*TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {

@@ -39,12 +39,13 @@ target_link_libraries(
         gtest
         gtest_main
         magic_enum
-        fmt
+        fmt::fmt-header-only
         span
 )
 target_include_directories(
     unit_tests_common_o
     PUBLIC
+        $<TARGET_PROPERTY:Metalium::Metal,INTERFACE_INCLUDE_DIRECTORIES>
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal

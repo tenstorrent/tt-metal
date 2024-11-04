@@ -14,8 +14,9 @@ target_link_libraries(
         compiler_flags
         metal_header_directories
         magic_enum
-        fmt
+        fmt::fmt-header-only
         span
+        Metalium::Metal::STL
 )
 
 target_include_directories(

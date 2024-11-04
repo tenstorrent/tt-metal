@@ -9,6 +9,8 @@ from itertools import product
 import torch
 import ttnn
 import math
+import itertools
+from typing import Optional, List
 
 
 def sanitize_shape_rm(input_shape):
@@ -154,3 +156,39 @@ def santize_topk_shape(input_shape):
     input_shape[num_dims - 1] = last_dim
 
     return input_shape
+
+
+def gen_rand_integers(low, high, num_samples):
+    for i in range(num_samples):
+        yield random.randint(low, high)
+
+
+def gen_split_qkv_heads_spec(
+    batch_size_list: List[int],
+    sequence_size_list: List[int],
+    num_heads_list: List[int],
+    transpose_key_list: List[bool],
+    num_kv_heads_list: List[int] = [None],
+    kv_input_tensor_list: List[bool] = [False],
+    use_invalid_hidden_size=False,
+):
+    for batch_size, sequence_size, num_heads, num_kv_heads, kv_input_tensor, transpose_key in itertools.product(
+        batch_size_list, sequence_size_list, num_heads_list, num_kv_heads_list, kv_input_tensor_list, transpose_key_list
+    ):
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
+        if use_invalid_hidden_size is False:
+            head_size = 32 * random.randint(1, 3)
+            hidden_size = head_size * (num_heads + num_kv_heads * 2)
+        else:
+            hidden_size = random.randint(num_heads + num_kv_heads * 2, 2048)
+
+        yield {
+            "batch_size": batch_size,
+            "sequence_size": sequence_size,
+            "hidden_size": hidden_size,
+            "num_heads": num_heads,
+            "num_kv_heads": num_kv_heads,
+            "kv_input_tensor": kv_input_tensor,
+            "transpose_key": transpose_key,
+        }

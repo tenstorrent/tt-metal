@@ -34,7 +34,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(core_range, num_kernel_rows);
+        split_work_to_cores_wt_core_range(core_range, num_kernel_rows);
 
     auto arch = input.device()->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -46,7 +46,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
@@ -69,13 +69,13 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
+    auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_w_large.cpp",
         all_cores,
         {src_is_dram},
         reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_w_large.cpp",
         all_cores,
@@ -97,7 +97,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     }
 
     // create compute kernel
-    tt::operations::primary::CreateComputeKernel(
+    CreateComputeKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/moreh_softmax_w_large.cpp",
         {

@@ -55,6 +55,9 @@ if(ENABLE_LIBCXX)
     #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
     #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
     #)
+else()
+    # required when linking with libstdc++ with clang and gcc
+    add_compile_options(-fsized-deallocation)
 endif()
 
 # Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
@@ -62,8 +65,6 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
 endif()
-
-add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fsized-deallocation>)
 
 include(CTest)
 
@@ -102,9 +103,9 @@ endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG=DEBUG")
-set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG=DEBUG")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
+set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
 # Set default values for variables/options
 set(UMD_HOME "${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd")
@@ -130,10 +131,7 @@ if(ENABLE_BUILD_TIME_TRACE)
         message(STATUS "Adding compile option: -ftime-trace")
         add_compile_options("-ftime-trace")
     else()
-        message(
-            FATAL
-            "ENABLE_BUILD_TIME_TRACE is only supported with Clang"
-        )
+        message(FATAL_ERROR "ENABLE_BUILD_TIME_TRACE is only supported with Clang")
     endif()
 endif()
 
@@ -198,7 +196,6 @@ target_link_libraries(
 )
 
 # Note on flags:
-#   DFMT_HEADER_ONLY must be for every target or else they won't interact with the header only fmt as intended
 #   ttnn and tt_lib will break if built with LTO, so leaving -fno-lto in compile options
 add_library(linker_flags INTERFACE)
 
@@ -229,7 +226,6 @@ target_compile_options(
     INTERFACE
         -mavx2
         -fPIC
-        -DFMT_HEADER_ONLY
         -fvisibility-inlines-hidden
         -fno-lto
 )
@@ -268,14 +264,6 @@ target_compile_options(compiler_flags INTERFACE -DARCH_${ARCH_NAME_DEF})
 
 add_library(metal_header_directories INTERFACE)
 target_include_directories(metal_header_directories INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc)
-target_include_directories(
-    metal_header_directories
-    SYSTEM
-    INTERFACE
-        ${reflect_SOURCE_DIR}
-        ${flatbuffers_include_dir}
-        ${nng_include_dir}
-)
 foreach(lib ${BoostPackages})
     target_include_directories(metal_header_directories INTERFACE ${Boost${lib}_SOURCE_DIR}/include)
 endforeach()
