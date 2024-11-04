@@ -312,6 +312,8 @@ class CrossAttentionTransformer(torch.nn.Module):
                 "constant",
                 get_negative_inf_value(torch.float32),
             )
+        if mode == "decode":
+            xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
 
         tt_xattn_mask = ttnn.from_torch(
             xattn_mask_expand,
@@ -331,6 +333,8 @@ class CrossAttentionTransformer(torch.nn.Module):
         full_text_mask_expand_1NSH = full_text_mask.expand(
             -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
         )
+        if mode == "decode":
+            full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.transpose(1, 2).contiguous()
 
         tt_full_text_mask_expand_1NSH = ttnn.from_torch(
             full_text_mask_expand_1NSH,
@@ -386,26 +390,26 @@ class CrossAttentionTransformer(torch.nn.Module):
                 tt_xattn_mask,
                 shape=ttnn.Shape(
                     [
+                        seq_len,
                         batch,
                         self.configuration.n_heads // self.configuration.num_devices,
-                        seq_len,
                         xattn_mask.shape[-1],
                     ],
-                    [batch, self.configuration.n_heads // self.configuration.num_devices, 32, xattn_mask.shape[-1]],
+                    [seq_len, batch, 32, xattn_mask.shape[-1]],
                 ),
             )
             tt_full_text_mask_expand_1NSH = ttnn.reshape(
                 tt_full_text_mask_expand_1NSH,
                 shape=ttnn.Shape(
                     [
+                        seq_len,
                         batch,
                         self.configuration.n_heads // self.configuration.num_devices,
-                        seq_len,
                         self.configuration.head_dim,
                     ],
                     [
+                        seq_len,
                         batch,
-                        self.configuration.n_heads // self.configuration.num_devices,
                         32,
                         self.configuration.head_dim,
                     ],
