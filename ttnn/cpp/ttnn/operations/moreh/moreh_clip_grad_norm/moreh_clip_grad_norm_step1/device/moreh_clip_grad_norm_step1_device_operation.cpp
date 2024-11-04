@@ -15,10 +15,10 @@ void MorehClipGradNormStep1Operation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input_tensors = tensor_args.inputs;
     for (const auto& input : input_tensors) {
-        tt::operations::primary::check_tensor(input, "moreh_clip_grad_norm_step1", "input");
+        ttnn::operations::check_tensor(input, "moreh_clip_grad_norm_step1", "input");
     }
 
-    tt::operations::primary::check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
+    ttnn::operations::check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step1", "tmp_pow_sum");
 };
 
 MorehClipGradNormStep1Operation::program_factory_t MorehClipGradNormStep1Operation::select_program_factory(

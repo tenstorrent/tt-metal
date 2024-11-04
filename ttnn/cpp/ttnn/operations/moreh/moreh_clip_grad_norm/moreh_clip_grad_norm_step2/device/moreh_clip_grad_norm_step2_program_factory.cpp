@@ -63,7 +63,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(total_norm.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    ttnn::operations::CreateCircularBuffer(
         program,
         single_core,
         cb_data_format,
@@ -87,8 +87,8 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step2/device/kernels/"
         "writer_moreh_clip_grad_norm_step2.cpp";
 
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(program, reader_kernel_file, single_core);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, single_core);
+    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, single_core);
+    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, single_core);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -98,7 +98,7 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
         "moreh_clip_grad_norm_step2_kernel.cpp";
 
     const auto compute_kernel_id =
-        tt::operations::primary::CreateComputeKernel(program, compute_kernel_file, {single_core, num_tiles});
+        ttnn::operations::CreateComputeKernel(program, compute_kernel_file, {single_core, num_tiles});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp

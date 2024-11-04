@@ -46,8 +46,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
         // TODO: Duong
-        // const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
-        const auto& input_shape_without_padding = inputs.at(j).get_legacy_shape().without_padding();
+        const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
+        // const auto& input_shape_without_padding = inputs.at(j).get_legacy_shape().without_padding();
         origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
     }
 
@@ -88,7 +88,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
 
     const auto cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tmp_pow_sum.get_dtype());
 
-    tt::operations::primary::CreateCircularBuffer(
+    ttnn::operations::CreateCircularBuffer(
         program,
         core_group_1,
         cb_data_format,
@@ -116,8 +116,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "writer_moreh_clip_grad_norm_step1.cpp";
 
-    const auto reader_kernel_id = tt::operations::primary::CreateReadKernel(program, reader_kernel_file, core_group_1);
-    const auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, core_group_1);
+    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, core_group_1);
+    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, core_group_1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -130,7 +130,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_step1/device/kernels/"
         "moreh_clip_grad_norm_step1_kernel.cpp";
 
-    const auto compute_kernel_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_id = ttnn::operations::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_inputs_per_core_group_1}, compute_defines);
 
     ////////////////////////////////////////////////////////////////////////////
