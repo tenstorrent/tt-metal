@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-class DebugToolsFixture : public DispatchFixture {
+class DebugToolsFixture : virtual public DispatchFixture {
 
 };
 

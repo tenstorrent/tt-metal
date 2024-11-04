@@ -6,15 +6,17 @@
 
 #include "gtest/gtest.h"
 #include "event_fixture.hpp"
+#include "buffer_fixtures.hpp"
+#include "dispatch_fixture.hpp"
+#include "program_fixtures.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 using namespace tt::tt_metal;
 
-class MultiCommandQueueSingleDeviceFixture : virtual public ::testing::Test {
+class MultiCommandQueueSingleDeviceFixture : virtual public DispatchFixture {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -47,6 +49,10 @@ class MultiCommandQueueSingleDeviceFixture : virtual public ::testing::Test {
 };
 
 class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture, public EventFixture {};
+
+class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture, public BufferFixture {};
+
+class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture, public ProgramFixture {};
 
 class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
    protected:
@@ -88,5 +94,7 @@ class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
     size_t num_devices_;
     tt::ARCH arch_;
 };
+
+class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture, public BufferFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture, public EventFixture {};

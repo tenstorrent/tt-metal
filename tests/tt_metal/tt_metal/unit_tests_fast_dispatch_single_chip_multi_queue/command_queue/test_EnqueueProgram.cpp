@@ -79,7 +79,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_args(bool
 
 namespace stress_tests {
 
-TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestRandomizedProgram) {
+TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     uint32_t NUM_PROGRAMS = 100;
     uint32_t MAX_LOOP = 100;
     uint32_t page_size = 1024;
@@ -90,7 +90,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestRandomizedProgram) {
 
     // Make random
     auto random_seed = 0; // (unsigned int)time(NULL);
-    uint32_t seed = tt::parse_env("SEED", random_seed);
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 

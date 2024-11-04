@@ -4,12 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
 #include "command_queue_fixture.hpp"
-#include "command_queue_fixtures.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
@@ -556,7 +551,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueueSingleCardFixture, ActiveEthEnqueueDummyProgram) {
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             ASSERT_TRUE(fd_unit_tests::erisc::kernels::test_dummy_EnqueueProgram_with_runtime_args(device, eth_core));
@@ -564,7 +559,7 @@ TEST_F(CommandQueueSingleCardFixture, ActiveEthEnqueueDummyProgram) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ActiveEthEthKernelsNocReadNoSend) {
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -580,7 +575,7 @@ TEST_F(CommandQueueSingleCardFixture, ActiveEthEthKernelsNocReadNoSend) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ActiveEthEthKernelsNocWriteNoReceive) {
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocWriteNoReceive) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -596,7 +591,7 @@ TEST_F(CommandQueueSingleCardFixture, ActiveEthEthKernelsNocWriteNoReceive) {
     }
 }
 
-TEST_F(CommandQueueMultiDeviceFixture, ActiveEthEthKernelsDirectSendAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsDirectSendAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
@@ -647,7 +642,7 @@ TEST_F(CommandQueueMultiDeviceFixture, ActiveEthEthKernelsDirectSendAllConnected
     }
 }
 
-TEST_F(CommandQueueMultiDeviceFixture, ActiveEthEthKernelsSendDramBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsSendDramBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -679,7 +674,7 @@ TEST_F(CommandQueueMultiDeviceFixture, ActiveEthEthKernelsSendDramBufferAllConne
     }
 }
 
-TEST_F(CommandQueueMultiDeviceFixture, ActiveEthEthKernelsSendInterleavedBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {

@@ -7,7 +7,6 @@
 #include "gtest/gtest.h"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "command_queue_fixtures.hpp"
 #include "impl/kernels/kernel.hpp"
 
 class TraceFixture : virtual public ::testing::Test {};
@@ -35,21 +34,11 @@ class SingleDeviceTraceFixture : virtual public TraceFixture {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const int device_id = 0;
         this->device_ = tt::tt_metal::CreateDevice(device_id, num_hw_cqs, 0, buffer_size);
-        ;
     }
 
     void TearDown() override {
         if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
             tt::tt_metal::CloseDevice(this->device_);
         }
-    }
-};
-
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture, virtual public TraceFixture {
-   protected:
-    void SetUp() override {
-        this->validate_dispatch_mode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
     }
 };

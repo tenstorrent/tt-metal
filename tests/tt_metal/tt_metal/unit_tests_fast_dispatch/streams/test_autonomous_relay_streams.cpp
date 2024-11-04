@@ -648,7 +648,7 @@ void build_and_run_autonomous_stream_test(
 
 }  // namespace tt
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreams) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -691,7 +691,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     return;
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsSmallPackets) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSmallPackets) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -734,7 +734,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsSmallPacket
     return;
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingShort) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingShort) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {
@@ -780,7 +780,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingShor
 // Too long to run in post commit and these kernels are currently only live in these unit tests anyways
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingRandomShort) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingRandomShort) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
@@ -835,7 +835,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingRand
 // Too long to run in post commit and these kernels are currently only live in these unit tests anyways
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingLong) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingLong) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     // if (num_devices != 8) {
@@ -885,7 +885,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsLoopingLong
 // Too long to run in post commit and these kernels are currently only live in these unit tests anyways
 // so we just enable a couple of the unit tests to ensure nobody accidentally introduces compile errors
 // or anything like that
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAutonomousRelayStreamsSweep) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSweep) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (arch == tt::ARCH::GRAYSKULL) {

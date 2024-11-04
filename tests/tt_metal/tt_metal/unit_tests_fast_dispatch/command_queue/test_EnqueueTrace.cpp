@@ -9,7 +9,6 @@
 
 #include "command_queue_fixture.hpp"
 #include "command_queue_test_utils.hpp"
-#include "trace_fixtures.hpp"
 #include "detail/tt_metal.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "gtest/gtest.h"
@@ -93,7 +92,7 @@ constexpr bool kBlocking = true;
 constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
-TEST_F(SingleDeviceTraceFixture, TensixInstantiateTraceSanity) {
+TEST_F(SingleDeviceTraceFixture, InstantiateTraceSanity) {
     Setup(2048);
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -125,7 +124,7 @@ TEST_F(SingleDeviceTraceFixture, TensixInstantiateTraceSanity) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramTraceCapture) {
+TEST_F(SingleDeviceTraceFixture, EnqueueProgramTraceCapture) {
     Setup(2048);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -168,7 +167,7 @@ TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramTraceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramDeviceCapture) {
+TEST_F(SingleDeviceTraceFixture, EnqueueProgramDeviceCapture) {
     Setup(2048);
     auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
@@ -219,7 +218,7 @@ TEST_F(SingleDeviceTraceFixture, TensixEnqueueProgramDeviceCapture) {
     ReleaseTrace(this->device_, tid);
 }
 
-TEST_F(SingleDeviceTraceFixture, TensixEnqueueTwoProgramTrace) {
+TEST_F(SingleDeviceTraceFixture, EnqueueTwoProgramTrace) {
     Setup(6144);
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
@@ -295,7 +294,7 @@ TEST_F(SingleDeviceTraceFixture, TensixEnqueueTwoProgramTrace) {
     }
 }
 
-TEST_F(SingleDeviceTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
+TEST_F(SingleDeviceTraceFixture, EnqueueMultiProgramTraceBenchmark) {
     Setup(6144);
     CommandQueue& command_queue = this->device_->command_queue();
 

@@ -24,19 +24,10 @@ TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestAccessCommandQueue) {
     }
 }
 
-TEST(FastDispatchHostSuite, TestCannotAccessCommandQueueForClosedDevice) {
-    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (slow_dispatch) {
-        TT_THROW("This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-        GTEST_SKIP();
-    }
-    const unsigned int device_id = 0;
-    const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
-    Device* device = tt::tt_metal::CreateDevice(device_id, tt::llrt::OptionsG.get_num_hw_cqs(), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-
-    EXPECT_NO_THROW(device->command_queue());
-    CloseDevice(device);
-    EXPECT_ANY_THROW(device->command_queue());
+TEST_F(CommandQueueFixture, TestCannotAccessCommandQueueForClosedDevice) {
+    EXPECT_NO_THROW(device_->command_queue());
+    CloseDevice(device_);
+    EXPECT_ANY_THROW(device_->command_queue());
 }
 
 TEST_F(CommandQueueMultiDeviceFixture, DISABLED_TestDirectedLoopbackToUniqueHugepage) {

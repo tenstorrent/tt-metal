@@ -245,7 +245,7 @@ void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConf
 
 }  // namespace unit_tests::create_pipeline
 
-TEST_F(CommandQueueFixture, TensixTestPipelineAcrossRows) {
+TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     if (this->arch_ != tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }

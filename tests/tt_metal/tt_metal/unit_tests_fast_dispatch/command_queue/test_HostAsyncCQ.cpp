@@ -200,7 +200,7 @@ bool flatten(Device *device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5)
 
 namespace host_command_queue_tests {
 
-TEST_F(CommandQueueFixture, TensixTestAsyncCommandQueueSanityAndProfile) {
+TEST_F(CommandQueueProgramFixture, TensixTestAsyncCommandQueueSanityAndProfile) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
@@ -221,7 +221,7 @@ TEST_F(CommandQueueFixture, TensixTestAsyncCommandQueueSanityAndProfile) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
+TEST_F(CommandQueueBufferFixture, DISABLED_TestAsyncBufferRW) {
     // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -263,7 +263,7 @@ TEST_F(CommandQueueFixture, DISABLED_TestAsyncBufferRW) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncCBAllocation) {
+TEST_F(CommandQueueBufferFixture, DISABLED_TensixTestAsyncCBAllocation) {
     // Test asynchronous allocation of buffers and their assignment to CBs
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
@@ -306,7 +306,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncCBAllocation) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
@@ -332,7 +332,7 @@ TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncAssertForDeprecatedAPI) {
     command_queue.set_mode(current_mode);
 }
 
-TEST_F(CommandQueueFixture, DISABLED_TensixTestAsyncFlattenStress){
+TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncFlattenStress){
     auto& command_queue = this->device_->command_queue();
     auto current_mode = CommandQueue::default_mode();
     command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);

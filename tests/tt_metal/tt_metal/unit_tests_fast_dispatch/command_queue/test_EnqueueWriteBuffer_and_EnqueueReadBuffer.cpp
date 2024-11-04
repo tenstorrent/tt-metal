@@ -5,7 +5,6 @@
 #include <memory>
 
 #include "command_queue_fixture.hpp"
-#include "command_queue_fixtures.hpp"
 #include "command_queue_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/detail/tt_metal.hpp"
@@ -329,7 +328,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 namespace basic_tests {
 namespace dram_tests {
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     for (Device *device : devices_) {
         tt::log_info("Running On Device {}", device->id());
@@ -337,7 +336,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToDramBank0) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllDramBanks) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllDramBanks) {
     for (Device *device : devices_) {
         TestBufferConfig config = {
             .num_pages = uint32_t(device->num_banks(BufferType::DRAM)), .page_size = 2048, .buftype = BufferType::DRAM};
@@ -346,7 +345,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllDramBanks) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
     for (Device *device : devices_) {
         TestBufferConfig config = {
@@ -357,7 +356,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRo
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
+TEST_F(CommandQueueSingleCardBufferFixture, Sending131072Pages) {
     for (Device *device : devices_) {
         TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
         tt::log_info("Running On Device {}", device->id());
@@ -365,7 +364,7 @@ TEST_F(CommandQueueSingleCardFixture, Sending131072Pages) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPage) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTransferPage) {
     constexpr uint32_t num_round_robins = 2;
     for (Device *device : devices_) {
         TestBufferConfig config = {
@@ -377,7 +376,7 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanAndUnalignedToTransferPa
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
     for (Device *device : devices_) {
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -391,7 +390,7 @@ TEST_F(CommandQueueSingleCardFixture, TestPageLargerThanMaxPrefetchCommandSize) 
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestUnalignedPageLargerThanMaxPrefetchCommandSize) {
     constexpr uint32_t num_round_robins = 1;
     for (Device *device : devices_) {
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
@@ -406,7 +405,7 @@ TEST_F(CommandQueueSingleCardFixture, TestUnalignedPageLargerThanMaxPrefetchComm
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForDram) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     for (Device *device : devices_) {
@@ -414,7 +413,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForDram2) {
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
@@ -423,16 +422,18 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForDram2) {
     }
 }
 
-TEST_F(CommandQueueFixture, TestPageSizeTooLarge) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestPageSizeTooLarge) {
     // Should throw a host error due to the page size not fitting in the consumer CB
     TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
 
-    EXPECT_ANY_THROW((local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
-        this->device_, this->device_->command_queue(), config)));
+    for (Device *device : devices_) {
+        EXPECT_ANY_THROW((local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
+            device, device->command_queue(), config)));
+    }
 }
 
 // Requires enqueue write buffer
-TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     for (Device *device : this->devices_) {
         tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
@@ -450,7 +451,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapHostHugepageOnEnqueueReadBuffer) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     for (Device *device : this->devices_) {
         tt::log_info("Running On Device {}", device->id());
         uint32_t page_size = 2048;
@@ -465,7 +466,7 @@ TEST_F(CommandQueueSingleCardFixture, TestIssueMultipleReadWriteCommandsForOneBu
 }
 
 // Test that command queue wraps when buffer available space in completion region is less than a page
-TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpace) {
     uint32_t large_page_size = 8192;  // page size for first and third read
     uint32_t small_page_size = 2048;  // page size for second read
 
@@ -504,7 +505,7 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace) {
 
 // Test that command queue wraps when buffer read needs to be split into multiple enqueue_read_buffer commands and
 // available space in completion region is less than a page
-TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace2) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpace2) {
     // Using default 75-25 issue and completion queue split
     for (Device *device : devices_) {
         tt::log_info("Running On Device {}", device->id());
@@ -541,14 +542,14 @@ TEST_F(CommandQueueSingleCardFixture, TestWrapCompletionQOnInsufficientSpace2) {
 
 namespace l1_tests {
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToL1Bank0) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToL1Bank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
     for (Device *device : devices_) {
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1Banks) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllL1Banks) {
     for (Device *device : devices_) {
         auto compute_with_storage_grid = device->compute_with_storage_grid_size();
         TestBufferConfig config = {
@@ -560,7 +561,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1Banks) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
+TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     for (Device *device : devices_) {
         auto compute_with_storage_grid = device->compute_with_storage_grid_size();
         TestBufferConfig config = {
@@ -572,7 +573,7 @@ TEST_F(CommandQueueSingleCardFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForL1) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestNon32BAlignedPageSizeForL1) {
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     for (Device *device : devices_) {
@@ -583,7 +584,7 @@ TEST_F(CommandQueueSingleCardFixture, TestNon32BAlignedPageSizeForL1) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (Device *device : devices_) {
@@ -607,7 +608,7 @@ TEST_F(CommandQueueSingleCardFixture, TestBackToBackNon32BAlignedPageSize) {
 }
 
 // This case was failing for FD v1.3 design
-TEST_F(CommandQueueSingleCardFixture, TestLargeBuffer4096BPageSize) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestLargeBuffer4096BPageSize) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (Device *device : devices_) {
@@ -619,7 +620,7 @@ TEST_F(CommandQueueSingleCardFixture, TestLargeBuffer4096BPageSize) {
 
 }  // end namespace l1_tests
 
-TEST_F(CommandQueueSingleCardFixture, TestNonblockingReads) {
+TEST_F(CommandQueueSingleCardBufferFixture, TestNonblockingReads) {
     constexpr BufferType buff_type = BufferType::L1;
 
     for (auto device : devices_) {
@@ -649,7 +650,7 @@ namespace stress_tests {
 
 // TODO: Add stress test that vary page size
 
-TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
+TEST_F(CommandQueueSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsBlocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
@@ -660,7 +661,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsBlocki
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
+TEST_F(CommandQueueSingleCardBufferFixture, WritesToRandomBufferTypeAndThenReadsNonblocking) {
     BufferStressTestConfig config = {
         .seed = 0, .num_pages_total = 50000, .page_size = 2048, .max_num_pages_per_buffer = 16};
 
@@ -673,7 +674,7 @@ TEST_F(CommandQueueSingleCardFixture, WritesToRandomBufferTypeAndThenReadsNonblo
 }
 
 // TODO: Split this into separate tests
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
+TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
     std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
 
     for (Device *device : devices_) {
@@ -727,7 +728,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferL1ReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
+TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -785,7 +786,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferDRAMReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeL1ReadWrites) {
+TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -827,7 +828,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeL1ReadWrites) {
     }
 }
 
-TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeDRAMReadWrites) {
+TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
     for (Device *device : devices_) {
         for (const std::array<uint32_t, 2> cores :
              {std::array<uint32_t, 2>{1, 1},
@@ -881,7 +882,7 @@ TEST_F(CommandQueueSingleCardFixture, ShardedBufferLargeDRAMReadWrites) {
     }
 }
 
-TEST_F(CommandQueueFixture, StressWrapTest) {
+TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
     const char *arch = getenv("ARCH_NAME");
     if (strcasecmp(arch, "wormhole_b0") == 0) {
         tt::log_info("cannot run this test on WH B0");
@@ -891,8 +892,10 @@ TEST_F(CommandQueueFixture, StressWrapTest) {
 
     BufferStressTestConfig config = {
         .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
-    EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
-        this->device_, this->device_->command_queue(), config));
+    for (Device *device : devices_) {
+        EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
+            device, device->command_queue(), config));
+    }
 }
 
 }  // end namespace stress_tests
