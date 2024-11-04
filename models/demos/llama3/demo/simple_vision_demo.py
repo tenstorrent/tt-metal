@@ -22,6 +22,7 @@ import torch
 import pytest
 import os
 import ttnn
+import time
 
 
 class LlamaVision:
@@ -46,12 +47,12 @@ class LlamaVision:
         Responsible for taking model_input: ModelInput and returning vision_images, vision_mask, tokens
         """
         images = model_input.vision.images
-        mask = model_input.visiom.mask
+        mask = model_input.vision.mask
         tokens = model_input.tokens
 
         return images, mask, tokens
 
-    def forward_prefill(self, vision_images, vision_mask, tokens, total_len, text_only_inference=False):
+    def forward_prefill(self, vision_images, vision_mask, tokens, total_len, prefill_len, text_only_inference=False):
         """
         Performs vision encode step then text prefill.
         Returns (xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits)
@@ -62,7 +63,7 @@ class LlamaVision:
             total_len=total_len,
         )
 
-        position_ids = torch.arange(tokens.shape[-1], dtype=torch.long)
+        position_ids = torch.arange(prefill_len, dtype=torch.long)
 
         logits = self.model.forward(
             position_ids,
@@ -77,7 +78,7 @@ class LlamaVision:
 
     def forward_decode(
         self,
-        position_ids,
+        position_id,
         tokens,
         cross_attention_masks,
         full_text_row_masked_out_mask,
@@ -88,11 +89,21 @@ class LlamaVision:
         Performs text decode step.
         Returns logits
         """
-        pass
+        position_ids = torch.tensor([position_id], dtype=torch.long)
+        logits = self.model.forward(
+            position_ids,
+            tokens,
+            cross_attention_masks,
+            full_text_row_masked_out_mask,
+            xattn_caches,
+            text_only_inference,
+        )
+        return logits
 
 
 def get_sampler(temperature, top_p, tokenizer):
     def sample(logits):
+        logger.info(f"Sampling {logits.shape=}")
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
             next_token = llama_reference_generation.sample_top_p(probs, top_p)
@@ -141,15 +152,22 @@ def create_multimodal_model(mesh_device, dtype=ttnn.bfloat16):
     "warmup_iters",
     (0, 1),
 )
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        "normal",
+    ],
+)
 def test_llama_multimodal_demo_text(
     mesh_device,
     target,
     warmup_iters,
-    temperature: float = 0.5,
+    test_case,
+    temperature: float = 0,
     top_p: float = 0.9,
     max_seq_len: int = 512,
     max_batch_size: int = 4,
-    max_gen_len: Optional[int] = 200,
+    max_gen_len: Optional[int] = 100,
     model_parallel_size: Optional[int] = None,
 ):
     """
@@ -195,47 +213,72 @@ def test_llama_multimodal_demo_text(
             )
         ],
     ]
-    # text only
-    dialogs += [
-        [UserMessage(content="what is the recipe of mayonnaise in two sentences?")],
-    ]
 
     sampler = get_sampler(temperature, top_p, tokenizer)
 
     print(f"Running text completion on {target}")
-    for _ in range(warmup_iters + 1):
+    for iter_num in range(warmup_iters + 1):
         for dialog in dialogs:
-            # result = generator.chat_completion(
-            #     dialog,
-            #     max_gen_len=max_gen_len,
-            #     temperature=temperature,
-            #     top_p=top_p,
-            # )
             for msg in dialog:
                 print(f"{msg.role.capitalize()}: {msg.content}\n")
+
+            if iter_num <= warmup_iters:
+                logger.info(f"Warmup iteration {iter_num}")
 
             model_input = formatter.encode_dialog_prompt(dialog, tool_prompt_format=False)
 
             # Do initial prefill
-            vision_images, vision_mask, tokens = model.get_prefill_inputs(model_input)
-            total_len = len(tokens) + max_gen_len  # Prepares mask for full length of output
+            vision_images, vision_mask, prompt_tokens = model.get_prefill_inputs(model_input)
+            prefill_len = len(prompt_tokens)
+            total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
             # Create tokens tensor
             pad_id = tokenizer.pad_id
             bsz = 1
             tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long)
-            tokens[0, : len(tokens)] = torch.tensor(tokens, dtype=torch.long)
+            tokens[0, : len(prompt_tokens)] = torch.tensor(prompt_tokens, dtype=torch.long)
+            prefill_start = time.perf_counter()
             xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, logits = model.forward_prefill(
-                vision_images, vision_mask, tokens, total_len
+                vision_images, vision_mask, tokens, total_len, prefill_len
             )
+            prefill_end = time.perf_counter()
 
             next_token, text = sampler(logits)
-            logger.info(f"Prefill output: {text}")
+            logger.info(f"Prefill output: {next_token}:{text}")
+            tokens[0, prefill_len] = next_token
 
+            decode_times = []
             # Iterate over decode
-            # for gen_idx in range(max_gen_len-1):
 
-            # out_message = result.generation
-            # print(f"> {out_message.role.capitalize()}: {out_message.content}")
-            # for t in out_message.tool_calls:
-            #     print(f"  Tool call: {t.tool_name} ({t.arguments})")
-            # print("\n==================================\n")
+            for gen_idx in range(max_gen_len - 1):
+                decode_start = time.perf_counter()
+                position_id = prefill_len + gen_idx
+                logits = model.forward_decode(
+                    position_id,
+                    tokens,
+                    cross_attention_masks,
+                    full_text_row_masked_out_mask,
+                    xattn_caches,
+                )
+                next_token, text = sampler(logits)
+                # Update next token
+                tokens[0, position_id + 1] = next_token
+                logger.info(f"Decode output {position_id}: {next_token}:{text}")
+                decode_end = time.perf_counter()
+                decode_times.append(decode_end - decode_start)
+
+                if text in ["<|eot_id|>", "<|eom_id|>"]:
+                    break
+
+            # Log full text output
+            vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
+            # Remove <|image|> tokens since they break the tokenizer
+            tokens_out = [
+                t if t not in vision_tokens else tokenizer.pad_id for t in tokens[0].tolist()[: position_id + 2]
+            ]
+            text = tokenizer.decode(tokens_out)
+            logger.info(f"Full text: {text}")
+
+            prefill_time_ms = (prefill_end - prefill_start) * 1000
+            logger.info(f"Prefill time: {prefill_time_ms:.2f} ms")
+            decode_time_ms = sum(decode_times) / (gen_idx + 1) * 1000
+            logger.info(f"Decode time: {decode_time_ms:.2f} ms")
