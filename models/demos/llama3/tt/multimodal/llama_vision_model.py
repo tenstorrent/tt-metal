@@ -123,7 +123,6 @@ def _get_xattn_mask(
 class CrossAttentionTransformer(torch.nn.Module):
     def __init__(
         self,
-        args: llama_reference_model.ModelArgs,
         mesh_device,
         state_dict,
         weight_cache_path,
@@ -131,9 +130,8 @@ class CrossAttentionTransformer(torch.nn.Module):
         configuration,
     ) -> None:
         super().__init__()
-        self.params = args
 
-        self.model_dim = args.dim
+        self.model_dim = configuration.dim
 
         self.mesh_device = mesh_device
         self.state_dict = state_dict
@@ -162,11 +160,11 @@ class CrossAttentionTransformer(torch.nn.Module):
             dtype=ttnn.bfloat8_b,
             configuration=configuration,
         )
-        self.image_res = args.vision_chunk_size
-        self.max_num_chunks = args.vision_max_num_chunks
+        self.image_res = configuration.vision_chunk_size
+        self.max_num_chunks = configuration.vision_max_num_chunks
         self.image_transform = partial(
-            llama_reference_image_transforms.VariableSizeImageTransform(size=args.vision_chunk_size),
-            max_num_chunks=args.vision_max_num_chunks,
+            llama_reference_image_transforms.VariableSizeImageTransform(size=configuration.vision_chunk_size),
+            max_num_chunks=configuration.vision_max_num_chunks,
         )
 
     def setup_cache(self, max_batch_size: int, dtype: torch.dtype):
@@ -200,7 +198,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             stacked_images, num_chunks = _stack_images(
                 transformed_images,
                 max_num_chunks=self.max_num_chunks,
-                image_res=self.params.vision_chunk_size,
+                image_res=self.configuration.vision_chunk_size,
                 max_num_images=max_num_images,
             )
 
