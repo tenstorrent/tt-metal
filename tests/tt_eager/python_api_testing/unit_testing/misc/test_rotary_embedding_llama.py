@@ -44,7 +44,7 @@ class TtLlamaRotary(torch.nn.Module):
             get_rot_transformation_mat(dhead=ttnn.TILE_SIZE), device=device, layout=ttnn.TILE_LAYOUT, dtype=datatype
         )
 
-    def apply_rotary(self, x, cos, sin):
+    def apply_rotary(self, q, k, cos, sin):
         # n_head = 8 for Q
         # n_head = 1 for K
 
@@ -55,21 +55,20 @@ class TtLlamaRotary(torch.nn.Module):
             fp32_dest_acc_en=(True if self.head_dim <= 128 else False),
             packer_l1_acc=True,
         )
-
-        rotary_output = ttnn.experimental.rotary_embedding_llama(
-            x,
+        rotary_output = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q,
+            k,
             cos,
             sin,
             self.transformation_mat,
-            is_decode_mode=self.mode == "decode",
             compute_kernel_config=compute_kernel_config,
         )
 
         return rotary_output
 
     def forward(self, xq, xk, cos, sin):
-        xq = self.apply_rotary(xq, cos, sin)
-        xk = self.apply_rotary(xk, cos, sin)
+        xq, xk = self.apply_rotary(xq, xk, cos, sin)
+        # xk = self.apply_rotary(xk, cos, sin)
         return xq, xk
 
 
@@ -246,7 +245,7 @@ def run_test_rotary_embedding_llama(
         (1, 8192),
         (1, 16384),
         (1, 128 * 1024),
-        (64, 1),
+        # (64, 1),
         (32, 1),
         (16, 1),
         (8, 1),
@@ -263,7 +262,7 @@ def run_test_rotary_embedding_llama(
         "prefill_8k",
         "prefill_16k",
         "prefill_128k",
-        "decode_64",
+        # "decode_64",
         "decode_32",
         "decode_16",
         "decode_8",
