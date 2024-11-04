@@ -663,7 +663,8 @@ void bind_unary_backward_unary_optional_float(
     const unary_backward_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
-    const std::string_view description) {
+    const std::string_view description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
         R"doc(
         {4}
@@ -681,6 +682,9 @@ void bind_unary_backward_unary_optional_float(
         Returns:
             List of ttnn.Tensor: the output tensor.
 
+        Note:
+            {5}
+
         Example:
 
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
@@ -691,7 +695,8 @@ void bind_unary_backward_unary_optional_float(
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc,
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -1311,8 +1316,17 @@ void py_module(py::module& module) {
         module,
         ttnn::pow_bw,
         "exponent",
-        "Exponent value",
-        R"doc(Performs backward operations for power on :attr:`input_tensor` , :attr:`exponent` with given :attr:`grad_tensor`.)doc");
+        "Exponent value [must be non-negative]",
+        R"doc(Performs backward operations for power on :attr:`input_tensor` , :attr:`exponent` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_unary_backward_optional(
         module,
