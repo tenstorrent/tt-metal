@@ -34,6 +34,11 @@ The parameters of interest are 3 fold:
 2. The fidelity of the computation, referred to as lofi, hifi2, hifi3, and hifi4. This affects how many bits of each input datatype is actually ingested during the computation.  
 3. Datatype of input/output space. It has been shown that a network layer need not always use all of the bits of a given datatype. But some layers do need the full resolution provided by a given data type, and its higher memory footprint. 
 
+For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different. 
+
+![A simple bar chart of the TFLOPS on WH when changing the precision of matrcies](images/effects_of_precision.png "Variance in performance of TFLOPS on WH from SRAM due to changing precision")
+
+
 
 ## Operations
 
