@@ -142,7 +142,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
-    bool fp32_accum);
+    bool fp32_accum,
+    bool split_reader_enabled);
 
 template<typename T>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(

@@ -219,7 +219,8 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.act_block_w_div,
             kernel_size[0],
             kernel_size[1],
-            conv_config.fp32_dest_acc_enabled);
+            conv_config.fp32_dest_acc_enabled,
+            conv_config.enable_split_reader);
 
         //TODO: Flip the Weights
         bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
