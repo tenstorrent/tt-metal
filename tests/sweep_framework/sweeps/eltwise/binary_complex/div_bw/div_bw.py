@@ -50,8 +50,11 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # Make an issue for this regarding documentation
+    if test_vector["grad_dtype"] == ttnn.bfloat8_b:
+        return True, "Unsupported DataType on grad tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Op doesn't work with row major"
+        return True, "Input to eltwise binary must be tilized"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
         test_vector["input_a_dtype"] == ttnn.bfloat8_b
         or test_vector["input_b_dtype"] == ttnn.bfloat8_b
@@ -87,9 +90,6 @@ def run(
     torch_grad_tensor = gen_complex_tensor(input_shape, -100, 100, grad_dtype)
     torch_input_tensor_a = gen_complex_tensor(input_shape, -100, 100, input_a_dtype)
     torch_input_tensor_b = gen_complex_tensor(input_shape, -100, 100, input_b_dtype)
-    signs_b = torch.randint(0, 2, input_shape) * 2 - 1
-    torch_input_tensor_b.real *= signs_b
-    torch_input_tensor_b.imag *= signs_b
 
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_b.requires_grad = True
@@ -124,9 +124,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensors = ttnn.div_bw(
-        grad_tensor, input_tensor_a, input_tensor_b, alpha=0.0, memory_config=output_memory_config
-    )
+    output_tensors = ttnn.div_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     passed = []
@@ -143,26 +141,9 @@ def run(
         passed.append(passed_)
         output_string += output_string_ + ", "
 
+    if all(passed):
+        passed = True
+    else:
+        passed = False
+
     return [(passed, output_string), e2e_perf]
-
-
-from tests.sweep_framework.framework.permutations import *
-
-for suite in parameters.keys():
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    for vector in suite_vectors:
-        if invalidate_vector(vector)[0]:
-            continue
-        try:
-            passed, _ = run(**vector, device=device)
-            if passed[0] != True:
-                print(passed)
-        except Exception as e:
-            print(vector)
-            print(e)
-            break
-
-    ttnn.close_device(device)
