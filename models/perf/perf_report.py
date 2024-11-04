@@ -744,12 +744,12 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
     else:
         print(colored("Warning: 'HOST START TS' column not found. CSV will not be sorted.", "yellow"))
 
+    df = filter_by_signpost(df, signpost, ignore_signposts)
+
     # Check if the file contains multiple devices
     if "DEVICE ID" in df.columns and df["DEVICE ID"].nunique() > 1:
         print(colored(f"Detected data from {df['DEVICE ID'].nunique()} devices. Merging device data...", "cyan"))
         df = merge_device_rows(df)
-
-    df = filter_by_signpost(df, signpost, ignore_signposts)
 
     rows = []
     prev_row = None
