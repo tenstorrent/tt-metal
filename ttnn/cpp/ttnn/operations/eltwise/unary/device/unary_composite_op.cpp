@@ -473,6 +473,10 @@ Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<float> m
     return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
 }
 
+Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
+}
+
 // clamp
 Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
