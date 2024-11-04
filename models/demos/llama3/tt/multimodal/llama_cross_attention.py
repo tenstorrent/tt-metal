@@ -163,7 +163,7 @@ class TtLlamaCrossAttention(LightweightModule):
             xk = ttnn.reshape(xk, [bsz, 1, seqlen_y, -1])
             xv = ttnn.reshape(xv, [bsz, 1, seqlen_y, -1])
         else:
-            # 1, B, S, D -> B, NH, S, DH?
+            # 1, B, S, D -> B, NH, S, DH
             xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 xk,
                 xk,
@@ -178,6 +178,15 @@ class TtLlamaCrossAttention(LightweightModule):
                 num_kv_heads=self.n_local_kv_heads // 2,
                 transpose_k_heads=False,
             )
+            # def create_heads(x):
+            #     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+            #     x = ttnn.reshape(x, [bsz, seqlen_y, self.n_local_kv_heads, self.head_dim])
+            #     x = ttnn.transpose(x, 1, 2)
+            #     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+            #     return x
+
+            # xk = create_heads(xk)
+            # xv = create_heads(xv)
 
         xk = self.k_norm(xk, mode="decode")
 
@@ -219,18 +228,26 @@ class TtLlamaCrossAttention(LightweightModule):
             program_config=self.model_config["VISION_XATTN_Q_PROGCFG"](batch),
         )
 
-        # Below is how we want to reshape. It results in poor PCC
-        # 1, B, D -> B, 1, NH, DH -> B, NH, 1, DH
-        xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # Tell shape about padding
-        xq = ttnn.reshape(
-            xq,
-            shape=ttnn.Shape(
-                [1, 1, batch, xq.shape[-1]],
-                [1, 1, xq.shape[-2], xq.shape[-1]],
-            ),
+        # # Below is how we want to reshape. It results in poor PCC
+        # # 1, B, D -> B, 1, NH, DH -> B, NH, 1, DH
+        # xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # # Tell shape about padding
+        # xq = ttnn.reshape(
+        #     xq,
+        #     shape=ttnn.Shape(
+        #         [1, 1, batch, xq.shape[-1]],
+        #         [1, 1, xq.shape[-2], xq.shape[-1]],
+        #     ),
+        # )
+        # xq = ttnn.reshape(xq, (1, batch, self.n_local_heads, self.head_dim))
+        # xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
+
+        xq, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
-        xq = ttnn.reshape(xq, (1, batch, self.n_local_heads, self.head_dim))
+        xq = ttnn.to_layout(xq, layout=ttnn.ROW_MAJOR_LAYOUT)
+        xq = ttnn.slice(xq, (0, 0, 0, 0), (xq.shape[0], xq.shape[1], batch, xq.shape[3]))
+        xq = ttnn.transpose(xq, 1, 2)
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
         xq = self.q_norm(xq, mode="decode")
@@ -261,9 +278,16 @@ class TtLlamaCrossAttention(LightweightModule):
         # WARNING: this broadcast is also broken, must broadcast on host
         output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
 
+        # This is how we should be reshaping
+        # output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # output = ttnn.reshape(output, (1, 1, batch, self.n_local_heads * self.head_dim))
+        # output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+
         output = ttnn.to_layout(output, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output = ttnn.reshape(output, (1, 1, batch, self.n_local_heads * self.head_dim))
+        output = ttnn.transpose(output, 1, 2)  # 1, B, NH, DH -> 1, NH, B, DH
+        output = ttnn.slice(output, (0, 0, 0, 0), (1, self.n_local_heads, batch, self.head_dim))
         output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+        output = ttnn.experimental.nlp_concat_heads(output)
 
         output = ttnn.matmul(
             output,
