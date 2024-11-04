@@ -494,6 +494,19 @@ Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> 
     }
 }
 
+Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' tensors can be None. Please provide one tensor value");
+    if (!max.has_value()) {
+        return ttnn::where( ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
+    }else if(!min.has_value()) {
+        return ttnn::where( ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
+    }
+    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor temp = ttnn::where( ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config), ttnn::relu(a_max, output_memory_config), ttnn::maximum(a_max, min.value(), output_memory_config), output_memory_config);
+    return ttnn::where( ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config), max.value(), temp, output_memory_config);
+}
+
 // hardtanh
 Tensor _hardtanh(
     const Tensor& a, float low /* = -1.0f */, float high /* = +1.0f */, const std::optional<MemoryConfig>& output_mem_config) {
