@@ -106,6 +106,33 @@ class resnetBlock2D:
         self.conv1_input_width = input_width
         self.conv1_in_channels = split_input_channels
         self.conv1_out_channels = out_channels
+        self.conv1_output_height = ttnn.get_conv_output_dim(self.conv1_input_height, 3, 1, 1)
+        self.conv1_output_width = ttnn.get_conv_output_dim(self.conv1_input_width, 3, 1, 1)
+        self.conv1_shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+        self.conv1_input_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            tensor_shape=ttnn.Shape(
+                [
+                    1,
+                    1,
+                    self.batch_size * self.conv1_input_height * self.conv1_input_width,
+                    self.conv1_in_channels,
+                ]
+            ),
+            parallel_config=ttnn._ttnn.operations.conv.determine_parallel_config(
+                shard_layout=self.conv1_shard_layout,
+                batch_size=self.batch_size,
+                input_channels=self.conv1_in_channels,
+                output_height=self.conv1_output_height,
+                output_width=self.conv1_output_width,
+                output_channels=self.conv1_out_channels,
+                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                enable_channels_padding=False,
+                is_out_tiled=True,
+            ),
+            tile_size=32,
+        )
 
         for i in range(conv1_split_chunks):
             self.conv1s_weights.append(ttnn.from_torch(split_weight_tensors[i], ttnn.float32))
@@ -165,6 +192,29 @@ class resnetBlock2D:
         self.conv2_in_channels = parameters.conv2.weight.shape[1]
         self.conv2_out_channels = parameters.conv2.weight.shape[0]
         #     self.conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
+        self.conv2_input_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            tensor_shape=ttnn.Shape(
+                [
+                    1,
+                    1,
+                    self.batch_size * self.conv2_input_height * self.conv2_input_width,
+                    out_channels,
+                ]
+            ),
+            parallel_config=ttnn._ttnn.operations.conv.determine_parallel_config(
+                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                batch_size=self.batch_size,
+                input_channels=self.conv2_in_channels,
+                output_height=self.conv2_input_height,
+                output_width=self.conv2_input_width,
+                output_channels=self.conv2_out_channels,
+                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                enable_channels_padding=False,
+                is_out_tiled=True,
+            ),
+            tile_size=32,
+        )
 
         self.groups = 32
         # if use_in_shortcut:
@@ -402,12 +452,14 @@ class resnetBlock2D:
             # hidden_states = nonlinearity(hidden_states, memory_config=ttnn.get_memory_config(hidden_states))
             # hidden_states = self.conv1s[0](hidden_states)
 
+            hidden_states = ttnn.to_memory_config(hidden_states, self.conv1_input_memory_config)
+
             conv_config = ttnn.Conv2dConfig(
                 dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 activation="",
-                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                shard_layout=self.conv1_shard_layout,
                 math_approx_mode_enabled=True,
                 fp32_dest_acc_enabled=True,
                 packer_l1_accum_enabled=False,
@@ -598,6 +650,7 @@ class resnetBlock2D:
         # hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG, hidden_states.dtype)
 
+        hidden_states = ttnn.to_memory_config(hidden_states, self.conv2_input_memory_config)
         # hidden_states = self.conv2(hidden_states)
 
         conv_config = ttnn.Conv2dConfig(

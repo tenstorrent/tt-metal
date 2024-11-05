@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "common/math.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -565,7 +566,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value, sliding_window_config, out_block_h_ntiles);
+            ashape_with_channels_padded.value,
+            sliding_window_config,
+            parallelization_config.num_cores_nhw,
+            out_block_h_ntiles);
     assert(act_matrix_shape.size() == 3);
     assert(act_matrix_shape[0] == 1);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
@@ -887,8 +891,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     TT_FATAL(act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0, "Error");
     uint32_t total_active_num_cores_per_weight_slice;
     if (use_non_tile_height) {
-        uint32_t input_height_padded_per_core = shard_shape[0];
-        total_active_num_cores_per_weight_slice = act_matrix_height / parallelization_config.per_core_out_matrix_height;
+        total_active_num_cores_per_weight_slice =
+            tt::round_up(act_matrix_height_unpadded, parallelization_config.num_cores_nhw) /
+            parallelization_config.per_core_out_matrix_height;
     } else {
         total_active_num_cores_per_weight_slice = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
     }

@@ -150,7 +150,7 @@ def run_conv(
         enable_subblock_padding=False,
         output_layout=output_layout,
     )
-    if config_override and "act_block_h" in config_override:
+    if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
 
     if config_override and "act_block_w_div" in config_override:
@@ -1520,9 +1520,9 @@ def test_sd_conv_wh(
             False,
         ),  # fails. mismatch. It passes when input_channels=64. Probably an issue with padding when input_channels % 32 != 0.
         (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
-        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 22 * 32}, False),
+        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
+        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
+        (2, 1, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 8 * 32}, False),
     ),
 )
 @pytest.mark.parametrize(

@@ -21,7 +21,6 @@ def _nearest_32(x):
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-get_conv_padded_input_shape_and_mem_config = ttnn._ttnn.operations.conv.get_conv_padded_input_shape_and_mem_config
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
 

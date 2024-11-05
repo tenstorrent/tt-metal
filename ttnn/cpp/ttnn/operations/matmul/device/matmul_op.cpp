@@ -1268,9 +1268,8 @@ void Matmul::validate(
                         uint32_t K = input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1];
                         uint32_t per_core_M = program_config.per_core_M;
                         auto shard_shape = input_tensor_a.shard_spec().value().shape;
-
                         TT_FATAL(
-                            div_up(M, per_core_M) == input_tensor_a.shard_spec().value().grid.num_cores(), "Error");
+                            div_up(M, per_core_M) <= input_tensor_a.shard_spec().value().grid.num_cores(), "Error");
                         TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
                         TT_FATAL(K % program_config.in0_block_w == 0, "Error");
                         TT_FATAL(K == (shard_shape[1] / in0_tile_shape[1]), "Error");

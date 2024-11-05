@@ -4,6 +4,7 @@
 
 
 
+#include "common/constants.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
@@ -120,65 +121,6 @@ void py_bind_conv2d(py::module& module) {
             py::arg("queue_id") = 0}
     );
 
-    module.def(
-        "get_conv_padded_input_shape_and_mem_config",
-        [](ttnn::Device* device,
-           const ttnn::Tensor& input_tensor,
-           const Conv2dConfig& conv_config,
-           uint32_t batch_size,
-           uint32_t height,
-           uint32_t width,
-           uint32_t in_channels,
-           uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<ttnn::Device>(
-                device,
-                input_tensor,
-                conv_config,
-                batch_size,
-                height,
-                width,
-                in_channels,
-                out_channels);
-        },
-        py::kw_only(),
-        py::arg("device"),
-        py::arg("input_tensor"),
-        py::arg("conv_config"),
-        py::arg("batch_size"),
-        py::arg("height"),
-        py::arg("width"),
-        py::arg("in_channels"),
-        py::arg("out_channels"));
-
-    module.def(
-        "get_conv_padded_input_shape_and_mem_config",
-        [](MeshDevice* device,
-           const ttnn::Tensor& input_tensor,
-           const Conv2dConfig& conv_config,
-           uint32_t batch_size,
-           uint32_t height,
-           uint32_t width,
-           uint32_t in_channels,
-           uint32_t out_channels) -> std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> {
-            return ttnn::operations::conv::conv2d::get_conv_padded_input_shape_and_mem_config<MeshDevice>(
-                device,
-                input_tensor,
-                conv_config,
-                batch_size,
-                height,
-                width,
-                in_channels,
-                out_channels);
-        },
-        py::kw_only(),
-        py::arg("device"),
-        py::arg("input_tensor"),
-        py::arg("conv_config"),
-        py::arg("batch_size"),
-        py::arg("height"),
-        py::arg("width"),
-        py::arg("in_channels"),
-        py::arg("out_channels"));
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -213,9 +155,10 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_channels,
            const CoreCoord& compute_grid_size,
            ShardOrientation block_shard_orientation,
+           bool enable_channels_padding,
            bool is_out_tiled) -> ttnn::operations::sliding_window::ParallelConfig {
             return ttnn::operations::conv::conv2d::determine_parallel_config(
-                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, is_out_tiled);
+                shard_layout, batch_size, input_channels, output_height, output_width, output_channels, compute_grid_size, block_shard_orientation, enable_channels_padding, is_out_tiled);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),
@@ -225,6 +168,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_channels"),
         py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
+        py::arg("enable_channels_padding"),
         py::arg("is_out_tiled") = true);
 
     module.def(

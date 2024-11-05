@@ -74,6 +74,33 @@ class downsample_2d:
 
         self.output_height = ttnn.get_conv_output_dim(input_height, 3, self.stride, 1)
         self.output_width = ttnn.get_conv_output_dim(input_width, 3, self.stride, 1)
+        self.shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if self.in_channels < 320 else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
+
+        self.input_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            tensor_shape=ttnn.Shape(
+                [
+                    1,
+                    1,
+                    self.batch_size * self.input_height * self.input_width,
+                    self.out_channels,
+                ]
+            ),
+            parallel_config=ttnn._ttnn.operations.conv.determine_parallel_config(
+                shard_layout=self.shard_layout,
+                batch_size=self.batch_size,
+                input_channels=self.in_channels,
+                output_height=self.output_height,
+                output_width=self.output_width,
+                output_channels=self.out_channels,
+                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                enable_channels_padding=False,
+                is_out_tiled=True,
+            ),
+            tile_size=32,
+        )
 
     def __call__(
         self,
@@ -104,13 +131,15 @@ class downsample_2d:
             math_approx_mode_enabled=True,
             fp32_dest_acc_enabled=True,
             packer_l1_accum_enabled=False,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            if self.in_channels < 320
-            else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout=self.shard_layout,
             input_channels_alignment=32,
             transpose_shards=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=False,
         )
+
+        if hidden_states.memory_config() != self.input_memory_config:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.input_memory_config)
+
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 

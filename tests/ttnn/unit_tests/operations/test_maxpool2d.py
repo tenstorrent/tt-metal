@@ -158,6 +158,7 @@ def run_max_pool(
             output_channels=in_c,
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
             is_out_tiled=False,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
@@ -744,6 +745,7 @@ def test_pool_core_nondivis(
             output_channels=in_c,
             compute_grid_size=device.compute_with_storage_grid_size(),
             block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
             is_out_tiled=True,
         )
         sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
