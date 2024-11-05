@@ -175,6 +175,12 @@ int main() {
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
+
+#ifndef ARCH_BLACKHOLE
+            while (1) {
+                RISC_POST_HEARTBEAT(heartbeat);
+            }
+#endif
         }
     }
 
