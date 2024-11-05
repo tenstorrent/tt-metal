@@ -42,6 +42,7 @@ set(UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/device_cluster_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/erisc_app_direct_send.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ethernet/ring_gather_kernels.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/global_semaphore/test_global_semaphores.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/test_any_range.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/slotmap.cpp
 )

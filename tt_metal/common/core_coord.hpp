@@ -53,8 +53,8 @@ struct CoreRange {
 
     CoreRange(const CoreRange &other) = default;
     CoreRange &operator=(const CoreRange &other) = default;
-    CoreRange(CoreRange &&other) = default;
-    CoreRange &operator=(CoreRange &&other) = default;
+    CoreRange(CoreRange &&other) noexcept = default;
+    CoreRange &operator=(CoreRange &&other) noexcept = default;
 
     bool intersects(const CoreRange &other) const;
 

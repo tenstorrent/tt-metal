@@ -39,6 +39,7 @@ class Trace;
 class CircularBuffer;
 class Event;
 class Buffer;
+class GlobalSemaphore;
 
 // ==================================================
 //                  HOST API: Device management
@@ -240,13 +241,45 @@ void UpdateDynamicCircularBufferAddress(Program &program, CBHandle cb_handle, co
  * | program       | The program to which semaphore will be added to      | Program &                                                 |              | Yes      |
  * | core_spec     | Range of the Tensix co-ordinates using the semaphore | const std::variant<CoreRange,CoreRangeSet> &              |              | Yes      |
  * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
- * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | Yes      |
+ * | core_type     | Tensix or Ethernet core to create semaphore on.      | CoreType                                                  |              | No       |
  */
 uint32_t CreateSemaphore(
     Program &program,
     const std::variant<CoreRange, CoreRangeSet> &core_spec,
     uint32_t initial_value,
     CoreType core_type = CoreType::WORKER);
+
+/**
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: std::unique_ptr<GlobalSemaphore>.
+ *
+ * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
+ * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
+ * | cores         | Range of the Tensix co-ordinates using the semaphore | const CoreRangeSet &                                      |              | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
+ * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ */
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, const CoreRangeSet &cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
+
+/**
+ * Initializes a global semaphore on all cores within the specified CoreRangeSet.
+ * This only supports tensix cores, and can only use L1 buffer types like BufferType::L1 and BufferType::L1_SMALL.
+ *
+ * Return value: std::unique_ptr<GlobalSemaphore>.
+ *
+ * | Argument      | Description                                          | Type                                                      | Valid Range  | Required |
+ * |---------------|------------------------------------------------------|-----------------------------------------------------------|--------------|----------|
+ * | device        | The device to create the semaphore on                | Device *                                                  |              | Yes      |
+ * | cores         | Range of the Tensix co-ordinates using the semaphore | CoreRangeSet &&                                           |              | Yes      |
+ * | initial_value | Initial value of the semaphore                       | uint32_t                                                  |              | Yes      |
+ * | buffer_type   | Buffer type to store the semaphore                   | BufferType                                                | L1 types     | No       |
+ */
+std::unique_ptr<GlobalSemaphore> CreateGlobalSemaphore(
+    Device *device, CoreRangeSet &&cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 /**
 *  Allocates an interleaved DRAM or L1 buffer on device
