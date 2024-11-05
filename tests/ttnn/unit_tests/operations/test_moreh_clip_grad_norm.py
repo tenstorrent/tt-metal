@@ -97,22 +97,13 @@ def test_new_moreh_clip_grad_norm(
         # reshape to flatten due to mismatch shape
         expected_total_norm = to_cpu(npu_total_norm, [1, 1, 1, 1]).reshape(-1)
         actual_total_norm = to_cpu(new_npu_total_norm, [1, 1, 1, 1]).reshape(-1)
-        print("expected_total_norm", expected_total_norm)
-        print("actual_total_norm", actual_total_norm)
-        print(
-            "torch.equal(expected_total_norm, actual_total_norm)", torch.equal(expected_total_norm, actual_total_norm)
-        )
-        print(
-            "assert_equal(expected_total_norm, actual_total_norm)", assert_equal(expected_total_norm, actual_total_norm)
-        )
-        print()
         assert torch.equal(expected_total_norm, actual_total_norm)
 
         # Check inputs
-        # for i in range(num_parameters):
-        #     expected_input_i = ttnn.to_torch(npu_inputs[i])
-        #     actual_input_i = ttnn.to_torch(new_npu_inputs[i])
-        #     assert torch.equal(expected_input_i, actual_input_i)
+        for i in range(num_parameters):
+            expected_input_i = ttnn.to_torch(npu_inputs[i])
+            actual_input_i = ttnn.to_torch(new_npu_inputs[i])
+            assert torch.equal(expected_input_i, actual_input_i)
 
 
 @pytest.mark.skip(reason="assertion fails during binary op input shape comparison because of different padding")

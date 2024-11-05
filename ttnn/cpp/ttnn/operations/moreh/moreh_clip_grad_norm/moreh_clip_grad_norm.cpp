@@ -91,8 +91,7 @@ Tensor MorehClipGradNorm::invoke(
     // max_norm / (total_norm + 1e-6)
     const auto &clip_coef = ttnn::multiply(ttnn::add(output_total_norm, 1e-6f), (1 / max_norm));
     // min(clip_coef, 1.0f)
-    Tensor scalar =
-        ttnn::operations::creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, inputs.at(0).device());
+    Tensor scalar = ttnn::operations::creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
     const auto &clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
 
@@ -105,7 +104,8 @@ Tensor MorehClipGradNorm::invoke(
         auto input_tensors = std::vector<Tensor>(
             inputs.begin() + start_input_idx, inputs.begin() + start_input_idx + num_inputs_at_this_iter);
 
-        ttnn::prim::moreh_clip_grad_norm_step3(input_tensors, clip_coef, memory_config, compute_kernel_config_val);
+        ttnn::prim::moreh_clip_grad_norm_step3(
+            input_tensors, clip_coef_clamped, memory_config, compute_kernel_config_val);
 
         if (i < (num_iter - 1)) {
             start_input_idx += num_inputs_at_this_iter;
