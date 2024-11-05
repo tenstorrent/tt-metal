@@ -566,6 +566,15 @@ class TtModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
+                # using n_heads since xattn repeats KV to match Q
+                (((self.n_heads // self.num_devices) * seq_len // 64), self.head_dim),
+                ttnn.CoreGrid(y=8, x=8),
+                ttnn.ShardStrategy.HEIGHT,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)

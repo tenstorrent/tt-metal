@@ -114,8 +114,8 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens):
-        return self.attention.compute_xattn_kv_cache(xattn_tokens)
+    def compute_xattn_kv_cache(self, xattn_tokens, xattn_cache, user_id):
+        return self.attention.compute_xattn_kv_cache(xattn_tokens, xattn_cache, user_id)
 
     def forward(
         self,
@@ -126,6 +126,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         full_text_row_masked_out_mask_1NSH,
         xattn_cache,
         mode,
+        user_id=0,
     ):
         attn_out = self.attention(
             x_11SH=self.attention_norm(x_11SH, mode=mode),
@@ -133,13 +134,17 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             xattn_cache=xattn_cache,
             full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
             mode=mode,
+            user_id=user_id,
         )
+        print(f"xattn output {attn_out.shape=}")
 
         attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
         res = ttnn.add(x_11SH, attn_out)
-        mlp_out = self.feed_forward(self.ffn_norm(res, mode=mode), mode=mode)
-        mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
+        mlp_out = self.feed_forward(self.ffn_norm(res), mode=mode)
+        if mode == "prefill":
+            # Making the assumption that you never mask decode rows
+            mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
         mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd))
         out = ttnn.add(res, mlp_out)
         return out
