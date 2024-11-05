@@ -157,7 +157,7 @@ jobs:
         sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
     - name: Prepare compile_commands.json
       run: |
-        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UMD_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF
     - name: Create results directory
       run: |
         mkdir clang-tidy-result
