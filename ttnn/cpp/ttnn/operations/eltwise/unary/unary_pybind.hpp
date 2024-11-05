@@ -180,7 +180,7 @@ void bind_unary_operation(py::module& module, const unary_operation_t& operation
 
 
 template <typename unary_operation_t>
-void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& info_doc = "" ) {
+void bind_unary_operation_overload_complex(py::module& module, const unary_operation_t& operation, const std::string& math, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -200,7 +200,19 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
             ttnn.Tensor: the output tensor.
 
         Note:
-            {3}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {3}
+                 - TILE
+                 - 2, 3, 4
+
+            {4}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -209,6 +221,7 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
         operation.base_name(),
         operation.python_fully_qualified_name(),
         math,
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -241,7 +254,7 @@ void bind_unary_operation_overload_complex(py::module& module, const unary_opera
 }
 
 template <typename unary_operation_t>
-void bind_unary_operation_overload_complex_return_complex(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+void bind_unary_operation_overload_complex_return_complex(py::module& module, const unary_operation_t& operation, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -261,7 +274,19 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
             ttnn.Tensor: the output tensor.
 
         Note:
-            {2}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {2}
+                 - TILE
+                 - 2, 3, 4
+
+            {3}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -269,6 +294,7 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -301,7 +327,7 @@ void bind_unary_operation_overload_complex_return_complex(py::module& module, co
 }
 
 template <typename unary_operation_t>
-void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation, const std::string& info_doc = "" ) {
+void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, const unary_operation_t& operation, const std::string& supported_dtype = "BFLOAT16", const std::string& info_doc = "" ) {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
@@ -322,7 +348,19 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             ttnn.Tensor: the output tensor.
 
         Note:
-            {2}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {2}
+                 - TILE
+                 - 2, 3, 4
+
+            {3}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -330,6 +368,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -1496,15 +1535,7 @@ void bind_dropout(py::module& module, const unary_operation_t& operation) {
 
 void py_module(py::module& module) {
     detail::bind_unary_operation_overload_complex(module, ttnn::abs, R"doc(\mathrm{{output\_tensor}}_i = abs(\mathrm{{input\_tensor}}_i))doc",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
-
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::acos, R"doc(\mathrm{{output\_tensor}}_i = acos(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::asin, R"doc(\mathrm{{output\_tensor}}_i = asin(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::atan, R"doc(\mathrm{{output\_tensor}}_i = atan(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1537,15 +1568,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
 
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = relu(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = relu6(\mathrm{{input\_tensor}}_i))doc");
@@ -1564,33 +1587,9 @@ void py_module(py::module& module) {
     "Input tensor needs to be in the range [-2147483647, 2147483647], INT32 dtype. Support provided only for Wormhole_B0.");
 
     //  Unaries with fast_and_approximate_mode
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-            +----------------------------+---------------------------------+-------------------+
-            |     Dtypes                 |         Layouts                 |     Ranks         |
-            +----------------------------+---------------------------------+-------------------+
-            |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-            +----------------------------+---------------------------------+-------------------+
-        )doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc,
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-        )doc");
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu);
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt);
 
