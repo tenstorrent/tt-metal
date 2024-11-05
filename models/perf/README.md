@@ -90,4 +90,3 @@ Export the table of ops and columns as a CSV file:
 ```bash
 python perf_report.py trace.csv --csv my_report.csv
 ```
-

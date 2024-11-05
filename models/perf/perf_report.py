@@ -567,15 +567,15 @@ def print_op_to_op_gap_advice(rows, headers, col_widths):
 
         total_duration = sum(
             op_data["Device Time"].raw_value for op_data in rows if op_data["Device Time"].raw_value is not None
-        ) + sum(
-            op_data["Op-to-Op Gap"].raw_value for op_data in rows if op_data["Op-to-Op Gap"].raw_value is not None
-        )
+        ) + sum(op_data["Op-to-Op Gap"].raw_value for op_data in rows if op_data["Op-to-Op Gap"].raw_value is not None)
 
         percentage_saved = (max_gap_overhead / total_duration) * 100
         print(
             f"\nThese ops have a >6us gap since the previous operation. Running with tracing could save {max_gap_overhead:.0f} us ({percentage_saved:.1f}% of overall time)"
         )
-        print("Alternatively ensure device is not waiting for the host and use device.enable_async(True). Experts can try moving runtime args in the kernels to compile-time args.\n")
+        print(
+            "Alternatively ensure device is not waiting for the host and use device.enable_async(True). Experts can try moving runtime args in the kernels to compile-time args.\n"
+        )
 
 
 def print_matmul_advice(rows, headers, col_widths):
@@ -800,7 +800,7 @@ def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_out
             "Output Subblock W",
         ]
         print(colored(f"Writing CSV output to {csv_output_file}", "cyan"))
-        with open(csv_output_file, 'w') as f:
+        with open(csv_output_file, "w") as f:
             f.write(",".join(all_headers) + "\n")
             for op_data in rows:
                 f.write(",".join(str(op_data[header].raw_value) for header in all_headers) + "\n")
