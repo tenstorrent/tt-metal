@@ -157,7 +157,19 @@ def perf_report(original_file_path):
         return pd.DataFrame(results)
 
     def calculate_bandwidth(row):
-        element_size = 2
+        dtype = row["Data Type"]
+        dtype_sizes = {
+            "BFLOAT16": 2,
+            "BFLOAT8_B": 1,
+            "BFLOAT4_B": 1,
+            "FLOAT32": 4,
+            "UINT8": 1,
+            "UINT16": 2,
+            "INT32": 4,
+            "UINT32": 4,
+        }
+        element_size = dtype_sizes.get(dtype)
+
         longest_device_fw_time = row["DEVICE FW DURATION [ns]"]
         longest_erisc_fw_time = row["DEVICE ERISC KERNEL DURATION [ns]"]
 
