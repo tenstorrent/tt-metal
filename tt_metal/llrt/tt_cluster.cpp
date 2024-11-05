@@ -137,7 +137,7 @@ BoardType Cluster::get_board_type(chip_id_t chip_id) const {
 
 void Cluster::generate_cluster_descriptor() {
     this->cluster_desc_path_ = (this->target_type_ == TargetDevice::Silicon and this->arch_ == tt::ARCH::WORMHOLE_B0)
-                                   ? tt_ClusterDescriptor::get_cluster_descriptor_file_path().string()
+                                   ? tt_ClusterDescriptor::get_cluster_descriptor_file_path()
                                    : "";
 
     // Cluster descriptor yaml not available for Blackhole bring up
