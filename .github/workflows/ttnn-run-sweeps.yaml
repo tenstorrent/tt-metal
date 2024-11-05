@@ -195,6 +195,7 @@ on:
           - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.binary.subtract.subtract
           - eltwise.binary.subtract.subtract_tensor_pytorch2
+          - eltwise.binary.subtract.subtract_tensor_fails
           - eltwise.binary.multiply.multiply
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
