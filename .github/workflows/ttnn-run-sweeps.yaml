@@ -203,6 +203,7 @@ on:
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
+          - eltwise.binary.div.div_tensor_fails
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
