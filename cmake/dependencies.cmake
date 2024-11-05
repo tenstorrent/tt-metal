@@ -8,6 +8,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 
 fetch_boost_library(core)
 fetch_boost_library(smart_ptr)
+fetch_boost_library(container)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -27,7 +28,6 @@ CPMAddPackage(
 )
 
 if(yaml-cpp_ADDED)
-    target_link_libraries(yaml-cpp PRIVATE stdlib)
     set_target_properties(
         yaml-cpp
         PROPERTIES
@@ -51,8 +51,6 @@ CPMAddPackage(
 
 if(googletest_ADDED)
     target_compile_options(gtest PRIVATE -Wno-implicit-int-float-conversion)
-    target_link_libraries(gtest PRIVATE stdlib)
-    target_link_libraries(gtest_main PRIVATE stdlib)
 endif()
 
 ############################################################################################################################
@@ -60,6 +58,11 @@ endif()
 ############################################################################################################################
 
 CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.1.1)
+if(reflect_ADDED)
+    add_library(reflect INTERFACE)
+    add_library(Reflect::Reflect ALIAS reflect)
+    target_include_directories(reflect SYSTEM INTERFACE ${reflect_SOURCE_DIR})
+endif()
 
 ############################################################################################################################
 # magic_enum : https://github.com/Neargye/magic_enum

@@ -18,31 +18,31 @@ void MorehAdamOperation::validate_inputs(
     auto& exp_avg_in = tensor_args.exp_avg_in;
     auto& exp_avg_sq_in = tensor_args.exp_avg_sq_in;
 
-    tt::operations::primary::check_tensor(params_in, "moreh_adam", "params_in");
-    tt::operations::primary::check_tensor(grad, "moreh_adam", "grad");
-    tt::operations::primary::check_tensor(exp_avg_in, "moreh_adam", "exp_avg_in");
-    tt::operations::primary::check_tensor(exp_avg_sq_in, "moreh_adam", "exp_avg_sq_in");
+    check_tensor(params_in, "moreh_adam", "params_in");
+    check_tensor(grad, "moreh_adam", "grad");
+    check_tensor(exp_avg_in, "moreh_adam", "exp_avg_in");
+    check_tensor(exp_avg_sq_in, "moreh_adam", "exp_avg_sq_in");
 
     if (tensor_args.max_exp_avg_sq_in) {
-        tt::operations::primary::check_tensor(*tensor_args.max_exp_avg_sq_in, "moreh_adam", "max_exp_avg_sq_in");
+        check_tensor(*tensor_args.max_exp_avg_sq_in, "moreh_adam", "max_exp_avg_sq_in");
     }
 
     const auto& params_out = tensor_args.output_tensors.at(0);
 
     if (params_out.has_value()) {
-        tt::operations::primary::check_tensor(params_out.value(), "moreh_adam", "params_out");
+        check_tensor(params_out.value(), "moreh_adam", "params_out");
     }
 
     if (tensor_args.output_tensors.at(1).has_value()) {
-        tt::operations::primary::check_tensor(tensor_args.output_tensors.at(1).value(), "moreh_adam", "exp_avg_out");
+        check_tensor(tensor_args.output_tensors.at(1).value(), "moreh_adam", "exp_avg_out");
     }
 
     if (tensor_args.output_tensors.at(2).has_value()) {
-        tt::operations::primary::check_tensor(tensor_args.output_tensors.at(2).value(), "moreh_adam", "exp_avg_sq_out");
+        check_tensor(tensor_args.output_tensors.at(2).value(), "moreh_adam", "exp_avg_sq_out");
     }
 
     if (tensor_args.output_tensors.at(3).has_value()) {
-        tt::operations::primary::check_tensor(
+        check_tensor(
             tensor_args.output_tensors.at(3).value(), "moreh_adam", "max_exp_avg_sq_out");
     }
 }
@@ -160,25 +160,10 @@ std::tuple<MorehAdamOperation::operation_attributes_t, MorehAdamOperation::tenso
 auto MorehAdamOperation::compute_program_hash(
     const MorehAdamOperation::operation_attributes_t& operation_attributes,
     const MorehAdamOperation::tensor_args_t& tensor_args) -> tt::stl::hash::hash_t {
-    return operation::hash_operation<MorehAdamOperation>(
-        operation_attributes.beta1,
-        operation_attributes.beta2,
-        operation_attributes.eps,
-        operation_attributes.amsgrad,
-        operation_attributes.weight_decay,
-        operation_attributes.memory_config,
-        operation_attributes.compute_kernel_config,
-        tensor_args.param_in.memory_config(),
-        tensor_args.param_in.dtype(),
-        tensor_args.grad.memory_config(),
-        tensor_args.grad.dtype(),
-        tensor_args.exp_avg_in.memory_config(),
-        tensor_args.exp_avg_in.dtype(),
-        tensor_args.exp_avg_sq_in.memory_config(),
-        tensor_args.exp_avg_sq_in.dtype(),
-        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().memory_config()
-                                                  : MemoryConfig{},
-        tensor_args.max_exp_avg_sq_in.has_value() ? tensor_args.max_exp_avg_sq_in.value().dtype() : DataType::INVALID);
+    auto operation_attributes_without_step_and_lr = operation_attributes;
+    operation_attributes_without_step_and_lr.step = 0;
+    operation_attributes_without_step_and_lr.lr = 0.0f;
+    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adam

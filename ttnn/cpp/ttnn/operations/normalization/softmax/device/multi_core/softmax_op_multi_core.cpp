@@ -20,11 +20,15 @@
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
+}
+}
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
@@ -36,7 +40,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     bool numeric_stable
 ) {
-
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto shape = input_tensor.get_legacy_shape();
     uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
     uint32_t HW = H*W;
@@ -242,9 +246,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             continue;
         }
         uint32_t num_tile_rows_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
@@ -395,9 +399,9 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 continue;
             }
 
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tile_rows_per_core = num_tile_rows_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tile_rows_per_core = num_tile_rows_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");

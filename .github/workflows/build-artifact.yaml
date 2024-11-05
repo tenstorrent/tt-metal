@@ -71,7 +71,6 @@ jobs:
       ARCH_NAME: ${{ matrix.arch }}
       SILENT: 0
       VERBOSE: 1
-    environment: dev
     runs-on:
       - build
       - in-service
@@ -127,6 +126,8 @@ jobs:
             -e ARCH_NAME=${{ matrix.arch }}
             -w ${{ github.workspace }}
           run: |
+            set -eu # basic shell hygiene
+
             # /tmp is a tmpfs; more efficient than persisted storage
             mkdir -p /tmp/ccache
             export CCACHE_TEMPDIR=/tmp/ccache

@@ -9,6 +9,7 @@
 #include "impl/dispatch/debug_tools.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 using std::cout, std::endl;
 using std::string;
 using std::vector;

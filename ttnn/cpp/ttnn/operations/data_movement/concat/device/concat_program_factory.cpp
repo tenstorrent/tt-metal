@@ -46,14 +46,14 @@ operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     uint32_t num_output_rows = output.get_legacy_shape()[-2];
     uint32_t num_input_tensors = input_tensors.size();
 
-    vector<CBHandle> cb_input(num_input_tensors);
-    vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
-    vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
+    std::vector<CBHandle> cb_input(num_input_tensors);
+    std::vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
+    std::vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     auto all_cores = input_tensors[0].shard_spec().value().grid;
 
-    vector<uint32_t> cb_ids(num_input_tensors);
+    std::vector<uint32_t> cb_ids(num_input_tensors);
     uint32_t input_unit_size = input_tensors[0].shard_spec().value().shape[1] * input_tensors[0].element_size();
     // input CBs
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
@@ -201,10 +201,10 @@ operation::ProgramWithCallbacks s2s_concat_multi_core(
         elements_per_page_height = TILE_HEIGHT;
     }
 
-    vector<CBHandle> cb_inputs(num_input_tensors);
-    vector<uint32_t> input_num_pages_per_stick(num_input_tensors);
-    vector<uint32_t> input_num_sticks(num_input_tensors);
-    vector<uint32_t> input_write_offsets(num_input_tensors);
+    std::vector<CBHandle> cb_inputs(num_input_tensors);
+    std::vector<uint32_t> input_num_pages_per_stick(num_input_tensors);
+    std::vector<uint32_t> input_num_sticks(num_input_tensors);
+    std::vector<uint32_t> input_write_offsets(num_input_tensors);
 
     // Assume inputs and output have the same sharding grid.
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
@@ -299,14 +299,14 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     uint32_t num_output_rows = output.get_legacy_shape()[-1];
     uint32_t num_input_tensors = input_tensors.size();
 
-    vector<CBHandle> cb_input(num_input_tensors);
-    vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
-    vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
+    std::vector<CBHandle> cb_input(num_input_tensors);
+    std::vector<uint32_t> input_num_units_per_shard_height(num_input_tensors);
+    std::vector<uint32_t> input_num_units_per_shard_width(num_input_tensors);
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     auto all_cores = input_tensors[0].shard_spec().value().grid;
 
-    vector<uint32_t> cb_ids(num_input_tensors);
+    std::vector<uint32_t> cb_ids(num_input_tensors);
     uint32_t input_unit_size = input_tensors[0].shard_spec().value().shape[1] * input_tensors[0].element_size();
     // input CBs
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
@@ -349,7 +349,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         auto input_shard_spec = input_tensors[0].shard_spec().value();
         uint32_t curr_num_input_tensors;
         uint32_t curr_num_output_rows;
-        if (input_cores.core_coord_in_core_ranges(core)) {
+        if (input_cores.contains(core)) {
             curr_num_input_tensors = num_input_tensors;
             curr_num_output_rows = num_output_rows_per_core;
         } else {
@@ -357,8 +357,8 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             curr_num_output_rows = 0;
         }
 
-        vector<uint32_t> reader_runtime_args = {};
-        vector<uint32_t> writer_runtime_args = {
+        std::vector<uint32_t> reader_runtime_args = {};
+        std::vector<uint32_t> writer_runtime_args = {
             output.buffer()->address(),
             core_id,
             curr_num_output_rows,
@@ -392,7 +392,7 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
                 uint32_t curr_num_output_rows;
-                if (input_cores.core_coord_in_core_ranges(core)) {
+                if (input_cores.contains(core)) {
                     curr_num_input_tensors = num_input_tensors;
                     curr_num_output_rows = num_output_rows_per_core;
                 } else {
@@ -400,8 +400,8 @@ operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
                     curr_num_output_rows = 0;
                 }
 
-                vector<uint32_t> reader_runtime_args = {curr_num_input_tensors};
-                vector<uint32_t> writer_runtime_args = {
+                std::vector<uint32_t> reader_runtime_args = {curr_num_input_tensors};
+                std::vector<uint32_t> writer_runtime_args = {
                     dst_buffer->address(), curr_num_input_tensors, curr_num_output_rows};
                 for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
                     UpdateDynamicCircularBufferAddress(program, input_id, *dst_buffer);
@@ -540,7 +540,7 @@ operation::ProgramWithCallbacks concat_multi_core(
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
+    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), is_dram.begin(), is_dram.end());
     common_reader_kernel_args.insert(
@@ -615,13 +615,13 @@ operation::ProgramWithCallbacks concat_multi_core(
             }
         }
 
-        vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         reader_kernel_args[0] = num_pages_per_core;
         reader_kernel_args[1] = curr_tensor;
         reader_kernel_args[2] = curr_tensor_id;
         reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
 
-        vector<uint32_t> writer_kernel_args;
+        std::vector<uint32_t> writer_kernel_args;
         if (rm_layout) {
             writer_kernel_args = {
                 dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};

@@ -121,6 +121,12 @@ struct ExecuteUnaryCompositeClamp {
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        std::optional<Tensor> min = std::nullopt,
+        std::optional<Tensor> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
@@ -128,6 +134,12 @@ struct ExecuteUnaryCompositeClip {
         const Tensor &input_tensor,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        std::optional<Tensor> min = std::nullopt,
+        std::optional<Tensor> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
@@ -151,6 +163,12 @@ struct ExecuteRdiv {
         const std::string& round_mode = "None",
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteMish {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace unary
@@ -240,7 +258,7 @@ constexpr auto log1p = ttnn::register_operation_with_auto_launch_op<
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
 constexpr auto mish = ttnn::register_operation_with_auto_launch_op<
     "ttnn::mish",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MISH>>();
+    operations::unary::ExecuteMish>();
 constexpr auto multigammaln = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();

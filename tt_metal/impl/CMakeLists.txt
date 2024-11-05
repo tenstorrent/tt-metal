@@ -6,7 +6,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/runtime_args_data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/basic_allocator.cpp
@@ -25,6 +24,8 @@ set(IMPL_SRC
 )
 
 add_library(impl OBJECT ${IMPL_SRC})
+add_library(Metalium::Metal::Impl ALIAS impl)
+
 target_link_libraries(impl PRIVATE Boost::smart_ptr)
 target_link_libraries(impl PUBLIC common)
 

@@ -18,6 +18,8 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) { return input_tensor.memory_config().buffer_type == BufferType::DRAM; }
 inline bool is_dram(const std::optional<const Tensor> input_tensor) {
      return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
@@ -40,6 +42,8 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
     // second -> upper 16
     return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
 }
+}
+}
 
 operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     const Tensor &a,
@@ -47,6 +51,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
     const auto shape = a.get_legacy_shape();
     const uint32_t W = shape[-1], H = shape[-2];
@@ -183,7 +188,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)
     );
 
-    vector<uint32_t> compute_args = { Wt, block_size };
+    std::vector<uint32_t> compute_args = { Wt, block_size };
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -226,9 +231,9 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
         uint32_t num_tile_rows_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");

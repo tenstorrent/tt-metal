@@ -22,7 +22,7 @@ namespace ttnn::graph {
 
     public:
         ProcessorHooks() = default;
-        bool hook_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        bool hook_allocate(const tt::tt_metal::Buffer* buffer) override;
 
         bool hook_deallocate(tt::tt_metal::Buffer* buffer) override;
 
@@ -40,11 +40,11 @@ namespace ttnn::graph {
         GraphProcessor(tt::tt_metal::IGraphProcessor::RunMode mode);
         ~GraphProcessor() override;
 
-        void track_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        void track_allocate(const tt::tt_metal::Buffer* buffer) override;
 
         void track_deallocate(tt::tt_metal::Buffer* buffer) override;
 
-        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size) override;
+        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size, bool is_globally_allocated) override;
 
         void track_deallocate_cb() override;
 

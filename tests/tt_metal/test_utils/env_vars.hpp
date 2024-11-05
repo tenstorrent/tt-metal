@@ -14,7 +14,6 @@ namespace {
 std::string get_string_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole_b0"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         case tt::ARCH::Invalid: return "invalid"; break;
@@ -57,7 +56,7 @@ inline std::string get_umd_arch_name() {
             get_string_lowercase(detected_arch));
     }
 
-    return get_string_lowercase(arch); 
+    return get_string_lowercase(arch);
 
 }
 

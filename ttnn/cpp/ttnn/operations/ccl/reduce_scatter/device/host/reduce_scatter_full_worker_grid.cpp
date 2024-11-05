@@ -210,7 +210,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(worker_arg_builder.generate_sender_kernel_ct_args(), worker_defines));
 
-    vector<uint32_t> compute_kernel_args = {};
+    std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
     std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(binary_math_op);
@@ -253,7 +253,7 @@ static void set_reduce_scatter_worker_rt(
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& cw_edm_builders,
     std::vector<ttnn::ccl::EriscDatamoverBuilder>& ccw_edm_builders,
     EdmInterfaceAddresses const& edm_interface_addresses,
-    WorkerAttributes &worker_attributes,
+    WorkerAttributes const& worker_attributes,
     std::size_t num_edm_channels,
     std::size_t edm_num_buffers_per_channel,
     ttnn::operations::binary::BinaryOpType binary_math_op) {
@@ -339,7 +339,7 @@ static std::pair<CoreRangeSet, std::optional<CoreRangeSet>> select_worker_cores_
     auto const& lower_half_of_cores =
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(workers_per_direction - 1, num_links - 1)));
     auto const& upper_half_of_cores = CoreRangeSet(
-        CoreRange(CoreCoord(workers_per_direction, 0), CoreCoord(num_edm_channels - 1, num_links - 1)));
+        CoreRange(CoreCoord(0, num_links), CoreCoord(workers_per_direction - 1, (2 * num_links) - 1)));
     if (topology_config.ring_index == 0) {
         log_trace(tt::LogOp, "Start of line, putting CCL send cores in lower half");
         return {upper_half_of_cores, lower_half_of_cores};
@@ -650,7 +650,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
 
     std::function<bool(uint32_t)> is_worker_in_clockwise_direction_fn = [is_linear, enable_bidirectional, num_edm_channels_per_link](std::size_t x) {
                 static constexpr std::size_t bidirectional_directions = 2;
-                return is_linear ? (x < (num_edm_channels_per_link / bidirectional_directions)):
+                return is_linear ? ((x % num_edm_channels_per_link) < (num_edm_channels_per_link / bidirectional_directions)):
                     enable_bidirectional ? (x % bidirectional_directions == 0) : true;
             };
 

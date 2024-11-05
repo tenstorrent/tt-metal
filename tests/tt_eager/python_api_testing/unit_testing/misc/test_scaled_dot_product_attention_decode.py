@@ -469,6 +469,7 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -518,6 +519,7 @@ def test_sdpa_decode(
         )
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -550,6 +552,7 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
     assert device.num_program_cache_entries() == 1
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -694,21 +697,20 @@ def run_test_sdpa_decode_paged_attention(
         start_indices = np.linspace(max(max_start_idx - b, 0), max_start_idx, b, dtype=np.int32).tolist()
 
         # Test when page_table does not contain blocks for full sequence length
+        k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+        padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
         if causal:
-            last_block = max(1, int(math.ceil((max_start_idx + 1) / block_size)))
+            last_block = max(1, math.ceil(padded_layer_len / block_size))
             tt_page_table = ttnn.Tensor(page_table[:, :last_block], ttnn.int32).to(device)
         else:
             tt_page_table = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
-        k_chunk_size = get_chunk_size(max_start_idx + 1, s)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,  # device.compute_with_storage_grid_size(),
             q_chunk_size=padded_num_heads,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=False,
         )
-
-        padded_layer_len = nearest_n(max_start_idx + 1, n=k_chunk_size) if causal else s
 
         # Test various sequence lengths
         logger.debug(
@@ -869,6 +871,7 @@ def test_sdpa_decode_paged_attention(
     assert device.num_program_cache_entries() == 4
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -898,6 +901,7 @@ def test_sdpa_decode_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype
     )
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.skip("Skipping Perf Test in CI")
 def test_sdpa_decode_perf(device, use_program_cache):
@@ -952,6 +956,7 @@ def test_sdpa_decode_perf(device, use_program_cache):
         )
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype",
@@ -1171,6 +1176,7 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
     logger.info(f"PCC failed Start Pos: {failed_start_pos}")
 
 
+@skip_for_blackhole("Unsupported on BH, see #12349")
 @pytest.mark.timeout(600)
 @pytest.mark.skip("Skipping due to causing 45 minutes timeout on tt eager unit tests")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")

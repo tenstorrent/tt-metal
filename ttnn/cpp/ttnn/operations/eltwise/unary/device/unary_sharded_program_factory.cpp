@@ -50,8 +50,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     uint32_t num_tile_per_core = 0;
 
     if (input.get_dtype() == DataType::BFLOAT8_B) {
-        uint32_t ntiles_along_width = ceil(shard_spec.shape[1] / (float) tt::constants::TILE_WIDTH);
-        uint32_t ntiles_along_height = ceil(shard_spec.shape[0] / (float) tt::constants::TILE_HEIGHT);
+        uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float) tt::constants::TILE_WIDTH);
+        uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float) tt::constants::TILE_HEIGHT);
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
@@ -109,12 +109,12 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                 // per_core_block_cnt
         num_tile_per_core  // per_core_block_size
     };
 
-    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[in_cb_id] = UnpackToDestMode::UnpackToDestFp32;
     }

@@ -33,7 +33,6 @@ namespace tt::tt_metal {
 static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
     switch (arch) {
         case tt::ARCH::GRAYSKULL: return "grayskull"; break;
-        case tt::ARCH::WORMHOLE: return "wormhole"; break;
         case tt::ARCH::WORMHOLE_B0: return "wormhole"; break;
         case tt::ARCH::BLACKHOLE: return "blackhole"; break;
         default: return "invalid"; break;
@@ -196,6 +195,11 @@ void JitBuildState::finish_init() {
     // Note the preceding slash which defies convention as this gets appended to
     // the kernel name used as a path which doesn't have a slash
     this->target_full_path_ = "/" + this->target_name_ + "/" + this->target_name_ + ".elf";
+
+    if (not this->is_fw_) {
+        // Emit relocations, so we can relocate the resulting binary
+        this->lflags_ += "-Wl,--emit-relocs ";
+    }
 }
 
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) :
@@ -412,7 +416,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 }
 
 JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig &build_config) : JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid idle ethernet processor");
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -433,9 +437,9 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
-                "-DCOMPILE_FOR_IDLE_ERISC "
+                "-DCOMPILE_FOR_IDLE_ERISC=0 "
                 "-DERISC "
-                "-DRISC_B0_HW ";
+                "-DRISC_B0_HW ";    // do we need this for BH?
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
 
@@ -452,6 +456,28 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_ierisc.ld ";
             }
 
+            break;
+        }
+        case 1: {
+            this->target_name_ = "slave_idle_erisc";
+            this->cflags_ =
+                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->defines_ +=
+                "-DCOMPILE_FOR_IDLE_ERISC=1 "
+                "-DERISC "
+                "-DRISC_B0_HW ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            if (this->is_fw_) {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/slave_idle_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
+            }
+            this->lflags_ = env_.lflags_ + "-Os ";
+            if (this->is_fw_) {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
+            } else {
+                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_slave_ierisc.ld ";
+            }
             break;
         }
         default:
@@ -480,7 +506,7 @@ void JitBuildState::compile_one(
     const JitBuildSettings* settings,
     const string& src,
     const string& obj) const {
-    ZoneScoped;
+    //ZoneScoped;
     fs::create_directories(out_dir);
 
     // Add kernel specific defines
@@ -517,7 +543,7 @@ void JitBuildState::compile_one(
 }
 
 void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
-    ZoneScoped;
+    //ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         launch_build_step(
@@ -534,7 +560,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
+    //ZoneScoped;
     string lflags = this->lflags_;
     if (tt::llrt::OptionsG.get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
@@ -564,7 +590,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
 void JitBuildState::weaken(const string& log_file, const string& out_dir) const {
-    ZoneScoped;
+    //ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
     std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
@@ -577,7 +603,7 @@ void JitBuildState::weaken(const string& log_file, const string& out_dir) const 
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
-    ZoneScoped;
+    //ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
@@ -596,7 +622,7 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
 }
 
 void JitBuildState::build(const JitBuildSettings* settings) const {
-    ZoneScoped;
+    //ZoneScoped;
     string out_dir = (settings == nullptr)
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
@@ -616,13 +642,13 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
-    ZoneScoped;
+    //ZoneScoped;
 
     build.build(settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
-    ZoneScoped;
+    //ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < build_set.size(); ++i) {
         // Capture the necessary objects by reference

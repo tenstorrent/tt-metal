@@ -13,8 +13,6 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
-using namespace tt::constants;
-
 namespace tt {
 
 namespace tt_metal {
@@ -27,6 +25,8 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     std::optional<uint32_t> token_idx,
     ttnn::DeviceComputeKernelConfig compute_kernel_config
 ) {
+    using namespace tt::constants;
+
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
@@ -286,7 +286,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,
         (std::uint32_t)rotated_input_cb_index,
         (std::uint32_t)cos_cb_index,

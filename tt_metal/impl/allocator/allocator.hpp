@@ -19,6 +19,12 @@ namespace tt {
 
 namespace tt_metal {
 
+inline namespace v0 {
+
+class Buffer;
+
+}  // namespace v0
+
 // Fwd declares
 enum class BufferType;
 struct Allocator;
@@ -51,6 +57,9 @@ class BankManager {
     Statistics get_statistics() const;
 
     void dump_blocks(std::ofstream &out) const;
+
+    void shrink_size(DeviceAddr shrink_size, bool bottom_up=true);
+    void reset_size();
 
    private:
     void deallocate_buffer_(DeviceAddr address);
@@ -99,14 +108,18 @@ std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator &allocator,
 
 DeviceAddr base_alloc(const AllocatorConfig & config, BankManager &bank_manager, DeviceAddr size, DeviceAddr page_size, bool bottom_up, std::optional<uint32_t> num_shards);
 
-DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, DeviceAddr page_size, const BufferType &buffer_type, bool bottom_up, std::optional<uint32_t> num_shards = std::nullopt);
+void shrink_allocator_size(Allocator &allocator, const BufferType &buffer_type, DeviceAddr shrink_size, bool bottom_up=true);
+
+DeviceAddr allocate_buffer(Allocator &allocator, DeviceAddr size, Buffer *buffer);
 
 void mark_allocations_unsafe(Allocator &allocator);
 
 void mark_allocations_safe(Allocator &allocator);
 
-void deallocate_buffer(Allocator &allocator, DeviceAddr address, const BufferType &buffer_type);
+void deallocate_buffer(Allocator &allocator, Buffer *buffer);
 void deallocate_buffers(Allocator &allocator);
+
+const std::unordered_set<Buffer *> &get_allocated_buffers(const Allocator &allocator);
 
 void clear(Allocator &allocatator);
 
@@ -127,6 +140,7 @@ struct Allocator {
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;
     std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids;
+    std::unordered_set<Buffer *> allocated_buffers;
 
     AllocatorConfig config;
     // Callbacks to invoke during initialization and allocation

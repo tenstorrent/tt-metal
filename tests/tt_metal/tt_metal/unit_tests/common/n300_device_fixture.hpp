@@ -23,7 +23,7 @@ class N300DeviceFixture : public ::testing::Test {
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 2 and
             tt::tt_metal::GetNumPCIeDevices() == 1) {
-            vector<chip_id_t> ids;
+            std::vector<chip_id_t> ids;
             for (unsigned int id = 0; id < num_devices_; id++) {
                 ids.push_back(id);
             }

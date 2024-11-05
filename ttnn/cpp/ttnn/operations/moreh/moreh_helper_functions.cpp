@@ -4,15 +4,17 @@
 
 #include "moreh_helper_functions.hpp"
 
-#include "common/constants.hpp"
 #include <magic_enum.hpp>
-#include "tt_metal/detail/util.hpp"
+
+#include "common/constants.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "tt_metal/detail/util.hpp"
 
-namespace tt {
+namespace ttnn {
 namespace operations {
-namespace primary {
 
+using namespace tt;
+using namespace tt::tt_metal;
 using namespace constants;
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
@@ -50,7 +52,7 @@ std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
     return std::make_tuple(new_all_cores, new_core_group_1, new_core_group_2);
 }
 
-std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
+std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores_wt_core_range(
     CoreRange core_range, uint32_t units_to_divide) {
     uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -99,7 +101,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
+            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
             .defines = defines});
 }
@@ -116,7 +118,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
+            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
             .compile_args = compile_args,
             .defines = defines});
 }
@@ -129,19 +131,12 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    vector<UnpackToDestMode> unpack_to_dest_mode) {
+    std::vector<UnpackToDestMode> unpack_to_dest_mode) {
     std::vector<KernelHandle> compute_kernel_ids{};
     KernelHandle compute_kernel_id{};
     for (auto arg : args) {
         compute_kernel_id = CreateComputeKernel(
-            program,
-            file_name,
-            arg,
-            defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode,
-            unpack_to_dest_mode);
+            program, file_name, arg, defines, math_fidelity, fp32_dest_acc_en, math_approx_mode, unpack_to_dest_mode);
         compute_kernel_ids.push_back(compute_kernel_id);
     }
     return compute_kernel_ids;
@@ -155,7 +150,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
-    vector<UnpackToDestMode> unpack_to_dest_mode) {
+    std::vector<UnpackToDestMode> unpack_to_dest_mode) {
     KernelHandle compute_kernel_id{0};
     if (arg.num_tile_per_core_group > 0) {
         compute_kernel_id = CreateKernel(
@@ -298,9 +293,7 @@ void check_tensor(
     check_tensor(tensor.value(), op_name, tensor_name, data_types, layout, check_dtype, check_layout);
 }
 
-bool is_hw_dim(uint32_t dim, uint32_t rank) {
-    return (dim >= rank - 2);
-}
+bool is_hw_dim(uint32_t dim, uint32_t rank) { return (dim >= rank - 2); }
 
 uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     uint32_t num_inner = 1;
@@ -331,7 +324,7 @@ uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(std::vector<uint32_t> &dim, const ttnn::SimpleShape &shape) {
+void expand_to_max_dim(ttnn::SmallVector<uint32_t> &dim, const ttnn::SimpleShape &shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -381,10 +374,10 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
                 output_rank);
         }
 
-        std::vector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
-        std::vector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> input_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
+        ttnn::SmallVector<uint32_t> output_dim_wo_padding(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
         expand_to_max_dim(input_dim, input_shape);
         expand_to_max_dim(output_dim, output_shape);
         expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
@@ -395,8 +388,8 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
             TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
-        std::vector<uint32_t> expected_output_shape;
-        std::vector<uint32_t> expected_output_shape_wo_padding;
+        ttnn::SmallVector<uint32_t> expected_output_shape;
+        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape.rank(); ++i) {
             if (i == dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
@@ -418,21 +411,21 @@ void validate_output_with_keepdim(const Tensor &input, const Tensor &output, con
     }
 }
 
-void initialize_dims_with_range(std::vector<int64_t> &dims, uint32_t input_rank) {
+void initialize_dims_with_range(ttnn::SmallVector<int64_t> &dims, uint32_t input_rank) {
     dims.resize(input_rank);
     std::iota(dims.begin(), dims.end(), 0);
 }
 
-std::vector<int64_t> get_dim(
-    const std::optional<std::variant<int64_t, std::vector<int64_t>>> &dim, uint32_t input_rank) {
-    std::vector<int64_t> dims;
+ttnn::SmallVector<int64_t> get_dim(
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> &dim, uint32_t input_rank) {
+    ttnn::SmallVector<int64_t> dims;
     if (!dim.has_value()) {
         initialize_dims_with_range(dims, input_rank);
     } else if (std::holds_alternative<int64_t>(dim.value())) {
         auto d = std::get<int64_t>(dim.value());
         dims.push_back(d);
     } else {
-        dims = std::get<std::vector<int64_t>>(dim.value());
+        dims = std::get<ttnn::SmallVector<int64_t>>(dim.value());
         if (dims.empty()) {
             initialize_dims_with_range(dims, input_rank);
         }
@@ -440,7 +433,7 @@ std::vector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape &shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -452,10 +445,11 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
         other_dims_product *= shape[i];
     }
 
-    return { W, H, other_dims_product};
+    return {W, H, other_dims_product};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(const ttnn::SimpleShape& shape, uint32_t dim) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
+    const ttnn::SimpleShape &shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -471,9 +465,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
     uint32_t inner_tile_size = inner_dims_product * Ht * Wt;
     uint32_t reduce_tile_size = reduce_dim * inner_tile_size;
 
-    return { Wt, Ht, inner_tile_size, reduce_tile_size};
+    return {Wt, Ht, inner_tile_size, reduce_tile_size};
 }
 
-}  // namespace primary
 }  // namespace operations
-}  // namespace tt
+}  // namespace ttnn

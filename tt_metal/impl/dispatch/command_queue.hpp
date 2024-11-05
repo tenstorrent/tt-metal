@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "tt_metal/common/base.hpp"
 #include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -298,7 +297,6 @@ class EnqueueProgramCommand : public Command {
     uint32_t unicast_cores_launch_message_wptr = 0;
 
    public:
-
     EnqueueProgramCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -475,14 +473,6 @@ using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescripto
 using CompletionReaderQueue = LockFreeQueue<CompletionReaderVariant>;
 }  // namespace detail
 
-struct AllocBufferMetadata {
-    Buffer* buffer;
-    std::reference_wrapper<Allocator> allocator;
-    BufferType buffer_type;
-    uint32_t device_address;
-    bool bottom_up;
-};
-
 struct RuntimeArgsMetadata {
     CoreCoord core_coord;
     std::shared_ptr<RuntimeArgs> runtime_args_ptr;
@@ -590,7 +580,6 @@ struct CommandInterface {
     std::optional<bool> blocking;
     std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
     Program* program;
-    std::optional<AllocBufferMetadata> alloc_md;
     std::optional<RuntimeArgsMetadata> runtime_args_md;
     std::optional<const Buffer*> shadow_buffer;
     std::optional<HostDataType> src;
@@ -707,5 +696,5 @@ void EnqueueAddBufferToProgram(
 
 }  // namespace tt::tt_metal
 
-std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);
-std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::EnqueueCommandType const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::CommandQueue::CommandQueueMode const& type);

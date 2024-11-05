@@ -13,6 +13,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 
+using std::vector;
 using namespace tt;
 
 namespace unit_tests::initialize_semaphores {

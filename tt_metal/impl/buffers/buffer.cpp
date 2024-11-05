@@ -4,13 +4,21 @@
 
 #include "tt_metal/impl/buffers/buffer.hpp"
 
-#include "llrt/llrt.hpp"
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/device/device.hpp"
+
+#include <algorithm>
+#include <mutex>
+#include <string>
+#include <utility>
+#include "tt_metal/common/base.hpp"
+#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include "third_party/umd/device/tt_soc_descriptor.h"
+#include "fmt/base.h"
+#include "tt_stl/reflection.hpp"
 
 namespace tt {
 
@@ -41,12 +49,18 @@ void validate_buffer_size_and_page_size(
         size);
     TT_FATAL(
         page_size % sizeof(uint32_t) == 0,
-        "Page size must be divisible by sizeof(uint32_t) because buffers hold uint32_t values");
+        "Page size {} must be divisible by sizeof(uint32_t) because buffers hold uint32_t values", page_size);
 
     if (is_sharded(buffer_layout)) {
-        TT_FATAL(shard_parameters != std::nullopt, "Sharded buffers must have a core grid assigned");
-    } else if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
-        TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        TT_FATAL(
+            shard_parameters != std::nullopt,
+            "Buffer was specified as sharded but does not have shard_parameters specified");
+    } else {
+        TT_FATAL(
+            shard_parameters == std::nullopt, "Buffer was specified as not sharded but has shard_parameters specified");
+        if (buffer_layout == TensorMemoryLayout::SINGLE_BANK) {
+            TT_FATAL(page_size == size, "Contiguous buffer must be one contiguous page");
+        }
     }
 }
 
@@ -125,7 +139,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     auto shard_spec = buffer.shard_spec();
 
     bool row_major = shard_spec.orientation() == ShardOrientation::ROW_MAJOR;
-    uint32_t num_cores = buffer.num_cores();
+    uint32_t num_cores = buffer.num_cores().value();
 
     buffer_page_mapping.all_cores_ = corerange_to_cores(shard_spec.grid(), num_cores, row_major);
     TT_FATAL(num_cores == buffer_page_mapping.all_cores_.size(), "Buffer has {} cores, but page mapping expects {} cores", num_cores, buffer_page_mapping.all_cores_.size());
@@ -189,14 +203,17 @@ Buffer::Buffer(
     const BufferType buffer_type,
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
-    const std::optional<bool> bottom_up) :
+    const std::optional<bool> bottom_up,
+    const bool owns_data,
+    Private) :
     device_(device),
     size_(size),
     page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
-    bottom_up_(bottom_up),
+    bottom_up_(bottom_up.value_or(this->is_dram())),
+    owns_data_(owns_data),
     buffer_page_mapping_(nullptr) {
     TT_FATAL(this->device_ != nullptr && this->device_->allocator_ != nullptr, "Device and allocator need to not be null.");
 
@@ -213,7 +230,8 @@ std::shared_ptr<Buffer> Buffer::create(
     const TensorMemoryLayout buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up) {
-    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up);
+    auto* bufferPtr = new Buffer(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, true /* owns data */, Private());
+    // Using a custom deleter to properly clean up the owned datas
     auto buffer = std::shared_ptr<Buffer>(bufferPtr, deleter);
     buffer->weak_self = buffer;
 
@@ -223,12 +241,19 @@ std::shared_ptr<Buffer> Buffer::create(
     }
 
     buffer->device_->push_work([buffer] {
-        bool bottom_up = buffer->bottom_up_.value_or(buffer->is_dram());
-        buffer->address_ = detail::AllocateBuffer(buffer.get(), bottom_up);
-        detail::BUFFER_MAP.insert({buffer->device_->id(), buffer->address_}, buffer.get());
+        try {
+            buffer->address_ = detail::AllocateBuffer(buffer.get());
+        } catch(...) {
+            std::unique_lock lock(buffer->allocation_mutex_);
+            buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
+            lock.unlock();
+            buffer->allocation_cv_.notify_all();
+
+            throw;
+        }
 
         std::unique_lock lock(buffer->allocation_mutex_);
-        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+        buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
         lock.unlock();
         buffer->allocation_cv_.notify_all();
     });
@@ -236,8 +261,30 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
+std::shared_ptr<Buffer> Buffer::create(
+    Device *device,
+    DeviceAddr address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up) {
+    // Not using a custom deleter, because it doesn't own any data to cleanup
+    auto buffer = std::make_shared<Buffer>(device, size, page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, false /* owns data */, Private());
+    buffer->weak_self = buffer;
+
+    buffer->address_ = address;
+    buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+
+    return buffer;
+}
+
 void Buffer::deallocate() {
     deallocation_requested_.store(true, std::memory_order::relaxed);
+    if (!owns_data_) {
+        return;
+    }
     device_->push_work([self = weak_self.lock()] {
         self->deallocate_impl();
     });
@@ -251,13 +298,12 @@ void Buffer::deleter(Buffer* buffer) {
 }
 
 void Buffer::deallocate_impl() {
-    if (allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+    if (allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATED) {
         return;
     }
 
     if (device_->initialized_ && size_ != 0) {
         // address_ is only modified from this thread, no sync required
-        detail::BUFFER_MAP.erase({device_->id(), address_});
         detail::DeallocateBuffer(this);
     }
 
@@ -278,6 +324,10 @@ bool Buffer::is_allocated() const {
 }
 
 uint32_t Buffer::address() const {
+    if (allocation_status_.load(std::memory_order::acquire) != AllocationStatus::ALLOCATION_REQUESTED) {
+        return address_;
+    }
+
     if (device_->can_use_passthrough_scheduling()) {
         return address_;
     }
@@ -306,7 +356,7 @@ uint32_t Buffer::num_dev_pages() const {
         return this->num_pages();
     }
 
-    return this->shard_spec().size() * this->num_cores();
+    return this->shard_spec().size() * this->num_cores().value();
 }
 
 CoreType Buffer::core_type() const {
@@ -329,6 +379,7 @@ bool Buffer::is_dram() const {
 }
 bool Buffer::is_trace() const {
     return buffer_type() == BufferType::TRACE;
+
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -399,9 +450,9 @@ void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
     this->buffer_page_mapping_ = nullptr;
 }
 
-uint32_t Buffer::num_cores() const {
+std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_))
-        return 1;
+        return std::nullopt;
 
     return this->shard_spec().tensor_shard_spec.grid.num_cores();
 }
@@ -431,10 +482,6 @@ std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
 DeviceAddr ShardSpecBuffer::size() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
-}
-
-namespace detail {
-buffer_map_t BUFFER_MAP = {};
 }
 
 }  // namespace tt_metal

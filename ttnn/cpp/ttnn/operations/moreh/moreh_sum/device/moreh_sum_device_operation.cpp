@@ -42,13 +42,13 @@ void validate_tensors(
     const auto& input = tensor_args.input;
     auto& output = tensor_args.output;
 
-    tt::operations::primary::check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
-    tt::operations::primary::check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(input, "moreh_sum", "input", {DataType::BFLOAT16, DataType::INT32});
+    check_tensor(output, "moreh_sum", "output", {DataType::BFLOAT16, DataType::INT32});
 
-    tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
+    validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        tt::operations::primary::validate_output_with_keepdim(
+        validate_output_with_keepdim(
             input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }
@@ -93,8 +93,8 @@ MorehSumOperation::shape_return_value_t MorehSumOperation::compute_output_shapes
 
         output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
     } else {
-        std::vector<uint32_t> shape;
-        std::vector<Padding::PadDimension> pad_dimensions;
+        ttnn::SmallVector<uint32_t> shape;
+        ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
         auto input_padding = input_shape.value.padding();
 

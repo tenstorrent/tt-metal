@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
         /*
          * Set the parameters that the compute kernel will use.
          */
-        vector<uint32_t> compute_kernel_args = {
+        std::vector<uint32_t> compute_kernel_args = {
             num_tiles,
             1
         };

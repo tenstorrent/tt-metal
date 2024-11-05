@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// #pragma once
+#pragma once
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/bfloat16.hpp"
@@ -29,7 +29,7 @@ struct BufferStressTestConfig {
 
 inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_t start = 0) {
     TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
-    vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
+    std::vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
 
     for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = start + i;

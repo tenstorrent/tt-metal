@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-import math
 import pytest
 from loguru import logger
 import os
-import itertools
 
 ##### PyTorch imports #####
 import torch
@@ -56,18 +54,16 @@ class ClassEmbedding(nn.Module):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "input_shape",
+    "bsz, num_concurrent_media, num_chunks",
     [
-        ((1, 4, 4, 1024, 1280)),
-        ((1, 4, 4, 1024 + 1, 1280)),
-        ((1, 4, 4, 1032, 1280)),
+        ((1, 4, 4)),
     ],
 )
 @pytest.mark.parametrize(
@@ -81,12 +77,14 @@ def test_llama_class_embedding_inference(
     use_program_cache,
     reset_seeds,
     # Input params
-    input_shape,
+    bsz,
+    num_concurrent_media,
+    num_chunks,
     layout,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.9999
+    pcc_required = 0.9999
 
     mesh_device.enable_async(True)
 
@@ -97,13 +95,8 @@ def test_llama_class_embedding_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    (
-        bsz,
-        num_concurrent_media,
-        num_chunks,
-        ntok,
-        dim,
-    ) = input_shape
+    ntok = nearest_32(model_args.vision_chunk_ntok)
+    dim = model_args.vision_dim
 
     ##### Prepare inputs #####
     input_tensor = torch.randn(bsz * num_concurrent_media * num_chunks, ntok, dim)
@@ -145,12 +138,8 @@ def test_llama_class_embedding_inference(
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim].view(reference_output.shape)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-    if passing:
-        logger.info(f"Llama_ClassEmbedding Passed!")
-    else:
-        logger.warning(f"Llama_ClassEmbedding Failed!")
-        assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

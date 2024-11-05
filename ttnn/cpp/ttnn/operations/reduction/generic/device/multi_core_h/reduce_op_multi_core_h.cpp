@@ -149,7 +149,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::KernelHandle writer_kernel_id;
 
     if (out_sharded) {
-        vector<uint32_t> writer_ct_args = {
+        std::vector<uint32_t> writer_ct_args = {
             output_cb_index,
         };
         writer_kernel_id = CreateKernel(
@@ -168,7 +168,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
     std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
@@ -185,7 +185,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
@@ -208,19 +208,19 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         uint32_t shard_Wt = num_cols_per_core_group_1 / NC;
         uint32_t shard_row_size = shard_Wt * src0_single_tile_size;
         uint32_t shard_batch_size = shard_row_size * Ht;
-        vector<uint32_t> reader_rt_args = {
+        std::vector<uint32_t> reader_rt_args = {
             num_cols_per_core_group_1 * Ht, shard_Wt, Ht, NC, shard_row_size, shard_batch_size, packed_scaler_value};
         tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
-        vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
+        std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
     } else {
         for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
             const CoreCoord &core = cores[i];
             uint32_t num_cols_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_cols_per_core = num_cols_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_cols_per_core = num_cols_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");

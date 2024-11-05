@@ -276,8 +276,10 @@ inline namespace v0 {
 
         void SetLazyCommandQueueMode(bool lazy);
 
-        DeviceAddr AllocateBuffer(const Buffer* buffer, bool bottom_up);
+        DeviceAddr AllocateBuffer(Buffer* buffer);
 
         void DeallocateBuffer(Buffer *buffer);
+
+        void SynchronizeWorkerThreads(const std::vector<Device*>& workers);
     }  // namespace detail
 }  // namespace tt::tt_metal

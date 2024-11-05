@@ -27,12 +27,12 @@ bool GraphTracker::add_hook(const std::shared_ptr<IGraphHooks>& new_hook) {
     return true;
 }
 
-void GraphTracker::track_allocate(const Buffer* buffer, bool bottom_up) {
+void GraphTracker::track_allocate(const Buffer* buffer) {
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_allocate(buffer, bottom_up);
+        it->track_allocate(buffer);
     }
 }
 
@@ -45,12 +45,12 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
     }
 }
 
-void GraphTracker::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {
+void GraphTracker::track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_allocate_cb(core_range_set, addr, size);
+        it->track_allocate_cb(core_range_set, addr, size, is_globally_allocated);
     }
 }
 
@@ -73,11 +73,11 @@ void GraphTracker::track_program(Program* program) {
     }
 }
 
-bool GraphTracker::hook_allocate(const Buffer* buffer, bool bottom_up) {
+bool GraphTracker::hook_allocate(const Buffer* buffer) {
     if (hook == nullptr)
         return false;
 
-    return hook->hook_allocate(buffer, bottom_up);
+    return hook->hook_allocate(buffer);
 }
 
 bool GraphTracker::hook_deallocate(Buffer* buffer) {

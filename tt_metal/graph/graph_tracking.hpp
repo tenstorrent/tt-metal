@@ -28,11 +28,11 @@ inline namespace v0 {
 
         IGraphProcessor() = default;
 
-        virtual void track_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) {};
+        virtual void track_allocate(const tt::tt_metal::Buffer* buffer) {};
 
         virtual void track_deallocate(tt::tt_metal::Buffer* buffer) {};
 
-        virtual void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size) {};
+        virtual void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {};
 
         virtual void track_deallocate_cb() {};
 
@@ -54,7 +54,7 @@ inline namespace v0 {
     class IGraphHooks {
     public:
         IGraphHooks() = default;
-        virtual bool hook_allocate(const tt::tt_metal::Buffer* buffer, bool bottom_up) = 0;
+        virtual bool hook_allocate(const tt::tt_metal::Buffer* buffer) = 0;
 
         virtual bool hook_deallocate(tt::tt_metal::Buffer* buffer) = 0;
 
@@ -77,11 +77,11 @@ inline namespace v0 {
 
         bool add_hook(const std::shared_ptr<IGraphHooks>& hook);
 
-        void track_allocate(const Buffer* buffer, bool bottom_up);
+        void track_allocate(const Buffer* buffer);
 
         void track_deallocate(Buffer* buffer);
 
-        void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size);
+        void track_allocate_cb(const CoreRangeSet &core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated);
 
         void track_deallocate_cb();
 
@@ -118,7 +118,7 @@ inline namespace v0 {
             }
         }
 
-        bool hook_allocate(const Buffer* buffer, bool bottom_up);
+        bool hook_allocate(const Buffer* buffer);
 
         bool hook_deallocate(Buffer* buffer);
 

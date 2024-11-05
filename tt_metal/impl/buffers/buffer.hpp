@@ -4,23 +4,28 @@
 
 #pragma once
 
-#include <map>
-#include <mutex>
+#include <array>
+#include <atomic>
+#include <cstdint>
 #include <condition_variable>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <tuple>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
 #include "common/bfloat16.hpp"
 #include "common/core_coord.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h" // For CoreType
+#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
+#include "third_party/umd/device/xy_pair.h"
 #include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include "tt_metal/common/assert.hpp"
+#include "third_party/json/json.hpp"
+
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -139,9 +144,20 @@ struct BufferPageMapping {
 inline namespace v0 {
 
 class Buffer final {
+    struct Private { explicit Private() = default; };
+
    public:
     static std::shared_ptr<Buffer> create(
         Device *device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt);
+    static std::shared_ptr<Buffer> create(
+        Device *device,
+        DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -176,6 +192,8 @@ class Buffer final {
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
+    bool bottom_up() const { return bottom_up_; }
+
     uint32_t dram_channel_from_bank_id(uint32_t bank_id) const;
 
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const;
@@ -199,11 +217,11 @@ class Buffer final {
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
 
-    uint32_t num_cores() const;
+    std::optional<uint32_t> num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
-   private:
+
     Buffer(
         Device *device,
         DeviceAddr size,
@@ -211,10 +229,14 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
-        std::optional<bool> bottom_up);
+        std::optional<bool> bottom_up,
+        bool owns_data,
+        Private);
 
+   private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
+        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
@@ -231,7 +253,8 @@ class Buffer final {
     const DeviceAddr size_; // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
-    const std::optional<bool> bottom_up_;
+    const bool bottom_up_;
+    const bool owns_data_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;
@@ -251,36 +274,6 @@ class Buffer final {
 }  // namespace v0
 
 BufferPageMapping generate_buffer_page_mapping(const Buffer &buffer);
-
-namespace detail {
-using Deviceid = uint32_t;
-
-class buffer_map_t {
-   public:
-    void insert(std::tuple<Deviceid, DeviceAddr> buf_attr, Buffer *buffer) {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.insert({buf_attr, buffer});
-    }
-
-    void erase(std::tuple<Deviceid, DeviceAddr> buf_attr) {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        this->map.erase(buf_attr);
-    }
-
-    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> value() {
-        std::scoped_lock<std::mutex> lock(this->map_mutex);
-        return this->map;
-    }
-
-    ~buffer_map_t() { TT_ASSERT(this->map.empty(), "Not all buffers deallocated by runtime!"); }
-
-   private:
-    std::mutex map_mutex;
-    std::map<std::tuple<Deviceid, DeviceAddr>, Buffer *> map = {};
-};
-
-extern buffer_map_t BUFFER_MAP;
-}  // namespace detail
 
 inline namespace v0 {
 

@@ -11,7 +11,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     ShardTensor2dMesh,
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
-    tt_all_gather,
     tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
@@ -162,7 +161,6 @@ class TtLlamaDecoder_galaxy:
         )
 
         attn_outs = self.attention(attn_norm_out, rot_mats, start_pos, attn_masks, mode="decode")
-        attn_outs = ttnn.to_memory_config(attn_outs, memory_config=self.decoder_config["ATTN_ACT_MEMCFG"])
 
         output = ttnn.add(
             xs,

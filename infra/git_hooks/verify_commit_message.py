@@ -10,7 +10,8 @@ Commit msg must be in the format:
 """
 FORMAT_MSG = "#<GH ISSUE NUMBER> or MET-<JIRA ISSUE NUMBER>: <non-empty message>"
 VALID_PREFIXES = "|".join(["#", "MET-"])
-MATCHING_REGEX = f"^({VALID_PREFIXES})(\d+\:\ .)"
+STANDARD_PREFIXES = "|".join(["Merge remote-tracking branch ", "fixup! "])
+MATCHING_REGEX = f"^(({VALID_PREFIXES})(\d+\:\ .)|({STANDARD_PREFIXES}))"
 
 
 def print_commit_msg(commit_msg_whole):

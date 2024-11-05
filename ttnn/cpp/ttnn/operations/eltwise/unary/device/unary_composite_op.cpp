@@ -315,26 +315,19 @@ Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_con
     return result_log1p;
 }
 
+// log[exp[x] + 1] => softplus[x]
 // mish[x] = x*tanh[softplus[x]]
-// use transformation y = x*tanh[softplus[x]] by broadcast
-// Ref: https://krutikabapat.github.io/Swish-Vs-Mish-Latest-Activation-Functions/
-Tensor _mish(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({x}))};
-    operation::launch_op(
-        [output_mem_config](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& x = input_tensors.at(0);
-            Tensor sp_x = ttnn::softplus(x, 1.0f, 20.0f, output_mem_config);
-            Tensor tanh_x = ttnn::tanh(sp_x, output_mem_config);
-            sp_x.deallocate();
-            Tensor mish_x = ttnn::multiply(x, tanh_x, std::nullopt, output_mem_config);
-            return {mish_x};
-        },
-        {x},
-        output_tensors);
-    return output_tensors.at(0);
+Tensor ExecuteMish::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    using ttnn::operations::unary::UnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<UnaryWithParam> ops_chain = {
+    UnaryWithParam{UnaryOpType::EXP, 1.0f},
+    UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
+    UnaryWithParam{UnaryOpType::LOG},
+    UnaryWithParam{UnaryOpType::TANH} };
+    Tensor result = ttnn::unary_chain(x, ops_chain, output_mem_config);
+    Tensor mish_x = ttnn::multiply(x, result, std::nullopt, output_mem_config);
+    return mish_x;
 }
 
 // multivariate log-gamma function
@@ -398,7 +391,7 @@ Tensor _variance_impl(
     const Tensor& mean_y,
     Tensor& y_minus_mean_y,
     const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     constexpr float correction = 0.0f;
     auto shape_wh = y.get_legacy_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
@@ -412,7 +405,7 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
 
 Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     return _variance_impl(y, mean_y, output_memory_config);
 }
@@ -435,7 +428,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>&  output
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<int> dims = { 2, 3 };
+    ttnn::SmallVector<int> dims = { 2, 3 };
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
@@ -480,6 +473,10 @@ Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<float> m
     return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
 }
 
+Tensor ExecuteUnaryCompositeClip::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
+    return ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config);
+}
+
 // clamp
 Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> min, std::optional<float> max, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(a.memory_config());
@@ -499,6 +496,19 @@ Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<float> 
         const Tensor l_const = full_like(a, min.value());
         return ttnn::maximum(a_max, l_const, output_memory_config);
     }
+}
+
+Tensor ExecuteUnaryCompositeClamp::invoke(const Tensor& a, std::optional<Tensor> min, std::optional<Tensor> max, const std::optional<MemoryConfig>& output_mem_config) {
+    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
+    if (!max.has_value()) {
+        return ttnn::where( ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
+    }else if(!min.has_value()) {
+        return ttnn::where( ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
+    }
+    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
+    Tensor temp = ttnn::where( ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config), ttnn::relu(a_max, output_memory_config), ttnn::maximum(a_max, min.value(), output_memory_config), output_memory_config);
+    return ttnn::where( ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config), max.value(), temp, output_memory_config);
 }
 
 // hardtanh
@@ -551,13 +561,13 @@ std::vector<Tensor> split_tensor_for_glu(const Tensor& input_a, int32_t dim, con
     std::vector<Tensor> t_split;
     tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
-    std::vector<uint32_t> s_a = {0, 0, 0, 0};
-    std::vector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
-    std::vector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
-    std::vector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
+    ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = std::vector<uint32_t>({1,1,1,1});
+    auto step = ttnn::SmallVector<uint32_t>({1,1,1,1});
     Tensor t_a = ttnn::slice(DefaultQueueId, input_a, s_a, e_a, step, output_mem_config);
     Tensor t_b = ttnn::slice(DefaultQueueId, input_a, s_b, e_b, step, output_mem_config);
 
@@ -817,7 +827,7 @@ Tensor _normalize_global(const Tensor& y,  const std::optional<MemoryConfig>& ou
 
 Tensor _frac(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     auto arch = input.device()->arch();
-    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0, "Op is only supported on Wormhole");
+    TT_FATAL(arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE, "Op is only supported on Wormhole or Blackhole");
     Tensor trunc_res = ttnn::trunc(input);
     Tensor result = ttnn::subtract(input, trunc_res, std::nullopt, output_mem_config);
     return result;

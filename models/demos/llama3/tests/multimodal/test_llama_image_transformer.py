@@ -6,17 +6,12 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-import importlib
 
-llama_reference_mod = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.model"
-)
-encoder_utils = importlib.import_module(
-    "models.demos.t3000.llama2_70b.reference.llama-models.models.llama3.reference_impl.multimodal.encoder_utils"
-)
+import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
+from llama_models.llama3.reference_impl.multimodal import encoder_utils
 from models.demos.llama3.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.multimodal.llama_image_vision_encoder import pad_seq_one_tile, mask_tile_padding
+from models.demos.llama3.tt.multimodal.llama_vision_encoder import pad_seq_one_tile, mask_tile_padding
 from models.demos.llama3.tt.llama_common import (
     prepare_inputs_ttnn_prefill,
 )
@@ -29,8 +24,8 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "batch, num_chunks, ntok",
-    ((1, 4, 1024),),
+    "batch, num_chunks",
+    ((1, 4),),
 )
 @pytest.mark.parametrize(
     "is_global",
@@ -38,14 +33,18 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(os.environ.get("FAKE_DEVICE"), None)],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 def test_llama_image_transformer_inference(
-    batch, num_chunks, ntok, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
+    batch, num_chunks, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16
-    pcc = 0.86
+    pcc_required = 0.86
 
     mesh_device.enable_async(True)
 
@@ -59,11 +58,11 @@ def test_llama_image_transformer_inference(
         n_layers = model_args.vision_n_global_layers
         return_intermediate = None
     else:
-        # first_layer_prefix = "vision_model.vision_encoder.transformer."
         first_layer_prefix = "vision_model.vision_encoder."
         gated = False
         n_layers = model_args.vision_n_layers
         # return_intermediate = [int(l) for l in "3,7,15,23,30".split(",")]
+        # Checks all intermediates
         return_intermediate = list(range(n_layers))
 
     partial_state_dict = {
@@ -71,7 +70,7 @@ def test_llama_image_transformer_inference(
     }
 
     dim = model_args.vision_dim
-    heads = model_args.vision_attn_n_heads
+    ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
 
     reference_model = llama_reference_mod.VisionEncoder(
         max_num_tiles=4,
@@ -129,7 +128,6 @@ def test_llama_image_transformer_inference(
     )
     tt_attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
     # Make striped attention mask to mask out our padding between 8 and 32
-    # Striped mask doesn't affect PCC
     tt_attn_mask = mask_tile_padding(tt_attn_mask, ntok, npadtt, num_chunks)
 
     attention_input = attention_input.reshape(1, batch, -1, dim)
@@ -167,25 +165,16 @@ def test_llama_image_transformer_inference(
             intermediates = [i.squeeze(-1) for i in intermediates]
         reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
         reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-        # Check mse
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+        all_tests_pass = all_tests_pass and passing
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         if return_intermediate:
             for idx, (pt_interm, tt_interm) in enumerate(zip(intermediates, tt_intermed_torch)):
-                passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc)
+                passing, pcc_message = comp_pcc(pt_interm, tt_interm, pcc_required)
                 logger.info(f"Intermediate {idx}: {pcc_message}")
                 logger.info(comp_allclose(pt_interm, tt_interm))
+                all_tests_pass = all_tests_pass and passing
 
-        if passing:
-            logger.info(f"Llama_Attention Passed!")
-        else:
-            logger.warning(f"Llama_Attention Failed!")
-            all_tests_pass = False
-
-        if all_tests_pass:
-            logger.info("Llama Attention output Passed!")
-        else:
-            logger.warning("Llama Attention output Failed!")
-            assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
+        assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

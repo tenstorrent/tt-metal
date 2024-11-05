@@ -61,7 +61,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     uint32_t unpadded_row_size_bytes_offset = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::round_up(unpadded_row_size_bytes, TILE_WIDTH) : tt::round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
 
-    vector<uint32_t> common_reader_kernel_args = {
+    std::vector<uint32_t> common_reader_kernel_args = {
         input_tensor.buffer()->address() + output_tensor_start[-1] * output_tensor.element_size(),
         padded_row_size_bytes,
         unpadded_row_size_bytes,
@@ -82,9 +82,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_sticks_per_core = num_sticks_per_core_group_2;
         } else {
             // no-op
@@ -108,7 +108,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             unpadded_written = unpadded_written / num_unpadded_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
-        vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
         uint32_t addr_offset = 5;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
         reader_kernel_args[addr_offset++] = start_id;
@@ -117,7 +117,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         reader_kernel_args[addr_offset] = num_read_per_barrier;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
-        vector<uint32_t> writer_kernel_args = {
+        std::vector<uint32_t> writer_kernel_args = {
             output_buffer->address(), unpadded_row_size_bytes, unpadded_row_size_bytes_offset, num_sticks_per_core, num_sticks_per_core_read, num_read_per_barrier, num_sticks_written, 0};
         num_sticks_written += num_sticks_per_core;
         ret_val[i] = {reader_kernel_args, writer_kernel_args};
@@ -493,7 +493,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // reader rt args
-        vector<uint32_t> reader_kernel_args;
+        std::vector<uint32_t> reader_kernel_args;
         reader_kernel_args.push_back(core_stick_map.size()); // num_cores
 
         tt::log_debug("num_cores: {}", core_stick_map.size());
@@ -513,7 +513,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         }
 
         // coalesce the sticks into chunks
-        vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_values(core_stick_pair.second);
             stick_chunks_per_core.push_back(stick_chunks);
@@ -531,7 +531,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             }
         }
 
-        vector<uint32_t> writer_kernel_args;
+        std::vector<uint32_t> writer_kernel_args;
         ret_val[i] = {reader_kernel_args, writer_kernel_args};
     }
 

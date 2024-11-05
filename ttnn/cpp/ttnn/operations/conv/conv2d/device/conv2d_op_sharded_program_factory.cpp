@@ -17,6 +17,8 @@ namespace conv2d {
 
 using namespace tt;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 const uint32_t act_cb = CB::c_in0;
 const uint32_t weight_cb = CB::c_in1;
 const uint32_t bias_cb = CB::c_in2;
@@ -30,6 +32,8 @@ const uint32_t tilize_mode_tilized_act_cb = CB::c_intermed1;
 const uint32_t untilize_mode_reblock_cb = CB::c_intermed2;
 const uint32_t out0_cb = CB::c_out0;
 const uint32_t temp_sum_cb = CB::c_intermed3;
+}
+}
 
 
 operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
@@ -82,6 +86,8 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en,
     bool use_non_tile_height) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -260,6 +266,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
     bool split_reader,
     bool fp32_dest_acc_en,
     bool packer_l1_acc_en) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     tt::DataFormat interm0_df =
         packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
 
@@ -352,9 +359,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     bool pass = true;
     tt_metal::Device* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
@@ -491,7 +500,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
             "Out_block_h must be divisible by out_subblock_h!");
     }
-    ttnn::Shape ashape_with_channels_padded(std::vector<uint32_t>({ashape[0], ashape[1], ashape[2], input_channels_padded}));
+    ttnn::Shape ashape_with_channels_padded(ttnn::SmallVector<uint32_t>({ashape[0], ashape[1], ashape[2], input_channels_padded}));
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -758,12 +767,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t window_outer;
     uint32_t window_inner;
 
-    if (weight_width_sliced and filter_w == 3) {
-        window_outer = 1;  // window_outer = 1 becasue all of filter window is processed in the inner loop
-        window_inner = 3;  // window_inner = 9 / 3, ie. read 3 width coalesced
+    if (weight_width_sliced) {
+        window_outer = 1;
+        window_inner = filter_h;
     } else {
-        window_outer = num_blocks_act_w;                                  // window_outer
-        window_inner = filter_h * filter_w / num_blocks_act_w;  // window_inner
+        window_outer = num_blocks_act_w;
+        window_inner = filter_h * filter_w / num_blocks_act_w;
     }
 
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
@@ -920,9 +929,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t num_act_cb_tiles = act_block_h_ntiles * act_block_w_ntiles / conv_act_c_blocks;
     uint32_t num_act_cb_second_reader_tiles = 0;
     // TODO: This flag should be set in kernel logic but need this for create_CB
-    if (a.memory_config().is_sharded() and ((filter_h == 3 and filter_w == 3 and
-        (stride_h == 1 or stride_h == 2)) or (filter_h == 1 and filter_w == 1 and stride_h == 2)) and weight_width_sliced) {
-        // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire 3x3 window before
+    if (weight_width_sliced) {
+        // If conv_act_c_blocks > 1 and we have 2D conv with sharded input, we always read entire filter_h x filter_w window before
         // pushing in reader/writer
         // TODO: Generalize this to not make this assumption
         read_window_in_inner_loop = true;
@@ -935,8 +943,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     if (fully_buffer_weights) {
         num_weight_cb_tiles *= window_outer;
-    } else if (per_core_out_matrix_width_ntiles < 5 && per_core_out_matrix_height_ntiles < 22) {  // Q: where are these
-                                                                                                  // numbers from?
+    } else if (enable_weights_double_buffer) {
         num_weight_cb_tiles = num_weight_cb_tiles * 2;
     }
 
@@ -953,9 +960,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     } else {
         if (enable_act_double_buffer) {
             num_act_cb_tiles = num_act_cb_tiles * 2;
-        } else if (conv_act_size_c / conv_act_c_blocks < 160 &&
-            per_core_out_matrix_height_ntiles < 22) {  // Q: where are these numbers from?
-            num_act_cb_tiles = num_act_cb_tiles * 2;   // double buffered
         }
     }
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
@@ -1272,7 +1276,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
 
-    vector<uint32_t> compute_kernel_args = {
+    std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,
         act_num_subblocks,
         in0_block_num_tiles,
@@ -1677,6 +1681,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     Tensor& output,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height) {
@@ -1750,6 +1755,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         output,
         compute_kernel_config.value(),
         enable_act_double_buffer,
+        enable_weights_double_buffer,
         enable_split_reader,
         enable_subblock_padding,
         use_non_tile_height);
