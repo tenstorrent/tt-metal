@@ -553,6 +553,7 @@ void bind_unary_operation_with_dim_parameter(
     const std::string& parameter_name,
     const std::string& parameter_doc,
     const std::string& info_doc,
+    const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
 
     auto doc = fmt::format(
@@ -575,7 +576,19 @@ void bind_unary_operation_with_dim_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {5}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 4
+
+            {6}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -586,6 +599,7 @@ void bind_unary_operation_with_dim_parameter(
         parameter_name,
         parameter_doc,
         info_doc,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -1652,15 +1666,8 @@ void py_module(py::module& module) {
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the GLU function on the second tensor, and then perform multiplication with the first tensor.",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.
 
@@ -1672,15 +1679,8 @@ void py_module(py::module& module) {
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform multiplication with the first tensor.",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.
 
@@ -1692,15 +1692,8 @@ void py_module(py::module& module) {
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.
 
@@ -1712,15 +1705,8 @@ void py_module(py::module& module) {
         "dim",
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the SiLU function on the second tensor, and then perform multiplication with the first tensor.",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.
 
