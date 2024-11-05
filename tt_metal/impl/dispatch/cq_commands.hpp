@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 constexpr uint32_t CQ_DISPATCH_CMD_SIZE = 16;          // for L1 alignment
 
 // Prefetcher CMD ID enums
