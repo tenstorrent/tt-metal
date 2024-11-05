@@ -97,8 +97,8 @@ struct Config {
                 if (this->attributes.enable_logging) {
                     tt::log_warning(
                         tt::LogAlways,
-                        "Running without detailed tensor report. Please enable detailed tensor report mode if you want "
-                        "to enable saving all tensors as pytorch.");
+                        "Running without detailed tensor report. Enable detailed tensor report to enable saving all "
+                        " tensors as PyTorch (.pt) files to enable reading on non-host machines.");
                 }
             }
         }
