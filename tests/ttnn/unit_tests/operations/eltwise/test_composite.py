@@ -5,7 +5,11 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    data_gen_with_range_dtype,
+    compare_pcc,
+)
 from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
@@ -231,6 +235,26 @@ def test_unary_composite_deg2rad_ttnn(input_shapes, device):
 
     output_tensor = ttnn.deg2rad(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.deg2rad)
+    golden_tensor = golden_function(in_data1)
+
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [32, 32],
+        [5, 96, 64],
+        [1, 3, 320, 384],
+        [1, 2, 4, 32, 32],
+    ],
+)
+def test_unary_composite_hardsigmoid_bf8b(input_shapes, device):
+    in_data1, input_tensor1 = data_gen_with_range_dtype(input_shapes, -100, 100, device, False, False, ttnn.bfloat8_b)
+
+    output_tensor = ttnn.hardsigmoid(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.hardsigmoid)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])

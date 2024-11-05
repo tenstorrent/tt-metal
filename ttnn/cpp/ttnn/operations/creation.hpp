@@ -13,6 +13,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -138,23 +139,34 @@ inline ttnn::Tensor full_like_impl(
     const std::optional<std::reference_wrapper<Device>>& device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
+
+    Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_layout() : layout.value_or(tensor.get_layout());
+    DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype() : dtype.value_or(tensor.get_dtype());
+    auto arch = tensor.device()->arch();
+    bool is_TILE =  (tensor.get_layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (ttnn::is_tensor_on_device_or_multidevice(tensor)) {
-        return full_impl(
-            queue_id,
-            tensor.get_shape(),
-            fill_value,
-            dtype.value_or(tensor.get_dtype()),
-            layout.value_or(tensor.get_layout()),
-            device.value_or(*tensor.device()),
-            memory_config.value_or(tensor.memory_config()),
-            optional_output_tensor);
+        // requires reference tensor to be in TILE for device operation fill - this will be changed later
+        if (is_TILE &&  (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 || (arch != tt::ARCH::GRAYSKULL && dtype_value == DataType::FLOAT32)) && tensor.storage_type() == StorageType::DEVICE ) {
+            return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
+        }
+        else {
+            return full_impl(
+                queue_id,
+                tensor.get_shape(),
+                fill_value,
+                dtype_value,
+                layout_value,
+                device.value_or(*tensor.device()),
+                memory_config.value_or(tensor.memory_config()),
+                optional_output_tensor);
+        }
     } else {
         return full_impl(
             queue_id,
             tensor.get_shape(),
             fill_value,
-            dtype.value_or(tensor.get_dtype()),
-            layout.value_or(tensor.get_layout()),
+            dtype_value,
+            layout_value,
             device,
             memory_config,
             optional_output_tensor);
