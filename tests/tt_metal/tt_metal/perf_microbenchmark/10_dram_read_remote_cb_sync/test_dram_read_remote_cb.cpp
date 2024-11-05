@@ -477,7 +477,7 @@ bool validation_mixed_df(
         }
         layer_transfer_size = page_size * kt * nt / num_receivers;
 
-        uint32_t block_size = block_num_tiles * 32*32*2; // fp16
+        uint32_t block_size = block_num_tiles * tt::constants::TILE_HW * datum_size(tt::DataFormat::Float16_b); // fp16
         uint32_t num_blocks = fifo_size / block_size;
         uint32_t cb_size_block_aligned = num_blocks * block_size;
 
