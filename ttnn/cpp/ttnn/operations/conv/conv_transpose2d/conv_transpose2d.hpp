@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 
 namespace ttnn {
@@ -10,9 +11,11 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv_transpose2d {
 
-
+using OutputHeight = uint32_t;
+using OutputWidth = uint32_t;
+using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 struct ConvTranpose2dOperation{
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+    static Result invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -31,7 +34,7 @@ struct ConvTranpose2dOperation{
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const conv2d::Conv2dConfig> conv_config_ = std::nullopt);
 
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+    static Result invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,

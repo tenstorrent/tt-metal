@@ -65,19 +65,19 @@ Tensor _transform_weights_for_conv_transpose2d(
 
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor) {
-            switch (conv_weight_tensor.get_dtype()) {
-                case DataType::BFLOAT16:
-                    return _transform_weights_for_conv_transpose2d<::bfloat16>(conv_weight_tensor);
-                case DataType::FLOAT32:
-                    return _transform_weights_for_conv_transpose2d<float>(conv_weight_tensor);
-                case DataType::UINT32:
-                    return _transform_weights_for_conv_transpose2d<uint32_t>(conv_weight_tensor);
-                default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d",conv_weight_tensor.get_dtype());
-            }
+    switch (conv_weight_tensor.get_dtype()) {
+        case DataType::BFLOAT16:
+            return _transform_weights_for_conv_transpose2d<::bfloat16>(conv_weight_tensor);
+        case DataType::FLOAT32:
+            return _transform_weights_for_conv_transpose2d<float>(conv_weight_tensor);
+        case DataType::UINT32:
+            return _transform_weights_for_conv_transpose2d<uint32_t>(conv_weight_tensor);
+        default: TT_THROW("Unsupported data type for transform_weights_for_conv_transpose2d",conv_weight_tensor.get_dtype());
+    }
 };
 
 template<typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv_transpose2d(
+Result conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T * device,
@@ -263,47 +263,10 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_act_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding);
-        ttnn::operations::core::deallocate(halo_output);
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv_transpose2d<Device>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    Device * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> output_padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const conv2d::Conv2dConfig> conv_config_);
-
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv_transpose2d<MeshDevice>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    MeshDevice * device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
-    std::array<uint32_t, 2> output_padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    std::optional<const ttnn::Tensor> bias_tensor,
-    std::optional<const conv2d::Conv2dConfig> conv_config_);
-
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> ConvTranpose2dOperation::invoke(
+Result ConvTranpose2dOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -324,7 +287,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
     return conv_transpose2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, output_padding, dilation, groups, bias_tensor, conv_config_);
 }
 
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> ConvTranpose2dOperation::invoke(
+Result ConvTranpose2dOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,

@@ -787,7 +787,7 @@ static void adjust_conv_op_config_for_auto_shard(
 }
 
 template <typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
+Result conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T* device,
@@ -981,7 +981,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding,
             use_non_tile_height);
-        ttnn::operations::core::deallocate(halo_output);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -1093,7 +1092,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     MeshDevice * device,
     uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<Device>(
+Result Conv2dOperation::invoke(
+    uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     Device * device,
@@ -1109,9 +1109,12 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
+    const std::optional<const MemoryConfig> memory_config){
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+}
 
-template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d<MeshDevice>(
+Result Conv2dOperation::invoke(
+    uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice * device,
@@ -1127,7 +1130,9 @@ template std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optiona
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
     std::optional<const Conv2dConfig> conv_config_,
-    const std::optional<const MemoryConfig> memory_config);
+    const std::optional<const MemoryConfig> memory_config){
+    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
+}
 
 }  // namespace conv2d
 }  // namespace operations

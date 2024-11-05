@@ -25,6 +25,10 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
+using OutputHeight = uint32_t;
+using OutputWidth = uint32_t;
+using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+
 struct Conv2dConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     DataType dtype = DataType::BFLOAT16;
@@ -193,7 +197,7 @@ template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor, uint32_t input_channels_alignment, DataType weights_bias_dtype, uint32_t weight_block_h_ntiles, uint32_t weight_block_w_ntiles, const sliding_window::ParallelConfig& parallel_config, T * device, uint32_t groups, uint32_t act_block_h_ntiles, uint32_t input_width);
 
 template <typename T>
-std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> conv2d(
+Result conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     T * device,
@@ -213,7 +217,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
 
 
 struct Conv2dOperation{
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+    static Result invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -230,11 +234,9 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
-    }
+        const std::optional<const MemoryConfig> memory_config = std::nullopt);
 
-    static std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::Tensor>> invoke(
+    static Result invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
@@ -251,11 +253,8 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         std::optional<const Conv2dConfig> conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt){
-        return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, bias_tensor, conv_config_, memory_config);
-    }
-};
-
+        const std::optional<const MemoryConfig> memory_config = std::nullopt);
+    };
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
