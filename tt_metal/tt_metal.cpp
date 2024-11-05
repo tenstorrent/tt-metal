@@ -33,6 +33,23 @@ namespace tt_metal {
 
 namespace {
 
+#if defined(TRACY_ENABLE)
+
+std::unordered_map<int, std::string> global_mempool_names;
+std::mutex global_mempool_names_mutex;
+
+static const char * get_buffer_location_name (BufferType buffer_type, int device_id) {
+    std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
+    int name_combo = (int)buffer_type * 1000 + device_id;
+    if (global_mempool_names.find(name_combo) == global_mempool_names.end())
+    {
+        std::string global_mempool_name = fmt::format("Device {} {}", device_id, magic_enum::enum_name(buffer_type));
+        global_mempool_names.emplace(name_combo, global_mempool_name);
+    }
+    return global_mempool_names[name_combo].c_str();
+}
+#endif
+
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet> &specified_core_spec) {
     ZoneScoped;
     return std::visit(
@@ -60,44 +77,57 @@ struct DataMovementConfigStatus {
     bool noc1_in_use;
 };
 
-DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRangeSet &core_ranges) {
+DataMovementConfigStatus CheckDataMovementConfig(const HalProgrammableCoreType &programmable_core, Program &program, const CoreRangeSet &core_ranges) {
     DataMovementConfigStatus data_movement_config_status{
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
     auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool &local_noc0_usage, bool &local_noc1_usage) {
         const auto kernel = detail::GetKernel(program, kernel_id);
-        auto kernel_config = std::get<DataMovementConfig>(kernel->config());
-        auto noc_value = magic_enum::enum_integer(kernel_config.noc);
+        int noc_value;
+        switch (programmable_core) {
+            case HalProgrammableCoreType::TENSIX:
+                noc_value = magic_enum::enum_integer(std::get<DataMovementConfig>(kernel->config()).noc);
+            break;
+            case HalProgrammableCoreType::ACTIVE_ETH:
+            case HalProgrammableCoreType::IDLE_ETH:
+                noc_value = magic_enum::enum_integer(std::get<EthernetConfig>(kernel->config()).noc);
+            break;
+            default:
+                TT_THROW("Checking NoC and DataMovementProcessor is unsupported for programmable core {}", magic_enum::enum_name(programmable_core));
+        }
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
         data_movement_config_status.noc0_in_use = local_noc0_usage;
         data_movement_config_status.noc1_in_use = local_noc1_usage;
     };
 
+    // TODO (abhullar): Clean this up when brisc/ncrisc are moved to be one processor class with two data movement processor types
+    uint32_t dm0_idx = programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM0 : DISPATCH_CLASS_ETH_DM0;
+    uint32_t dm1_idx = programmable_core == HalProgrammableCoreType::TENSIX ? DISPATCH_CLASS_TENSIX_DM1 : DISPATCH_CLASS_ETH_DM1;
     for (const auto &core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup *kernel_group = program.kernels_on_core(
-                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                    CoreCoord(x, y), hal.get_programmable_core_type_index(programmable_core));
                 if (kernel_group != nullptr) {
                     bool local_noc0_in_use = false;
                     bool local_noc1_in_use = false;
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value()) {
+                    if (kernel_group->kernel_ids[dm0_idx].has_value()) {
                         data_movement_config_status.riscv0_in_use = true;
                         set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value(),
+                            kernel_group->kernel_ids[dm0_idx].value(),
                             local_noc0_in_use,
                             local_noc1_in_use);
                     }
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                    if (kernel_group->kernel_ids[dm1_idx].has_value()) {
                         data_movement_config_status.riscv1_in_use = true;
                         set_global_and_local_noc_usage(
-                            kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value(),
+                            kernel_group->kernel_ids[dm1_idx].value(),
                             local_noc0_in_use,
                             local_noc1_in_use);
                     }
-                    if (kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
-                        kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value()) {
+                    if (kernel_group->kernel_ids[dm0_idx].has_value() and
+                        kernel_group->kernel_ids[dm1_idx].has_value()) {
                         TT_FATAL(
                             local_noc0_in_use and local_noc1_in_use,
                             "Illegal NOC usage: data movement kernels on logical core {} cannot use the same NOC, "
@@ -113,11 +143,18 @@ DataMovementConfigStatus CheckDataMovementConfig(Program &program, const CoreRan
 }
 
 void ConfigureKernelGroup(
-    const Program &program, const KernelGroup *kernel_group, Device *device, const CoreCoord &logical_core) {
+    Program &program,
+    uint32_t programmable_core_type_index,
+    const KernelGroup *kernel_group,
+    Device *device,
+    const CoreCoord &logical_core) {
 
+    uint32_t kernel_config_base = hal.get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
-            detail::GetKernel(program, optional_id.value())->configure(device, logical_core);
+            // Need the individual offsets of each bin
+            detail::GetKernel(program, optional_id.value())->configure(device, logical_core,
+                kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
 }
@@ -696,7 +733,7 @@ bool ConfigureDeviceWithProgram(Device *device, Program &program, bool fd_bootlo
             KernelGroup *kernel_group = program.kernels_on_core(logical_core, index);
             CoreCoord physical_core = device->physical_core_from_logical_core(logical_core, core_type);
 
-            ConfigureKernelGroup(program, kernel_group, device, logical_core);
+            ConfigureKernelGroup(program, index, kernel_group, device, logical_core);
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 // CircularBufferConfigVec -- common across all kernels, so written once to the core
@@ -818,6 +855,11 @@ DeviceAddr AllocateBuffer(Buffer *buffer) {
 
     GraphTracker::instance().track_allocate(buffer);
 
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyAllocN(reinterpret_cast<void const *>(allocated_addr), buffer->size(), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
     return allocated_addr;
 }
 
@@ -827,6 +869,11 @@ void DeallocateBuffer(Buffer *buffer) {
         return;
     }
 
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::OptionsG.get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(reinterpret_cast<void const *>(buffer->address()), get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
     allocator::deallocate_buffer(*buffer->device()->allocator_, buffer);
 }
 
@@ -902,7 +949,7 @@ KernelHandle CreateDataMovementKernel(
     const KernelSource &kernel_src,
     const CoreRangeSet &core_range_set,
     const DataMovementConfig &config) {
-    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(program, core_range_set);
+    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(HalProgrammableCoreType::TENSIX, program, core_range_set);
     const bool are_both_riscv_in_use =
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
@@ -942,13 +989,34 @@ KernelHandle CreateEthernetKernel(
     const CoreRangeSet &core_range_set,
     const EthernetConfig &config) {
     KernelHandle kernel_handle;
+    HalProgrammableCoreType eth_core_type = config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+    const DataMovementConfigStatus &data_movement_config_status = CheckDataMovementConfig(eth_core_type, program, core_range_set);
+    const bool are_both_riscv_in_use = data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
+    const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
+
     std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
-    if (config.eth_mode == Eth::IDLE) {
-        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::IDLE_ETH);
-    } else {
-        kernel_handle = detail::AddKernel(program, kernel, HalProgrammableCoreType::ACTIVE_ETH);
-    }
-    return kernel_handle;
+
+    TT_FATAL(
+        utils::underlying_type<DataMovementProcessor>(config.processor)
+            < hal.get_processor_classes_count(eth_core_type),
+        "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} processors. "
+        "Update DataMovementProcessor in the config.",
+        kernel->name(),
+        magic_enum::enum_name(config.processor),
+        hal.get_processor_classes_count(eth_core_type));
+    TT_FATAL(
+        !(are_both_riscv_in_use),
+        "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
+        "cores because both data movement processors are in use!",
+        kernel->name());
+    TT_FATAL(
+        !(are_both_noc_in_use),
+        "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+        "cores because both NOCs are in use!",
+        kernel->name());
+
+
+    return detail::AddKernel(program, kernel, eth_core_type);
 }
 
 KernelHandle CreateKernel(
@@ -1063,9 +1131,26 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config) {
         config.device, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
 }
 
+std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device, address, config.size, config.page_size, config.buffer_type, config.buffer_layout, std::nullopt, std::nullopt);
+}
+
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config) {
     return Buffer::create(
         config.device,
+        config.size,
+        config.page_size,
+        config.buffer_type,
+        config.buffer_layout,
+        config.shard_parameters,
+        std::nullopt);
+}
+
+std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig &config, DeviceAddr address) {
+    return Buffer::create(
+        config.device,
+        address,
         config.size,
         config.page_size,
         config.buffer_type,

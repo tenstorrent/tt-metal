@@ -20,13 +20,13 @@ void MorehMeanOperation::validate_tensors(
         operation_attributes.dim);
     TT_FATAL(operation_attributes.divisor.has_value() == false, "divisor not supported yet.");
 
-    tt::operations::primary::check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
-    tt::operations::primary::check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
+    check_tensor(input, "moreh_mean", "input", {DataType::BFLOAT16});
+    check_tensor(output, "moreh_mean", "output", {DataType::BFLOAT16});
 
-    tt::operations::primary::validate_input_with_dim(input, operation_attributes.dim);
+    validate_input_with_dim(input, operation_attributes.dim);
 
     if (output.has_value()) {
-        tt::operations::primary::validate_output_with_keepdim(
+        validate_output_with_keepdim(
             input, output.value(), operation_attributes.dim, operation_attributes.keepdim);
     }
 }

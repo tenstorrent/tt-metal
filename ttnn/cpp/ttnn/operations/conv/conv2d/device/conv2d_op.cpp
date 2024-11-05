@@ -60,13 +60,14 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
     bool use_shallow_conv_variant,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool enable_act_double_buffer,
+    bool enable_weights_double_buffer,
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool use_non_tile_height
 ) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({a, b}))};
     operation::launch_op(
-        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
+        [sliding_window_config, output_channels, groups, untilize_out, fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, compute_kernel_config, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height]
             (const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 using ttnn::operations::experimental::auto_format::FormatParams;
                 auto& a = input_tensors.at(0);
@@ -86,7 +87,7 @@ Tensor optimized_conv_new(const Tensor& a, const Tensor &b, std::optional<const 
                 bool fp32_accum = a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ? compute_kernel_config.value().fp32_dest_acc_en : false;
                 auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::LoFi, true, fp32_accum, false);
                 return operation::run_without_autoformat(
-                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height
+                    OptimizedConvNew(sliding_window_config, output_channels, groups, untilize_out, bias.has_value(), fuse_relu, math_fidelity, parallelization_config, block_config, memory_config, dtype, input_tensor_shape, use_shallow_conv_variant, kernel_config_val, enable_act_double_buffer, enable_weights_double_buffer, enable_split_reader, enable_subblock_padding, use_non_tile_height
                     ),
                     input_tensors,
                     optional_input_tensors);
@@ -143,7 +144,9 @@ std::vector<tt::tt_metal::LegacyShape> OptimizedConvNew::compute_output_shapes(c
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w = this->use_non_tile_height ?  parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height : parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
+    auto padded_shape_w = this->use_non_tile_height ?
+        parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height
+        : parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntiles * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
@@ -233,6 +236,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(const std::vect
         compute_kernel_config,
         output_tensor,
         enable_act_double_buffer,
+        enable_weights_double_buffer,
         enable_split_reader,
         enable_subblock_padding,
         use_non_tile_height);

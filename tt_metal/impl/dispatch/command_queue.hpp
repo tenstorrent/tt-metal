@@ -297,7 +297,6 @@ class EnqueueProgramCommand : public Command {
     uint32_t unicast_cores_launch_message_wptr = 0;
 
    public:
-
     EnqueueProgramCommand(
         uint32_t command_queue_id,
         Device* device,
@@ -697,5 +696,5 @@ void EnqueueAddBufferToProgram(
 
 }  // namespace tt::tt_metal
 
-std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type);
-std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::EnqueueCommandType const& type);
+std::ostream& operator<<(std::ostream& os, tt::tt_metal::CommandQueue::CommandQueueMode const& type);

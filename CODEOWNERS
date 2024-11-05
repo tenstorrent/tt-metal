@@ -74,6 +74,7 @@ tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
+tt_metal/tt_stl/ @patrickroberts @yan-zaretskiy @eyonland @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 sfpi/ @pgkeller
 
@@ -115,6 +116,7 @@ ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na
+tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps

@@ -461,8 +461,8 @@ void gen_dram_packed_read_cmd(Device *device,
     vector<CQPrefetchRelayPagedPackedSubCmd> sub_cmds;
 
     uint32_t total_length = 0;
-    for (auto l : lengths) {
-        total_length += l;
+    for (auto length : lengths) {
+        total_length += length;
     }
     gen_bare_dispatcher_unicast_write_cmd(device, dispatch_cmds, worker_core, device_data, total_length);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
@@ -880,18 +880,19 @@ void gen_packed_read_test(Device *device,
                           vector<uint32_t>& prefetch_cmds,
                           vector<uint32_t>& cmd_sizes,
                           DeviceData& device_data) {
-
+    static constexpr uint32_t min_read_size = 128;
     bool done = false;
     while (!done) {
-        uint32_t packed_read_page_size = std::rand() % 3 + 9; // 512, 1024, 2048
+        uint32_t packed_read_page_size = std::rand() % 3 + 9; // log2 values. i.e., 512, 1024, 2048
         uint32_t n_sub_cmds =  relay_max_packed_paged_submcds ?  CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS : (std::rand() % 7) + 1;
-
+        uint32_t max_read_size = (1 << packed_read_page_size) * num_dram_banks_g;
+        auto dram_alignment = hal.get_alignment(HalMemType::DRAM);
         vector<uint32_t> lengths;
         uint32_t total_length = 0;
         for (uint32_t i = 0; i < n_sub_cmds; i++) {
             uint32_t max_size128b = (scratch_db_size_g / 2) >> 7;
-            uint32_t length = (std::rand() % max_size128b) << 7;
-            if (length < 128) length = 128;
+            // limit the length to min and max read size
+            uint32_t length = align(std::min(std::max(min_read_size, (std::rand() % max_size128b) << 7), max_read_size), dram_alignment);
             total_length += length;
             lengths.push_back(length);
         }
@@ -1108,19 +1109,21 @@ void gen_smoke_test(Device *device,
     lengths.push_back(length_to_read);
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size + 1, lengths);
 
+    // when adding read lengths based on some calculations to generate test cases
+    // ensure they are aligned properly so they work on all page table configs
     lengths.resize(0);
-    lengths.push_back(scratch_db_size_g / 8);
-    lengths.push_back(scratch_db_size_g / 8);
-    lengths.push_back(scratch_db_size_g / 8);
-    lengths.push_back(scratch_db_size_g / 4);  // won't fit in first pass
-    lengths.push_back(scratch_db_size_g / 2);  // won't fit in second pass
+    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 4, dram_alignment));  // won't fit in first pass
+    lengths.push_back(align(scratch_db_size_g / 2, dram_alignment));  // won't fit in second pass
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    lengths.push_back(scratch_db_size_g / 4 + 2 * 1024 + 32);
-    lengths.push_back(scratch_db_size_g / 4 + 3 * 1024 + 32);
-    lengths.push_back(scratch_db_size_g / 2);
-    lengths.push_back(scratch_db_size_g / 8 + 5 * 1024 + 96);
+    lengths.push_back(align(scratch_db_size_g / 4 + 2 * 1024 + 32, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 4 + 3 * 1024 + 32, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 2, dram_alignment));
+    lengths.push_back(align(scratch_db_size_g / 8 + 5 * 1024 + 96, dram_alignment));
     gen_dram_packed_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     // Read from dram, write to worker

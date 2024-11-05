@@ -106,16 +106,28 @@ Tensor _isclose(
 }
 
 // minimum(a,b) = a - (a - b > 0 )*(a-b)
-Tensor _minimum(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_diff = ttnn::subtract(input_a, input_b, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, input_b, input_a);
     return result;
 }
 
+Tensor ExecuteMinimum::invoke(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_diff = ttnn::subtract(input_a, value, std::nullopt, output_mem_config);
+    Tensor result = ttnn::where(t_diff, value, input_a);
+    return result;
+}
+
 // maximum(a,b) = a + (b - a > 0 )*(b-a)
-Tensor _maximum(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ExecuteMaximum::invoke(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor t_diff = ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, input_b, input_a);
+    return result;
+}
+
+Tensor ExecuteMaximum::invoke(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor t_diff = ttnn::rsub(input_a, value, output_mem_config);
+    Tensor result = ttnn::where(t_diff, value, input_a);
     return result;
 }
 
@@ -151,13 +163,6 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return res;
 }
 
-Tensor _logical_xor(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config);
-    Tensor in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
-    Tensor in_b_neq_zero = ttnn::nez(input_b, output_mem_config);
-    Tensor result = ttnn::where(in_a_eq_zero, in_b_neq_zero, in_b_eq_zero);
-    return result;
-}
 
 Tensor ExecuteDiv::invoke(uint8_t queue_id, const Tensor& input, float value, bool accurate_mode, const std::string& round_mode, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
     TT_FATAL((round_mode == "None" || round_mode == "trunc" || round_mode == "floor"), "Incorrect rounding mode (expected 'None', 'trunc', or 'floor')");
@@ -284,7 +289,8 @@ Tensor ExecuteBinaryFmod::invoke(const Tensor& input_a, const Tensor& input_b, c
     DataType input_dtype = input_a.get_dtype();
     Tensor a = typecast(input_a, DataType::FLOAT32);
     Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(a, ttnn::multiply(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor div_res = typecast(ttnn::div(input_a, input_b, true, "trunc", output_mem_config), DataType::FLOAT32);
+    Tensor result = ttnn::subtract(a, ttnn::multiply(div_res, b, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     result = ttnn::where(ttnn::eq(a, b, std::nullopt, output_mem_config), ttnn::full_like(input_a, 0.0f), result);
     return typecast(result, input_dtype);
 }
@@ -324,13 +330,6 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
         result);
 }
 
-Tensor _logical_xor_(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor in_a_eq_zero = ttnn::eqz(input_a, output_mem_config, input_a );
-    Tensor in_b_eq_zero = ttnn::nez(input_b, output_mem_config, input_b );
-    in_b_eq_zero = ttnn::eqz(input_b, output_mem_config);
-    Tensor result = ttnn::where(input_a, input_b, in_b_eq_zero, output_mem_config, input_a);
-    return result;
-}
 
 Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     tt::tt_metal::Array4D start_index = {0, 0, 0, 0};

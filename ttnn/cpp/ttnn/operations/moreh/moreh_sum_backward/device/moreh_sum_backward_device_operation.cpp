@@ -18,14 +18,14 @@ void MorehSumBackwardOperation::validate_inputs(
     const auto dims = operation_attributes.dims;
 
     // validate tensor
-    tt::operations::primary::check_tensor(output_grad, "moreh_sum_backward", "output_grad");
-    tt::operations::primary::check_tensor(input_grad, "moreh_sum_backward", " input_grad");
+    check_tensor(output_grad, "moreh_sum_backward", "output_grad");
+    check_tensor(input_grad, "moreh_sum_backward", " input_grad");
 
     if (!input.has_value()) {
         return;
     }
 
-    tt::operations::primary::check_tensor(input, "moreh_sum_backward", "input");
+    check_tensor(input, "moreh_sum_backward", "input");
     const auto& input_shape = input.value().get_legacy_shape();
     auto input_shape_wo_padding = input_shape.without_padding();
     auto input_rank = input_shape.rank();

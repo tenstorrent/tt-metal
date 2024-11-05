@@ -21,7 +21,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.tg.llama3_70b.tt.llama_common import (
     tt_all_reduce,
-    tt_all_gather,
+    tt_composite_sharded_all_reduce,
     tt_sharded_distributed_rmsnorm,
     tt_distributed_rmsnorm,
 )
@@ -334,13 +334,12 @@ class TtLlamaModel_galaxy:
         )
         norm_out.deallocate(True)
 
-        lm_head_out = tt_all_reduce(
+        lm_head_out = tt_composite_sharded_all_reduce(
             lm_head_out,
             mesh_device=self.mesh_device,
             cluster_axis=1,
-            dim=0,
             num_links=2,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            reduce_scatter_mem_cfg=self.core_model_config["LM_HEAD_OUT_REDUCE_SCATTER_MEMCFG"],
         )
 
         return lm_head_out

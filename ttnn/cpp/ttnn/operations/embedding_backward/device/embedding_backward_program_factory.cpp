@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     // reader
 
     bool index_stick_size_is_power_of_two = is_power_of_two_at_least_32(index_page_size);
-    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? log2(index_page_size) : 0;
+    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? std::log2(index_page_size) : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         grad_is_dram,

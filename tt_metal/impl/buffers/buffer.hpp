@@ -144,9 +144,20 @@ struct BufferPageMapping {
 inline namespace v0 {
 
 class Buffer final {
+    struct Private { explicit Private() = default; };
+
    public:
     static std::shared_ptr<Buffer> create(
         Device *device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        const std::optional<ShardSpecBuffer>& shard_parameter = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt);
+    static std::shared_ptr<Buffer> create(
+        Device *device,
+        DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -210,7 +221,7 @@ class Buffer final {
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
-   private:
+
     Buffer(
         Device *device,
         DeviceAddr size,
@@ -218,10 +229,14 @@ class Buffer final {
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
-        std::optional<bool> bottom_up);
+        std::optional<bool> bottom_up,
+        bool owns_data,
+        Private);
 
+   private:
     enum class AllocationStatus : uint8_t {
         ALLOCATION_REQUESTED,
+        ALLOCATION_FAILED,
         ALLOCATED,
         DEALLOCATED,
     };
@@ -239,6 +254,7 @@ class Buffer final {
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
+    const bool owns_data_;
 
     std::atomic<AllocationStatus> allocation_status_ = AllocationStatus::ALLOCATION_REQUESTED;
     DeviceAddr address_ = 0;

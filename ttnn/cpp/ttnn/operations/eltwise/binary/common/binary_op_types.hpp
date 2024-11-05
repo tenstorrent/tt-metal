@@ -21,6 +21,7 @@ enum class BinaryOpType {
     LOGADDEXP,
     LOGICAL_AND,
     LOGICAL_OR,
+    LOGICAL_XOR,
     LDEXP,
     LOGADDEXP2,
     DIV_FAST

@@ -12,6 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
@@ -23,8 +24,6 @@ namespace tt {
 namespace tt_metal {
 
 namespace tensor_impl {
-
-std::array<uint32_t, 2> get_sharded_page_shape(Layout layout, DataType dtype, std::array<uint32_t, 2> shard_shape, const std::optional<Tile>& tile);
 
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
@@ -212,7 +211,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::Legac
     auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), TensorLayout::LIN_ROW_MAJOR, TensorLayout::TILED_NFACES, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape);
 }
 
 template <typename T, template <typename> typename BufferType>
@@ -220,7 +219,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::Legac
     auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
     auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
     return convert_layout(
-        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), TensorLayout::TILED_NFACES, TensorLayout::LIN_ROW_MAJOR, tile_shape, face_shape);
+        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tile_shape, face_shape);
 }
 
 // ======================================================================================
@@ -244,17 +243,7 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-uint32_t get_page_size(DataType dtype, Layout layout, uint32_t total_size_bytes, const ttnn::SimpleShape& shape, const std::optional<Tile>& tile = std::nullopt);
-
-DeviceBuffer allocate_buffer_on_device(
-    size_t buffer_size_bytes,
-    Device* device,
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    const MemoryConfig& memory_config,
-    const std::optional<ShardSpecBuffer>& shard_spec = std::nullopt,
-    const std::optional<Tile>& tile = std::nullopt);
+DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout);
 
 template <typename T>
 inline void read_data_from_device_buffer(

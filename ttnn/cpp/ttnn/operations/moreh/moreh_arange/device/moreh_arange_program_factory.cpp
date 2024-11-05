@@ -26,7 +26,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     Program program = Program();
 
     // Create circular buffer
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         tt::tt_metal::datatype_to_dataformat_converter(dtype),
@@ -44,7 +44,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     }
 
     uint32_t dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    auto kernel_id = tt::operations::primary::CreateWriteKernel(
+    auto kernel_id = CreateWriteKernel(
         program,
         operation_attributes.untilize_out
             ? "ttnn/cpp/ttnn/operations/moreh/moreh_arange/device/kernels/writer_moreh_arange_rm.cpp"

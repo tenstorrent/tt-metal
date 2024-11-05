@@ -28,7 +28,7 @@ params += [
             "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             "output_tensor_shape": [1, 1, 128, 7328],
-            "pad_value": 10,
+            "pad_value": 10.0,
         },
     )
 ]

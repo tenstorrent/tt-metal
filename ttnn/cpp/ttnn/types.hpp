@@ -19,15 +19,6 @@ using Device = tt::tt_metal::Device;
 constexpr auto TILE_SIZE = 32;
 
 using tt::tt_metal::DataType;
-static constexpr auto uint8 = DataType::UINT8;
-static constexpr auto uint16 = DataType::UINT16;
-static constexpr auto int32 = DataType::INT32;
-static constexpr auto uint32 = DataType::UINT32;
-static constexpr auto float32 = DataType::FLOAT32;
-static constexpr auto bfloat16 = DataType::BFLOAT16;
-static constexpr auto bfloat8_b = DataType::BFLOAT8_B;
-static constexpr auto bfloat4_b = DataType::BFLOAT4_B;
-
 using tt::tt_metal::BufferType;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::TensorMemoryLayout;
