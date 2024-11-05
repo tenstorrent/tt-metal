@@ -920,28 +920,9 @@ int main(int argc, char **argv) {
             input_vec = create_random_vector_of_bfp4(
                 input_size, false, 100, 1234);
         } else if (tile_format == tt::DataFormat::Bfp8_b) {
-            // input_vec = create_constant_vector_of_bfp8(
-            //     input_size, 100, true);
             input_vec = create_random_vector_of_bfp8(
                 input_size, false, 100, 1234);
         } else {
-            // // Debugging: Create a vector of bfloat16s where each element contains the tile number
-            // uint32_t num_input_elements = k * n;
-            // input_vec.resize(num_input_elements/2); // num_input_elements/2 because we pack into fp32 instead of bf16
-            // for (uint32_t i = 0; i < num_input_elements/2; i++) {
-            //     uint32_t tile_value1 = i / 512; // Integer division to get tile number
-            //     uint32_t tile_value2 = (i + 1) / 512; // Integer division to get tile number
-            //     bfloat16 num_1_bfloat16 = bfloat16(static_cast<float>(tile_value1));
-            //     bfloat16 num_2_bfloat16 = bfloat16(static_cast<float>(tile_value2));
-            //     input_vec[i] = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(num_1_bfloat16, num_2_bfloat16));
-            // }
-
-            // auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
-            // // for (uint32_t i = 0; i < num_input_elements; i+=1024) {
-            // //     log_info(LogTest, "input_vec[{}] = {}", i, input_bf16[i].to_float());
-            // // }
-
-            // Use random vector
             input_vec = create_random_vector_of_bfloat16(
                 input_size, 100, 1234);
         }
