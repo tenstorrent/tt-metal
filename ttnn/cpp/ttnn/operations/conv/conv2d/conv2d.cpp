@@ -817,6 +817,8 @@ Result conv2d(
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
         adjust_conv_op_config_for_auto_shard(
@@ -828,7 +830,7 @@ Result conv2d(
             output_width,
             weight_tensor.get_shape()[3],
             input_width,
-            device->compute_with_storage_grid_size(),
+            compute_grid_size,
             conv_config,
             input_tensor.layout());
     }
@@ -850,8 +852,10 @@ Result conv2d(
     }
 
     if(conv_config.shard_layout == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+        uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
+
         output_parallel_config = {
-            .grid = num_cores_to_corerange_set( tt::div_up(out_channels, tt::constants::TILE_WIDTH), device->compute_with_storage_grid_size(), true),
+            .grid = num_cores_to_corerange_set( find_closest_largest_divisor(tt::div_up(out_channels, tt::constants::TILE_WIDTH),max_num_cores), compute_grid_size, true),
             .shard_scheme = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
             .shard_orientation = parallel_config.shard_orientation
         };
@@ -860,7 +864,7 @@ Result conv2d(
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
-        parallel_config, round_up_size);
+        output_parallel_config, round_up_size);
     auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
 
     auto opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(

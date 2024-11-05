@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <cstdint>
+#include <sys/param.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #define ENABLE_DEBUG 0
