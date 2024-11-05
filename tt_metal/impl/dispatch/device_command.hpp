@@ -270,7 +270,7 @@ class DeviceCommand {
         } else {
             initialize_mcast_cmd(mcast_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait) {
@@ -289,7 +289,7 @@ class DeviceCommand {
         } else {
             initialize_sem_update_cmd(dispatch_s_sem_update_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, PCIE_ALIGNMENT);
+        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     template <bool inline_data = false>
@@ -394,7 +394,7 @@ class DeviceCommand {
             initialize_set_unicast_only_cores_cmd(set_unicast_only_cores_cmd_dst);
         }
         uint32_t data_sizeB = noc_encodings.size() * sizeof(uint32_t);
-        uint32_t increment_sizeB = align(data_sizeB, PCIE_ALIGNMENT);
+        uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
         this->add_data(noc_encodings.data(), data_sizeB, increment_sizeB);
     }
 
