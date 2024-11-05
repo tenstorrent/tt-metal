@@ -826,7 +826,6 @@ tt::tt_metal::Tile get_output_tile(const MemoryConfig& output_mem_config, const 
     if (output_tile.has_value()) {
         uint32_t in0_tile_h = in0_tile_shape[0];
         uint32_t in1_tile_w = in1_tile_shape[1];
-        // uint32_t in1_tile_w = in1_tile.get_transpose_of_faces() ? in1_tile_shape[0] : in1_tile_shape[1];
         const auto& out_tile_shape = output_tile->get_tile_shape();
         TT_FATAL(out_tile_shape[1] > 0, "the override output tile width needs to be greater than zero");
         TT_FATAL(out_tile_shape[1] % in1_tile_w == 0, "the override output tile width be multiple of in1 tile width");
