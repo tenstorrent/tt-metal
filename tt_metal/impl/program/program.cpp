@@ -15,18 +15,19 @@
 #include "tt_metal/detail/reports/compilation_reporter.hpp"
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
+#include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "tt_metal/impl/buffers/semaphore.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/llrt/llrt.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/program.hpp"
+#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 
 namespace tt::tt_metal {
 
@@ -142,9 +143,12 @@ class Program_ {
     uint32_t get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(Device *device, CoreCoord logical_core, CoreType core_type) const;
+    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
 
    private:
     void populate_dispatch_data(Device *device);
+
+    HWCommandQueue *last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
     std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
@@ -208,6 +212,7 @@ class Program_ {
     std::vector<std::shared_ptr<Buffer>> config_buffers_;
 
     std::vector<ProgramConfig> program_configs_;
+    // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
@@ -246,6 +251,7 @@ class Program_ {
 
     bool runs_on_noc_unicast_only_cores();
     bool runs_on_noc_multicast_only_cores();
+    bool kernel_binary_always_stored_in_ringbuffer();
 
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
@@ -307,7 +313,9 @@ detail::Program_::Program_() :
     }
 
     program_configs_.resize(programmable_core_count);
-    program_config_sizes_.resize(programmable_core_count);
+    program_config_sizes_.resize(programmable_core_count + 1);
+    // Always need one launch buffer msg for a program.
+    program_config_sizes_[programmable_core_count] = 1;
 }
 
 Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
@@ -1454,9 +1462,10 @@ uint32_t detail::Program_::get_sem_base_addr(Device *device, CoreCoord logical_c
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
-    uint32_t base_addr = device->using_fast_dispatch ?
-        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t base_addr = device->using_fast_dispatch
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                                   programmable_core_type)
+                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].sem_offset;
 }
@@ -1471,15 +1480,24 @@ uint32_t detail::Program_::get_cb_base_addr(Device *device, CoreCoord logical_co
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(phys_core);
     uint32_t index = hal.get_programmable_core_type_index(programmable_core_type);
 
-    uint32_t base_addr = device->using_fast_dispatch ?
-        device->sysmem_manager().get_config_buffer_mgr().get_last_slot_addr(programmable_core_type) :
-        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    uint32_t base_addr = device->using_fast_dispatch
+                             ? this->last_used_command_queue_for_testing->get_config_buffer_mgr().get_last_slot_addr(
+                                   programmable_core_type)
+                             : hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 
     return base_addr + this->program_configs_[index].cb_offset;
 }
 
 uint32_t Program::get_cb_base_addr(Device *device, CoreCoord logical_core, CoreType core_type) const {
     return pimpl_->get_cb_base_addr(device, logical_core, core_type);
+}
+
+void detail::Program_::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+    this->last_used_command_queue_for_testing = queue;
+}
+
+void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+    pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
 uint32_t detail::Program_::get_sem_size(Device *device, CoreCoord logical_core, CoreType core_type) const {
@@ -1523,6 +1541,18 @@ bool detail::Program_::runs_on_noc_multicast_only_cores() {
 }
 
 bool Program::runs_on_noc_multicast_only_cores() { return pimpl_->runs_on_noc_multicast_only_cores(); }
+
+bool detail::Program_::kernel_binary_always_stored_in_ringbuffer() {
+    // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
+    // that big of a ringbuffer.
+    return !(
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
+}
+
+bool Program::kernel_binary_always_stored_in_ringbuffer() {
+    return pimpl_->kernel_binary_always_stored_in_ringbuffer();
+}
 
 Program::Program(Program &&other) noexcept = default;
 
