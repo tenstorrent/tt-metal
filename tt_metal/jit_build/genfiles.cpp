@@ -549,8 +549,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     std::vector<int32_t>& l1_bank_offset_map,
     uint32_t allocator_alignment) {
     stringstream ss;
-    bool is_dram_pow2 = ceil(log2(dram_bank_map.size())) == log2(dram_bank_map.size());
-    bool is_l1_pow2 = ceil(log2(l1_bank_map.size())) == log2(l1_bank_map.size());
 
     ss << "// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc." << endl;
     ss << "//" << endl;

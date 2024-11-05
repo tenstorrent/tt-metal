@@ -349,7 +349,7 @@ class Device {
     void MarkAllocationsUnsafe();
     void MarkAllocationsSafe();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
-    std::map<std::string, std::string> device_kernel_defines;
+    std::map<std::string, std::string> device_kernel_defines_;
 };
 
 }  // namespace v0
