@@ -27,11 +27,11 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     // Depending on riscv type, choose one core to run the test on.
     CoreCoord logical_core, phys_core;
     if (riscv_type == DebugErisc) {
-        if (device->get_active_ethernet_cores().empty()) {
+        if (device->get_active_ethernet_cores(true).empty()) {
             log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
             GTEST_SKIP();
         }
-        logical_core = *(device->get_active_ethernet_cores().begin());
+        logical_core = *(device->get_active_ethernet_cores(true).begin());
         phys_core = device->ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
