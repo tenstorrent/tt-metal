@@ -488,3 +488,30 @@ def test_add_with_block_sharding(device, input_a_sharded, input_b_sharded, out_s
     output_tensor = ttnn.to_torch(output_tensor)
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        ([], [], []),
+        ([1], [2], [3]),
+        ([1], [], []),
+        ([], [1], []),
+        ([1, 2], [3], [4, 5]),
+        ([1], [2, 3], [3, 4]),
+        ([1, 2], [3, 4], [4, 6]),
+    ],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_01_volume_tensors(device, data, memory_config):
+    (a, b, c_golden) = data
+    a = torch.BFloat16Tensor(a)
+    b = torch.BFloat16Tensor(b)
+    assert torch.add(a, b).tolist() == c_golden
+
+    ttnn_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    ttnn_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    ttnn_c = ttnn.add(ttnn_a, ttnn_b)
+    c = ttnn.to_torch(ttnn_c).reshape((-1))
+
+    assert c.tolist() == c_golden

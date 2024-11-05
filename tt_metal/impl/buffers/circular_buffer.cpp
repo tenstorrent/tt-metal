@@ -30,7 +30,7 @@ CircularBuffer::CircularBuffer(const CoreRangeSet &core_ranges, const CircularBu
     config_(config),
     locally_allocated_address_(std::nullopt) {
     if (this->config_.total_size() == 0) {
-        TT_THROW("Circular Buffer Config Error: Circular buffer size cannot be 0 B");
+        return;
     }
 
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
