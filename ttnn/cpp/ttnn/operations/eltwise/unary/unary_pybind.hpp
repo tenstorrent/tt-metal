@@ -476,6 +476,7 @@ void bind_unary_operation_with_integer_parameter(
     const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
+    const std::string& supported_dtype = "INT32",
     const std::string& note = "") {
 
     auto doc = fmt::format(
@@ -498,7 +499,19 @@ void bind_unary_operation_with_integer_parameter(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -508,6 +521,7 @@ void bind_unary_operation_with_integer_parameter(
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -1624,11 +1638,11 @@ void py_module(py::module& module) {
         R"doc(System memory is not supported.)doc");
 
     // Unaries with integer parameter
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "Input tensor needs to be of INT32 dtype. Support provided for Wormhole_B0 only.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_right_shift, "shift_bits", "integer within range (0, 31)", "Input tensor needs to be of INT32 dtype. Support provided for Wormhole_B0 only.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value", "Input tensor needs to be positive, INT32 dtype. Support provided only for Wormhole_B0.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_right_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_and, "value", "scalar value","INT32", "Input tensor needs to be positive.Support provided only for Wormhole_B0.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_or, "value", "scalar value", "INT32", "Input tensor needs to be positive.Support provided only for Wormhole_B0.");
+    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_xor, "value", "scalar value","INT32", "Input tensor needs to be positive.Support provided only for Wormhole_B0.");
 
 
     // Unary ops with dim parameter
