@@ -37,7 +37,7 @@ class WorkerConfigBufferMgr {
   public:
     WorkerConfigBufferMgr();
 
-    void init_add_core(uint32_t base_addr, uint32_t size);
+    void init_add_buffer(uint32_t base_addr, uint32_t size);
     const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> reserve(const std::vector<uint32_t>& sizes);
     void free(uint32_t free_up_to_sync_count);
     void alloc(uint32_t when_freeable_sync_count);

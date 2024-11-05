@@ -9,15 +9,17 @@
 #include <condition_variable>
 #include <fstream>
 #include <memory>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/lock_free_queue.hpp"
+#include "tt_metal/impl/dispatch/program_command_sequence.hpp"
+#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
 #include "tt_metal/impl/program/program.hpp"
 #include "tt_metal/impl/trace/trace_buffer.hpp"
 
@@ -30,6 +32,10 @@ class Trace;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 }  // namespace v0
+
+namespace detail {
+class Program_;
+}
 
 // Only contains the types of commands which are enqueued onto the device
 enum class EnqueueCommandType {
@@ -288,6 +294,7 @@ class EnqueueProgramCommand : public Command {
     NOC noc_index;
     Program& program;
     SystemMemoryManager& manager;
+    WorkerConfigBufferMgr& config_buffer_mgr;
     CoreCoord dispatch_core;
     CoreType dispatch_core_type;
     uint32_t expected_num_workers_completed;
@@ -304,17 +311,23 @@ class EnqueueProgramCommand : public Command {
         Program& program,
         CoreCoord& dispatch_core,
         SystemMemoryManager& manager,
+        WorkerConfigBufferMgr& config_buffer_mgr,
         uint32_t expected_num_workers_completed,
         uint32_t multicast_cores_launch_message_wptr,
         uint32_t unicast_cores_launch_message_wptr);
 
-    void assemble_preamble_commands(ProgramCommandSequence& program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
+    void assemble_preamble_commands(
+        ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
     void assemble_stall_commands(ProgramCommandSequence& program_command_sequence, bool prefetch_stall);
     void assemble_runtime_args_commands(ProgramCommandSequence& program_command_sequence);
-    void assemble_device_commands(ProgramCommandSequence& program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
-    void update_device_commands(ProgramCommandSequence& cached_program_command_sequence, std::vector<ConfigBufferEntry>& kernel_config_addrs);
+    void assemble_device_commands(
+        ProgramCommandSequence& program_command_sequence, const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
+    void update_device_commands(
+        ProgramCommandSequence& cached_program_command_sequence,
+        const tt::stl::Span<ConfigBufferEntry> kernel_config_addrs);
 
-    void write_program_command_sequence(const ProgramCommandSequence& program_command_sequence, bool stall_first);
+    void write_program_command_sequence(
+        const ProgramCommandSequence& program_command_sequence, bool stall_first, bool stall_before_program);
 
     void process();
 
@@ -502,6 +515,7 @@ class HWCommandQueue {
     std::shared_ptr<detail::TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
+    WorkerConfigBufferMgr config_buffer_mgr;
     // Expected value of DISPATCH_MESSAGE_ADDR in dispatch core L1
     //  Value in L1 incremented by worker to signal completion to dispatch. Value on host is set on each enqueue program
     //  call
@@ -550,6 +564,7 @@ class HWCommandQueue {
     void terminate();
     void increment_num_entries_in_completion_q();
     void set_exit_condition();
+    WorkerConfigBufferMgr& get_config_buffer_mgr() { return this->config_buffer_mgr; }
     friend void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking);
     friend void EnqueueProgramImpl(
         CommandQueue& cq,
@@ -572,6 +587,7 @@ class HWCommandQueue {
     friend void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
     friend CommandQueue;
     friend Device;
+    friend detail::Program_;
 };
 
 // Common interface for all command queue types

@@ -14,8 +14,8 @@ namespace working_config_buffer_tests {
 
 TEST(WorkingConfigBuffer, MarkCompletelyFull) {
     WorkerConfigBufferMgr mgr;
-    mgr.init_add_core(1024, 1024);
-    mgr.init_add_core(2, 1024);
+    mgr.init_add_buffer(1024, 1024);
+    mgr.init_add_buffer(2, 1024);
 
     auto reservation = mgr.reserve({12, 12});
     mgr.alloc(1);
@@ -36,4 +36,24 @@ TEST(WorkingConfigBuffer, MarkCompletelyFull) {
 
     EXPECT_FALSE(next_reservation.first.need_sync);
 }
+
+// Test that small-sized, tightly-packed ringbuffers work.
+TEST(WorkerConfigBuffer, SmallSize) {
+    WorkerConfigBufferMgr mgr;
+    mgr.init_add_buffer(0, 5);
+    for (size_t i = 0; i < 5; i++) {
+        auto reservation = mgr.reserve({1});
+        EXPECT_FALSE(reservation.first.need_sync);
+        mgr.alloc(i + 1);
+    }
+
+    for (size_t i = 5; i < 15; i++) {
+        auto reservation = mgr.reserve({1});
+        EXPECT_TRUE(reservation.first.need_sync);
+        EXPECT_EQ(reservation.first.sync_count, i - 4);
+        mgr.free(reservation.first.sync_count);
+        mgr.alloc(i + 1);
+    }
+}
+
 }  // namespace working_config_buffer_tests

@@ -16,8 +16,7 @@ WorkerConfigBufferMgr::WorkerConfigBufferMgr() {
     entries_.resize(kernel_config_entry_count);
 }
 
-void WorkerConfigBufferMgr::init_add_core(uint32_t base_addr, uint32_t size) {
-
+void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->base_addrs_.push_back(base_addr);
     this->end_addrs_.push_back(base_addr + size);
 
@@ -43,9 +42,9 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
     ConfigBufferSync sync_info;
     sync_info.need_sync = false;
 
-    size_t num_core_types = this->reservation_.size();
-    TT_ASSERT(sizes.size() == num_core_types);
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
+    size_t num_buffer_types = this->reservation_.size();
+    TT_ASSERT(sizes.size() == num_buffer_types);
+    for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         uint32_t free_index = this->free_index_[idx];
         uint32_t alloc_index = this->alloc_index_[idx];
 
@@ -64,16 +63,18 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
             TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
 
             // alloc_index may be ahead or behind free_index
-            // so compare to either end of buffer or next to be freed addr
-            uint32_t end = (addr >= this->entries_[free_index][idx].addr) ?
-                this->end_addrs_[idx] :
-                this->entries_[free_index][idx].addr;
+            // so compare to either end of buffer or next to be freed addr. if alloc_index is inside free_index, we
+            // consider that behind.
+            uint32_t end = (addr >= this->entries_[free_index][idx].addr + this->entries_[free_index][idx].size)
+                               ? this->end_addrs_[idx]
+                               : this->entries_[free_index][idx].addr;
 
             if (addr + size > end && end == this->end_addrs_[idx]) {
                 // Wrap the ring buffer
                 addr = this->base_addrs_[idx];
                 end = this->entries_[free_index][idx].addr;
             }
+            bool had_sync = sync_info.need_sync;
 
             if (addr + size > end) {
                 // Need a sync...but will this entry free enough space?  Look at the next
@@ -99,13 +100,21 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
                 }
 
                 sync_info.need_sync = true;
+                if (had_sync) {
+                    sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
+                } else {
+                    sync_info.sync_count = this->entries_[free_index][idx].sync_count;
+                }
             } else if (alloc_index + 1 == free_index ||
                        (alloc_index + 1 == kernel_config_entry_count && free_index == 0)) {
                 // We need a sync because the table of entries is too small
                 sync_info.need_sync = true;
+                if (had_sync) {
+                    sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
+                } else {
+                    sync_info.sync_count = this->entries_[free_index][idx].sync_count;
+                }
             }
-
-            sync_info.sync_count = this->entries_[free_index][idx].sync_count;
             this->reservation_[idx].addr = addr;
         }
     }
@@ -115,26 +124,23 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
 
 // Repeatedly move free_index up until it catches up w/ the reserved sync_counts or alloc_index
 void WorkerConfigBufferMgr::free(uint32_t free_up_to_sync_count) {
-
-    size_t num_core_types = this->reservation_.size();
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
+    size_t num_buffer_types = this->reservation_.size();
+    for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         uint32_t free_index = this->free_index_[idx];
-        if (free_up_to_sync_count >= this->entries_[free_index][idx].sync_count) {
-            if (free_index != this->alloc_index_[idx]) {
-                free_index++;
-                if (free_index == kernel_config_entry_count) {
-                    free_index = 0;
-                }
-                this->free_index_[idx] = free_index;
+        while ((free_up_to_sync_count >= this->entries_[free_index][idx].sync_count) &&
+               (free_index != this->alloc_index_[idx])) {
+            free_index++;
+            if (free_index == kernel_config_entry_count) {
+                free_index = 0;
             }
+            this->free_index_[idx] = free_index;
         }
     }
 }
 
 void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
-
-    size_t num_core_types = this->reservation_.size();
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
+    size_t num_buffer_types = this->reservation_.size();
+    for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         uint32_t alloc_index = this->alloc_index_[idx];
 
         this->entries_[alloc_index][idx].addr = this->reservation_[idx].addr;
@@ -163,8 +169,8 @@ uint32_t WorkerConfigBufferMgr::get_last_slot_addr(HalProgrammableCoreType progr
 }
 
 void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
-    size_t num_core_types = this->reservation_.size();
-    for (uint32_t idx = 0; idx < num_core_types; idx++) {
+    size_t num_buffer_types = this->reservation_.size();
+    for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         constexpr uint32_t kNewFreeIndex = 0;
         constexpr uint32_t kNewAllocIndex = 1;
         this->alloc_index_[idx] = kNewAllocIndex;
