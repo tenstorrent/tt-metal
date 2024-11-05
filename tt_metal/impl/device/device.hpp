@@ -61,12 +61,6 @@ static constexpr float  INF_BH = INF_WHB0;
 
 inline namespace v0 {
 
-struct DeviceKernelDefinesHash {
-    DeviceKernelDefinesHash() {}
-
-    size_t operator()(const std::map<std::string, std::string> &c_defines) const;
-};
-
 // A physical PCIexpress Tenstorrent device
 class Device {
    public:

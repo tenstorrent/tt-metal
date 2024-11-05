@@ -70,7 +70,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel> kernel, JitBuildOptions &
     {
         unique_lock<mutex> lock;
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+          << " :: " << kernel->compute_hash() << " :: " << device_kernel_defines_hash << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
     }
 #endif
