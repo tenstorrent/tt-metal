@@ -35,8 +35,7 @@ class CommandQueueFixture : virtual public DispatchFixture {
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        const int device_id = 0;
-
+        const chip_id_t device_id = 0;
         const auto &dispatch_core_type = tt::llrt::OptionsG.get_dispatch_core_type();
         this->device_ = tt::tt_metal::CreateDevice(device_id, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
     }
@@ -85,13 +84,10 @@ class CommandQueueSingleCardFixture : virtual public DispatchFixture {
         } else {
             this->devices_.push_back(this->reserved_devices_.at(mmio_device_id));
         }
-
-        this->num_devices_ = this->reserved_devices_.size();
     }
 
     std::vector<tt::tt_metal::Device *> devices_;
     std::map<chip_id_t, tt::tt_metal::Device *> reserved_devices_;
-    size_t num_devices_;
 };
 
 class CommandQueueSingleCardBufferFixture : virtual public CommandQueueSingleCardFixture,

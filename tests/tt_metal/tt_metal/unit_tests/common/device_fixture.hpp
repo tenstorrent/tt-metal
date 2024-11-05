@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-#include "buffer_fixtures.hpp"
+#include "buffer_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"

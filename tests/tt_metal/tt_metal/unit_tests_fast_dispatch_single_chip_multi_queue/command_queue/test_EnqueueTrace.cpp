@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_fixture.hpp"
-#include "trace_fixtures.hpp"
+#include "trace_fixture.hpp"
 #include "gtest/gtest.h"
 #include "tt_metal/common/scoped_timer.hpp"
 #include "tt_metal/host_api.hpp"

@@ -6,9 +6,9 @@
 
 #include "gtest/gtest.h"
 #include "event_fixture.hpp"
-#include "buffer_fixtures.hpp"
+#include "buffer_fixture.hpp"
 #include "dispatch_fixture.hpp"
-#include "program_fixtures.hpp"
+#include "program_fixture.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -54,7 +54,7 @@ class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingl
 
 class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture, public ProgramFixture {};
 
-class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
+class MultiCommandQueueMultiDeviceFixture : virtual public DispatchFixture {
    protected:
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -67,11 +67,11 @@ class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
             TT_THROW("This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
-        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
 
         DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
+        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
             if (!tt::tt_metal::IsGalaxyCluster()) {
                 tt::log_warning(tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
                 dispatch_core_type = DispatchCoreType::ETH;
@@ -83,16 +83,12 @@ class MultiCommandQueueMultiDeviceFixture : virtual public ::testing::Test {
         for (const auto &[id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
-
-        num_devices_ = reserved_devices_.size();
     }
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
     std::vector<tt::tt_metal::Device*> devices_;
     std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
-    size_t num_devices_;
-    tt::ARCH arch_;
 };
 
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture, public BufferFixture {};

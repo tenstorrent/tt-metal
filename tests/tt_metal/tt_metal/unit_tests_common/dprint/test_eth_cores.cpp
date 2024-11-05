@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixtures.hpp"
+#include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "test_utils.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
