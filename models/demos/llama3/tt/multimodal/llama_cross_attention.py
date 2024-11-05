@@ -131,11 +131,12 @@ class TtLlamaCrossAttention(LightweightModule):
             eps=self.norm_eps,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens):
-        bsz, seqlen_y = xattn_tokens.shape[1], xattn_tokens.shape[2]
+    def compute_xattn_kv_cache(self, xattn_tokens, xattn_cache, user_id):
+        # Always runs with batch=1
+        B, seqlen_y = 1, xattn_tokens.shape[2]
         MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
         if seqlen_y > MAX_MM_SEQ_LEN:
-            xattn_tokens = ttnn.reshape(xattn_tokens, [1, bsz * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+            xattn_tokens = ttnn.reshape(xattn_tokens, [1, B * seqlen_y // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         xk = ttnn.linear(
             xattn_tokens,
@@ -155,13 +156,13 @@ class TtLlamaCrossAttention(LightweightModule):
             program_config=self.model_config["VISION_XATTN_KV_PROGCFG"](seqlen_y, MAX_MM_SEQ_LEN),
         )
         if seqlen_y > MAX_MM_SEQ_LEN:
-            xk = ttnn.reshape(xk, [1, bsz, seqlen_y, -1])
-            xv = ttnn.reshape(xv, [1, bsz, seqlen_y, -1])
+            xk = ttnn.reshape(xk, [1, B, seqlen_y, -1])
+            xv = ttnn.reshape(xv, [1, B, seqlen_y, -1])
 
         if self.n_local_kv_heads == 1:
             # Only a simple reshape required, no need to split
-            xk = ttnn.reshape(xk, [bsz, 1, seqlen_y, -1])
-            xv = ttnn.reshape(xv, [bsz, 1, seqlen_y, -1])
+            xk = ttnn.reshape(xk, [B, 1, seqlen_y, -1])
+            xv = ttnn.reshape(xv, [B, 1, seqlen_y, -1])
         else:
             # 1, B, S, D -> B, NH, S, DH
             xk, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -180,7 +181,7 @@ class TtLlamaCrossAttention(LightweightModule):
             )
             # def create_heads(x):
             #     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            #     x = ttnn.reshape(x, [bsz, seqlen_y, self.n_local_kv_heads, self.head_dim])
+            #     x = ttnn.reshape(x, [B, seqlen_y, self.n_local_kv_heads, self.head_dim])
             #     x = ttnn.transpose(x, 1, 2)
             #     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
             #     return x
@@ -193,7 +194,17 @@ class TtLlamaCrossAttention(LightweightModule):
         # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
         xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
         xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        return [xk, xv]
+
+        k_cache, v_cache = xattn_cache
+
+        # Work around fill_cache memory constraint by making these sharded
+        k_fill = ttnn.interleaved_to_sharded(xk, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
+        v_fill = ttnn.interleaved_to_sharded(xv, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
+
+        ttnn.fill_cache(k_cache, k_fill, user_id)
+        ttnn.fill_cache(v_cache, v_fill, user_id)
+
+        return xattn_cache
 
         ### Below is how I would like to implement TMs, but it results in poor PCC
         xk = ttnn.to_layout(xk, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -311,7 +322,7 @@ class TtLlamaCrossAttention(LightweightModule):
         else:
             return output
 
-    def forward_prefill(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
+    def forward_prefill(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, user_id):
         seq_len = x_11SH.shape[-2]
         # B, S, D
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
@@ -338,12 +349,16 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xq = self.q_norm(xq, mode="prefill")
 
-        xk, xv = xattn_cache
-        cache_seq_len = xk.shape[-2]
+        k_cache, v_cache = xattn_cache
+        cache_seq_len = k_cache.shape[-2]
+
+        k_cache_user = ttnn.slice(
+            k_cache, (user_id, 0, 0, 0), (user_id + 1, k_cache.shape[1], k_cache.shape[2], k_cache.shape[3])
+        )
 
         scores = ttnn.matmul(
             xq,
-            ttnn.transpose(xk, -1, -2),
+            ttnn.transpose(k_cache_user, -1, -2),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -355,9 +370,12 @@ class TtLlamaCrossAttention(LightweightModule):
         scores = ttnn.add(scores, xattn_mask)
         scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
 
+        v_cache_user = ttnn.slice(
+            v_cache, (user_id, 0, 0, 0), (user_id + 1, v_cache.shape[1], v_cache.shape[2], v_cache.shape[3])
+        )
         output = ttnn.matmul(
             scores,
-            xv,
+            v_cache_user,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
@@ -395,8 +413,10 @@ class TtLlamaCrossAttention(LightweightModule):
         else:
             return output
 
-    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode):
+    def forward(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode, user_id=0):
         if mode == "prefill":
-            return self.forward_prefill(x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache)
+            return self.forward_prefill(
+                x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, user_id=user_id
+            )
         else:
             return self.forward_decode(x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache)
