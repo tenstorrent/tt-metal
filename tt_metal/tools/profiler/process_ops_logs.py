@@ -63,8 +63,8 @@ OPS_CSV_HEADER = [
     "DEVICE COMPUTE CB RESERVE BACK [ns]",
     "INPUTS",
     "OUTPUTS",
-    "TRACE ID",
-    "TRACE RUNTIME ID",
+    "METAL TRACE ID",
+    "METAL TRACE REPLAY SESSION ID",
     "COMPUTE KERNEL PATH",
     "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
@@ -110,7 +110,7 @@ def import_tracy_op_logs(logFolder):
                     if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
                         jsonStr = tmpStrs[-1]
                         opData = json.loads(jsonStr)
-                        opData["trace_id"] = None
+                        opData["metal_trace_id"] = None
                         if "op_hash" in opData.keys():
                             assert "device_id" in opData.keys()
                             deviceID = int(opData["device_id"])
@@ -121,7 +121,7 @@ def import_tracy_op_logs(logFolder):
                                 cached_ops[deviceID] = {opHash: opData.copy()}
                             del cached_ops[deviceID][opHash]["global_call_count"]
                             if deviceID in traceIDs:
-                                opData["trace_id"] = traceIDs[deviceID]
+                                opData["metal_trace_id"] = traceIDs[deviceID]
                     else:  # cached device op
                         opDataList = opDataStr.split(":", 1)[-1].split(",")
                         assert len(opDataList) > 3, "Wrong cached op info format"
@@ -133,9 +133,9 @@ def import_tracy_op_logs(logFolder):
                         assert opHash in cached_ops[deviceID].keys(), "Expected hashed op info is not found"
                         opData = cached_ops[deviceID][opHash].copy()
                         opData["global_call_count"] = opID
-                        opData["trace_id"] = None
+                        opData["metal_trace_id"] = None
                         if deviceID in traceIDs:
-                            opData["trace_id"] = traceIDs[deviceID]
+                            opData["metal_trace_id"] = traceIDs[deviceID]
                     opData["tracy_time"] = opDataTime
                     opsData.append(opData)
                 elif "TRACE" in opDataStr:
@@ -208,7 +208,7 @@ def get_device_op_data(ops):
                 deviceOps[deviceID] = [opData]
             else:
                 deviceOps[deviceID].append(opData)
-        if "trace_id" in opData.keys() and opData["trace_id"] is not None:
+        if "metal_trace_id" in opData.keys() and opData["metal_trace_id"] is not None:
             hasTraceRuns = True
 
     def device_ops_compare(op):
@@ -265,7 +265,7 @@ def append_device_data(ops, traceReplays, logFolder):
                         assert (
                             deviceOpID in opIDHostDataDict
                         ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data"
-                        traceID = opIDHostDataDict[deviceOpID]["trace_id"]
+                        traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
                         if traceID is not None:
                             if device in traceOps:
                                 if traceID in traceOps[device]:
@@ -282,7 +282,7 @@ def append_device_data(ops, traceReplays, logFolder):
                                 len(traceReplays[device][traceID]) > 0
                             ), "Wrong trace replay count: Device has more ops than trace replay issued commands"
                             opIDHostDataDict[deviceOpID]["tracy_time"] = traceReplays[device][traceID][0]
-                            opIDHostDataDict[deviceOpID]["trace_runtime_id"] = (
+                            opIDHostDataDict[deviceOpID]["metal_trace_replay_session_id"] = (
                                 traceReplayCounts[device][traceID] - len(traceReplays[device][traceID]) + 1
                             )
                         generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
@@ -333,9 +333,9 @@ def append_device_data(ops, traceReplays, logFolder):
             # Tag trace ops with a UID
             for device in devicesOps:
                 for deviceOp in devicesOps[device]:
-                    if "trace_runtime_id" in deviceOp.keys():
+                    if "metal_trace_replay_session_id" in deviceOp.keys():
                         deviceOp["global_call_count"] = (
-                            deviceOp["global_call_count"] | deviceOp["trace_runtime_id"] << 16
+                            deviceOp["global_call_count"] | deviceOp["metal_trace_replay_session_id"] << 16
                         )
                         traceOps[deviceOp["global_call_count"]] = deviceOp
                     else:
@@ -580,9 +580,9 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     opData["global_call_count"] = ((1 << 16) - 1) & op
                 else:
                     opData = ops[op]
-                    opData["trace_runtime_id"] = ""
-                    if "trac_id" not in opData.keys() or opData["trace_id"] is None:
-                        opData["trace_id"] = ""
+                    opData["metal_trace_replay_session_id"] = ""
+                    if "trac_id" not in opData.keys() or opData["metal_trace_id"] is None:
+                        opData["metal_trace_id"] = ""
 
                 for field, fieldData in opData.items():
                     headerField = csv_header_format(field)
