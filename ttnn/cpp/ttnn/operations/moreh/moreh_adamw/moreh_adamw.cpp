@@ -50,17 +50,7 @@ std::vector<std::optional<Tensor>> MorehAdamw::invoke(
         compute_kernel_config);
 }
 
-std::vector<Tensor> MorehAdamw::create_async_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-    const auto& input_tensor = input_tensors.at(0);
-    return {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
-}
-
-std::vector<bool> MorehAdamw::create_async_return_flag(
+OptionalTensors MorehAdamw::create_async_optional_output_tensors(
     const Tensor& param_in,
     const Tensor& grad,
     const Tensor& exp_avg_in,
@@ -81,6 +71,10 @@ std::vector<bool> MorehAdamw::create_async_return_flag(
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    return std::vector<bool>{true, true, true, amsgrad.value_or(false)};
+    return {
+        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})),
+        amsgrad.value_or(false) ? std::optional<Tensor>(operation::get_workers_for_op_output({param_in, grad, exp_avg_in, exp_avg_sq_in}, {max_exp_avg_sq_in})) : std::nullopt,};
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
