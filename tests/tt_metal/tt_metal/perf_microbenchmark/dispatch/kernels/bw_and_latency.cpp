@@ -15,7 +15,6 @@ void kernel_main() {
         uint32_t read_ptr = cb_addr;
         uint32_t write_ptr = cb_addr;
         for (int j = 0; j < PAGE_COUNT; j++) {
-
 #if DRAM_BANKED
             uint64_t noc_addr = get_dram_noc_addr(j, page_size, 0);
 #else
@@ -24,8 +23,11 @@ void kernel_main() {
 
 #if ISSUE_MCAST
             uint64_t dst_noc_multicast_addr =
-                get_noc_multicast_addr(NOC_ADDR_X, NOC_ADDR_Y, MCAST_NOC_END_ADDR_X, MCAST_NOC_END_ADDR_Y, NOC_MEM_ADDR);
-            noc_async_write_multicast(write_ptr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS);
+                get_noc_multicast_addr(NOC_ADDR_X, NOC_ADDR_Y, MCAST_NOC_END_ADDR_X, MCAST_NOC_END_ADDR_Y, write_ptr);
+            noc_async_write_multicast(read_ptr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS, LINKED);
+#elif WRITE
+            uint64_t noc_write_addr = NOC_XY_ADDR(NOC_X(NOC_ADDR_X), NOC_Y(NOC_ADDR_Y), write_ptr);
+            noc_async_write(NOC_MEM_ADDR, noc_write_addr, page_size);
 #elif READ_ONE_PACKET
             noc_async_read_one_packet(noc_addr, read_ptr, page_size);
 #else
@@ -33,16 +35,29 @@ void kernel_main() {
 #endif
 
 #if LATENCY
-            noc_async_read_barrier();
-            noc_async_write_barrier();
+#if WRITE
+#if LINKED
+            noc_async_write_multicast(cb_addr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS, false);
 #endif
-
+            noc_async_write_barrier();
+#else
+            noc_async_read_barrier();
+#endif
+#endif
             read_ptr += page_size;
             write_ptr += page_size;
         }
     }
 #if !LATENCY
-    noc_async_read_barrier();
+#if WRITE
+#if LINKED
+    uint64_t dst_noc_multicast_addr =
+        get_noc_multicast_addr(NOC_ADDR_X, NOC_ADDR_Y, MCAST_NOC_END_ADDR_X, MCAST_NOC_END_ADDR_Y, cb_addr);
+    noc_async_write_multicast(cb_addr, dst_noc_multicast_addr, page_size, NUM_MCAST_DESTS, false);
+#endif
     noc_async_write_barrier();
+#else
+    noc_async_read_barrier();
+#endif
 #endif
 }
