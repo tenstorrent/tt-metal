@@ -27,6 +27,10 @@ repos:
   rev: 0.16.2
   hooks:
   - id: gersemi
+- repo: https://github.com/adrienverge/yamllint.git
+  rev: v1.35.1
+  hooks:
+    - id: yamllint
 # - repo: https://github.com/pre-commit/mirrors-clang-format
 #   rev: v18.1.5
 #   hooks:
