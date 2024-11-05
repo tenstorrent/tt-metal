@@ -252,7 +252,7 @@ structure our tests with this framework is to bundle it into a single
 executable.
 
 You can use `--gtest_filter_test` to filter out the specific test you'd like.
-For example, to build and run the `DispatchFixture.DRAMLoopbackSingleCore` on
+For example, to build and run the `DispatchFixture.TensixDRAMLoopbackSingleCore` on
 fast dispatch, you can
 
 1. Build the unit tests:
@@ -261,7 +261,7 @@ fast dispatch, you can
    ```
 2. Run the test:
    ```
-   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="DispatchFixture.DRAMLoopbackSingleCore"
+   ./build/test/tt_metal/unit_tests_fast_dispatch --gtest_filter="DispatchFixture.TensixDRAMLoopbackSingleCore"
    ```
 
 On slow dispatch, to run another specific test, the equivalent would be:
@@ -270,7 +270,7 @@ On slow dispatch, to run another specific test, the equivalent would be:
 2. Run with the slow dispatch mode:
    ```
    export TT_METAL_SLOW_DISPATCH_MODE=1
-   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter_test="BasicFixture.TestL1BuffersAllocatedTopDown"
+   ./build/test/tt_metal/unit_tests/fast_dispatch --gtest_filter="DeviceSingleCardBufferFixture.TestL1BuffersAllocatedTopDown"
    ```
 
 We have split our tests into the two dispatch modes for less pollution of state

@@ -145,7 +145,7 @@ class CommandQueueMultiDeviceFixture : public DispatchFixture {
 class CommandQueueMultiDeviceProgramFixture : virtual public CommandQueueMultiDeviceFixture,
                                               virtual public ProgramFixture {};
 
-class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {
+class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
    protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -198,7 +198,7 @@ class RandomProgramFixture : virtual public CommandQueueSingleCardFixture {
     Device *device_;
 
     void SetUp() override {
-        CommandQueueSingleCardFixture::SetUp();
+        CommandQueueSingleCardProgramFixture::SetUp();
         this->device_ = this->devices_[0];
         this->initialize_seed();
     }

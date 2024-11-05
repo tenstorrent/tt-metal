@@ -559,7 +559,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocReadNoSend) {
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -575,7 +575,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocReadNoSend) {
     }
 }
 
-TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocWriteNoReceive) {
+TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
@@ -591,7 +591,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEthKernelsNocWriteNoReceiv
     }
 }
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsDirectSendAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
@@ -642,7 +642,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsDirectSendAllCo
     }
 }
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsSendDramBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllConnectedChips) {
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -674,7 +674,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsSendDramBufferA
     }
 }
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsSendInterleavedBufferAllConnectedChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {

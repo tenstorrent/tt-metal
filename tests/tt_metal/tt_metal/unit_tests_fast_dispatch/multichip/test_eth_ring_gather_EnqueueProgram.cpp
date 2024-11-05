@@ -460,7 +460,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 }
 }  // namespace fd_unit_tests::erisc::kernels
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsDirectRingGatherAllChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectRingGatherAllChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
@@ -476,7 +476,7 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsDirectRingGathe
         device_ring, WORD_SIZE, src_eth_l1_byte_address, dst_eth_l1_byte_address, sem_l1_byte_address));
 }
 
-TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthEthKernelsInterleavedRingGatherAllChips) {
+TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsInterleavedRingGatherAllChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (num_devices_ < 4) {
         GTEST_SKIP();
