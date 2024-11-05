@@ -955,7 +955,7 @@ void bind_power(py::module& module, const unary_operation_t& operation, const st
 }
 
 template <typename unary_operation_t>
-void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "", const std::string& info_doc = "") {
+void bind_unary_composite(py::module& module, const unary_operation_t& operation, const std::string& description, const std::string& range = "", const std::string& supported_dtype = "BFLOAT16", const std::string& supported_layout = "TILE", const std::string& supported_rank = "2,3,4", const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -970,7 +970,19 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
             ttnn.Tensor: the output tensor.
 
         Note:
-            {4}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - {5}
+                 - {6}
+
+            {7}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -980,6 +992,9 @@ void bind_unary_composite(py::module& module, const unary_operation_t& operation
         operation.python_fully_qualified_name(),
         description,
         range,
+        supported_dtype,
+        supported_layout,
+        supported_rank,
         info_doc);
 
     bind_registered_operation(
@@ -1729,138 +1744,33 @@ void py_module(py::module& module) {
 
         )doc");
 
-// it is only supporetd for range -9 to 9
-// not supported for grayskull
     // unary composite imported into ttnn
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::rad2deg, R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::tanhshrink, R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::acosh, R"doc(Performs acosh function on :attr:`input_tensor`.)doc", "",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
-
-        )doc");
-    detail::bind_unary_composite(module, ttnn::asinh, R"doc(Performs asinh function on :attr:`input_tensor`.)doc", "",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
-
-        )doc");
-    detail::bind_unary_composite(module, ttnn::atanh, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
-
-        )doc");
+    detail::bind_unary_composite(module, ttnn::acosh, R"doc(Performs acosh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc",R"doc(TILE)doc", R"doc(2,3,4)doc",
+        R"doc(System memory is not supported.)doc");
+    detail::bind_unary_composite(module, ttnn::asinh, R"doc(Performs asinh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+        R"doc(System memory is not supported.)doc");
+    detail::bind_unary_composite(module, ttnn::atanh, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+        R"doc(System memory is not supported.)doc");
     detail::bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::cosh, R"doc(Performs cosh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
+    detail::bind_unary_composite(module, ttnn::cosh, R"doc(Performs cosh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]",R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
-    detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]",
-        R"doc(Supported dtypes, layouts, and ranks:
+    detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]", R"doc(BFLOAT16)doc");
+    detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]", R"doc(BFLOAT16)doc");
+    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+        R"doc(Not supported on Grayskull.)doc");
+    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]", R"doc(BFLOAT16)doc");
 
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
-    detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
-    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf]",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           Not supported on Grayskull.
-
-        )doc");
-    detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
-
-    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
+    detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -88 to 88]", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::swish, R"doc(Performs swish function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::var_hw, R"doc(Performs var_hw function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::std_hw, R"doc(Performs std_hw function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc", "",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          ROW MAJOR, TILE        |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
+    detail::bind_unary_composite(module, ttnn::normalize_hw, R"doc(Performs normalize_hw function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(ROW_MAJOR, TILE)doc", R"doc(4)doc");
     detail::bind_unary_composite(module, ttnn::logical_not_, R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc", "",
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |          ROW MAJOR, TILE        |      4            |
-           +----------------------------+---------------------------------+-------------------+
-
-        )doc");
+    detail::bind_unary_composite(module, ttnn::normalize_global, R"doc(Performs normalize_global function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(ROW_MAJOR, TILE)doc", R"doc(4)doc");
     detail::bind_unary_composite(module, ttnn::frac, R"doc(Performs frac function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite_operation(module, ttnn::trunc, R"doc(Not supported for grayskull.)doc");
 
