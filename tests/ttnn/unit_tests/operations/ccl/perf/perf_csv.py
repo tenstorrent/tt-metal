@@ -65,7 +65,9 @@ def perf_report(original_file_path):
     def split_attributes(attributes):
         attr_dict = {key: value for key, value in re.findall(r"'([^']+)':\s*'([^']+)'", attributes)}
         attr_dict["topology"] = attr_dict.get("topology", "").split("::")[-1]
-        attr_dict["n_chips"] = int(attr_dict.get("ring_size", 1))
+        if "ring_size" not in attr_dict:
+            raise KeyError("Missing 'ring_size' attribute")
+        attr_dict["n_chips"] = int(attr_dict["ring_size"])
         return pd.Series(
             {
                 "dim": attr_dict.get("dim"),
@@ -125,13 +127,28 @@ def perf_report(original_file_path):
                 avg_values = group_excluded[numeric_columns].mean().round(2)
                 max_values = group_excluded[numeric_columns].max().round(2)
 
-                longest_device_fw_time = max_values["DEVICE FW DURATION [ns]"]
-                longest_erisc_fw_time = max_values["DEVICE ERISC KERNEL DURATION [ns]"]
+                op_bw_values, link_bw_values = [], []
+
+                for _, row in group_excluded.iterrows():
+                    op_bw, link_bw = calculate_bandwidth(row)
+                    op_bw_values.append(op_bw)
+                    link_bw_values.append(link_bw)
+
+                op_bw_min, op_bw_avg, op_bw_max = (
+                    round(min(op_bw_values), 2),
+                    round(sum(op_bw_values) / len(op_bw_values), 2),
+                    round(max(op_bw_values), 2),
+                )
+                link_bw_min, link_bw_avg, link_bw_max = (
+                    round(min(link_bw_values), 2),
+                    round(sum(link_bw_values) / len(link_bw_values), 2),
+                    round(max(link_bw_values), 2),
+                )
 
                 result_row = {
                     **{col: f"{min_values[col]} - {avg_values[col]} - {max_values[col]}" for col in numeric_columns},
-                    "longest_device_fw_time": longest_device_fw_time,
-                    "longest_erisc_fw_time": longest_erisc_fw_time,
+                    "Op BW [GB/s]": f"{op_bw_min} - {op_bw_avg} - {op_bw_max}",
+                    "Link BW [GB/s]": f"{link_bw_min} - {link_bw_avg} - {link_bw_max}",
                     **{key: value for key, value in zip(group_columns, name)},
                     "n_chips": n_chips,
                 }
@@ -139,17 +156,17 @@ def perf_report(original_file_path):
 
         return pd.DataFrame(results)
 
-    average_values_by_common_run = calculate_min_avg_max_by_common_runs(filtered_df)
-
     def calculate_bandwidth(row):
-        longest_device_fw_time = row["longest_device_fw_time"]
-        longest_erisc_fw_time = row["longest_erisc_fw_time"]
+        element_size = 2
+        longest_device_fw_time = row["DEVICE FW DURATION [ns]"]
+        longest_erisc_fw_time = row["DEVICE ERISC KERNEL DURATION [ns]"]
 
         input_tensor_volume = (
             int(row["Input Shape"].split(",")[0][1:])
             * int(row["Input Shape"].split(",")[1])
             * int(row["Input Shape"].split(",")[2])
             * int(row["Input Shape"].split(",")[3][:-1])
+            * element_size
         )
 
         output_tensor_volume = (
@@ -157,6 +174,7 @@ def perf_report(original_file_path):
             * int(row["Output Shape"].split(",")[1])
             * int(row["Output Shape"].split(",")[2])
             * int(row["Output Shape"].split(",")[3][:-1])
+            * element_size
         )
 
         op_bw, link_bw = None, None
@@ -177,9 +195,7 @@ def perf_report(original_file_path):
                 link_bw = input_tensor_volume * (n_chips - 1) / n_chips / longest_erisc_fw_time
         return round(op_bw, 2), round(link_bw, 2)
 
-    average_values_by_common_run[["Op BW [GB/s]", "Link BW [GB/s]"]] = average_values_by_common_run.apply(
-        calculate_bandwidth, axis=1, result_type="expand"
-    )
+    average_values_by_common_run = calculate_min_avg_max_by_common_runs(filtered_df)
 
     final_order = [
         "Input Shape",
