@@ -20,7 +20,7 @@ TIMEOUT = 30
 random.seed(0)
 
 parameters = {
-    "nightly": {
+    "clamp_test": {
         "input_specs": [
             {"shape": [0, 1], "max": 4.135166556742356},
             {"shape": [0, 2], "min": 0, "max": 1066},
@@ -116,8 +116,11 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.clamp(input_tensor_a, min=min_val, max=max_val, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
+    output_tensor = ttnn.clamp(input_tensor_a, min=min_val, max=max_val, memory_config=output_memory_config)
+    if len(input_specs["shape"]) == 1:
+        output_tensor = ttnn.to_torch(output_tensor, original_shape=input_specs["shape"])
+    else:
+        output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
