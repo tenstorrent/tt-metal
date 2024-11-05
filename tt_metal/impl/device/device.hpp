@@ -61,8 +61,8 @@ static constexpr float  INF_BH = INF_WHB0;
 
 inline namespace v0 {
 
-struct DeviceDefinesHash {
-    DeviceDefinesHash() {}
+struct DeviceKernelDefinesHash {
+    DeviceKernelDefinesHash() {}
 
     size_t operator()(const std::map<std::string, std::string> &c_defines) const;
 };
@@ -242,6 +242,7 @@ class Device {
     void initialize_cluster();
     void initialize_allocator(size_t l1_small_size, size_t trace_region_size, const std::vector<uint32_t> &l1_bank_remap = {});
     void initialize_build();
+    void initialize_device_kernel_defines();
     void build_firmware();
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
     void reset_cores();
@@ -348,12 +349,13 @@ class Device {
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const CoreRangeContainer& ranges, const CoreType core_type);
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
-    size_t get_device_defines_hash();
+    size_t get_device_kernel_defines_hash();
 
    private:
     void MarkAllocationsUnsafe();
     void MarkAllocationsSafe();
     std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
+    std::map<std::string, std::string> device_kernel_defines;
 };
 
 }  // namespace v0

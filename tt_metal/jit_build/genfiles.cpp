@@ -569,21 +569,6 @@ std::string generate_bank_to_noc_coord_descriptor_string(
     ss << "#include <noc/noc_parameters.h>" << endl;
     ss << endl;
 
-    ss << "#define NUM_DRAM_BANKS " << dram_bank_map.size() << endl;
-    ss << "#define NUM_L1_BANKS " << l1_bank_map.size() << endl;
-
-    if (is_dram_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_DRAM_BANKS " << log2(dram_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_DRAM_BANKS 1" << endl;
-    }
-    if (is_l1_pow2) {
-        ss << "#define LOG_BASE_2_OF_NUM_L1_BANKS " << log2(l1_bank_map.size()) << endl;
-    } else {
-        ss << "#define IS_NOT_POW2_NUM_L1_BANKS 1" << endl;
-    }
-    ss << endl;
-
     ss << "static_assert(NUM_NOCS == 2);" << endl;
     ss << endl;
 
