@@ -357,14 +357,14 @@ KernelGroup::KernelGroup(
             if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
                 // The code below sets the brisc_noc_id for use by the device firmware
                 // Use 0 if neither brisc nor ncrisc specify a noc
-                if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) { // weird?
+                if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                     // Use brisc's noc if brisc specifies a noc
                     this->launch_msg.kernel_config.brisc_noc_id = std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                     if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
-                } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) { // weird?
+                } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
@@ -706,7 +706,7 @@ void detail::Program_::allocate_circular_buffers(const Device *device) {
                 }
             }
         }
-        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size());
+        tt::tt_metal::GraphTracker::instance().track_allocate_cb(circular_buffer->core_ranges(), computed_addr, circular_buffer->size(), circular_buffer->globally_allocated());
         circular_buffer->set_locally_allocated_address(computed_addr);
     }
     this->local_circular_buffer_allocation_needed_ = false;
@@ -1236,18 +1236,18 @@ uint32_t detail::Program_::finalize_kernel_bins(Device *device, uint32_t program
                     }
                 } else {
                     uint32_t binary_packed_size = kernel->get_binary_packed_size(device, 0);
-                    kg.kernel_bin_sizes[0] = binary_packed_size;
+                    kg.kernel_bin_sizes[class_id] = binary_packed_size;
 
                     // No kernel config buffer on active eth yet
                     if (hal.get_programmable_core_type(kg.programmable_core_type_index) ==
                         HalProgrammableCoreType::IDLE_ETH) {
-                        kg.kernel_text_offsets[0] = offset;
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = offset;
+                        kg.kernel_text_offsets[class_id] = offset;
+                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
                         offset += binary_packed_size;
                         offset = align(offset, l1_alignment);
                     } else {
-                        kg.kernel_text_offsets[0] = binaries[0].get_text_addr();
-                        kg.launch_msg.kernel_config.kernel_text_offset[0] = binaries[0].get_text_addr();
+                        kg.kernel_text_offsets[class_id] = binaries[0].get_text_addr();
+                        kg.launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0].get_text_addr();
                     }
                 }
             }

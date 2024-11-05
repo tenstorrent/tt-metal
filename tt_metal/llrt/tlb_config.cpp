@@ -205,7 +205,7 @@ void configure_static_tlbs(tt::ARCH arch, chip_id_t mmio_device_id, const metal_
         }
     }
 
-    device_driver.setup_core_to_tlb_map([get_static_tlb_index](CoreCoord core) { return get_static_tlb_index(core); });
+    device_driver.setup_core_to_tlb_map(mmio_device_id, get_static_tlb_index);
 }
 
 }  // namespace ll_api

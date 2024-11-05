@@ -686,7 +686,7 @@ uint32_t get_l1_size(tt::ARCH arch) {
     constexpr uint32_t WH_L1_SIZE = 1499136;
 
     uint32_t l1_size = 0;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
         l1_size = WH_L1_SIZE;
     } else if (arch == tt::ARCH::GRAYSKULL) {
         l1_size = GS_L1_SIZE;
@@ -701,7 +701,7 @@ double get_tt_npu_rpeak_tflops(tt::ARCH arch, CoreCoord grid_size, int tt_npu_cl
     double rpeak_tflops = 0.0f;
     double clock = static_cast<double>(tt_npu_clock) / 1000;
     uint32_t num_compute_core = grid_size.x * grid_size.y;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
         rpeak_tflops =
             WH_FPU_BFP8_TFLOPS_PER_TENSIX * static_cast<double>(num_compute_core) * static_cast<double>(clock);
     } else if (arch == tt::ARCH::GRAYSKULL) {
@@ -777,7 +777,7 @@ CoreCoord get_core_range(
 std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    if (arch == tt::ARCH::WORMHOLE || arch == tt::ARCH::WORMHOLE_B0) {
+    if (arch == tt::ARCH::WORMHOLE_B0) {
         math_fidelity = MathFidelity::HiFi2;
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments

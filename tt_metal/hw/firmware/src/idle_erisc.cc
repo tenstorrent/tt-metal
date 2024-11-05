@@ -62,6 +62,13 @@ namespace kernel_profiler {
 //  ptr[0] = status;
 //}
 
+void set_deassert_addresses() {
+#ifdef ARCH_BLACKHOLE
+    // start_pc1 make this a const!
+    WRITE_REG(0xFFB14008, MEM_SLAVE_IERISC_FIRMWARE_BASE);
+#endif
+}
+
 void init_sync_registers() {
     volatile tt_reg_ptr uint* tiles_received_ptr;
     volatile tt_reg_ptr uint* tiles_acked_ptr;
@@ -73,17 +80,18 @@ void init_sync_registers() {
     }
 }
 
-void flush_icache() {
-#ifdef ARCH_BLACKHOLE
-    // Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
-    //  between FW end and Kernel start.
-    // This works because risc tries to prefetch 1 cache line.
-    // The 32B still get cached but they are never executed
-    #pragma GCC unroll 2048
-    for (int i = 0; i < 2048; i++) {
-        asm("nop");
+inline void run_slave_eriscs(dispatch_core_processor_masks enables) {
+    if (enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
     }
-#endif
+}
+
+inline void wait_slave_eriscs(uint32_t &heartbeat) {
+    WAYPOINT("SEW");
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        RISC_POST_HEARTBEAT(heartbeat);
+    }
+    WAYPOINT("SED");
 }
 
 int main() {
@@ -99,12 +107,19 @@ int main() {
     }
 
     risc_init();
+
+    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    set_deassert_addresses();
     //device_setup();
+
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
+    deassert_all_reset(); // Bring all riscs on eth cores out of reset
     mailboxes->go_message.signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
+
+
     while (1) {
 
         init_sync_registers();
@@ -125,21 +140,28 @@ int main() {
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
 
+            flush_erisc_icache();
+
+            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            run_slave_eriscs(enables);
+
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, DISPATCH_CLASS_ETH_DM0);
             uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
                 launch_msg_address->kernel_config.cb_offset);
-            setup_cb_read_write_interfaces(cb_l1_base, 0, launch_msg_address->kernel_config.max_cb_index, true, true, false);
-
-            flush_icache();
 
             // Run the ERISC kernel
-            WAYPOINT("R");
-            int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-            void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
-                (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
-            (*kernel_address)((uint32_t)kernel_address);
-            RECORD_STACK_USAGE();
-            WAYPOINT("D");
+            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+                WAYPOINT("R");
+                int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+                    (kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index]);
+                (*kernel_address)((uint32_t)kernel_address);
+                RECORD_STACK_USAGE();
+                WAYPOINT("D");
+            }
+
+            wait_slave_eriscs(heartbeat);
+
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
@@ -154,9 +176,11 @@ int main() {
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
             }
 
+#ifndef ARCH_BLACKHOLE
             while (1) {
                 RISC_POST_HEARTBEAT(heartbeat);
             }
+#endif
         }
     }
 
