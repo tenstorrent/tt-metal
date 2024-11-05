@@ -629,7 +629,8 @@ void bind_unary_rdiv(
     const std::string& parameter_b_doc,
     const std::string parameter_b_value,
     const std::string& description,
-    const std::string& note = " ") {
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         {7}
@@ -648,7 +649,19 @@ void bind_unary_rdiv(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {8}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {8}
+                 - TILE
+                 - 2, 3, 4
+
+            {9}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -662,6 +675,7 @@ void bind_unary_rdiv(
         parameter_b_doc,
         parameter_b_value,
         description,
+        supported_dtype,
         note);
 
     bind_registered_operation(
@@ -1074,6 +1088,7 @@ void bind_unary_composite_floats_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     float parameter_b_value,
+    const std::string& supported_dtype = "BFLOAT16",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1091,7 +1106,19 @@ void bind_unary_composite_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {8}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {8}
+                 - TILE
+                 - 2, 3, 4
+
+            {9}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -1105,6 +1132,7 @@ void bind_unary_composite_floats_with_default(
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -1281,6 +1309,7 @@ void bind_unary_composite_float_with_default(
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
     float parameter_a_value,
+    const std::string& supported_dtype = "BFLOAT16",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1297,7 +1326,19 @@ void bind_unary_composite_float_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {5}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {5}
+                 - TILE
+                 - 2, 3, 4
+
+            {6}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -1308,6 +1349,7 @@ void bind_unary_composite_float_with_default(
         parameter_name_a,
         parameter_a_doc,
         parameter_a_value,
+        supported_dtype,
         info_doc);
 
     bind_registered_operation(
@@ -1335,6 +1377,7 @@ void bind_unary_composite_float(
     const std::string& parameter_a_doc,
     const std::string& description,
     const std::string& range,
+    const std::string& supported_dtype = "BFLOAT16",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1351,7 +1394,19 @@ void bind_unary_composite_float(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {6}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {6}
+                 - TILE
+                 - 2, 3, 4
+
+            {7}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -1363,6 +1418,7 @@ void bind_unary_composite_float(
         parameter_a_doc,
         description,
         range,
+        supported_dtype,
         info_doc);
     bind_registered_operation(
         module,
@@ -1647,7 +1703,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu);
+    detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt);
 
     // Unaries with float parameter
@@ -1748,18 +1804,18 @@ void py_module(py::module& module) {
     detail::bind_unary_composite(module, ttnn::deg2rad, R"doc(Performs deg2rad function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::rad2deg, R"doc(Performs rad2deg function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::tanhshrink, R"doc(Performs tanhshrink function on :attr:`input_tensor`.)doc");
-    detail::bind_unary_composite(module, ttnn::acosh, R"doc(Performs acosh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc",R"doc(TILE)doc", R"doc(2,3,4)doc",
+    detail::bind_unary_composite(module, ttnn::acosh, R"doc(Performs acosh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc",R"doc(TILE)doc", R"doc(2, 3, 4)doc",
         R"doc(System memory is not supported.)doc");
-    detail::bind_unary_composite(module, ttnn::asinh, R"doc(Performs asinh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+    detail::bind_unary_composite(module, ttnn::asinh, R"doc(Performs asinh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc",
         R"doc(System memory is not supported.)doc");
-    detail::bind_unary_composite(module, ttnn::atanh, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+    detail::bind_unary_composite(module, ttnn::atanh, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "",R"doc(BFLOAT16)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc",
         R"doc(System memory is not supported.)doc");
     detail::bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::cosh, R"doc(Performs cosh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]",R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0]", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1]", R"doc(BFLOAT16)doc");
-    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2,3,4)doc",
+    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc",
         R"doc(Not supported on Grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf]", R"doc(BFLOAT16)doc");
 
@@ -1778,46 +1834,19 @@ void py_module(py::module& module) {
         module,
         ttnn::hardswish,
         "scale", "Scale value", 1.0f/6.0f,
-        "shift", "Shift value", 0.5f,
-            R"doc(Supported dtypes, layouts, and ranks:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        "shift", "Shift value", 0.5f);
 
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardsigmoid,
         "scale", "Scale value", 1.0f/6.0f,
-        "shift", "Shift value", 0.5f,
-            R"doc(Supported dtypes, layouts, and ranks:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        "shift", "Shift value", 0.5f);
 
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::hardtanh,
         "min", "min value", -1.0f,
-        "max", "max value", 1.0f,
-            R"doc(Supported dtypes, layouts, and ranks:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |          TILE                   |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        "max", "max value", 1.0f);
 
     detail::bind_unary_composite_optional_floats_with_default(
         module,
@@ -1868,59 +1897,24 @@ void py_module(py::module& module) {
         module,
         ttnn::hardshrink,
         "lambd", "lambd value", 0.5f,
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16, BFLOAT8_B     |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+            R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::softshrink,
         "lambd", "lambd value", 0.5f,
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+            R"doc(BFLOAT16)doc");
 
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::celu,
-        "alpha", "alpha value", 1.0f,
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        "alpha", "alpha value", 1.0f, R"doc(BFLOAT16)doc");
 
     detail::bind_unary_composite_float_with_default(
         module,
         ttnn::logit,
-        "eps", "eps", 0.0f,
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-               Not available for Wormhole_B0.
-
-            )doc");
+        "eps", "eps", 0.0f,  R"doc(BFLOAT16)doc",
+            R"doc(Not available for Wormhole_B0.)doc");
 
     detail::bind_unary_composite_float(
         module,
@@ -1928,17 +1922,7 @@ void py_module(py::module& module) {
         "exponent", "exponent value. Non-positive values are not supported.",
         R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc",
         R"doc(Supported for input range upto 28)doc",
-        R"doc(Supported dtypes and layouts:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
-
-        )doc");
+        R"doc(BFLOAT16)doc", R"doc(System memory is not supported.)doc");
 
     detail::bind_unary_rdiv(
     module,
@@ -1951,18 +1935,7 @@ void py_module(py::module& module) {
 
         Output tensor will have BFLOAT16 data type.)doc",
 
-        R"doc(Supported dtypes, layouts, and ranks:
-
-           +----------------------------+---------------------------------+-------------------+
-           |     Dtypes                 |         Layouts                 |     Ranks         |
-           +----------------------------+---------------------------------+-------------------+
-           |    BFLOAT16, BFLOAT8_B     |          TILE                   |      2, 3, 4      |
-           +----------------------------+---------------------------------+-------------------+
-
-           System memory is not supported.
-
-        )doc");
-
+        R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(System memory is not supported.)doc");
 }
 
 }  // namespace unary
