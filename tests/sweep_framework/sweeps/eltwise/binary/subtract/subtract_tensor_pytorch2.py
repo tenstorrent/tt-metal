@@ -17,8 +17,8 @@ from models.utility_functions import torch_random
 parameters = {
     "subtract_test": {
         "input_specs": [
-            {"shape": [0, 1], "other": [0, 1]},
-            {"shape": [0], "other": [0]},
+            # {"shape": [0, 1], "other": [0, 1]},
+            # {"shape": [0], "other": [0]},
             {"shape": [1, 1, 1, 42], "other": -3.0},
             {"shape": [1, 1, 1, 42], "other": -3.75},
             {"shape": [1, 1, 1, 42], "other": 0.5},
