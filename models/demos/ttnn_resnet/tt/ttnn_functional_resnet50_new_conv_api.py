@@ -4,11 +4,11 @@
 
 import ttnn
 import torch
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
     _nearest_y,
-    pad_and_fold_conv_activation_for_unity_stride,
 )
 from typing import List
 from loguru import logger
@@ -632,15 +632,18 @@ class resnet50:
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        _, self.override_fold_mem_config, _, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
-            device=device,
-            input_tensor=conv_dummy_tensor,
-            conv_config=self.conv1_config,
-            batch_size=self.batch_size,
-            height=self.conv1_output_height,
-            width=self.conv1_output_width,
-            in_channels=self.conv1_input_channels,
-            out_channels=self.conv1_output_channels,
+
+        self.override_fold_mem_config = get_conv_input_memory_config(
+            self.batch_size,
+            self.conv1_input_channels,
+            self.conv1_input_height,
+            self.conv1_input_width,
+            self.conv1_output_channels,
+            self.conv1_output_height,
+            self.conv1_output_width,
+            device.compute_with_storage_grid_size(),
+            self.conv1_config.input_channels_alignment,
+            is_grayskull(),
         )
 
     def __del__(self):
