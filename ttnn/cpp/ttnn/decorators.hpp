@@ -68,7 +68,7 @@ inline auto create_async_output_tensors(
         static_assert(
             custom_create_async_optional_outputs,
             "If the operation returns a vector of optional Tensors, it must "
-            "implementcreate_async_optional_output_tensors.");
+            "implement create_async_optional_output_tensors.");
 
         return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
     } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
