@@ -43,6 +43,7 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_x = grid.x;
     const auto num_cores_y = grid.y;
 
     const auto
@@ -102,9 +103,10 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
     const auto clip_coef_clamped_addr = clip_coef_clamped.buffer()->address();
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
@@ -113,17 +115,14 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
         // reader
         const std::array reader_runtime_args{
             input_addr,
-            static_cast<uint32_t>(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0),
+            static_cast<uint32_t>(input.buffer()->is_dram()),
             clip_coef_clamped_addr,
-            static_cast<uint32_t>(clip_coef_clamped.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0),
+            static_cast<uint32_t>(clip_coef_clamped.buffer()->is_dram()),
             num_tiles};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{
-            input_addr,
-            static_cast<uint32_t>(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0),
-            num_tiles};
+        const std::array writer_runtime_args{input_addr, static_cast<uint32_t>(input.buffer()->is_dram()), num_tiles};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute

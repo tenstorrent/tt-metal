@@ -109,15 +109,13 @@ MorehClipGradNormStep2Operation::ProgramFactory::create(
     // reader
     const std::array reader_runtime_args{
         input_addr,
-        static_cast<uint32_t>(tmp_pow_sum.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0),
+        static_cast<uint32_t>(tmp_pow_sum.buffer()->is_dram()),
         num_tiles,
         *reinterpret_cast<uint32_t*>(&decimal)};
     SetRuntimeArgs(program, reader_kernel_id, single_core, reader_runtime_args);
 
     // writer
-    const std::array writer_runtime_args{
-        output_addr,
-        static_cast<uint32_t>(total_norm.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)};
+    const std::array writer_runtime_args{output_addr, static_cast<uint32_t>(total_norm.buffer()->is_dram())};
     SetRuntimeArgs(program, writer_kernel_id, single_core, writer_runtime_args);
 
     // compute

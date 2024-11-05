@@ -57,6 +57,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_x = grid.x;
     const auto num_cores_y = grid.y;
     const auto
         [num_cores_to_be_used,
@@ -138,11 +139,11 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
 
     const auto output_addr = tmp_pow_sum.buffer()->address();
-    bool tmp_pow_sum_is_dram = tmp_pow_sum.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
 
     uint32_t tile_offset = tile_offset_of_tmp_pow_sum;
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
         const auto input_addr = input.buffer()->address();
@@ -152,7 +153,7 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         // reader
         const std::array reader_runtime_args{
             input_addr,
-            static_cast<uint32_t>(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0),
+            static_cast<uint32_t>(input.buffer()->is_dram()),
             num_tiles,
             *reinterpret_cast<uint32_t*>(&decimal),
             origin_h,
@@ -160,7 +161,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
         // writer
-        const std::array writer_runtime_args{output_addr, static_cast<uint32_t>(tmp_pow_sum_is_dram), tile_offset};
+        const std::array writer_runtime_args{
+            output_addr, static_cast<uint32_t>(tmp_pow_sum.buffer()->is_dram()), tile_offset};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
 
         // compute
