@@ -236,8 +236,6 @@ inline void _llk_unpack_AB_matmul_(
         // Wait for free context
         wait_for_next_context(2);
 
-        semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
-
         // Program unpacker 1 base address
         if (0 == unp_cfg_context) {
             cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_b;
@@ -246,6 +244,11 @@ inline void _llk_unpack_AB_matmul_(
             cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_b;
             cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_a;
         }
+
+        semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
+
+        // Stall unpacker until pending CFG writes from Trisc have completed
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         if (reuse_a) {
             #if SKIP_UNP == 1
