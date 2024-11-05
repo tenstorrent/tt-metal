@@ -684,6 +684,7 @@ def test_matmul_single_core_sharded(
     [
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
 def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
@@ -722,14 +723,61 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
 
 
 @pytest.mark.parametrize(
-    "arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id",
+    "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target",
     [
-        ("grayskull", 1202, np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0),
-        ("wormhole_b0", 1000, np.array([32768 * 2, 12 * 128]), 1, 64, 1, 12, 0),
-        ("blackhole", 800, np.array([32768 * 8, 8 * 128]), 1, 256, 1, 8, 0),
+        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 2, 8, 0, None),
+        ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
+        ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
+        # FF1/FF3 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 3840]),
+            1,
+            16,
+            0,
+            12,
+            0,
+            240,
+        ),  # 244 GB/s
+        # FF2 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([3584, 2304]),
+            1,
+            28,
+            1,
+            12,
+            0,
+            250,
+        ),  # 255 GB/s
+        # Dense Out shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([1024, 2304]),
+            1,
+            8,
+            1,
+            12,
+            0,
+            220,
+        ),  # 226 GB/s
+        # QKV shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 1536]),
+            1,
+            16,
+            1,
+            12,
+            0,
+            225,
+        ),  # 232 GB/s
     ],
 )
-def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+def test_dram_read_l1_write_core(
+    arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target
+):
+    dev_freq = get_device_freq()
     data = []
     cycle_list = []
     time_list = []
@@ -737,14 +785,16 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
     for _ in range(num_tests):
         k = int(test_vector[0])
         n = int(test_vector[1])
-        if data_format == 0:
+        if data_format == 0:  # BFP4
+            input_size = k * n * (512 + 64) // 1024
+        elif data_format == 1:  # BFP8
             input_size = k * n * 1088 // 1024
-        elif data_format == 1:
+        elif data_format == 2:  # BFLOAT16
             input_size = k * n * 2048 // 1024
         run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
         cycle = profile_results_kernel_duration()
-        time = cycle / freq / 1000.0 / 1000.0
-        throughput = input_size / cycle * freq / 1000.0
+        time = cycle / dev_freq / 1000.0 / 1000.0
+        throughput = input_size / cycle * dev_freq / 1000.0
         cycle_list.append(cycle)
         time_list.append(time)
         throughput_list.append(throughput)
@@ -756,13 +806,15 @@ def test_dram_read_l1_write_core(arch, freq, test_vector, num_tests, nblock, dat
     logger.info("DRAM read throughput: " + str(throughput))
     data.append([throughput])
     # check within range
-    dev_freq = get_device_freq()
     if arch == "grayskull":
         bw_bound = 100.0
     elif arch == "wormhole_b0":
         bw_bound = 260.0
     elif arch == "blackhole":
         bw_bound = 340.0
+    if bw_target is not None:
+        bw_bound = bw_target
+    bw_bound = bw_bound * dev_freq / 1000.0  # Adjust for device frequency; target is based on max device frequency
     assert bw_bound <= throughput
 
 
