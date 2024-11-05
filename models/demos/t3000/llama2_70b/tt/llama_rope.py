@@ -22,14 +22,15 @@ class TtLlamaRotarySetup(LightweightModule):
         device,
         head_dim: int,
         max_seq_len: int,
-        rope_theta: float,
-        use_scaled_rope: bool,
+        rope_theta: float = 10000,
+        use_scaled_rope: bool = False,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
 
         self.head_dim = head_dim
         self.device = device
+        self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
 
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
@@ -44,18 +45,18 @@ class TtLlamaRotarySetup(LightweightModule):
         )
 
         self.cos_matrix = ttnn.from_torch(
-            cos_matrix.repeat(1, 1, 1, ttnn.TILE_SIZE),
+            cos_matrix,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device),
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
-            sin_matrix.repeat(1, 1, 1, ttnn.TILE_SIZE),
+            sin_matrix,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=datatype,
-            mesh_mapper=ReplicateTensorToMesh(device),
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
         # Generate the transformation matrix
@@ -74,7 +75,7 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(device),
+            mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
     def get_trans_mats(self):
@@ -93,7 +94,7 @@ class TtLlamaRotarySetup(LightweightModule):
             position_idxs,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(self.device),
+            mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
         )
 
         return rot_idxs
@@ -106,7 +107,7 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            # assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:
@@ -116,14 +117,13 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
         sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
 
-        cos = ttnn.reshape(cos, (1, batch, ttnn.TILE_SIZE, self.head_dim))  # [1, batch, 1[32], self.head_dim]
-        sin = ttnn.reshape(sin, (1, batch, ttnn.TILE_SIZE, self.head_dim))  # [1, batch, 1[32], self.head_dim]
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
-        grid = (
-            ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(batch, self.core_grid, row_wise=True))
-            .bounding_box()
-            .grid_size()
-        )
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
+
+        grid = ttnn.num_cores_to_corerangeset(batch, self.core_grid, row_wise=True).bounding_box().grid_size()
         mem_config = ttnn.create_sharded_memory_config(
             shape=(1, batch, ttnn.TILE_SIZE, self.head_dim),
             core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),

@@ -284,7 +284,10 @@ class TtLlamaModel_optimized:
             )
 
             rot_mats = None  # Created in prepare_device_inputs
-            rot_idxs_tt = self.rope_setup_decode.get_rot_idxs(cache_idxs)
+            rot_cache_idxs = torch.maximum(
+                cache_idxs, torch.tensor(0, dtype=torch.int64)
+            )  # Ensure position indices are non-negative
+            rot_idxs_tt = self.rope_setup_decode.get_rot_idxs(rot_cache_idxs)
 
             if isinstance(page_table, torch.Tensor):
                 # Support vLLM tensor page_table input

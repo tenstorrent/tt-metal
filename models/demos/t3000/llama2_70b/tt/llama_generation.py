@@ -172,7 +172,7 @@ class TtLlamaModelForGeneration:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
 
-        return trace_id, tt_inp, self.tt_model.rope_setup_decode, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table
+        return trace_id, tt_inp, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table
 
     def delete_trace(self, trace_id):
         ttnn.release_trace(self.mesh_device, trace_id)
@@ -183,7 +183,6 @@ class TtLlamaModelForGeneration:
         start_pos: int,
         trace_id,
         tt_inp,
-        rope_setup_decode,
         rot_idxs_tt,
         cache_idxs_tt,
         tt_logits,
