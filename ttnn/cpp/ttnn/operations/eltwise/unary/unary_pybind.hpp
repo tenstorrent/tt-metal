@@ -34,7 +34,8 @@ void bind_unary_composite_optional_floats_with_default(
     const std::string& parameter_b_doc,
     std::optional<float> parameter_b_value,
     const std::string& description,
-    const std::string& info_doc = "") {
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note="") {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -51,7 +52,19 @@ void bind_unary_composite_optional_floats_with_default(
             ttnn.Tensor: the output tensor.
 
         Note:
-            {9}
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {9}
+                 - TILE
+                 - 2, 3, 4
+
+            {10}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -66,7 +79,7 @@ void bind_unary_composite_optional_floats_with_default(
         parameter_b_doc,
         parameter_b_value,
         description,
-        info_doc);
+        supported_dtype, note);
 
     bind_registered_operation(
         module,
@@ -1516,18 +1529,12 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::isneginf, R"doc(\mathrm{{output\_tensor}}_i = isneginf(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::isposinf, R"doc(\mathrm{{output\_tensor}}_i = isposinf(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::lez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
-
     detail::bind_unary_operation(module, ttnn::log, R"doc(\mathrm{{output\_tensor}}_i = log(\mathrm{{input\_tensor}}_i))doc");
     detail::bind_unary_operation(module, ttnn::log10, R"doc(\mathrm{{output\_tensor}}_i = log10(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BF8 only supported in WHB0)doc");
-
-    detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-
+    detail::bind_unary_operation(module, ttnn::log2, R"doc(\mathrm{{output\_tensor}}_i = log2(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc",  R"doc(BF8 only supported in WHB0)doc");
     detail::bind_unary_operation(module, ttnn::logical_not, R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc");
     detail::bind_unary_operation(module, ttnn::ltz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
-
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = neg(\mathrm{{input\_tensor}}_i))doc",R"doc(BFLOAT16, BFLOAT8_B)doc");
-
     detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal,
@@ -1968,31 +1975,13 @@ void py_module(py::module& module) {
         ttnn::clip,
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
-        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc",
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clamp,
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
-        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc",
-            R"doc(Supported dtypes and layouts:
-
-               +----------------------------+---------------------------------+-------------------+
-               |     Dtypes                 |         Layouts                 |     Ranks         |
-               +----------------------------+---------------------------------+-------------------+
-               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
-               +----------------------------+---------------------------------+-------------------+
-
-            )doc");
+        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,
