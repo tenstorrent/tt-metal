@@ -103,7 +103,7 @@ class Cluster {
 
     std::function<void(uint32_t, uint32_t, const uint8_t *)> get_fast_pcie_static_tlb_write_callable(
         int chip_id) const {
-        chip_id_t mmio_device_id = device_to_mmio_device_.at(chip_id);
+        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
         tt_SiliconDevice *device = dynamic_cast<tt_SiliconDevice *>(driver_.get());
         return device->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
@@ -188,7 +188,7 @@ class Cluster {
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
-        return this->device_to_mmio_device_.at(device_id);
+        return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
     }
 
     uint16_t get_assigned_channel_for_device(chip_id_t device_id) const {
@@ -196,12 +196,12 @@ class Cluster {
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::set<chip_id_t> &get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
+    const std::unordered_set<chip_id_t> &get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
         TT_ASSERT(
-            this->devices_grouped_by_assoc_mmio_device_.count(mmio_device_id),
+            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
             "Expected device {} to be an MMIO device!",
             mmio_device_id);
-        return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
+        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
     }
 
     // Returns vector of unique tunnels originating from mmio device.
@@ -224,7 +224,7 @@ class Cluster {
     void generate_cluster_descriptor();
     void initialize_device_drivers();
     void assert_risc_reset();
-    void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids);
+    void assign_mem_channels_to_devices(chip_id_t mmio_device_id, const std::unordered_set<chip_id_t> &controlled_device_ids);
     void open_driver(
         const bool &skip_driver_allocs = false);
     void start_driver(tt_device_params &device_params) const;
@@ -257,12 +257,6 @@ class Cluster {
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc_;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
-
-    // Collections of devices that are grouped based on the associated MMIO device. MMIO device is included in the
-    // grouping
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> devices_grouped_by_assoc_mmio_device_;
-    // Save mapping of device id to associated MMIO device id for fast lookup
-    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_device_;
 
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.

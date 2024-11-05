@@ -167,20 +167,6 @@ void Cluster::generate_cluster_descriptor() {
         }
     }
 
-    // Use cluster descriptor to map MMIO device id to all devices on the same card (including the MMIO device)
-    if (this->target_type_ == TargetDevice::Simulator) {
-        std::set<chip_id_t> dummy_card = {0};
-        this->devices_grouped_by_assoc_mmio_device_[0] = dummy_card;
-        this->device_to_mmio_device_[0] = 0;
-    } else {
-        for (chip_id_t device_id : this->cluster_desc_->get_all_chips()) {
-            chip_id_t closest_mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
-            std::set<chip_id_t> &device_ids = this->devices_grouped_by_assoc_mmio_device_[closest_mmio_device_id];
-            device_ids.insert(device_id);
-            this->device_to_mmio_device_[device_id] = closest_mmio_device_id;
-        }
-    }
-
     uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
     if (this->is_tg_cluster_) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
@@ -203,7 +189,7 @@ void Cluster::generate_cluster_descriptor() {
 }
 
 void Cluster::initialize_device_drivers() {
-    for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto &[mmio_device_id, controlled_devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
 
@@ -218,7 +204,7 @@ void Cluster::assert_risc_reset() {
 }
 
 void Cluster::assign_mem_channels_to_devices(
-    chip_id_t mmio_device_id, const std::set<chip_id_t> &controlled_device_ids) {
+    chip_id_t mmio_device_id, const std::unordered_set<chip_id_t> &controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt_SiliconDevice and denotes the max number of host memory channels per
     // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
     // One WH gateway should have 8 remote deivces in its control group.
@@ -308,8 +294,6 @@ Cluster::~Cluster() {
     this->driver_->close_device();
 
     this->sdesc_per_chip_.clear();
-    this->devices_grouped_by_assoc_mmio_device_.clear();
-    this->device_to_mmio_device_.clear();
     this->device_to_host_mem_channel_.clear();
     this->device_eth_routing_info_.clear();
     this->tunnels_from_mmio_device.clear();
@@ -345,7 +329,8 @@ uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
 }
 
 void Cluster::verify_eth_fw() const {
-    for (const auto &[chip, mmio_device_id] : this->device_to_mmio_device_) {
+    for (const chip_id_t &chip : this->driver_->get_all_chips_in_cluster()) {
+        const chip_id_t mmio_device_id = get_associated_mmio_device(chip);
         std::vector<uint32_t> fw_versions;
         for (const CoreCoord &eth_core : get_soc_desc(chip).ethernet_cores) {
             uint32_t val;
@@ -362,10 +347,10 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
         log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 800 MHz due to lack of ARC message support");
         return 800;
     }
-    if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
+    if (  this->driver_->get_all_chips_in_cluster().find(chip_id) != this->driver_->get_all_chips_in_cluster().end()) {
         // get_clocks returns MMIO device ID -> clock frequency
         // There is one driver per MMIO device, so we use that to index returned map
-        chip_id_t mmio_device_id = this->device_to_mmio_device_.at(chip_id);
+        chip_id_t mmio_device_id = get_associated_mmio_device(chip_id);
         return this->driver_->get_clocks().at(mmio_device_id);
     }
     TT_THROW("Cannot get frequency for device {} that is not initialized!", chip_id);
@@ -587,7 +572,7 @@ void Cluster::set_tunnels_from_mmio_device() {
             continue;
         }
 
-        std::set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
+        std::unordered_set<chip_id_t> device_ids = get_devices_controlled_by_mmio_device(mmio_chip_id);
         device_ids.erase(mmio_chip_id);
 
         if (device_ids.size() == 0) {
@@ -704,7 +689,7 @@ void Cluster::initialize_ethernet_sockets() {
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto &[assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
                 this->device_eth_routing_info_.insert({chip_id, {}});
@@ -886,9 +871,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
     std::vector<chip_id_t> mmio_devices;
-    mmio_devices.reserve(this->devices_grouped_by_assoc_mmio_device_.size());
+    mmio_devices.reserve(this->driver_->get_target_mmio_device_ids().size());
     std::vector<chip_id_t> non_mmio_devices;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto &[assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         mmio_devices.emplace_back(assoc_mmio_device);
         for (const auto &chip_id : devices) {
             non_mmio_devices.emplace_back(chip_id);
@@ -947,7 +932,7 @@ uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const 
     TT_ASSERT(
         (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
     uint32_t depth = 0;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+    for (const auto &[assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             depth =
                 std::max(depth, uint32_t(this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device)));
