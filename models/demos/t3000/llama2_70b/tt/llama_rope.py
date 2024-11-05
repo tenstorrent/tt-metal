@@ -1,19 +1,18 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
 from models.common.lightweightmodule import LightweightModule
-from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, get_rot_transformation_mat
+from models.demos.t3000.llama2_70b.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from loguru import logger
 
 
 def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope):
     cos, sin = precompute_freqs(dhead, end, theta, use_scaled_rope)
-    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
-    cos = cos.gather(0, position_id_expanded)
-    sin = sin.gather(0, position_id_expanded)
-    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    return cos, sin
+    return gather_cos_sin(position_ids, cos, sin)
 
 
 class TtLlamaRotarySetup(LightweightModule):
@@ -99,8 +98,8 @@ class TtLlamaRotarySetup(LightweightModule):
 
         return rot_idxs
 
-    def get_rot_mats(self, position_idxs, device=None, return_rot_idxs=False):
-        device = self.device if device is None else device
+    def get_rot_mats(self, position_idxs, return_rot_idxs=False):
+        device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
@@ -114,14 +113,21 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         batch = rot_idxs.shape[1]
 
-        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
-        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=ttnn.TILE_LAYOUT)  # [1, batch, head_dim]
+        use_rm = batch % ttnn.TILE_SIZE != 0  # Use row major is batch size is not a multiple of TILE_SIZE
+        embedding_layout = ttnn.ROW_MAJOR_LAYOUT if use_rm else ttnn.TILE_LAYOUT
+
+        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
+        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, head_dim]
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
 
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
+
+        if use_rm:
+            cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
+            sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
 
         grid = ttnn.num_cores_to_corerangeset(batch, self.core_grid, row_wise=True).bounding_box().grid_size()
         mem_config = ttnn.create_sharded_memory_config(

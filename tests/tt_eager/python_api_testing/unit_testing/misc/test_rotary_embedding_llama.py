@@ -301,9 +301,6 @@ def test_rotary_embedding_llama(
     if seq_len == 1 and (n_heads > ttnn.TILE_SIZE or n_kv_heads > ttnn.TILE_SIZE):
         pytest.skip("n_heads or n_kv_heads cannot be greater than ttnn.TILE_SIZE for decode mode")
 
-    if seq_len == 1 and (batch % ttnn.TILE_SIZE != 0):
-        pytest.skip(f"Batch size should be multiple of {ttnn.TILE_SIZE=} in decode mode.")
-
     max_seq_len = max(4096, seq_len)
 
     run_test_rotary_embedding_llama(device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, max_seq_len, datatype)
@@ -368,9 +365,6 @@ def test_rotary_embedding_llama_with_program_cache(
     if compute_grid_size.x < 8 or compute_grid_size.y < 8:
         pytest.skip(f"Requires grid size of at least {(8, 8)} to run")
 
-    if seq_len == 1 and (batch % ttnn.TILE_SIZE != 0):
-        pytest.skip(f"Batch size should be multiple of {ttnn.TILE_SIZE=} in decode mode.")
-
     max_seq_len = max(4096, seq_len)
 
     mode = "decode" if seq_len == 1 else "prefill"
@@ -396,7 +390,12 @@ def test_rotary_embedding_llama_with_program_cache(
 
         cache_tensors.append(test_tensor)
 
+    num_ops = 2  # 2 * rope
     if mode == "decode":
-        assert device.num_program_cache_entries() == 6  # 2 * Rope + embedding + unsqueeze_to_4D + transpose + ?
-    else:
-        assert device.num_program_cache_entries() == 2  # 2 * Rope
+        num_ops += 4  # embedding + transpose + pad + interleaved_to_sharded
+
+        # When batch size is 1, transpose is a no-op
+        if batch == 1:
+            num_ops -= 1
+
+    assert device.num_program_cache_entries() == num_ops

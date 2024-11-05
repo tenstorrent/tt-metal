@@ -320,7 +320,7 @@ class TtLlamaModel_optimized:
             tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
             cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             rot_mat, rot_idxs_tt = self.rope_setup_decode.get_rot_mats(
-                rot_idxs_tt, self.mesh_device, return_rot_idxs=True
+                rot_idxs_tt, return_rot_idxs=True
             )  # Sends rot_idxs to device internally
             if tt_page_table is not None:
                 tt_page_table = ttnn.to_device(tt_page_table, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)

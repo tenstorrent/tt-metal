@@ -158,7 +158,7 @@ class TtLlamaModelForGeneration:
         # Run TT model
         tt_inp_emb = self.tt_model.tt_embd(tt_inp)
         tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-        rot_mat = self.tt_model.rope_setup_decode.get_rot_mats(rot_idxs_tt, rot_idxs_tt.device)
+        rot_mat = self.tt_model.rope_setup_decode.get_rot_mats(rot_idxs_tt)
         tt_logits = self.tt_model(
             tt_inp_emb,
             rot_mat,

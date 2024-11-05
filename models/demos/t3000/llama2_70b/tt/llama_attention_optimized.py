@@ -224,13 +224,17 @@ class TtLlamaAttention_optimized:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
     def decode_forward(self, xs, rot_mats, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
-        query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats, cache_idxs)
+        query_layer, key_layer, value_layer = self.attn_qkv(xs, rot_mats)
         attn_outputs = self.attn_mqa(
             query_layer, key_layer, value_layer, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache
         )
         return self.attn_selfout(attn_outputs)
 
-    def attn_qkv(self, xs, rot_mats, cache_idxs):
+    def attn_qkv(
+        self,
+        xs,
+        rot_mats,
+    ):
         # Fused QKV
         fused_query_key_value = ttnn.matmul(
             xs,
