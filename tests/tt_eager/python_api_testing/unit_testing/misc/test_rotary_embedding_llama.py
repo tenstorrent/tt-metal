@@ -173,7 +173,9 @@ def run_test_rotary_embedding_llama(
         inp = [x.transpose(1, 2) for x in inp]
         # inp: [seq_len, batch, n_heads, head_dim]
 
-        grid = ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True).bounding_box().grid_size()
+        grid = (
+            ttnn.num_cores_to_corerangeset(batch, rope_setup_decode.core_grid, row_wise=True).bounding_box().grid_size()
+        )
         input_mem_config = ttnn.create_sharded_memory_config(
             shape=(1, batch, ttnn.TILE_SIZE, head_dim),
             core_grid=ttnn.CoreGrid(y=grid.y, x=grid.x),
