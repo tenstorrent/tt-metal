@@ -93,7 +93,7 @@ def import_tracy_op_logs(logFolder):
     tracyOpDataLog = os.path.join(logFolder, TRACY_OPS_DATA_FILE_NAME)
 
     if not os.path.isfile(tracyOpTimesLog) or not os.path.isfile(tracyOpDataLog):
-        return ops, signposts
+        return ops, signposts, None
 
     with open(tracyOpDataLog, "r", newline="") as csvFile:
         opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
@@ -425,11 +425,15 @@ def get_device_data_generate_report(
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
 
+        rowDictHeaders = set()
+        for row in rowDicts:
+            for k in row.keys():
+                rowDictHeaders.add(k)
         if export_csv:
             with open(allOpsCSVPath, "w") as allOpsCSV:
                 allHeaders = []
                 for header in OPS_CSV_HEADER:
-                    if header in rowDicts[-1].keys():
+                    if header in rowDictHeaders:
                         allHeaders.append(header)
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
                 writer.writeheader()
@@ -668,7 +672,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def process_ops(output_folder, name_append, date):
+def process_ops(output_folder, name_append, date, device_only=False):
     if not output_folder:
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
@@ -676,10 +680,9 @@ def process_ops(output_folder, name_append, date):
 
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
-    if ops:
+    if ops and not device_only:
         deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder)
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
-
     else:
         deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
 
@@ -688,10 +691,11 @@ def process_ops(output_folder, name_append, date):
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
-def main(output_folder, name_append, date):
+@click.option("--device-only", default=False, is_flag=True, help="Only generate a device data report")
+def main(output_folder, name_append, date, device_only):
     if output_folder:
         output_folder = Path(output_folder)
-    process_ops(output_folder, name_append, date)
+    process_ops(output_folder, name_append, date, device_only)
 
 
 if __name__ == "__main__":
