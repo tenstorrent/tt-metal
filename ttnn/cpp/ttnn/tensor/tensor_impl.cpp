@@ -832,7 +832,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
         return tensor;
     }
 
-    auto shape = tensor.get_padded_shape();
+    auto shape = tensor.get_legacy_shape();
     auto source_layout = tensor.get_layout();
     auto tile = tensor.tile();
     auto convert = [tile, &shape, source_layout, target_layout](const auto& input_data) -> std::vector<T> {
