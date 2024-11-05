@@ -99,6 +99,9 @@ inline void _llk_unpack_AB_matmul_(const std::uint32_t address_a, const std::uin
 
     semaphore_post(semaphore::UNPACK_SYNC);  // Trisc::SEMPOST for context acquire
 
+    // Stall unpacker until pending CFG writes from Trisc have completed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
     // Run MOP
     mop_run(0, 2);
 
