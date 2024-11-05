@@ -33,7 +33,8 @@ void bind_unary_composite_optional_floats_with_default(
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
     std::optional<float> parameter_b_value,
-    const std::string& description) {
+    const std::string& description,
+    const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
         {8}
@@ -42,16 +43,19 @@ void bind_unary_composite_optional_floats_with_default(
             input_tensor (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
-            {5} (float): {6}. Defaults to `{7}`.
+            {2} (float or ttnn.Tensor): {3}. Defaults to `{4}`.
+            {5} (float or ttnn.Tensor): {6}. Defaults to `{7}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Note:
+            {9}
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = {1}(tensor, {2} = {4}, {5} = {7})
+            >>> output = {1}(tensor, 5.0, 7.0)
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
@@ -61,12 +65,27 @@ void bind_unary_composite_optional_floats_with_default(
         parameter_name_b,
         parameter_b_doc,
         parameter_b_value,
-        description);
+        description,
+        info_doc);
 
     bind_registered_operation(
         module,
         operation,
         doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               std::optional<Tensor> parameter_a,
+               std::optional<Tensor> parameter_b,
+               const std::optional<MemoryConfig>& memory_config)  {
+                return self(input_tensor, parameter_a, parameter_b, memory_config);
+            },
+            py::arg("input_tensor"),
+            py::arg(parameter_name_a.c_str()) = parameter_a_value,
+            py::arg(parameter_name_b.c_str()) = parameter_b_value,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt},
+
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const ttnn::Tensor& input_tensor,
@@ -2058,13 +2077,31 @@ void py_module(py::module& module) {
         ttnn::clip,
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
-        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
+        R"doc(Performs clip function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc",
+            R"doc(Supported dtypes and layouts:
+
+               +----------------------------+---------------------------------+-------------------+
+               |     Dtypes                 |         Layouts                 |     Ranks         |
+               +----------------------------+---------------------------------+-------------------+
+               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+               +----------------------------+---------------------------------+-------------------+
+
+            )doc");
     detail::bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clamp,
         "min", "Minimum value", std::nullopt,
         "max", "Maximum value", std::nullopt,
-        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
+        R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc",
+            R"doc(Supported dtypes and layouts:
+
+               +----------------------------+---------------------------------+-------------------+
+               |     Dtypes                 |         Layouts                 |     Ranks         |
+               +----------------------------+---------------------------------+-------------------+
+               |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+               +----------------------------+---------------------------------+-------------------+
+
+            )doc");
     detail::bind_unary_composite_floats_with_default(
         module,
         ttnn::selu,

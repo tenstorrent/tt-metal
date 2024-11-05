@@ -121,6 +121,12 @@ struct ExecuteUnaryCompositeClamp {
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        std::optional<Tensor> min = std::nullopt,
+        std::optional<Tensor> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
@@ -128,6 +134,12 @@ struct ExecuteUnaryCompositeClip {
         const Tensor &input_tensor,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
+        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor &input_tensor,
+        std::optional<Tensor> min = std::nullopt,
+        std::optional<Tensor> max = std::nullopt,
         const std::optional<MemoryConfig> &memory_config = std::nullopt);
 };
 
