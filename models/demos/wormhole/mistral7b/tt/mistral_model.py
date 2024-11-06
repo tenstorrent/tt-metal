@@ -52,7 +52,6 @@ class TtTransformer(nn.Module):
             state_dict=state_dict,
             layer_num=None,
             weight_cache_path=weight_cache_path,
-            weight_dtype=dtype,
             weight_key="norm",
         )
 
@@ -79,7 +78,7 @@ class TtTransformer(nn.Module):
             x = layer(x, current_pos, attn_masks, rot_mat, transformation_mats, user_id, mode)
         if mode == "prefill":
             return x
-        x = self.norm(x)
+        x = self.norm(x, mode=mode)
         output = ttnn.linear(
             x,
             self.output_weight,

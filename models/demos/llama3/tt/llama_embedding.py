@@ -22,21 +22,19 @@ class TtLlamaEmbedding(LightweightModule):
         self.mesh_device = mesh_device
 
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
-        torch_weight = self.state_dict[base_name]
+        torch_weight = self.state_dict[base_name].unsqueeze(0).unsqueeze(0)
         cache_name = weight_cache_path / base_name
         self.weights = ttnn.as_tensor(
             torch_weight,
             dtype=dtype,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=3),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.reshape(x, [x.shape[0], 1, x.shape[1], x.shape[2]])
-        # x = ttnn.pad(x, padding=((0, 0), (0, 0), (0, 32-x.shape[2]), (0, 0)), value=0)
-        # x = ttnn.tilize(x, use_multicore=True)
         return x

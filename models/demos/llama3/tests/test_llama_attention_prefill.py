@@ -10,7 +10,6 @@ from models.demos.llama3.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
-    prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
 )
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
@@ -43,7 +42,8 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
@@ -81,15 +81,17 @@ def test_llama_attention_inference(seq_len, mesh_device, use_program_cache, rese
 
     pt_attention_input = (torch.rand(batch, seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    attention_input = prepare_inputs_ttnn_prefill(
+    attention_input = model_args.prepare_inputs_ttnn_prefill(
         tt_attention_input,
-        mesh_device,
+        force_replicated=True,
     )
 
     tt_out = tt_model(attention_input, 0, rot_mats, transformation_mats, user_id=0, mode="prefill")
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[:, 0, :, :].view(
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        0, :, :, : model_args.dim
+    ].view(
         batch, seq_len, -1
-    )  # [ batch, seq, hidden_dim]
+    )  # [ batch, seq, dim]
 
     positions = torch.LongTensor(range(seq_len))
     freqs_cis_i = precompute_freqs_cis(

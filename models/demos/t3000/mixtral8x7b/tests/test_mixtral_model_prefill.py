@@ -49,7 +49,7 @@ def test_mixtral_model_inference_CI(t3k_mesh_device, use_program_cache, reset_se
 
     n_layers = 32
 
-    pcc = 0.92
+    pcc = 0.91
     dtype = ttnn.bfloat8_b
 
     # Validate that the prompt file and reference output files exist

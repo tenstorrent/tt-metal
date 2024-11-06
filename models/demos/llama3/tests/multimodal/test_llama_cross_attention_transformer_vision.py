@@ -12,9 +12,6 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_vision 
     TtLlamaCrossAttentionTransformerVision,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.llama3.tt.llama_common import (
-    prepare_inputs_ttnn_prefill,
-)
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,

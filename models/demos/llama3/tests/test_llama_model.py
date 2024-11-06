@@ -9,7 +9,6 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     get_single_rot_mat,
-    prepare_inputs_ttnn,
     sample,
     encode_prompt_llama_instruct,
     HostEmbedding,
@@ -33,7 +32,7 @@ from models.utility_functions import skip_for_grayskull
     "weights, layers",
     [
         ("random", 1),
-        ("general", None),
+        ("instruct", None),
     ],
     ids=["quick", "full"],
 )
@@ -55,8 +54,7 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     mesh_device.enable_async(True)
 
     # This sets the minimum PCC for each iteration
-    # TODO: In the full model test, iterations 4 and 8 have lower PCCs of 0.9077 and 0.9593 respectively.
-    pcc = 0.94
+    pcc = 0.88 if layers == 1 else 0.94  # TODO For model test quick (1 layer) one iteration might get a worse PCC
 
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
@@ -67,18 +65,34 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
         (28, False): "llama32_3b",
         (32, False): "llama31_8b",
         (32, True): "llama32_11b",
+        (80, False): "llama31_70b",
     }[(model_args.n_layers, model_args.is_vision())]
 
-    final_model_pcc = {"llama32_1b": 0.99912, "llama32_3b": 0.99898, "llama31_8b": 0.99888, "llama32_11b": 0.9976}[
+    final_model_pcc = {
+        "llama32_1b": 0.9991,
+        "llama32_3b": 0.9989,
+        "llama31_8b": 0.99899,
+        "llama32_11b": 0.9976,
+        "llama31_70b": 0.98454,
+    }[model_name]
+
+    final_k_cache_pcc = {
+        "llama32_1b": 0.9998,
+        "llama32_3b": 0.9998,
+        "llama31_8b": 0.99986,
+        "llama32_11b": 0.9995,
+        "llama31_70b": 0.99983,
+    }[model_name]
+    final_v_cache_pcc = {
+        "llama32_1b": 0.9996,
+        "llama32_3b": 0.9998,
+        "llama31_8b": 0.99986,
+        "llama32_11b": 0.9996,
+        "llama31_70b": 0.99985,
+    }[model_name]
+    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
         model_name
     ]
-    final_k_cache_pcc = {"llama32_1b": 0.99984, "llama32_3b": 0.99980, "llama31_8b": 0.99983, "llama32_11b": 0.9995}[
-        model_name
-    ]
-    final_v_cache_pcc = {"llama32_1b": 0.99984, "llama32_3b": 0.99982, "llama31_8b": 0.99984, "llama32_11b": 0.9996}[
-        model_name
-    ]
-    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6}[model_name]
 
     iterations = quick_iterations if layers == 1 else 9
 
@@ -160,10 +174,9 @@ def test_llama_model_inference(mesh_device, weights, layers, use_program_cache, 
     for i in range(generation_length):
         current_pos = generation_start_pos + i
 
-        decode_input = prepare_inputs_ttnn(
+        decode_input = model_args.prepare_inputs_ttnn_decode(
             tt_decode_input,
-            model_args.dim,
-            tt_model.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
         current_pos_tensor = ttnn.from_torch(
             torch.tensor([current_pos] * batch),

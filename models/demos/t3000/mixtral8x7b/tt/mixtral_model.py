@@ -104,7 +104,7 @@ class TtTransformer(LightweightModule):
                 x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096)
             )  # [:, :, get_last_token:get_last_token+32, :]
 
-        x_norm = self.norm(x)
+        x_norm = self.norm(x, mode)
         outputs = ttnn.matmul(
             x_norm,
             self.output_weight,

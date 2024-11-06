@@ -22,7 +22,7 @@ from models.utility_functions import (
 def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
     t3k_mesh_device.enable_async(True)
 
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(t3k_mesh_device.get_device(0))
     state_dict = model_args.load_state_dict()
@@ -53,7 +53,7 @@ def test_mixtral_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_se
         mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, mode="decode")
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
