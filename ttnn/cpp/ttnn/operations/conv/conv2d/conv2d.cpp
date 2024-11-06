@@ -98,7 +98,7 @@ ParallelConfig determine_parallel_config(
         if (num_cores_nhw < compute_grid_size.x && out_nhw_ntiles > compute_grid_size.x) {
             num_cores_nhw = find_closest_largest_divisor_with_num_padding(out_nhw_ntiles, compute_grid_size.x);
         }
-        grid = num_cores_to_corerange_set(num_cores_nhw, compute_grid_size, true);
+        grid = num_cores_to_corerangeset(num_cores_nhw, compute_grid_size, true);
     } else if (shard_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         uint32_t start_divisor =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.x : compute_grid_size.y;
@@ -111,7 +111,7 @@ ParallelConfig determine_parallel_config(
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         num_cores_nhw = 1;
         uint32_t num_cores_c = find_closest_common_largest_divisor(out_c_ntiles, std::ceil((float)input_channels / effective_tile_width), max_num_cores);
-        grid = num_cores_to_corerange_set(num_cores_c, compute_grid_size, true);
+        grid = num_cores_to_corerangeset(num_cores_c, compute_grid_size, true);
     } else {
         TT_THROW("Conv2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
     }
@@ -315,8 +315,6 @@ static TensorMemoryLayout select_shard_spec(
     uint32_t weights_width,
     uint32_t input_width,
     ShardOrientation shard_orientation,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size) {
     auto get_core_count_for_sharding = [&](TensorMemoryLayout shard_layout) {
         return determine_parallel_config(
@@ -331,11 +329,6 @@ static TensorMemoryLayout select_shard_spec(
             .grid.num_cores();
     };
 
-    // Block sharding supports very few kernel dims.
-    const bool is_block_sharding_valid =
-        (kernel_size[0] == 3 && kernel_size[1] == 3 && (stride[0] == 1 || stride[0] == 2)) ||
-        (kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == 2);
-
     // 1d convs support only height sharding
     const bool is_conv1d = weights_width == 1 && input_width == 1;
 
@@ -343,8 +336,7 @@ static TensorMemoryLayout select_shard_spec(
     // matmul doesn't support width sharding
     const uint32_t cc_width =
         !is_mm_conv && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::WIDTH_SHARDED) : 0;
-    const uint32_t cc_block =
-        (is_block_sharding_valid || is_mm_conv) && !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
+    const uint32_t cc_block = !is_conv1d ? get_core_count_for_sharding(TensorMemoryLayout::BLOCK_SHARDED) : 0;
 
     uint32_t max_cc = cc_block;
     TensorMemoryLayout shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
@@ -763,8 +755,6 @@ static void adjust_conv_op_config_for_auto_shard(
     uint32_t output_width,
     uint32_t weights_width,
     uint32_t input_width,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
     const CoreCoord& compute_grid_size,
     Conv2dConfig& conv_config) {
     ShardOrientation shard_orientation =
@@ -779,8 +769,6 @@ static void adjust_conv_op_config_for_auto_shard(
         weights_width,
         input_width,
         shard_orientation,
-        kernel_size,
-        stride,
         compute_grid_size);
 
     if (conv_config.act_block_h_override == 0 && conv_config.shard_layout != TensorMemoryLayout::WIDTH_SHARDED) {
@@ -833,8 +821,6 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             output_width,
             weight_tensor.get_shape()[3],
             input_width,
-            kernel_size,
-            stride,
             device->compute_with_storage_grid_size(),
             conv_config);
     }
@@ -945,6 +931,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
                 conv_config.input_channels_alignment == 16,
                 compute_kernel_config,
                 conv_config.enable_act_double_buffer,
+                conv_config.enable_weights_double_buffer,
                 conv_config.enable_split_reader,
                 conv_config.enable_subblock_padding);
             if (conv_config.deallocate_activation) {
@@ -990,6 +977,7 @@ std::tuple<ttnn::Tensor, uint32_t, uint32_t, ttnn::Tensor, std::optional<ttnn::T
             conv_config.input_channels_alignment == 16,
             compute_kernel_config,
             conv_config.enable_act_double_buffer,
+            conv_config.enable_weights_double_buffer,
             conv_config.enable_split_reader,
             conv_config.enable_subblock_padding,
             use_non_tile_height);

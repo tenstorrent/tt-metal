@@ -226,9 +226,9 @@ int main(int argc, char **argv) {
             for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
                 uint32_t num_tiles_per_core = 0;
-                if (core_group_1.core_coord_in_core_ranges(core)) {
+                if (core_group_1.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_1;
-                } else if (core_group_2.core_coord_in_core_ranges(core)) {
+                } else if (core_group_2.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_2;
                 } else {
                     TT_ASSERT(false, "Core not in specified core ranges");
@@ -411,9 +411,9 @@ bool assign_runtime_args_to_program(
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
@@ -451,9 +451,9 @@ bool validation(
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_tiles_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
@@ -483,9 +483,9 @@ bool validation(
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             uint32_t num_tiles_per_core = 0;
-            if (core_group_1.core_coord_in_core_ranges(core)) {
+            if (core_group_1.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_1;
-            } else if (core_group_2.core_coord_in_core_ranges(core)) {
+            } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");

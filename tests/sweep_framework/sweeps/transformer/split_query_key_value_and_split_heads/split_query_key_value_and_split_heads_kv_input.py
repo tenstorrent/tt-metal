@@ -13,9 +13,8 @@ from tests.sweep_framework.sweep_utils.utils import (
     sanitize_shape_rm,
     gen_rand_integers,
     gen_split_qkv_heads_spec,
-    tensor_to_dtype,
 )
-
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -33,12 +32,12 @@ parameters = {
     "nightly": {
         "input_spec": list(
             gen_split_qkv_heads_spec(
-                batch_size_list=list(gen_rand_integers(1, 10, 2)),
-                sequence_size_list=list(gen_rand_integers(1, 512, 4)),
+                input_shape_list=gen_shapes([1, 1, 1], [6, 512, 2048], [1, 1, 1], 8),
                 num_heads_list=list(gen_rand_integers(1, 20, 4)),
                 transpose_key_list=[True, False],
                 num_kv_heads_list=[None, 1],
                 kv_input_tensor_list=[True],
+                use_invalid_hidden_size=False,
             )
         ),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -54,7 +53,7 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_a_dtype"] != test_vector["input_b_dtype"]:
         return True, "KV tensor dtype must be same as Q tensor dtype"
-    if test_vector["input_spec"]["num_kv_heads"] != test_vector["input_spec"]["num_heads"]:
+    if test_vector["input_spec"]["num_kv_heads"] is not None:
         return True, "Can't use num_kv_heads when using separate kv tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Inputs to eltwise binary must be tilized"
@@ -82,40 +81,36 @@ def run(
     torch.manual_seed(data_seed)
 
     batch_size, sequence_size, hidden_size, num_heads, num_kv_heads, _, transpose_key = input_spec.values()
-    input_shape = (batch_size, sequence_size, hidden_size)
 
-    if num_kv_heads == num_heads:
-        num_kv_heads = num_heads
+    if num_kv_heads is not None:
+        head_size = hidden_size // (2 * num_kv_heads + num_heads)
+    else:
+        head_size = hidden_size // (3 * num_heads)
 
-    head_size = hidden_size // (2 * num_kv_heads + num_heads)
+    q_hidden_size = head_size * num_heads
 
-    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.float32)
-    intermediate_result = torch.reshape(
-        torch_input_tensor, (batch_size, sequence_size, num_heads + (2 * num_kv_heads), head_size)
+    q_input_shape = (batch_size, sequence_size, q_hidden_size)
+    kv_input_shape = (batch_size, sequence_size, hidden_size - q_hidden_size)
+
+    torch_q_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(q_input_shape)
+
+    torch_kv_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(kv_input_shape)
+
+    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
+    torch_output_tensors = golden_function(
+        torch_q_input_tensor,
+        torch_kv_input_tensor,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_key=transpose_key,
     )
-    query, key, value = (
-        intermediate_result[..., :num_heads, :],
-        intermediate_result[..., num_heads : num_heads + num_kv_heads, :],
-        intermediate_result[..., num_heads + num_kv_heads :, :],
-    )
-
-    query = tensor_to_dtype(torch.reshape(query, (batch_size, sequence_size, num_heads, head_size)), input_a_dtype)
-    key = tensor_to_dtype(torch.reshape(key, (batch_size, sequence_size, num_kv_heads, head_size)), input_b_dtype)
-    value = tensor_to_dtype(torch.reshape(value, (batch_size, sequence_size, num_kv_heads, head_size)), input_b_dtype)
-
-    query = torch.permute(query, (0, 2, 1, 3)).contiguous().clone()
-    key = torch.permute(key, (0, 2, 1, 3)).contiguous().clone()
-    value = torch.permute(value, (0, 2, 1, 3)).contiguous().clone()
-
-    if transpose_key:
-        key = torch.permute(key, (0, 1, 3, 2)).contiguous().clone()
-
-    torch_output_tensors = (query, key, value)
-
-    q_hiden_size = head_size * num_heads
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor[:, :, :q_hiden_size],
+        torch_q_input_tensor,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
@@ -123,7 +118,7 @@ def run(
     )
 
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor[:, :, q_hiden_size:],
+        torch_kv_input_tensor,
         dtype=input_b_dtype,
         layout=input_layout,
         device=device,
