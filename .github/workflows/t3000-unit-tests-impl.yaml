@@ -17,6 +17,7 @@ jobs:
           { name: "t3k llama3.2-11b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
           { name: "t3k llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
           { name: "t3k n300 mesh llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
+          { name: "t3k llama3.1-70b tests", arch: wormhole_b0, cmd: run_t3000_llama3.1-70b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
           { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal

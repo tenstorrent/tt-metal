@@ -47,7 +47,6 @@ run_perf_models_llm_javelin() {
 
     env pytest -n auto models/demos/falcon7b_common/tests -m $test_marker
     env pytest -n auto models/demos/wormhole/mistral7b/tests -m $test_marker
-    env pytest -n auto models/demos/wormhole/llama31_8b/tests -m $test_marker
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
