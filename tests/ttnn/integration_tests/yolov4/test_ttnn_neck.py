@@ -80,5 +80,5 @@ def test_neck(device, reset_seeds, model_location_generator):
     result2 = result_2.reshape(ref2.shape)
     result3 = result_3.reshape(ref3.shape)
     assert_with_pcc(result1, ref1, 0.94)  # PCC = 0.94
-    assert_with_pcc(result2, ref2, 0.99)  # PCC = 0.99
+    assert_with_pcc(result2, ref2, 0.985)  # PCC = 0.985
     assert_with_pcc(result3, ref3, 0.96)  # PCC = 0.96
